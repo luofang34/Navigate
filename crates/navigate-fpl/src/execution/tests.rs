@@ -367,3 +367,19 @@ fn a_position_far_from_everything_advances_nothing() {
     assert_eq!(exec.active_index(), 0);
     assert!(!exec.is_complete());
 }
+
+#[test]
+fn nav_tt_003_a_leg_no_longer_than_the_capture_radius_is_refused_at_activation() {
+    // A 50 m fixed leg under the 100 m capture radius would sequence
+    // while the vehicle is still at the previous fix.
+    let w1_lon = 50.0 / M_PER_DEG;
+    let plan = FlightPlan::new(
+        "short".into(),
+        PlanRole::Mission,
+        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, w1_lon)],
+    );
+    assert!(matches!(
+        PlanExecution::new(plan, ExecutionConfig::default()),
+        Err(PlanActivationError::CaptureRadiusExceedsLeg { ident, .. }) if ident == "W1"
+    ));
+}

@@ -13,7 +13,7 @@ use navigate_contract::{FlightPlan, GeodeticPosition, TurnType, Waypoint};
 use navigate_geodesy::{distance_m, initial_bearing_rad};
 
 use crate::plan_set::PlanActivationError;
-use crate::turn::{turn_anticipation_m, turn_radius_m};
+use crate::turn::{fold_to_half_turn, turn_anticipation_m, turn_radius_m};
 
 #[cfg(test)]
 mod tests;
@@ -27,17 +27,6 @@ const MIN_TRACK_SEPARATION_M: f64 = 1e-3;
 /// has no fly-by solution — holds and radius-to-fix legs own that
 /// geometry and are out of scope (NAV-TT-003).
 const MAX_ANTICIPATED_TRACK_CHANGE_RAD: f64 = 2.0 * core::f64::consts::FRAC_PI_3;
-
-/// Folds a course difference into `[0, π]` — the magnitude of a track
-/// change.
-fn fold_track_change(angle_rad: f64) -> f64 {
-    let wrapped = angle_rad.rem_euclid(core::f64::consts::TAU);
-    if wrapped > core::f64::consts::PI {
-        core::f64::consts::TAU - wrapped
-    } else {
-        wrapped
-    }
-}
 
 /// Tunable sequencing parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,6 +149,20 @@ impl PlanExecution {
                 });
             }
         }
+        for pair in plan.waypoints.windows(2) {
+            let leg_length_m = distance_m(&pair[0].position, &pair[1].position);
+            // A leg shorter than the capture radius would sequence while
+            // the vehicle is still at the previous fix — a plan-design
+            // defect refused here rather than flown as a skip.
+            if leg_length_m <= config.capture_radius_m {
+                return Err(PlanActivationError::CaptureRadiusExceedsLeg {
+                    plan: plan.id.clone(),
+                    ident: pair[1].ident.clone(),
+                    leg_length_m,
+                    capture_radius_m: config.capture_radius_m,
+                });
+            }
+        }
         Ok(Self {
             plan,
             config,
@@ -248,7 +251,7 @@ impl PlanExecution {
         // would mis-size the corner by the great-circle convergence.
         let inbound = initial_bearing_rad(&leg.to.position, &from.position) + core::f64::consts::PI;
         let outbound = initial_bearing_rad(&leg.to.position, &next.position);
-        let track_change = fold_track_change(outbound - inbound);
+        let track_change = fold_to_half_turn(outbound - inbound);
         if track_change > MAX_ANTICIPATED_TRACK_CHANGE_RAD {
             return 0.0;
         }

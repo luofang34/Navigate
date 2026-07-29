@@ -55,9 +55,14 @@ vehicle class.
   120°: beyond it `tan(Δ/2)` approaches a reversal's blowup and a
   course reversal has no fly-by solution (holds and radius-to-fix legs
   own that geometry and are out of scope), so such fixes sequence at
-  the capture radius. A straight-ahead fix (`Δtrack ≈ 0`), a direct-to
-  leg (whose inbound geometry is the live position, not a fixed track),
-  and the terminal fix likewise degrade to the capture radius.
+  the capture radius — a deliberate step, not a taper, because clamping
+  the DTA at the limit would fabricate a turn the vehicle cannot fly.
+  A straight-ahead fix (`Δtrack ≈ 0`), a direct-to leg (whose inbound
+  geometry is the live position, not a fixed track), and the terminal
+  fix likewise degrade to the capture radius. The no-sequencing-at-leg-
+  start guarantee is completed by activation: a plan whose fixed leg is
+  no longer than the capture radius is refused rather than flown as a
+  skip.
 - **NAV-TT-004** A fly-over waypoint sequences only within the capture
   radius of the fix itself (no anticipation). After sequencing, guidance
   tracks the next leg from the overflown fix; the rejoin appears as
@@ -93,9 +98,10 @@ vehicle class.
   with no declared gradient uses the caps alone.
 - **NAV-VC-003** A waypoint MAY carry a maximum-speed constraint. On
   the leg toward that fix, commanded along-track speed is
-  `min(cruise, constraint)`. Constraints below the vehicle's minimum
-  controllable approach speed floor are refused at plan validation, not
-  silently clamped in flight.
+  `min(cruise, constraint)`. Non-positive constraints are refused at
+  plan validation; constraints below the vehicle's configured minimum
+  approach-speed floor are refused at activation — never silently
+  clamped in flight.
 - **NAV-VC-004** Constraint provenance follows the plan: fixture and
   test plans set constraints explicitly; procedure-derived plans carry
   them from their source data. The executor never invents a constraint.

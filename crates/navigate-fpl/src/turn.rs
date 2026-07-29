@@ -26,9 +26,10 @@ pub fn turn_radius_m(groundspeed_mps: f64, bank_limit_rad: f64) -> f64 {
 
 /// Distance of turn anticipation before a fly-by fix:
 /// `DTA = r · tan(Δ/2)` with the track change `Δ` folded into `[0, π]`.
-/// A straight-ahead fix (`Δ ≈ 0`) anticipates nothing; a near-reversal
-/// approaches the tangent's blowup and is capped by the caller's
-/// inbound-leg length, not here.
+/// A straight-ahead fix (`Δ ≈ 0`) anticipates nothing. The tangent
+/// blows up toward a reversal; bounding is the sequencer's policy — it
+/// refuses track changes beyond its anticipation limit and caps the
+/// result at half the shorter adjoining leg.
 #[must_use]
 pub fn turn_anticipation_m(radius_m: f64, track_change_rad: f64) -> f64 {
     if !radius_m.is_finite() || radius_m <= 0.0 || !track_change_rad.is_finite() {
@@ -44,7 +45,7 @@ pub fn turn_anticipation_m(radius_m: f64, track_change_rad: f64) -> f64 {
 }
 
 /// Folds any angle into `[0, π]` — the magnitude of a track change.
-fn fold_to_half_turn(angle_rad: f64) -> f64 {
+pub(crate) fn fold_to_half_turn(angle_rad: f64) -> f64 {
     let wrapped = angle_rad.rem_euclid(core::f64::consts::TAU);
     if wrapped > core::f64::consts::PI {
         core::f64::consts::TAU - wrapped

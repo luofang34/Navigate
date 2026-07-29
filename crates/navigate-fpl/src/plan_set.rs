@@ -106,6 +106,21 @@ pub enum PlanActivationError {
         /// The configured floor it violates.
         floor_mps: f64,
     },
+    /// A fixed leg is no longer than the capture radius: the leg would
+    /// sequence while the vehicle is still at the previous fix.
+    #[error(
+        "plan {plan} leg to {ident} is {leg_length_m} m, no longer than the {capture_radius_m} m capture radius"
+    )]
+    CaptureRadiusExceedsLeg {
+        /// Offending plan id.
+        plan: String,
+        /// The waypoint the too-short leg runs to.
+        ident: String,
+        /// The fixed leg's length.
+        leg_length_m: f64,
+        /// The configured capture radius it does not clear.
+        capture_radius_m: f64,
+    },
     /// An execution-config value cannot feed the comparisons it exists
     /// for (non-finite, non-positive, or an unflyable bank limit).
     #[error("execution config {field} = {value} is not flyable")]
