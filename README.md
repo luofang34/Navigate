@@ -25,9 +25,9 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
    redundancy, and fault-detection honesty; confidence is never fabricated.
 3. **Flight-plan management and execution** — plans, procedures (including
    loss-of-communication procedures), and leg sequencing.
-4. **Guidance** — deviation-tracking setpoint generation toward the
-   active plan, refusing to guide without the integrity the decision
-   requires. Position and velocity setpoints are contract vocabulary
+4. **Guidance** — deviation-tracking and NED velocity setpoint generation
+   toward the active plan, refusing to guide without the integrity the
+   decision requires. Position setpoints are contract vocabulary
    mirroring the FC's command surface; generating them is deferred.
 
 ## Navigate never does

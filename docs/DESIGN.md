@@ -79,8 +79,11 @@ sequencing with capture criteria, terminal behavior, and procedure
 selection (a loss-of-communication procedure is a plan with a different
 role, not a different machine). `navigate-guidance` turns the solution plus
 the active leg into setpoints — cross-track and course for lateral,
-altitude constraints for vertical — and refuses to guide when solution
-integrity is below what the maneuver requires.
+altitude constraints for vertical, and an NED velocity vector for a
+flight controller that takes velocity commands — and refuses to guide
+when solution integrity is below what the maneuver requires. Both
+derivations admit a solution through one helper, so their floors cannot
+drift apart.
 
 ## The contract (ADR-0005)
 
@@ -99,8 +102,9 @@ vocabulary; process topology is a deployment decision, not a contract one.
 - IMU mechanization propagation and filter-state growth.
 - Coupling admission-gate storm rates into the quality derivation
   (quality currently degrades on covariance bounds and source silence).
-- Position/velocity setpoint generation (the contract vocabulary mirrors
-  the FC command surface; guidance derives deviation-tracking setpoints).
+- Position setpoint generation (the contract vocabulary mirrors the FC
+  command surface; guidance derives deviation-tracking and velocity
+  setpoints).
 - RAIM-class fault detection and protection levels.
 - Terrain database binding for EGPWS (the seam returns typed
   `Unavailable`).

@@ -1,25 +1,15 @@
-//! The guidance derivation: solution plus leg geometry to one setpoint.
+//! The deviation-tracking derivation: solution plus leg geometry to one
+//! flight-director setpoint.
 
 use navigate_contract::{
     ClockDomainId, GeodeticPosition, GuidanceCommand, GuidanceSetpoint, MonotonicNanos,
-    NavigationSolution, SolutionQuality, Waypoint,
+    NavigationSolution, Waypoint,
 };
-use navigate_geodesy::{cross_track_m, initial_bearing_rad};
 
+use crate::admission::admit_leg;
 use crate::config::GuidanceConfig;
 use crate::refusal::GuidanceRefusal;
 use crate::vertical;
-
-/// Rank under the quality ordering `Good` > `Degraded` > `Unusable`.
-/// A classification this crate cannot interpret ranks with `Unusable`:
-/// fail closed, never optimistic (ADR-0004).
-const fn quality_rank(quality: SolutionQuality) -> u8 {
-    match quality {
-        SolutionQuality::Good => 2,
-        SolutionQuality::Degraded => 1,
-        _ => 0,
-    }
-}
 
 /// Derives one deviation-tracking guidance command from a navigation
 /// solution and the active leg, or refuses with a typed reason.
@@ -63,69 +53,17 @@ pub fn guide(
     now_clock: ClockDomainId,
     config: &GuidanceConfig,
 ) -> Result<GuidanceCommand, GuidanceRefusal> {
-    admit(solution, now, now_clock, config)?;
-    if !leg_to.position.is_plausible() {
-        return Err(GuidanceRefusal::ImplausibleTarget {
-            ident: leg_to.ident.clone(),
-        });
-    }
-    let track_start = leg_from.unwrap_or(&solution.position);
-    // Any track the geodesy layer refuses (today: endpoints closer than
-    // its degenerate-track floor) cannot define a course, so the leg's
-    // target is implausible as a guidance target.
-    let lateral_m =
-        cross_track_m(&solution.position, track_start, &leg_to.position).map_err(|_| {
-            GuidanceRefusal::ImplausibleTarget {
-                ident: leg_to.ident.clone(),
-            }
-        })?;
-    let course_rad = initial_bearing_rad(track_start, &leg_to.position);
+    let leg = admit_leg(solution, leg_from, leg_to, now, now_clock, config)?;
     let vertical_m = vertical::deviation_m(solution.position.altitude_m, leg_to.altitude.as_ref());
     Ok(GuidanceCommand::new(
         now,
         GuidanceSetpoint::DeviationTracking {
-            lateral_m,
+            lateral_m: leg.cross_track_m,
             vertical_m,
-            course_rad,
+            course_rad: leg.course_rad,
         },
         solution.stamp,
     ))
-}
-
-/// Fail-closed admission: clock-domain agreement first (age arithmetic
-/// across domains is meaningless), then quality floor, then age against
-/// `now`.
-fn admit(
-    solution: &NavigationSolution,
-    now: MonotonicNanos,
-    now_clock: ClockDomainId,
-    config: &GuidanceConfig,
-) -> Result<(), GuidanceRefusal> {
-    let expected = solution.stamp.clock;
-    if now_clock != expected {
-        return Err(GuidanceRefusal::ClockDomainMismatch {
-            expected,
-            got: now_clock,
-        });
-    }
-    let quality = solution.integrity.quality;
-    if quality_rank(quality) < quality_rank(config.minimum_quality) {
-        return Err(GuidanceRefusal::IntegrityBelowFloor {
-            quality,
-            floor: config.minimum_quality,
-        });
-    }
-    let solved_at = solution.stamp.solved_at;
-    let age = now
-        .elapsed_since(solved_at)
-        .ok_or(GuidanceRefusal::ClockInversion { now, solved_at })?;
-    if age > config.max_solution_age {
-        return Err(GuidanceRefusal::SolutionStale {
-            age,
-            bound: config.max_solution_age,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -133,58 +71,16 @@ mod tests {
     #![allow(clippy::expect_used, clippy::panic)]
 
     use navigate_contract::{
-        AltitudeConstraint, ClockDomainId, DurationNanos, FaultDetection, GeodeticPosition,
-        GuidanceSetpoint, IntegrityAssessment, MonotonicNanos, NavigationSolution, NedVelocity,
-        Redundancy, SensorClass, SolutionQuality, SolutionStamp, SourceComposition, SourceEpoch,
-        SymmetricCov3, Waypoint, WrappingSequence,
+        AltitudeConstraint, ClockDomainId, DurationNanos, GeodeticPosition, GuidanceSetpoint,
+        MonotonicNanos, SolutionQuality, Waypoint,
     };
     use navigate_geodesy::{cross_track_m, initial_bearing_rad, wgs84};
 
     use crate::config::GuidanceConfig;
     use crate::refusal::GuidanceRefusal;
+    use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
 
     use super::guide;
-
-    /// The single clock domain of these tests: solutions are stamped on
-    /// it and `now` is read from it unless a test probes the mismatch.
-    const CLOCK: ClockDomainId = ClockDomainId::new(0);
-
-    fn deg(latitude_deg: f64, longitude_deg: f64, altitude_m: f64) -> GeodeticPosition {
-        GeodeticPosition::new(
-            latitude_deg.to_radians(),
-            longitude_deg.to_radians(),
-            altitude_m,
-        )
-    }
-
-    fn solution(
-        quality: SolutionQuality,
-        position: GeodeticPosition,
-        solved_at: MonotonicNanos,
-    ) -> NavigationSolution {
-        let composition = SourceComposition::of(SensorClass::Gnss);
-        NavigationSolution::new(
-            SolutionStamp::new(
-                SourceEpoch::new(1),
-                WrappingSequence::new(42),
-                solved_at,
-                CLOCK,
-            ),
-            position,
-            NedVelocity::new(0.0, 0.0, 0.0),
-            SymmetricCov3::from_diagonal(1.0, 1.0, 1.0),
-            SymmetricCov3::from_diagonal(0.1, 0.1, 0.1),
-            IntegrityAssessment::new(
-                quality,
-                composition,
-                Redundancy::None,
-                1.0,
-                1.5,
-                FaultDetection::Unavailable,
-            ),
-            composition,
-        )
-    }
 
     fn deviation(setpoint: GuidanceSetpoint) -> (f64, f64, f64) {
         match setpoint {
@@ -195,20 +91,6 @@ mod tests {
             } => (lateral_m, vertical_m, course_rad),
             other => panic!("expected DeviationTracking, got {other:?}"),
         }
-    }
-
-    fn now() -> MonotonicNanos {
-        MonotonicNanos::from_nanos(2_000_000_000)
-    }
-
-    // Eastbound track along the equator: the geometry with the least
-    // ambiguous bearing (exactly 90°) and cross-track sign (right is
-    // south).
-    fn equator_leg() -> (GeodeticPosition, Waypoint) {
-        (
-            deg(0.0, 0.0, 0.0),
-            Waypoint::new("END".into(), deg(0.0, 1.0, 0.0)),
-        )
     }
 
     #[test]

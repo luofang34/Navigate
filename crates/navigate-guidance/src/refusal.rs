@@ -3,7 +3,9 @@
 use navigate_contract::{ClockDomainId, DurationNanos, MonotonicNanos, SolutionQuality};
 use thiserror::Error;
 
-/// Why [`crate::guide`] refused to derive a setpoint.
+/// Why a derivation — [`crate::guide`] or [`crate::guide_velocity`] —
+/// refused to issue a setpoint. Both admit through one helper, so one
+/// solution draws the same refusal from either.
 ///
 /// Guidance consumes integrity fail-closed (ADR-0004): every refusal
 /// names the floor or bound it enforced so the caller can log, display,
