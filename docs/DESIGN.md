@@ -77,13 +77,18 @@ absent; displays show quality rather than hiding it.
 `navigate-fpl` owns the plan model's execution: validation, active-leg
 sequencing with capture criteria, terminal behavior, and procedure
 selection (a loss-of-communication procedure is a plan with a different
-role, not a different machine). `navigate-guidance` turns the solution plus
-the active leg into setpoints — cross-track and course for lateral,
-altitude constraints for vertical, and an NED velocity vector for a
-flight controller that takes velocity commands — and refuses to guide
-when solution integrity is below what the maneuver requires. Both
-derivations admit a solution through one helper, so their floors cannot
-drift apart.
+role, not a different machine). Waypoints carry turn types per the
+[procedure requirements](procedure-requirements.md): a fly-by fix
+sequences early by the distance of turn anticipation the bank-limit
+model earns at the commanded groundspeed, while fly-over and terminal
+fixes sequence only inside the capture radius. `navigate-guidance`
+turns the solution plus the active leg into setpoints — cross-track and
+course for lateral, altitude constraints (including between-altitude
+windows) for vertical, bounded by per-leg gradient and waypoint speed
+constraints, and an NED velocity vector for a flight controller that
+takes velocity commands — and refuses to guide when solution integrity
+is below what the maneuver requires. Both derivations admit a solution
+through one helper, so their floors cannot drift apart.
 
 ## The contract (ADR-0005)
 

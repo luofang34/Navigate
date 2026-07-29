@@ -12,6 +12,9 @@ use navigate_contract::AltitudeConstraint;
 ///   report `0.0` while satisfied; a violation reports only its
 ///   direction — below an `AtOrAbove` floor is negative, above an
 ///   `AtOrBelow` ceiling is positive.
+/// - [`AltitudeConstraint::Window`] reports `0.0` inside the band
+///   (bounds inclusive) and the violation direction outside it
+///   (NAV-VC-001).
 /// - No constraint reports `0.0`; profile interpolation between
 ///   constrained waypoints is a designed extension.
 pub(crate) fn deviation_m(ownship_altitude_m: f64, constraint: Option<&AltitudeConstraint>) -> f64 {
@@ -30,6 +33,15 @@ pub(crate) fn deviation_m(ownship_altitude_m: f64, constraint: Option<&AltitudeC
                 0.0
             } else {
                 ownship_altitude_m - ceiling_m
+            }
+        }
+        Some(AltitudeConstraint::Window { lower_m, upper_m }) => {
+            if ownship_altitude_m < *lower_m {
+                ownship_altitude_m - lower_m
+            } else if ownship_altitude_m > *upper_m {
+                ownship_altitude_m - upper_m
+            } else {
+                0.0
             }
         }
         // The constraint vocabulary grows in the contract crate first; a
@@ -102,5 +114,30 @@ mod tests {
     #[test]
     fn no_constraint_is_zero() {
         assert!(close(deviation_m(1234.5, None), 0.0));
+    }
+
+    #[test]
+    fn nav_vc_001_a_window_reports_zero_inside_and_direction_outside() {
+        let window = AltitudeConstraint::Window {
+            lower_m: 100.0,
+            upper_m: 200.0,
+        };
+        assert!(close(deviation_m(150.0, Some(&window)), 0.0), "inside");
+        assert!(
+            close(deviation_m(100.0, Some(&window)), 0.0),
+            "lower boundary is satisfied"
+        );
+        assert!(
+            close(deviation_m(200.0, Some(&window)), 0.0),
+            "upper boundary is satisfied"
+        );
+        assert!(
+            close(deviation_m(80.0, Some(&window)), -20.0),
+            "below the band is negative: climb demand"
+        );
+        assert!(
+            close(deviation_m(230.0, Some(&window)), 30.0),
+            "above the band is positive: descent demand"
+        );
     }
 }

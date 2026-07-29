@@ -10,12 +10,13 @@
 
 use navigate_contract::{
     ClockDomainId, FaultDetection, FlightPlan, GeodeticPosition, GuidanceSetpoint, MonotonicNanos,
-    NavigationSolution, ObservationStamp, PlanRole, PlanValidationError, Redundancy, SensorClass,
-    SolutionQuality, SourceComposition, SourceEpoch, SourceId, SymmetricCov3, Waypoint,
-    WrappingSequence,
+    NavigationSolution, ObservationStamp, PlanRole, Redundancy, SensorClass, SolutionQuality,
+    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, Waypoint, WrappingSequence,
 };
 use navigate_egpws::{EgpwsAssessment, EgpwsConfig, EgpwsUnavailable, assess};
-use navigate_fpl::{ExecutionConfig, PlanExecution, SequenceEvent};
+use navigate_fpl::{
+    ExecutionConfig, PlanActivationError, PlanExecution, SequenceEvent, SequenceReason,
+};
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
@@ -75,15 +76,18 @@ pub struct ScenarioSummary {
     pub final_redundancy: Redundancy,
     /// Fault-detection statement of the final published solution.
     pub final_fault_detection: FaultDetection,
+    /// Why the most recent non-terminal leg sequenced, when one did
+    /// (NAV-TT-005); the collinear fixture route earns `Overflown`.
+    pub last_sequence_reason: Option<SequenceReason>,
 }
 
 /// Why the scripted scenario could not finish.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ScenarioError {
-    /// The scripted flight plan failed structural validation.
+    /// The scripted flight plan could not become an execution.
     #[error(transparent)]
-    InvalidPlan(#[from] PlanValidationError),
+    InvalidPlan(#[from] PlanActivationError),
     /// A truth-model tangent plane could not be anchored.
     #[error("truth geometry failed at step {step}")]
     TruthGeometry {
@@ -156,6 +160,7 @@ struct ScenarioRun {
     max_lateral_dev_m: f64,
     last_solution: Option<NavigationSolution>,
     plan_completed: bool,
+    last_sequence_reason: Option<SequenceReason>,
 }
 
 impl ScenarioRun {
@@ -176,6 +181,7 @@ impl ScenarioRun {
             max_lateral_dev_m: 0.0,
             last_solution: None,
             plan_completed: false,
+            last_sequence_reason: None,
         })
     }
 
@@ -194,8 +200,12 @@ impl ScenarioRun {
         }
         if let Some(solution) = self.filter.tick(self.now) {
             self.solutions_published = self.solutions_published.wrapping_add(1);
-            if self.execution.advance(&solution.position) == SequenceEvent::PlanComplete {
-                self.plan_completed = true;
+            match self.execution.advance(&solution.position, GROUND_SPEED_MPS) {
+                SequenceEvent::PlanComplete => self.plan_completed = true,
+                SequenceEvent::LegAdvanced { reason, .. } => {
+                    self.last_sequence_reason = Some(reason);
+                }
+                _ => {}
             }
             self.guide_active_leg(&solution, step)?;
             check_terrain_seam(&solution, self.now, step)?;
@@ -292,6 +302,7 @@ impl ScenarioRun {
             final_quality: last.integrity.quality,
             final_redundancy: last.integrity.redundancy,
             final_fault_detection: last.integrity.fault_detection,
+            last_sequence_reason: self.last_sequence_reason,
         })
     }
 }
@@ -371,10 +382,14 @@ mod tests {
         // Truth starts at W0, so the first advance captures it and the
         // active waypoint becomes W1, about 3 km east.
         let start = run.truth;
-        assert_eq!(
-            run.execution.advance(&start),
-            SequenceEvent::LegAdvanced { to_index: 1 }
-        );
+        assert!(matches!(
+            run.execution.advance(&start, GROUND_SPEED_MPS),
+            SequenceEvent::LegAdvanced {
+                to_index: 1,
+                reason: SequenceReason::Overflown,
+                ..
+            }
+        ));
         let target = run.execution.active_leg().expect("active leg").to.position;
         let before_m = distance_m(&run.truth, &target);
         run.propagate_truth(0).expect("truth propagates");

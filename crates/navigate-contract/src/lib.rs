@@ -26,7 +26,10 @@ pub use integrity::{
     FaultDetection, IntegrityAssessment, ProtectionLevels, Redundancy, SolutionQuality,
 };
 pub use kinematics::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
-pub use plan::{AltitudeConstraint, FlightPlan, PlanRole, PlanValidationError, Waypoint};
+pub use plan::{
+    AltitudeConstraint, ConstraintField, FlightPlan, PlanRole, PlanValidationError, TurnType,
+    Waypoint,
+};
 pub use solution::NavigationSolution;
 pub use stamp::{ObservationStamp, SolutionStamp, SourceEpoch, SourceId, WrappingSequence};
 pub use time::{ClockDomainId, DurationNanos, MonotonicNanos};

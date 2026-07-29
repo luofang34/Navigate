@@ -4,8 +4,6 @@
 //! Sharing them is what lets a test assert that both derivations judge
 //! *the same* solution identically rather than two look-alike copies.
 
-#![allow(clippy::expect_used, clippy::panic)]
-
 use navigate_contract::{
     ClockDomainId, FaultDetection, GeodeticPosition, IntegrityAssessment, MonotonicNanos,
     NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality, SolutionStamp,

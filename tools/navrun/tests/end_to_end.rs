@@ -5,6 +5,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use navigate_contract::{FaultDetection, Redundancy};
+use navigate_fpl::SequenceReason;
 use navrun::run_scenario;
 
 #[test]
@@ -57,5 +58,15 @@ fn single_source_honesty_is_visible_end_to_end() {
         summary.final_fault_detection,
         FaultDetection::Unavailable,
         "a single source agreeing with itself proves nothing: {summary:?}"
+    );
+}
+
+#[test]
+fn nav_tt_005_the_collinear_route_sequences_by_capture_not_anticipation() {
+    let summary = run_scenario().expect("scenario runs");
+    assert_eq!(
+        summary.last_sequence_reason,
+        Some(SequenceReason::Overflown),
+        "collinear legs have no turn to anticipate: {summary:?}"
     );
 }

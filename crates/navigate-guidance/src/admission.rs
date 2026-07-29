@@ -63,8 +63,8 @@ pub(crate) fn admit_leg(
         });
     }
     let track_start = leg_from.unwrap_or(&solution.position);
-    // Any track the geodesy layer refuses (today: endpoints closer than
-    // its degenerate-track floor) cannot define a course, so the leg's
+    // Any track the geodesy layer refuses (endpoints below its
+    // degenerate-track floor) cannot define a course, so the leg's
     // target is implausible as a guidance target.
     let lateral_m =
         cross_track_m(&solution.position, track_start, &leg_to.position).map_err(|_| {
