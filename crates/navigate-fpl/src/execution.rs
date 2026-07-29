@@ -3,32 +3,63 @@
 //! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg. The active leg
 //! runs from the previously captured waypoint — or from the present
 //! position on the initial direct-to leg — to the next waypoint in fly
-//! order. A waypoint captures when a caller-supplied position comes
-//! within the configured capture radius; after the final waypoint
-//! captures, the execution is complete and further advances are inert.
+//! order. A fly-by waypoint sequences early by the distance of turn
+//! anticipation when the turn geometry earns it (NAV-TT-003); a fly-over
+//! waypoint and the terminal waypoint sequence only inside the capture
+//! radius (NAV-TT-004). After the final waypoint captures, the execution
+//! is complete and further advances are inert.
 
-use navigate_contract::{FlightPlan, GeodeticPosition, PlanValidationError, Waypoint};
-use navigate_geodesy::distance_m;
+use navigate_contract::{FlightPlan, GeodeticPosition, TurnType, Waypoint};
+use navigate_geodesy::{distance_m, initial_bearing_rad};
+
+use crate::plan_set::PlanActivationError;
+use crate::turn::{fold_to_half_turn, turn_anticipation_m, turn_radius_m};
+
+#[cfg(test)]
+mod tests;
+
+/// Below this track separation a course is numerically meaningless and
+/// turn geometry is skipped (mirrors the geodesy degenerate-track floor).
+const MIN_TRACK_SEPARATION_M: f64 = 1e-3;
+
+/// Largest track change fly-by anticipation applies to: 120°. Beyond it
+/// `tan(Δ/2)` grows toward a reversal's blowup, and a course reversal
+/// has no fly-by solution — holds and radius-to-fix legs own that
+/// geometry and are out of scope (NAV-TT-003).
+const MAX_ANTICIPATED_TRACK_CHANGE_RAD: f64 = 2.0 * core::f64::consts::FRAC_PI_3;
 
 /// Tunable sequencing parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ExecutionConfig {
     /// Great-circle distance to the active `to` waypoint, in meters, at
-    /// which the waypoint captures and the leg sequences.
+    /// which the waypoint captures regardless of turn geometry.
     pub capture_radius_m: f64,
+    /// Bank-angle limit for the fly-by turn-performance model, radians
+    /// (NAV-TT-002). The default is the 18° RNP fly-by standard recorded
+    /// in `docs/procedure-requirements.md`.
+    pub bank_limit_rad: f64,
+    /// Floor under waypoint speed constraints, meters per second
+    /// (NAV-VC-003): a plan demanding a slower approach is refused at
+    /// activation, never silently clamped in flight.
+    pub min_approach_speed_mps: f64,
 }
 
 impl ExecutionConfig {
-    /// Builds a config with the given capture radius in meters.
+    /// Builds a config with the given capture radius in meters and the
+    /// default bank limit and approach-speed floor.
     #[must_use]
-    pub const fn new(capture_radius_m: f64) -> Self {
-        Self { capture_radius_m }
+    pub fn new(capture_radius_m: f64) -> Self {
+        Self {
+            capture_radius_m,
+            bank_limit_rad: 18.0_f64.to_radians(),
+            min_approach_speed_mps: 0.3,
+        }
     }
 }
 
-/// 100 m: a fixed capture radius; turn anticipation is a designed
-/// extension of the leg-transition criteria.
+/// 100 m capture radius, the 18° fly-by bank standard, and a 0.3 m/s
+/// approach-speed floor.
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self::new(100.0)
@@ -47,6 +78,19 @@ pub struct Leg<'a> {
     pub index: usize,
 }
 
+/// Why a waypoint sequenced (NAV-TT-005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SequenceReason {
+    /// The distance of turn anticipation drove an advance beyond the
+    /// capture radius — only fly-by geometry earns this.
+    Anticipated,
+    /// The fix captured inside the capture radius: every fly-over
+    /// crossing, and any fly-by fix whose anticipation distance stays
+    /// inside the capture radius.
+    Overflown,
+}
+
 /// What one call to [`PlanExecution::advance`] decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -57,9 +101,19 @@ pub enum SequenceEvent {
     LegAdvanced {
         /// Index of the newly active `to` waypoint.
         to_index: usize,
+        /// How the captured waypoint was flown.
+        turn: TurnType,
+        /// Why it sequenced.
+        reason: SequenceReason,
     },
     /// The final waypoint captured; the plan is complete.
-    PlanComplete,
+    PlanComplete {
+        /// How the terminal waypoint was flown.
+        turn: TurnType,
+        /// Why it sequenced (always capture-driven: the terminal fix has
+        /// no onward course to anticipate).
+        reason: SequenceReason,
+    },
 }
 
 /// Sequencing state for one activated flight plan.
@@ -72,15 +126,43 @@ pub struct PlanExecution {
 }
 
 impl PlanExecution {
-    /// Validates the plan and starts execution on the initial direct-to
-    /// leg toward the first waypoint.
+    /// Validates the plan and the config, then starts execution on the
+    /// initial direct-to leg toward the first waypoint.
     ///
     /// # Errors
     ///
-    /// Returns the plan's first structural defect; an invalid plan never
-    /// becomes an execution.
-    pub fn new(plan: FlightPlan, config: ExecutionConfig) -> Result<Self, PlanValidationError> {
+    /// The plan's first structural defect, an unflyable config value, or
+    /// a waypoint speed constraint below the approach-speed floor
+    /// (NAV-VC-003) — an invalid plan never becomes an execution.
+    pub fn new(plan: FlightPlan, config: ExecutionConfig) -> Result<Self, PlanActivationError> {
         plan.validate()?;
+        validate_config(&config)?;
+        for waypoint in &plan.waypoints {
+            if let Some(max_speed_mps) = waypoint.max_speed_mps
+                && max_speed_mps < config.min_approach_speed_mps
+            {
+                return Err(PlanActivationError::SpeedBelowFloor {
+                    plan: plan.id.clone(),
+                    ident: waypoint.ident.clone(),
+                    max_speed_mps,
+                    floor_mps: config.min_approach_speed_mps,
+                });
+            }
+        }
+        for pair in plan.waypoints.windows(2) {
+            let leg_length_m = distance_m(&pair[0].position, &pair[1].position);
+            // A leg shorter than the capture radius would sequence while
+            // the vehicle is still at the previous fix — a plan-design
+            // defect refused here rather than flown as a skip.
+            if leg_length_m <= config.capture_radius_m {
+                return Err(PlanActivationError::CaptureRadiusExceedsLeg {
+                    plan: plan.id.clone(),
+                    ident: pair[1].ident.clone(),
+                    leg_length_m,
+                    capture_radius_m: config.capture_radius_m,
+                });
+            }
+        }
         Ok(Self {
             plan,
             config,
@@ -89,30 +171,92 @@ impl PlanExecution {
         })
     }
 
-    /// Feeds one position sample to the sequencer. Capture is
-    /// horizontal: within [`ExecutionConfig::capture_radius_m`]
-    /// great-circle meters of the active `to` waypoint, ignoring
-    /// altitude. Once complete, every further call returns
-    /// [`SequenceEvent::None`] without mutating anything.
-    pub fn advance(&mut self, position: &GeodeticPosition) -> SequenceEvent {
-        let (captured, index) = match self.active_leg() {
-            None => return SequenceEvent::None,
-            Some(leg) => (
-                distance_m(position, &leg.to.position) <= self.config.capture_radius_m,
-                leg.index,
-            ),
+    /// Feeds one position sample to the sequencer at the commanded
+    /// groundspeed. Capture is horizontal and ignores altitude: a fly-by
+    /// waypoint between two fixed legs sequences strictly within
+    /// `max(capture_radius, min(DTA, half the shorter adjoining leg))`
+    /// of the fix (NAV-TT-003); fly-over waypoints, the terminal
+    /// waypoint, direct-to legs, and track changes beyond the
+    /// anticipation limit sequence within the capture radius only
+    /// (NAV-TT-004). A non-finite or negative groundspeed anticipates
+    /// nothing; a non-finite position captures nothing. Once complete,
+    /// every further call returns [`SequenceEvent::None`] without
+    /// mutating anything.
+    pub fn advance(&mut self, position: &GeodeticPosition, groundspeed_mps: f64) -> SequenceEvent {
+        let Some(leg) = self.active_leg() else {
+            return SequenceEvent::None;
         };
-        if !captured {
+        let index = leg.index;
+        let turn = leg.to.turn;
+        let distance = distance_m(position, &leg.to.position);
+        if !distance.is_finite() {
             return SequenceEvent::None;
         }
+        let anticipation = self.anticipation_distance(&leg, groundspeed_mps);
+        let threshold = self.config.capture_radius_m.max(anticipation);
+        // Strict: a capped anticipation can equal a leg-start distance,
+        // and a leg must never sequence at the instant it begins.
+        if distance >= threshold {
+            return SequenceEvent::None;
+        }
+        // The reason names the RULE that authorizes early sequencing,
+        // not the sample that happened to arrive (NAV-TT-005): a fly-by
+        // fix whose anticipation exceeds the capture radius is an
+        // anticipated transition even when a sparse sample lands inside
+        // the radius.
+        let reason = if anticipation > self.config.capture_radius_m {
+            SequenceReason::Anticipated
+        } else {
+            SequenceReason::Overflown
+        };
         let next = index.wrapping_add(1);
         if next >= self.plan.waypoints.len() {
             self.complete = true;
-            SequenceEvent::PlanComplete
+            SequenceEvent::PlanComplete { turn, reason }
         } else {
             self.active_index = next;
-            SequenceEvent::LegAdvanced { to_index: next }
+            SequenceEvent::LegAdvanced {
+                to_index: next,
+                turn,
+                reason,
+            }
         }
+    }
+
+    /// The fly-by anticipation distance for the active leg: the DTA
+    /// bounded by half the shorter adjoining leg, so each leg keeps a
+    /// flyable middle and both of its ends may anticipate (NAV-TT-003).
+    /// Zero — capture-radius sequencing — for fly-over fixes, the
+    /// terminal fix, direct-to legs (their inbound geometry is the live
+    /// position, not a fixed track), track changes beyond
+    /// [`MAX_ANTICIPATED_TRACK_CHANGE_RAD`] (a reversal has no fly-by
+    /// solution), and geometry too degenerate to define a course.
+    fn anticipation_distance(&self, leg: &Leg<'_>, groundspeed_mps: f64) -> f64 {
+        if leg.to.turn != TurnType::FlyBy {
+            return 0.0;
+        }
+        let Some(from) = leg.from else {
+            return 0.0;
+        };
+        let Some(next) = self.plan.waypoints.get(leg.index.wrapping_add(1)) else {
+            return 0.0;
+        };
+        let inbound_length = distance_m(&from.position, &leg.to.position);
+        let outbound_length = distance_m(&leg.to.position, &next.position);
+        if inbound_length < MIN_TRACK_SEPARATION_M || outbound_length < MIN_TRACK_SEPARATION_M {
+            return 0.0;
+        }
+        // The inbound course AT the fix is the reciprocal of the course
+        // back to the leg origin; the initial bearing from the origin
+        // would mis-size the corner by the great-circle convergence.
+        let inbound = initial_bearing_rad(&leg.to.position, &from.position) + core::f64::consts::PI;
+        let outbound = initial_bearing_rad(&leg.to.position, &next.position);
+        let track_change = fold_to_half_turn(outbound - inbound);
+        if track_change > MAX_ANTICIPATED_TRACK_CHANGE_RAD {
+            return 0.0;
+        }
+        let radius = turn_radius_m(groundspeed_mps, self.config.bank_limit_rad);
+        turn_anticipation_m(radius, track_change).min(0.5 * inbound_length.min(outbound_length))
     }
 
     /// The leg being flown, or `None` once the plan is complete.
@@ -162,99 +306,25 @@ impl PlanExecution {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
-    use navigate_contract::PlanRole;
-
-    use super::*;
-
-    fn pos(lat_deg: f64, lon_deg: f64) -> GeodeticPosition {
-        GeodeticPosition::new(lat_deg.to_radians(), lon_deg.to_radians(), 0.0)
+/// Screens the config's own numbers: a non-finite or non-positive value
+/// in any of them would silently disable the comparison it feeds.
+fn validate_config(config: &ExecutionConfig) -> Result<(), PlanActivationError> {
+    let defect =
+        |field: &'static str, value: f64| PlanActivationError::InvalidConfig { field, value };
+    if !config.capture_radius_m.is_finite() || config.capture_radius_m <= 0.0 {
+        return Err(defect("capture_radius_m", config.capture_radius_m));
     }
-
-    fn wp(ident: &str, lat_deg: f64, lon_deg: f64) -> Waypoint {
-        Waypoint::new(ident.to_owned(), pos(lat_deg, lon_deg))
+    if !config.bank_limit_rad.is_finite()
+        || config.bank_limit_rad <= 0.0
+        || config.bank_limit_rad >= core::f64::consts::FRAC_PI_2
+    {
+        return Err(defect("bank_limit_rad", config.bank_limit_rad));
     }
-
-    fn three_waypoint_execution() -> PlanExecution {
-        let plan = FlightPlan::new(
-            "mission".into(),
-            PlanRole::Mission,
-            vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 1.0), wp("W2", 1.0, 1.0)],
-        );
-        PlanExecution::new(plan, ExecutionConfig::default()).expect("valid plan")
-    }
-
-    #[test]
-    fn sequences_three_waypoints_capturing_exactly_at_the_radius() {
-        let mut exec = three_waypoint_execution();
-
-        // Initial direct-to leg: no origin waypoint.
-        let leg = exec.active_leg().expect("active leg");
-        assert!(leg.from.is_none());
-        assert_eq!(leg.index, 0);
-        assert_eq!(leg.to.ident, "W0");
-        assert_eq!(exec.remaining_waypoints().len(), 3);
-
-        // 0.001° of latitude ≈ 111 m: just outside the 100 m radius.
-        assert_eq!(exec.advance(&pos(0.001, 0.0)), SequenceEvent::None);
-        assert_eq!(exec.active_index(), 0);
-        // 0.0008° ≈ 89 m: just inside, so W0 captures.
-        assert_eq!(
-            exec.advance(&pos(0.0008, 0.0)),
-            SequenceEvent::LegAdvanced { to_index: 1 }
-        );
-        let leg = exec.active_leg().expect("active leg");
-        assert_eq!(leg.from.map(|w| w.ident.as_str()), Some("W0"));
-        assert_eq!(leg.to.ident, "W1");
-
-        // Mid-leg, far from W1: no capture.
-        assert_eq!(exec.advance(&pos(0.0, 0.5)), SequenceEvent::None);
-        assert_eq!(
-            exec.advance(&pos(0.0, 1.0)),
-            SequenceEvent::LegAdvanced { to_index: 2 }
-        );
-        assert_eq!(exec.remaining_waypoints().len(), 1);
-        assert!(!exec.is_complete());
-
-        assert_eq!(exec.advance(&pos(1.0, 1.0)), SequenceEvent::PlanComplete);
-        assert!(exec.is_complete());
-        assert!(exec.active_leg().is_none());
-        assert!(exec.remaining_waypoints().is_empty());
-    }
-
-    #[test]
-    fn post_complete_advance_is_inert_even_at_a_waypoint() {
-        let mut exec = three_waypoint_execution();
-        for position in [pos(0.0, 0.0), pos(0.0, 1.0), pos(1.0, 1.0)] {
-            exec.advance(&position);
-        }
-        assert!(exec.is_complete());
-        let snapshot = exec.clone();
-        assert_eq!(exec.advance(&pos(1.0, 1.0)), SequenceEvent::None);
-        assert_eq!(exec, snapshot);
-        assert_eq!(exec.active_index(), 2);
-    }
-
-    #[test]
-    fn a_position_far_from_everything_advances_nothing() {
-        let mut exec = three_waypoint_execution();
-        for _ in 0..3 {
-            assert_eq!(exec.advance(&pos(45.0, -120.0)), SequenceEvent::None);
-        }
-        assert_eq!(exec.active_index(), 0);
-        assert!(!exec.is_complete());
-        assert_eq!(exec.remaining_waypoints().len(), 3);
-    }
-
-    #[test]
-    fn an_invalid_plan_is_refused_at_construction() {
-        let empty = FlightPlan::new("empty".into(), PlanRole::Mission, Vec::new());
-        assert!(matches!(
-            PlanExecution::new(empty, ExecutionConfig::default()),
-            Err(PlanValidationError::Empty { .. })
+    if !config.min_approach_speed_mps.is_finite() || config.min_approach_speed_mps <= 0.0 {
+        return Err(defect(
+            "min_approach_speed_mps",
+            config.min_approach_speed_mps,
         ));
     }
+    Ok(())
 }

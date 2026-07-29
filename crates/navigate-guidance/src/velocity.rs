@@ -15,6 +15,8 @@ use crate::vertical;
 mod compose;
 
 #[cfg(test)]
+mod constraint_tests;
+#[cfg(test)]
 mod tests;
 
 /// Derives one local-level NED velocity setpoint from a navigation
@@ -31,11 +33,13 @@ mod tests;
 /// - The reference track runs `leg_from` → `leg_to`, or ownship →
 ///   `leg_to` for a direct-to leg, whose cross-track deviation is
 ///   therefore zero and whose velocity is pure bearing-aligned progress.
-/// - Along-track speed is `config.cruise_mps`, scaled linearly by the
-///   distance remaining inside `config.arrival_slowdown_radius_m` and
-///   floored at [`VelocityGuidanceConfig::MIN_APPROACH_SPEED_MPS`].
-///   Capturing the waypoint and terminating the leg stay `navigate-fpl`'s
-///   decisions; the slowdown only shapes the speed guidance asks for.
+/// - Along-track speed is `config.cruise_mps` — bounded by the target
+///   waypoint's speed constraint when it carries one (NAV-VC-003) —
+///   scaled linearly by the distance remaining inside
+///   `config.arrival_slowdown_radius_m` and floored at
+///   [`VelocityGuidanceConfig::MIN_APPROACH_SPEED_MPS`]. Capturing the
+///   waypoint and terminating the leg stay `navigate-fpl`'s decisions;
+///   the slowdown only shapes the speed guidance asks for.
 /// - The correction is `config.cross_track_gain_per_s` times the
 ///   deviation, limited to `config.max_horizontal_mps`, directed to
 ///   *reduce* the deviation: right of course (positive cross-track,
@@ -47,8 +51,10 @@ mod tests;
 /// Vertical: `config.vertical_gain_per_s` times the deviation from
 /// `leg_to`'s altitude constraint (positive above the profile, the
 /// convention of [`GuidanceSetpoint::DeviationTracking`]), limited to
-/// `config.max_vertical_mps`. Above the profile commands a positive down
-/// component — descent. A waypoint without a constraint commands `0.0`.
+/// `config.max_vertical_mps` and, when the leg declares a gradient, to
+/// `|gradient|` times the commanded along-track speed (NAV-VC-002).
+/// Above the profile commands a positive down component — descent. A
+/// waypoint without a constraint commands `0.0`.
 ///
 /// # Errors
 ///
@@ -80,7 +86,16 @@ pub fn guide_velocity(
         &config.admission,
     )?;
     let remaining_m = distance_m(&solution.position, &leg_to.position);
-    let horizontal = compose::horizontal_mps(&leg, remaining_m, config);
+    // A waypoint speed constraint bounds the leg toward it (NAV-VC-003);
+    // plan validation refuses non-positive constraints and activation
+    // refuses sub-floor ones, so a plain min is honest here.
+    let cruise_mps = leg_to
+        .max_speed_mps
+        .map_or(config.cruise_mps, |constraint| {
+            config.cruise_mps.min(constraint)
+        });
+    let (horizontal, along_speed_mps) =
+        compose::horizontal_mps(&leg, remaining_m, cruise_mps, config);
     let deviation_m = vertical::deviation_m(solution.position.altitude_m, leg_to.altitude.as_ref());
     Ok(GuidanceCommand::new(
         now,
@@ -88,7 +103,7 @@ pub fn guide_velocity(
             velocity: NedVelocity::new(
                 horizontal.north_mps,
                 horizontal.east_mps,
-                compose::down_mps(deviation_m, config),
+                compose::down_mps(deviation_m, leg_to.gradient, along_speed_mps, config),
             ),
         },
         solution.stamp,

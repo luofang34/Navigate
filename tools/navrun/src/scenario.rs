@@ -10,12 +10,13 @@
 
 use navigate_contract::{
     ClockDomainId, FaultDetection, FlightPlan, GeodeticPosition, GuidanceSetpoint, MonotonicNanos,
-    NavigationSolution, ObservationStamp, PlanRole, PlanValidationError, Redundancy, SensorClass,
-    SolutionQuality, SourceComposition, SourceEpoch, SourceId, SymmetricCov3, Waypoint,
-    WrappingSequence,
+    NavigationSolution, ObservationStamp, PlanRole, Redundancy, SensorClass, SolutionQuality,
+    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, Waypoint, WrappingSequence,
 };
 use navigate_egpws::{EgpwsAssessment, EgpwsConfig, EgpwsUnavailable, assess};
-use navigate_fpl::{ExecutionConfig, PlanExecution, SequenceEvent};
+use navigate_fpl::{
+    ExecutionConfig, PlanActivationError, PlanExecution, SequenceEvent, SequenceReason,
+};
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
@@ -52,6 +53,21 @@ const CLOCK: ClockDomainId = ClockDomainId::new(0);
 /// The synthesized GNSS receiver.
 const GNSS_SOURCE: SourceId = SourceId::new(1);
 
+/// The truth model's turn-rate limit per one-second step: the standard
+/// bank-limited rate g·tan(18°)/v at the scenario groundspeed, matching
+/// the turn geometry the sequencer anticipates.
+const MAX_TURN_RATE_RAD_S: f64 = 9.80665 * 0.324_919_696_2 / GROUND_SPEED_MPS;
+
+/// Folds a course error into [-π, π] for the shortest-way turn.
+fn wrap_to_pi(angle_rad: f64) -> f64 {
+    let wrapped = angle_rad.rem_euclid(core::f64::consts::TAU);
+    if wrapped > core::f64::consts::PI {
+        wrapped - core::f64::consts::TAU
+    } else {
+        wrapped
+    }
+}
+
 /// Cruise altitude above the WGS84 ellipsoid in meters.
 const CRUISE_ALTITUDE_M: f64 = 500.0;
 
@@ -75,15 +91,19 @@ pub struct ScenarioSummary {
     pub final_redundancy: Redundancy,
     /// Fault-detection statement of the final published solution.
     pub final_fault_detection: FaultDetection,
+    /// Why the most recent non-terminal leg sequenced, when one did
+    /// (NAV-TT-005); the dogleg at W1 earns `Anticipated` at the
+    /// scenario's groundspeed.
+    pub last_sequence_reason: Option<SequenceReason>,
 }
 
 /// Why the scripted scenario could not finish.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ScenarioError {
-    /// The scripted flight plan failed structural validation.
+    /// The scripted flight plan could not become an execution.
     #[error(transparent)]
-    InvalidPlan(#[from] PlanValidationError),
+    InvalidPlan(#[from] PlanActivationError),
     /// A truth-model tangent plane could not be anchored.
     #[error("truth geometry failed at step {step}")]
     TruthGeometry {
@@ -156,6 +176,10 @@ struct ScenarioRun {
     max_lateral_dev_m: f64,
     last_solution: Option<NavigationSolution>,
     plan_completed: bool,
+    last_sequence_reason: Option<SequenceReason>,
+    /// The truth model's current course, turned bank-limited toward the
+    /// active waypoint each step.
+    truth_course_rad: f64,
 }
 
 impl ScenarioRun {
@@ -163,6 +187,7 @@ impl ScenarioRun {
     fn new() -> Result<Self, ScenarioError> {
         let waypoints = mission_waypoints();
         let truth = waypoints[0].position;
+        let initial_course_rad = initial_bearing_rad(&truth, &waypoints[1].position);
         let plan = FlightPlan::new("navrun-mission".into(), PlanRole::Mission, waypoints.into());
         let execution = PlanExecution::new(plan, ExecutionConfig::default())?;
         Ok(Self {
@@ -176,6 +201,8 @@ impl ScenarioRun {
             max_lateral_dev_m: 0.0,
             last_solution: None,
             plan_completed: false,
+            last_sequence_reason: None,
+            truth_course_rad: initial_course_rad,
         })
     }
 
@@ -194,8 +221,12 @@ impl ScenarioRun {
         }
         if let Some(solution) = self.filter.tick(self.now) {
             self.solutions_published = self.solutions_published.wrapping_add(1);
-            if self.execution.advance(&solution.position) == SequenceEvent::PlanComplete {
-                self.plan_completed = true;
+            match self.execution.advance(&solution.position, GROUND_SPEED_MPS) {
+                SequenceEvent::PlanComplete { .. } => self.plan_completed = true,
+                SequenceEvent::LegAdvanced { reason, .. } => {
+                    self.last_sequence_reason = Some(reason);
+                }
+                _ => {}
             }
             self.guide_active_leg(&solution, step)?;
             check_terrain_seam(&solution, self.now, step)?;
@@ -267,11 +298,20 @@ impl ScenarioRun {
         };
         let target = leg.to.position;
         let travel_m = distance_m(&self.truth, &target).min(GROUND_SPEED_MPS);
-        let bearing_rad = initial_bearing_rad(&self.truth, &target);
+        let desired_rad = initial_bearing_rad(&self.truth, &target);
+        // A bank-limited turn toward the desired course: the truth flies
+        // the same 18° turn geometry the sequencer anticipates, so the
+        // fly-by corner is an arc a constant-velocity filter can track,
+        // not an instantaneous velocity flip its innovation gate would
+        // reject.
+        let error_rad = wrap_to_pi(desired_rad - self.truth_course_rad);
+        let turn_rad = error_rad.clamp(-MAX_TURN_RATE_RAD_S, MAX_TURN_RATE_RAD_S);
+        self.truth_course_rad =
+            (self.truth_course_rad + turn_rad).rem_euclid(core::f64::consts::TAU);
         let plane = tangent_plane(&self.truth, step)?;
         self.truth = plane.from_ned(&NedOffset::new(
-            travel_m * bearing_rad.cos(),
-            travel_m * bearing_rad.sin(),
+            travel_m * self.truth_course_rad.cos(),
+            travel_m * self.truth_course_rad.sin(),
             0.0,
         ));
         Ok(())
@@ -292,6 +332,7 @@ impl ScenarioRun {
             final_quality: last.integrity.quality,
             final_redundancy: last.integrity.redundancy,
             final_fault_detection: last.integrity.fault_detection,
+            last_sequence_reason: self.last_sequence_reason,
         })
     }
 }
@@ -316,7 +357,9 @@ fn mission_waypoints() -> [Waypoint; 3] {
     [
         waypoint("W0", 47.0, 8.00),
         waypoint("W1", 47.0, 8.04),
-        waypoint("W2", 47.0, 8.08),
+        // A 90° dogleg: the corner at W1 exercises fly-by anticipation
+        // end to end (DTA ≈ 282 m at 30 m/s under the 18° default).
+        waypoint("W2", 47.0273, 8.04),
     ]
 }
 
@@ -371,10 +414,14 @@ mod tests {
         // Truth starts at W0, so the first advance captures it and the
         // active waypoint becomes W1, about 3 km east.
         let start = run.truth;
-        assert_eq!(
-            run.execution.advance(&start),
-            SequenceEvent::LegAdvanced { to_index: 1 }
-        );
+        assert!(matches!(
+            run.execution.advance(&start, GROUND_SPEED_MPS),
+            SequenceEvent::LegAdvanced {
+                to_index: 1,
+                reason: SequenceReason::Overflown,
+                ..
+            }
+        ));
         let target = run.execution.active_leg().expect("active leg").to.position;
         let before_m = distance_m(&run.truth, &target);
         run.propagate_truth(0).expect("truth propagates");

@@ -5,6 +5,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use navigate_contract::{FaultDetection, Redundancy};
+use navigate_fpl::SequenceReason;
 use navrun::run_scenario;
 
 #[test]
@@ -37,11 +38,17 @@ fn lateral_deviation_stays_consistent_with_the_offset_table() {
         summary.max_lateral_dev_m > 0.0,
         "the offset table must produce some cross-track deviation: {summary:?}"
     );
-    // Offsets are under 3 m; the filter's velocity-convergence transient
-    // adds a little, but nothing should approach 10 m.
+    // The fly-by corner cut at W1 IS the dominant deviation, honestly
+    // reported against the new leg (NAV-HN-001): about the 282 m DTA,
+    // never runaway. Straight-leg tracking stays within the offset
+    // table's magnitude underneath it.
     assert!(
-        summary.max_lateral_dev_m < 10.0,
-        "lateral deviation must stay near the offset magnitude: {summary:?}"
+        summary.max_lateral_dev_m < 320.0,
+        "deviation is bounded by the corner geometry: {summary:?}"
+    );
+    assert!(
+        summary.max_lateral_dev_m > 100.0,
+        "the anticipated corner really was cut: {summary:?}"
     );
 }
 
@@ -57,5 +64,15 @@ fn single_source_honesty_is_visible_end_to_end() {
         summary.final_fault_detection,
         FaultDetection::Unavailable,
         "a single source agreeing with itself proves nothing: {summary:?}"
+    );
+}
+
+#[test]
+fn nav_tt_005_the_dogleg_fix_sequences_by_anticipation() {
+    let summary = run_scenario().expect("scenario runs");
+    assert_eq!(
+        summary.last_sequence_reason,
+        Some(SequenceReason::Anticipated),
+        "a 90° corner at 30 m/s anticipates well beyond the capture radius: {summary:?}"
     );
 }

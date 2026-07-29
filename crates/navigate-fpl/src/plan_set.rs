@@ -74,12 +74,12 @@ impl PlanSet {
             _ => None,
         };
         let plan = plan.ok_or(PlanActivationError::RoleUnavailable { role })?;
-        Ok(PlanExecution::new(plan.clone(), config)?)
+        PlanExecution::new(plan.clone(), config)
     }
 }
 
-/// Why a plan-set activation was refused.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Why a plan could not become an execution.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlanActivationError {
     /// No plan is loaded for the requested role.
@@ -91,6 +91,45 @@ pub enum PlanActivationError {
     /// The selected plan fails structural validation.
     #[error(transparent)]
     Invalid(#[from] PlanValidationError),
+    /// A waypoint's speed constraint is below the approach-speed floor
+    /// (NAV-VC-003): refused at activation, never clamped in flight.
+    #[error(
+        "plan {plan} waypoint {ident} demands {max_speed_mps} m/s, below the {floor_mps} m/s approach floor"
+    )]
+    SpeedBelowFloor {
+        /// Offending plan id.
+        plan: String,
+        /// Offending waypoint identifier.
+        ident: String,
+        /// The constraint that cannot be flown.
+        max_speed_mps: f64,
+        /// The configured floor it violates.
+        floor_mps: f64,
+    },
+    /// A fixed leg is no longer than the capture radius: the leg would
+    /// sequence while the vehicle is still at the previous fix.
+    #[error(
+        "plan {plan} leg to {ident} is {leg_length_m} m, no longer than the {capture_radius_m} m capture radius"
+    )]
+    CaptureRadiusExceedsLeg {
+        /// Offending plan id.
+        plan: String,
+        /// The waypoint the too-short leg runs to.
+        ident: String,
+        /// The fixed leg's length.
+        leg_length_m: f64,
+        /// The configured capture radius it does not clear.
+        capture_radius_m: f64,
+    },
+    /// An execution-config value cannot feed the comparisons it exists
+    /// for (non-finite, non-positive, or an unflyable bank limit).
+    #[error("execution config {field} = {value} is not flyable")]
+    InvalidConfig {
+        /// The offending config field.
+        field: &'static str,
+        /// The rejected value.
+        value: f64,
+    },
 }
 
 #[cfg(test)]
