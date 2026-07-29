@@ -21,8 +21,8 @@ fn execution(waypoints: Vec<Waypoint>, config: ExecutionConfig) -> PlanExecution
     PlanExecution::new(plan, config).expect("valid plan")
 }
 
-/// A dogleg with a 90° turn at W1, legs long enough that the 60 m/s DTA
-/// (1129.8 m) sits far outside the capture radius.
+/// A dogleg with a 90° turn at W1, legs long enough (~55 km) that the
+/// 60 m/s DTA (1129.8 m) sits far inside the half-leg cap.
 fn dogleg(turn_fix: Waypoint) -> PlanExecution {
     execution(
         vec![wp("W0", 0.0, 0.0), turn_fix, wp("W2", 0.5, 0.5)],
@@ -55,6 +55,23 @@ fn nav_tt_003_a_fly_by_fix_sequences_at_the_anticipation_distance() {
     );
     assert_eq!(
         exec.advance(&short_of_w1(1120.0), 60.0),
+        SequenceEvent::LegAdvanced {
+            to_index: 2,
+            turn: TurnType::FlyBy,
+            reason: SequenceReason::Anticipated,
+        }
+    );
+}
+
+#[test]
+fn nav_tt_005_a_late_sample_on_an_anticipated_fix_still_names_the_rule() {
+    // The fix's anticipation (1129.8 m) exceeds the capture radius, so
+    // the transition IS anticipated even when the deciding sample lands
+    // inside the radius — the reason names the rule, not the sample.
+    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    capture_w0(&mut exec);
+    assert_eq!(
+        exec.advance(&short_of_w1(90.0), 60.0),
         SequenceEvent::LegAdvanced {
             to_index: 2,
             turn: TurnType::FlyBy,
@@ -106,8 +123,10 @@ fn nav_tt_003_collinear_legs_degrade_to_the_capture_radius() {
 }
 
 #[test]
-fn nav_tt_003_anticipation_is_capped_by_the_inbound_leg_length() {
-    // Inbound leg 400 m, 90° turn: DTA (1129.8 m) caps to 400 m.
+fn nav_tt_003_anticipation_is_capped_at_half_the_shorter_adjoining_leg() {
+    // Inbound leg 400 m, 90° turn onto a long leg: DTA (1129.8 m) caps
+    // to 200 m — the leg keeps a flyable middle and never sequences at
+    // the instant it begins.
     let w1_lon = 400.0 / M_PER_DEG;
     let mut exec = execution(
         vec![
@@ -120,14 +139,110 @@ fn nav_tt_003_anticipation_is_capped_by_the_inbound_leg_length() {
     capture_w0(&mut exec);
 
     let short_of_short_w1 = |meters: f64| pos(0.0, w1_lon - meters / M_PER_DEG);
+    // At the leg start (400 m out) and outside the cap: no sequencing.
     assert_eq!(
-        exec.advance(&short_of_short_w1(390.0), 60.0),
+        exec.advance(&short_of_short_w1(399.0), 60.0),
+        SequenceEvent::None
+    );
+    assert_eq!(
+        exec.advance(&short_of_short_w1(201.0), 60.0),
+        SequenceEvent::None
+    );
+    assert_eq!(
+        exec.advance(&short_of_short_w1(199.0), 60.0),
         SequenceEvent::LegAdvanced {
             to_index: 2,
             turn: TurnType::FlyBy,
             reason: SequenceReason::Anticipated,
         }
     );
+}
+
+#[test]
+fn a_parked_vehicle_never_walks_through_short_legs() {
+    // Two 500 m legs with a 90° corner; the vehicle sits at W0. W0
+    // captures once, and W1 must NOT sequence while parked 500 m out —
+    // the whole-leg skip is the failure this pins against.
+    let w1_lon = 500.0 / M_PER_DEG;
+    let w2_lat = 500.0 / M_PER_DEG;
+    let mut exec = execution(
+        vec![
+            wp("W0", 0.0, 0.0),
+            wp("W1", 0.0, w1_lon),
+            wp("W2", w2_lat, w1_lon),
+        ],
+        ExecutionConfig::default(),
+    );
+    let parked = pos(0.0, 0.0);
+    assert!(matches!(
+        exec.advance(&parked, 60.0),
+        SequenceEvent::LegAdvanced { to_index: 1, .. }
+    ));
+    for _ in 0..3 {
+        assert_eq!(exec.advance(&parked, 60.0), SequenceEvent::None);
+    }
+    assert_eq!(exec.active_index(), 1, "W1 is still ahead");
+}
+
+#[test]
+fn a_direct_to_leg_anticipates_nothing_even_before_a_reversal() {
+    // Fly-by first waypoint with a reversal onward: the direct-to leg's
+    // inbound geometry is the live position, so anticipation would be
+    // self-referential — it degrades to the capture radius, and no fix
+    // captures from tens of kilometers away.
+    let mut exec = execution(
+        vec![wp("W0", 0.0, 0.5), wp("W1", 0.0, 0.0)],
+        ExecutionConfig::default(),
+    );
+    assert_eq!(
+        exec.advance(&pos(0.0, 0.05), 60.0),
+        SequenceEvent::None,
+        "50 km out must not capture"
+    );
+    assert_eq!(exec.active_index(), 0);
+}
+
+#[test]
+fn nav_tt_003_a_track_change_beyond_the_limit_falls_back_to_capture() {
+    // A 180° reversal at W1: tan(Δ/2) blows up, so anticipation refuses
+    // and the fix sequences at the capture radius like a fly-over.
+    let mut exec = execution(
+        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.0, 0.0)],
+        ExecutionConfig::default(),
+    );
+    capture_w0(&mut exec);
+    assert_eq!(exec.advance(&short_of_w1(500.0), 60.0), SequenceEvent::None);
+    assert_eq!(
+        exec.advance(&short_of_w1(99.0), 60.0),
+        SequenceEvent::LegAdvanced {
+            to_index: 2,
+            turn: TurnType::FlyBy,
+            reason: SequenceReason::Overflown,
+        }
+    );
+}
+
+#[test]
+fn nav_tt_001_the_terminal_waypoint_ignores_its_turn_type() {
+    for turn in [TurnType::FlyBy, TurnType::FlyOver] {
+        let mut exec = execution(
+            vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5).with_turn(turn)],
+            ExecutionConfig::default(),
+        );
+        capture_w0(&mut exec);
+        assert_eq!(
+            exec.advance(&short_of_w1(1120.0), 60.0),
+            SequenceEvent::None,
+            "no onward course exists to anticipate"
+        );
+        assert_eq!(
+            exec.advance(&short_of_w1(99.0), 60.0),
+            SequenceEvent::PlanComplete {
+                turn,
+                reason: SequenceReason::Overflown,
+            }
+        );
+    }
 }
 
 #[test]
@@ -143,16 +258,23 @@ fn an_unflyable_groundspeed_anticipates_nothing() {
     }
 }
 
-/// NAV-HN-002: a plan built with only `Waypoint::new` under the default
-/// config sequences exactly as pure capture-radius behavior — the same
-/// stations the pre-turn-type sequencer stepped through.
 #[test]
-fn nav_hn_002_a_legacy_plan_keeps_capture_radius_behavior() {
+fn a_non_finite_position_captures_nothing() {
+    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    let bad = GeodeticPosition::new(f64::NAN, 0.0, 0.0);
+    assert_eq!(exec.advance(&bad, 60.0), SequenceEvent::None);
+    assert_eq!(exec.active_index(), 0);
+}
+
+/// NAV-HN-002: a plan built with only `Waypoint::new` sequences at pure
+/// capture-radius stations whenever the DTA stays inside the capture
+/// radius (here 1.26 m at 2 m/s against 100 m).
+#[test]
+fn nav_hn_002_a_legacy_plan_keeps_capture_radius_behavior_at_low_speed() {
     let mut exec = execution(
         vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 1.0), wp("W2", 1.0, 1.0)],
         ExecutionConfig::default(),
     );
-    // At 2 m/s the DTA is ~1.26 m, far inside the 100 m capture radius.
     assert_eq!(exec.advance(&pos(0.001, 0.0), 2.0), SequenceEvent::None);
     assert!(matches!(
         exec.advance(&pos(0.0008, 0.0), 2.0),
@@ -167,12 +289,31 @@ fn nav_hn_002_a_legacy_plan_keeps_capture_radius_behavior() {
         exec.advance(&pos(0.0, 1.0), 2.0),
         SequenceEvent::LegAdvanced { to_index: 2, .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         exec.advance(&pos(1.0, 1.0), 2.0),
-        SequenceEvent::PlanComplete
-    );
+        SequenceEvent::PlanComplete { .. }
+    ));
     assert!(exec.is_complete());
     assert_eq!(exec.advance(&pos(1.0, 1.0), 2.0), SequenceEvent::None);
+}
+
+/// NAV-HN-002's honest boundary: fly-by is the DEFAULT, so the same
+/// vocabulary-free plan anticipates once the groundspeed makes the DTA
+/// exceed the capture radius — intentional, not a regression.
+#[test]
+fn nav_hn_002_a_legacy_plan_anticipates_at_speed_by_design() {
+    let mut exec = execution(
+        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.5)],
+        ExecutionConfig::default(),
+    );
+    capture_w0(&mut exec);
+    assert!(matches!(
+        exec.advance(&short_of_w1(1120.0), 60.0),
+        SequenceEvent::LegAdvanced {
+            reason: SequenceReason::Anticipated,
+            ..
+        }
+    ));
 }
 
 #[test]

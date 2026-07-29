@@ -87,8 +87,8 @@ pub fn guide_velocity(
     )?;
     let remaining_m = distance_m(&solution.position, &leg_to.position);
     // A waypoint speed constraint bounds the leg toward it (NAV-VC-003);
-    // constraints below a flyable floor are refused at plan activation,
-    // so a plain min is honest here.
+    // plan validation refuses non-positive constraints and activation
+    // refuses sub-floor ones, so a plain min is honest here.
     let cruise_mps = leg_to
         .max_speed_mps
         .map_or(config.cruise_mps, |constraint| {

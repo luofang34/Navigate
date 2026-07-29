@@ -170,3 +170,38 @@ fn a_defect_names_the_waypoint_that_carries_it() {
         "the message names the field: {refusal}"
     );
 }
+
+#[test]
+fn nav_vc_003_a_non_positive_speed_constraint_is_refused() {
+    for speed in [0.0, -5.0] {
+        let plan = FlightPlan::new(
+            "p".into(),
+            PlanRole::Mission,
+            vec![
+                Waypoint::new("W0".into(), GeodeticPosition::new(0.0, 0.0, 0.0))
+                    .with_max_speed(speed),
+            ],
+        );
+        assert!(
+            matches!(
+                plan.validate(),
+                Err(PlanValidationError::NonPositiveSpeedConstraint { max_speed_mps, .. })
+                    if max_speed_mps == speed
+            ),
+            "speed {speed} must be refused"
+        );
+    }
+}
+
+#[test]
+fn nav_vc_002_a_zero_gradient_is_refused_absence_expresses_no_limit() {
+    let plan = FlightPlan::new(
+        "p".into(),
+        PlanRole::Mission,
+        vec![Waypoint::new("W0".into(), GeodeticPosition::new(0.0, 0.0, 0.0)).with_gradient(0.0)],
+    );
+    assert!(matches!(
+        plan.validate(),
+        Err(PlanValidationError::ZeroGradient { .. })
+    ));
+}

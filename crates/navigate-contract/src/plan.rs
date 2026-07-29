@@ -65,14 +65,17 @@ pub struct Waypoint {
     /// How the turn at this waypoint is flown.
     pub turn: TurnType,
     /// Maximum along-track speed on the leg toward this waypoint, meters
-    /// per second (NAV-VC-003).
+    /// per second (NAV-VC-003). Must be finite and positive;
+    /// [`FlightPlan::validate`] refuses anything else.
     pub max_speed_mps: Option<f64>,
     /// Vertical gradient of the leg toward this waypoint: height in
     /// meters per along-track meter (NAV-VC-002). Procedure sources
     /// express gradients in feet per nautical mile; the canonical form
     /// is dimensionless m/m. Descent gradients may be expressed
     /// negative — consumers limit a rate magnitude, so the sign carries
-    /// intent, not the limit.
+    /// intent, not the limit. Zero is refused by
+    /// [`FlightPlan::validate`]: absence, not zero, expresses "no
+    /// gradient limit".
     pub gradient: Option<f64>,
 }
 
@@ -201,6 +204,9 @@ fn validate_constraints(
         ident: waypoint.ident.clone(),
         field,
     };
+    // The match is deliberately exhaustive without a wildcard: this is
+    // the defining crate, so a future AltitudeConstraint variant becomes
+    // a compile error here instead of silently skipping every screen.
     match waypoint.altitude {
         None => {}
         Some(
@@ -210,6 +216,11 @@ fn validate_constraints(
         ) if !altitude_m.is_finite() => {
             return Err(defect(ConstraintField::Altitude));
         }
+        Some(
+            AltitudeConstraint::At(_)
+            | AltitudeConstraint::AtOrAbove(_)
+            | AltitudeConstraint::AtOrBelow(_),
+        ) => {}
         Some(AltitudeConstraint::Window { lower_m, upper_m }) => {
             if !lower_m.is_finite() || !upper_m.is_finite() {
                 return Err(defect(ConstraintField::Altitude));
@@ -222,17 +233,36 @@ fn validate_constraints(
                 });
             }
         }
-        Some(_) => {}
     }
-    if let Some(max_speed_mps) = waypoint.max_speed_mps
-        && !max_speed_mps.is_finite()
-    {
-        return Err(defect(ConstraintField::MaxSpeed));
+    if let Some(max_speed_mps) = waypoint.max_speed_mps {
+        if !max_speed_mps.is_finite() {
+            return Err(defect(ConstraintField::MaxSpeed));
+        }
+        // A zero or negative demanded speed cannot fly a leg; guidance's
+        // plain min over the constraint is honest only because this
+        // refusal exists (NAV-VC-003).
+        if max_speed_mps <= 0.0 {
+            return Err(PlanValidationError::NonPositiveSpeedConstraint {
+                plan: plan.to_owned(),
+                index,
+                ident: waypoint.ident.clone(),
+                max_speed_mps,
+            });
+        }
     }
-    if let Some(gradient) = waypoint.gradient
-        && !gradient.is_finite()
-    {
-        return Err(defect(ConstraintField::Gradient));
+    if let Some(gradient) = waypoint.gradient {
+        if !gradient.is_finite() {
+            return Err(defect(ConstraintField::Gradient));
+        }
+        // A zero gradient cannot fly any profile change; absence — not
+        // zero — expresses "no gradient limit" (NAV-VC-002).
+        if gradient == 0.0 {
+            return Err(PlanValidationError::ZeroGradient {
+                plan: plan.to_owned(),
+                index,
+                ident: waypoint.ident.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -261,7 +291,7 @@ impl fmt::Display for ConstraintField {
 }
 
 /// Structural defects a plan can carry.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlanValidationError {
     /// The plan holds no waypoints.
@@ -304,5 +334,30 @@ pub enum PlanValidationError {
         ident: String,
         /// Which declared quantity is non-finite.
         field: ConstraintField,
+    },
+    /// A waypoint demands a speed no vehicle can fly a leg at.
+    #[error(
+        "plan {plan} waypoint {index} ({ident}) demands a non-positive speed {max_speed_mps} m/s"
+    )]
+    NonPositiveSpeedConstraint {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: String,
+        /// The speed that cannot be flown.
+        max_speed_mps: f64,
+    },
+    /// A waypoint declares a zero gradient, which cannot fly any profile
+    /// change; absence expresses "no gradient limit".
+    #[error("plan {plan} waypoint {index} ({ident}) declares a zero gradient")]
+    ZeroGradient {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: String,
     },
 }

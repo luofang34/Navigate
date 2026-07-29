@@ -94,3 +94,35 @@ fn nav_vc_001_a_window_flows_through_the_deviation_derivation_too() {
         "20 m below the band is a -20 m deviation, got {vertical_m}"
     );
 }
+
+#[test]
+fn nav_tt_004_a_fly_over_rejoin_reports_honest_deviation_and_corrects_toward_the_new_leg() {
+    // Ownship has just overflown a fix 300 m LEFT of the onward track
+    // (the fly-over rejoin geometry). Guidance against the new leg must
+    // report the real deviation and command a velocity whose lateral
+    // component reduces it — no synthetic intercept, no zeroed needle.
+    let (from, to) = equator_leg();
+    // The new leg runs west→east along the equator; 300 m left of track
+    // is 300 m NORTH of it.
+    let own = solution(
+        SolutionQuality::Good,
+        deg(300.0 / 111_194.926, 0.1, 0.0),
+        now(),
+    );
+    let config = VelocityGuidanceConfig::default();
+    let command =
+        guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("the rejoin guides");
+    let GuidanceSetpoint::Velocity { velocity } = command.setpoint else {
+        panic!("velocity derivation emits velocity setpoints");
+    };
+    assert!(
+        velocity.north_mps < -0.1,
+        "north of an eastbound track corrects southward, got {}",
+        velocity.north_mps
+    );
+    assert!(
+        velocity.east_mps > 0.5,
+        "progress along the new leg continues, got {}",
+        velocity.east_mps
+    );
+}

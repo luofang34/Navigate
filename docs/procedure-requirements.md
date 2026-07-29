@@ -45,21 +45,32 @@ vehicle class.
   limit (default 18°, the RNP fly-by standard; configurations MAY apply
   the DO-236C low-altitude cap of half the track change limited to 23°).
   The model is pure and unit-tested; no vehicle class is assumed.
-- **NAV-TT-003** A fly-by waypoint sequences at
-  `max(capture_radius, DTA)` before the fix, where
+- **NAV-TT-003** A fly-by waypoint between two fixed legs sequences
+  strictly within `max(capture_radius, DTA)` of the fix, where
   `DTA = r · tan(Δtrack / 2)` and `Δtrack` is the course change between
-  the inbound and outbound legs. A straight-ahead or terminal fix
-  (`Δtrack ≈ 0`) degrades to the capture radius. DTA is capped at the
-  leg length so short legs cannot sequence before they begin.
+  the inbound course at the fix and the outbound leg. DTA is bounded by
+  half the shorter adjoining leg, so every leg keeps a flyable middle
+  and both of its ends may anticipate — a leg never sequences at the
+  instant it begins. Anticipation applies only to track changes up to
+  120°: beyond it `tan(Δ/2)` approaches a reversal's blowup and a
+  course reversal has no fly-by solution (holds and radius-to-fix legs
+  own that geometry and are out of scope), so such fixes sequence at
+  the capture radius. A straight-ahead fix (`Δtrack ≈ 0`), a direct-to
+  leg (whose inbound geometry is the live position, not a fixed track),
+  and the terminal fix likewise degrade to the capture radius.
 - **NAV-TT-004** A fly-over waypoint sequences only within the capture
   radius of the fix itself (no anticipation). After sequencing, guidance
   tracks the next leg from the overflown fix; the rejoin appears as
   honest lateral deviation that converges — no synthetic intercept path
   is fabricated.
-- **NAV-TT-005** Sequencing events expose the turn type and the
-  sequencing reason (anticipated vs overflown) so consumers (telemetry,
-  tests, displays) can distinguish an early fly-by advance from a
-  fly-over crossing.
+- **NAV-TT-005** Every sequencing event — leg advance and plan
+  completion alike — exposes the turn type and the sequencing reason.
+  The reason names the RULE that authorized the advance, not the sample
+  that happened to arrive: a fly-by fix whose anticipation distance
+  exceeds the capture radius reports an anticipated transition even
+  when a sparse position sample lands inside the radius, so consumers
+  (telemetry, tests, displays) can always distinguish an anticipated
+  fly-by from a fly-over crossing.
 
 ## Vertical and speed constraints
 
@@ -69,13 +80,17 @@ vehicle class.
   deviation; below reports the climb demand (negative, below profile);
   above reports the descent demand (positive, above profile) —
   consistent with the existing one-sided forms.
-- **NAV-VC-002** Guidance vertical commands respect, in order: the
-  vehicle's configured vertical-rate caps, and a per-leg **gradient
-  limit** when the plan declares one (climb or descent, expressed as
-  height per along-track distance; procedure sources use ft/NM, the
-  vocabulary is dimensionless m/m in canonical units). The commanded
-  vertical rate is `min(rate_cap, gradient · groundspeed)`; a leg with
-  no declared gradient uses the caps alone.
+- **NAV-VC-002** Guidance vertical commands are the vertical-gain
+  correction toward the profile, clamped to a limit that is the tighter
+  of the vehicle's configured vertical-rate cap and, when the plan
+  declares a per-leg **gradient limit**, `|gradient|` times the
+  commanded along-track speed (so the limit is a path angle: it shrinks
+  with the arrival slowdown). Gradients are height per along-track
+  distance; procedure sources use ft/NM, the vocabulary is
+  dimensionless m/m in canonical units. A declared gradient is nonzero
+  — zero cannot fly any profile change and is refused at plan
+  validation; absence, not zero, expresses "no gradient limit". A leg
+  with no declared gradient uses the caps alone.
 - **NAV-VC-003** A waypoint MAY carry a maximum-speed constraint. On
   the leg toward that fix, commanded along-track speed is
   `min(cruise, constraint)`. Constraints below the vehicle's minimum
@@ -91,10 +106,13 @@ vehicle class.
   fly-by transition the lateral deviation is reported against the leg
   guidance is actually tracking (inbound until sequencing, outbound
   after), so a consumer sees the real geometry of the corner being cut.
-- **NAV-HN-002** All new vocabulary is additive: plans without turn
-  types, windows, gradients, or speed constraints behave exactly as
-  before (fly-by default with pure capture-radius sequencing when DTA is
-  degenerate, caps-only vertical, cruise speed).
+- **NAV-HN-002** All new vocabulary is additive: a plan built without
+  it still validates, activates, and flies. Sequencing is byte-identical
+  to pure capture-radius behavior whenever the anticipation distance
+  stays inside the capture radius (low groundspeed, gentle or degenerate
+  corners); at speeds where the DTA exceeds the capture radius the
+  fly-by default anticipates BY DESIGN — that is the feature, not a
+  compatibility break, and both regimes are regression-pinned.
 
 ## Out of scope (recorded, deferred)
 
