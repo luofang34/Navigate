@@ -1,0 +1,15 @@
+[package]
+name = "navigate-guidance"
+description = "Lateral and vertical guidance from solution plus active leg to setpoints"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+navigate-contract = { workspace = true }
+navigate-geodesy = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

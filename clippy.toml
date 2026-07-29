@@ -1,0 +1,11 @@
+disallowed-types = [
+    { path = "anyhow::Error", reason = "typed errors only in this workspace; use thiserror enums" },
+]
+
+disallowed-macros = [
+    { path = "std::println", reason = "use tracing; CLI product output goes through an explicitly allowed output module" },
+    { path = "std::print", reason = "use tracing; CLI product output goes through an explicitly allowed output module" },
+    { path = "std::eprintln", reason = "use tracing for diagnostics" },
+    { path = "std::eprint", reason = "use tracing for diagnostics" },
+    { path = "std::dbg", reason = "use tracing for diagnostics" },
+]
