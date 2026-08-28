@@ -77,7 +77,12 @@ absent; displays show quality rather than hiding it.
 `navigate-fpl` owns the plan model's execution: validation, active-leg
 sequencing with capture criteria, terminal behavior, and procedure
 selection (a loss-of-communication procedure is a plan with a different
-role, not a different machine). Waypoints carry turn types per the
+role, not a different machine). Each leg carries a path terminator from
+one vocabulary that names the RNAV leg types and the vertical procedure
+legs together, per the [leg requirements](leg-requirements.md) and
+ADR-0006; a leg type this build cannot fly is refused by name at
+activation, never flown under a guard written for another geometry.
+Waypoints carry turn types per the
 [procedure requirements](procedure-requirements.md): a fly-by fix
 sequences early by the distance of turn anticipation the bank-limit
 model earns at the commanded groundspeed, while fly-over and terminal
