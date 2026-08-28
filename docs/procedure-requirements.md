@@ -122,7 +122,15 @@ vehicle class.
 
 ## Out of scope (recorded, deferred)
 
-Radius-to-fix (RF) legs, holds, DME arcs, wind-compensated transition
-areas (DO-236 theoretical transition boundaries), full ARINC-424 leg
-types, and procedure databases (CIFP legs arrive through the
-communication component's navdata, a separate integration).
+The leg vocabulary and per-leg sequencing have their own requirements
+document ([leg-requirements.md](leg-requirements.md), the NAV-LG family)
+and their own decision record
+([ADR-0006](adr/0006-one-leg-vocabulary-for-path-terminators-and-vertical-legs.md)).
+That document owns path terminators, holds, and the vertical procedure
+legs. NAV-LG-010 narrows the "between two fixed legs" clause of
+NAV-TT-003 to the leg types that make a leg fixed at both ends.
+
+Deferred here: DME arcs, wind-compensated transition areas (DO-236
+theoretical transition boundaries), and procedure databases (CIFP legs
+arrive through the communication component's navdata, a separate
+integration).
