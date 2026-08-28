@@ -5,9 +5,9 @@
 //! judged twice yields the same refusal, and one leg yields one geometry.
 
 use navigate_contract::{
-    ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, SolutionQuality, Waypoint,
+    ClockDomainId, LateralReference, MonotonicNanos, NavigationSolution, SolutionQuality, Waypoint,
 };
-use navigate_geodesy::{cross_track_m, initial_bearing_rad};
+use navigate_geodesy::{cross_track_from_course_m, cross_track_m, initial_bearing_rad};
 
 use crate::config::GuidanceConfig;
 use crate::refusal::GuidanceRefusal;
@@ -36,10 +36,14 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 /// Admits the solution and the leg, returning the lateral geometry a
 /// derivation reads.
 ///
-/// The reference track runs `leg_from` → `leg_to` when the leg has an
-/// upstream fix. Direct-to (`leg_from` = `None`) anchors the track at
-/// ownship, so the cross-track deviation is zero by construction and the
-/// course is the live bearing to the waypoint.
+/// Each form of `reference` is the geometry one flown leg type defines
+/// (NAV-LG-014). [`LateralReference::Track`] runs the reference track
+/// from the upstream fix to `leg_to`.
+/// [`LateralReference::PresentPosition`] anchors the track at ownship,
+/// so the cross-track deviation is zero by construction and the course
+/// is the live bearing to the waypoint.
+/// [`LateralReference::Course`] measures against the published course
+/// line through `leg_to` and reports the published course.
 ///
 /// # Errors
 ///
@@ -50,7 +54,7 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 /// then [`GuidanceRefusal::ImplausibleTarget`].
 pub(crate) fn admit_leg(
     solution: &NavigationSolution,
-    leg_from: Option<&GeodeticPosition>,
+    reference: LateralReference,
     leg_to: &Waypoint,
     now: MonotonicNanos,
     now_clock: ClockDomainId,
@@ -62,7 +66,22 @@ pub(crate) fn admit_leg(
             ident: leg_to.ident.clone(),
         });
     }
-    let track_start = leg_from.unwrap_or(&solution.position);
+    // A course line needs one position and one direction, so it has no
+    // two-endpoint degenerate case to refuse (NAV-LG-012).
+    if let LateralReference::Course { course_rad } = reference {
+        return Ok(AdmittedLeg {
+            cross_track_m: cross_track_from_course_m(
+                &solution.position,
+                &leg_to.position,
+                course_rad,
+            ),
+            course_rad,
+        });
+    }
+    let track_start = match reference {
+        LateralReference::Track { ref from } => from,
+        _ => &solution.position,
+    };
     // Any track the geodesy layer refuses (endpoints below its
     // degenerate-track floor) cannot define a course, so the leg's
     // target is implausible as a guidance target.

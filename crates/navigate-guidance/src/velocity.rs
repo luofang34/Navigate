@@ -2,7 +2,7 @@
 //! velocity setpoint.
 
 use navigate_contract::{
-    ClockDomainId, GeodeticPosition, GuidanceCommand, GuidanceSetpoint, MonotonicNanos,
+    ClockDomainId, GuidanceCommand, GuidanceSetpoint, LateralReference, MonotonicNanos,
     NavigationSolution, NedVelocity, Waypoint,
 };
 use navigate_geodesy::distance_m;
@@ -30,9 +30,12 @@ mod tests;
 /// Lateral: the commanded horizontal velocity is along-track progress
 /// plus a cross-track correction.
 ///
-/// - The reference track runs `leg_from` → `leg_to`, or ownship →
-///   `leg_to` for a direct-to leg, whose cross-track deviation is
-///   therefore zero and whose velocity is pure bearing-aligned progress.
+/// - `reference` is the geometry the active leg defines (NAV-LG-014):
+///   the track from an upstream fix to `leg_to`, ownship → `leg_to` for
+///   an initial-fix or direct-to-fix leg — whose cross-track deviation
+///   is therefore zero and whose velocity is pure bearing-aligned
+///   progress — or the published course line through `leg_to` for a
+///   course-to-fix leg.
 /// - Along-track speed is `config.cruise_mps` — bounded by the target
 ///   waypoint's speed constraint when it carries one (NAV-VC-003) —
 ///   scaled linearly by the distance remaining inside
@@ -67,11 +70,12 @@ mod tests;
 /// - [`GuidanceRefusal::SolutionStale`] when the solution's age exceeds
 ///   `config.admission.max_solution_age`.
 /// - [`GuidanceRefusal::ImplausibleTarget`] when `leg_to`'s position
-///   fails the geodetic plausibility screen, or when the leg's endpoints
-///   coincide (a leg whose endpoints coincide cannot define a course).
+///   fails the geodetic plausibility screen, or when a track reference's
+///   endpoints coincide (such a track cannot define a course). A course
+///   reference has no such case: a fix and a course define the line.
 pub fn guide_velocity(
     solution: &NavigationSolution,
-    leg_from: Option<&GeodeticPosition>,
+    reference: LateralReference,
     leg_to: &Waypoint,
     now: MonotonicNanos,
     now_clock: ClockDomainId,
@@ -79,7 +83,7 @@ pub fn guide_velocity(
 ) -> Result<GuidanceCommand, GuidanceRefusal> {
     let leg = admit_leg(
         solution,
-        leg_from,
+        reference,
         leg_to,
         now,
         now_clock,

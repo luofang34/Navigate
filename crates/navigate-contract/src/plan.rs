@@ -9,6 +9,10 @@ use core::fmt;
 
 use crate::kinematics::GeodeticPosition;
 
+pub mod leg;
+
+pub use leg::{CourseReference, LegPath};
+
 #[cfg(test)]
 mod tests;
 
@@ -77,6 +81,12 @@ pub struct Waypoint {
     /// [`FlightPlan::validate`]: absence, not zero, expresses "no
     /// gradient limit".
     pub gradient: Option<f64>,
+    /// Path terminator of the leg toward this waypoint (NAV-LG-001).
+    /// `None` states that the plan source declared none; the executor
+    /// resolves it by position in the fly order — the first waypoint to
+    /// [`LegPath::DirectToFix`], every later one to
+    /// [`LegPath::TrackToFix`] (NAV-LG-002).
+    pub path: Option<LegPath>,
 }
 
 impl Waypoint {
@@ -91,6 +101,7 @@ impl Waypoint {
             turn: TurnType::FlyBy,
             max_speed_mps: None,
             gradient: None,
+            path: None,
         }
     }
 
@@ -121,6 +132,14 @@ impl Waypoint {
     #[must_use]
     pub fn with_gradient(mut self, gradient: f64) -> Self {
         self.gradient = Some(gradient);
+        self
+    }
+
+    /// This waypoint with an explicit path terminator on the leg toward
+    /// it (NAV-LG-001).
+    #[must_use]
+    pub fn with_path(mut self, path: LegPath) -> Self {
+        self.path = Some(path);
         self
     }
 }
@@ -163,9 +182,14 @@ impl FlightPlan {
     }
 
     /// Structural validation: a plan must have at least one waypoint,
-    /// every coordinate must be plausible, and every declared constraint
+    /// every coordinate must be plausible, every declared constraint
     /// must be a number that can be flown — finite, and an altitude
-    /// window that brackets a band.
+    /// window that brackets a band — and every declared path terminator
+    /// must agree with its position in the fly order (NAV-LG-004).
+    ///
+    /// Whether a terminator is implemented is the executor's property,
+    /// not this type's: a plan carrying a reserved leg is a valid plan,
+    /// and activation refuses it by name (NAV-LG-005).
     ///
     /// # Errors
     ///
@@ -185,6 +209,7 @@ impl FlightPlan {
                 });
             }
             validate_constraints(&self.id, index, waypoint)?;
+            leg::validate_path(&self.id, index, waypoint)?;
         }
         Ok(())
     }
@@ -359,5 +384,40 @@ pub enum PlanValidationError {
         index: usize,
         /// Waypoint identifier.
         ident: String,
+    },
+    /// The first waypoint declares a track-to-fix leg, which needs a fix
+    /// before it to run from (NAV-LG-004).
+    #[error("plan {plan} waypoint 0 ({ident}) declares a TF leg with no fix before it")]
+    TrackWithoutUpstreamFix {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint identifier.
+        ident: String,
+    },
+    /// A waypoint after the first declares an initial-fix leg, which
+    /// starts a procedure and cannot sit inside one (NAV-LG-004).
+    #[error("plan {plan} waypoint {index} ({ident}) declares an IF leg after the first waypoint")]
+    InitialFixNotFirst {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: String,
+    },
+    /// A course-to-fix leg declares a course that is not a finite angle
+    /// in `[0, 2π)`, so no vehicle can fly it (NAV-LG-004).
+    #[error(
+        "plan {plan} waypoint {index} ({ident}) declares a course {course_rad} outside [0, 2π)"
+    )]
+    CourseOutOfRange {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: String,
+        /// The course that cannot be flown.
+        course_rad: f64,
     },
 }

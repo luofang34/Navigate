@@ -21,14 +21,14 @@ pub mod stamp;
 pub mod time;
 
 pub use composition::{SensorClass, SourceComposition};
-pub use guidance::{GuidanceCommand, GuidanceSetpoint};
+pub use guidance::{GuidanceCommand, GuidanceSetpoint, LateralReference};
 pub use integrity::{
     FaultDetection, IntegrityAssessment, ProtectionLevels, Redundancy, SolutionQuality,
 };
 pub use kinematics::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 pub use plan::{
-    AltitudeConstraint, ConstraintField, FlightPlan, PlanRole, PlanValidationError, TurnType,
-    Waypoint,
+    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, LegPath, PlanRole,
+    PlanValidationError, TurnType, Waypoint,
 };
 pub use solution::NavigationSolution;
 pub use stamp::{ObservationStamp, SolutionStamp, SourceEpoch, SourceId, WrappingSequence};
