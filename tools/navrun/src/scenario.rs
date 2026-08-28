@@ -276,7 +276,7 @@ impl ScenarioRun {
         };
         let command = guide(
             solution,
-            leg.from.map(|waypoint| &waypoint.position),
+            leg.lateral_reference(),
             leg.to,
             self.now,
             CLOCK,

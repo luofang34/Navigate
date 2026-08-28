@@ -32,5 +32,7 @@ pub mod wgs84;
 
 pub use ecef::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
 pub use error::GeodesyError;
-pub use great_circle::{along_track_m, cross_track_m, distance_m, initial_bearing_rad};
+pub use great_circle::{
+    along_track_m, cross_track_from_course_m, cross_track_m, distance_m, initial_bearing_rad,
+};
 pub use local_plane::{LocalTangentPlane, NedOffset};

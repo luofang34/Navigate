@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use navigate_contract::{AltitudeConstraint, GuidanceSetpoint, SolutionQuality};
+use navigate_contract::{AltitudeConstraint, GuidanceSetpoint, LateralReference, SolutionQuality};
 
 use crate::config::{GuidanceConfig, VelocityGuidanceConfig};
 use crate::derive::guide;
@@ -15,8 +15,15 @@ fn nav_vc_003_a_waypoint_speed_constraint_bounds_the_leg_toward_it() {
     let constrained = to.clone().with_max_speed(0.8);
     let own = solution(SolutionQuality::Good, deg(0.0, 0.3, 0.0), now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &constrained, now(), CLOCK, &config)
-        .expect("constrained leg guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &constrained,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("constrained leg guides");
     let GuidanceSetpoint::Velocity { velocity } = command.setpoint else {
         panic!("velocity derivation emits velocity setpoints");
     };
@@ -39,8 +46,15 @@ fn nav_vc_002_a_tighter_gradient_binds_the_vertical_rate() {
         .with_gradient(0.05);
     let own = solution(SolutionQuality::Good, deg(0.0, 0.3, 200.0), now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &profiled, now(), CLOCK, &config)
-        .expect("profiled leg guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &profiled,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("profiled leg guides");
     let GuidanceSetpoint::Velocity { velocity } = command.setpoint else {
         panic!("velocity derivation emits velocity setpoints");
     };
@@ -57,8 +71,15 @@ fn nav_vc_002_a_tighter_gradient_binds_the_vertical_rate() {
         .clone()
         .with_altitude(AltitudeConstraint::At(0.0))
         .with_gradient(10.0);
-    let command = guide_velocity(&own, Some(&from), &loose, now(), CLOCK, &config)
-        .expect("loosely profiled leg guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &loose,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("loosely profiled leg guides");
     let GuidanceSetpoint::Velocity { velocity } = command.setpoint else {
         panic!("velocity derivation emits velocity setpoints");
     };
@@ -79,7 +100,7 @@ fn nav_vc_001_a_window_flows_through_the_deviation_derivation_too() {
     let own = solution(SolutionQuality::Good, deg(0.0, 0.3, 80.0), now());
     let command = guide(
         &own,
-        Some(&from),
+        LateralReference::track(from),
         &windowed,
         now(),
         CLOCK,
@@ -110,8 +131,15 @@ fn nav_tt_004_a_fly_over_rejoin_reports_honest_deviation_and_corrects_toward_the
         now(),
     );
     let config = VelocityGuidanceConfig::default();
-    let command =
-        guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("the rejoin guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("the rejoin guides");
     let GuidanceSetpoint::Velocity { velocity } = command.setpoint else {
         panic!("velocity derivation emits velocity setpoints");
     };

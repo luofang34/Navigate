@@ -1,22 +1,31 @@
 //! Active-leg sequencing over a validated flight plan.
 //!
-//! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg. The active leg
-//! runs from the previously captured waypoint — or from the present
-//! position on the initial direct-to leg — to the next waypoint in fly
-//! order. A fly-by waypoint sequences early by the distance of turn
-//! anticipation when the turn geometry earns it (NAV-TT-003); a fly-over
-//! waypoint and the terminal waypoint sequence only inside the capture
-//! radius (NAV-TT-004). After the final waypoint captures, the execution
-//! is complete and further advances are inert.
+//! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg. Every leg
+//! carries a path terminator (NAV-LG-001); a waypoint that declares none
+//! gets one by position in the fly order (NAV-LG-002), which names the
+//! implicit model rather than changing it. The active leg runs from the
+//! previously captured waypoint — or from the present position on a
+//! direct-to leg — to the next waypoint in fly order. A fly-by waypoint
+//! between two track-to-fix legs sequences early by the distance of turn
+//! anticipation when the turn geometry earns it (NAV-TT-003,
+//! NAV-LG-010); a fly-over waypoint and the terminal waypoint sequence
+//! only inside the capture radius (NAV-TT-004). After the final waypoint
+//! captures, the execution is complete and further advances are inert.
 
-use navigate_contract::{FlightPlan, GeodeticPosition, TurnType, Waypoint};
+use navigate_contract::{
+    FlightPlan, GeodeticPosition, LateralReference, LegPath, TurnType, Waypoint,
+};
 use navigate_geodesy::{distance_m, initial_bearing_rad};
 
 use crate::plan_set::PlanActivationError;
 use crate::turn::{fold_to_half_turn, turn_anticipation_m, turn_radius_m};
 
+mod activation;
+
 #[cfg(test)]
 mod tests;
+
+use activation::{resolve_path, screen_leg_paths};
 
 /// Below this track separation a course is numerically meaningless and
 /// turn geometry is skipped (mirrors the geodesy degenerate-track floor).
@@ -76,6 +85,34 @@ pub struct Leg<'a> {
     pub to: &'a Waypoint,
     /// Index of `to` in the plan's fly order.
     pub index: usize,
+    /// The leg's resolved path terminator (NAV-LG-002). Activation has
+    /// already refused every terminator this build cannot fly, so this
+    /// is always one the sequencer and the guidance derivations
+    /// understand.
+    pub path: LegPath,
+}
+
+impl Leg<'_> {
+    /// The lateral geometry this leg gives a guidance derivation
+    /// (NAV-LG-014).
+    ///
+    /// A track-to-fix leg yields the track from its upstream fix, a
+    /// course-to-fix leg yields its published course, and every other
+    /// flown leg runs from the present position.
+    #[must_use]
+    pub fn lateral_reference(&self) -> LateralReference {
+        match self.path {
+            LegPath::CourseToFix { course_rad, .. } => LateralReference::course(course_rad),
+            // A track leg without an upstream fix is refused at
+            // activation, so the fallback is unreachable; it is also
+            // the fail-safe answer, because a track anchored at ownship
+            // is exactly a direct-to.
+            LegPath::TrackToFix => self.from.map_or(LateralReference::PresentPosition, |from| {
+                LateralReference::track(from.position)
+            }),
+            _ => LateralReference::PresentPosition,
+        }
+    }
 }
 
 /// Why a waypoint sequenced (NAV-TT-005).
@@ -131,12 +168,14 @@ impl PlanExecution {
     ///
     /// # Errors
     ///
-    /// The plan's first structural defect, an unflyable config value, or
-    /// a waypoint speed constraint below the approach-speed floor
-    /// (NAV-VC-003) — an invalid plan never becomes an execution.
+    /// The plan's first structural defect, an unflyable config value, a
+    /// waypoint speed constraint below the approach-speed floor
+    /// (NAV-VC-003), or a path terminator this build cannot fly
+    /// (NAV-LG-005) — an invalid plan never becomes an execution.
     pub fn new(plan: FlightPlan, config: ExecutionConfig) -> Result<Self, PlanActivationError> {
         plan.validate()?;
         validate_config(&config)?;
+        screen_leg_paths(&plan)?;
         for waypoint in &plan.waypoints {
             if let Some(max_speed_mps) = waypoint.max_speed_mps
                 && max_speed_mps < config.min_approach_speed_mps
@@ -227,20 +266,28 @@ impl PlanExecution {
     /// bounded by half the shorter adjoining leg, so each leg keeps a
     /// flyable middle and both of its ends may anticipate (NAV-TT-003).
     /// Zero — capture-radius sequencing — for fly-over fixes, the
-    /// terminal fix, direct-to legs (their inbound geometry is the live
-    /// position, not a fixed track), track changes beyond
+    /// terminal fix, any corner whose inbound or outbound leg is not a
+    /// track between two fixes (NAV-LG-010), track changes beyond
     /// [`MAX_ANTICIPATED_TRACK_CHANGE_RAD`] (a reversal has no fly-by
     /// solution), and geometry too degenerate to define a course.
     fn anticipation_distance(&self, leg: &Leg<'_>, groundspeed_mps: f64) -> f64 {
-        if leg.to.turn != TurnType::FlyBy {
+        if leg.to.turn != TurnType::FlyBy || leg.path != LegPath::TrackToFix {
             return 0.0;
         }
         let Some(from) = leg.from else {
             return 0.0;
         };
-        let Some(next) = self.plan.waypoints.get(leg.index.wrapping_add(1)) else {
+        let next_index = leg.index.wrapping_add(1);
+        let Some(next) = self.plan.waypoints.get(next_index) else {
             return 0.0;
         };
+        // Only a track-to-fix outbound leg is flown along the bearing to
+        // the next fix. A course-to-fix or direct-to-fix outbound leaves
+        // the corner on some other path, so that bearing would mis-size
+        // the turn (NAV-LG-010).
+        if resolve_path(next_index, next.path) != LegPath::TrackToFix {
+            return 0.0;
+        }
         let inbound_length = distance_m(&from.position, &leg.to.position);
         let outbound_length = distance_m(&leg.to.position, &next.position);
         if inbound_length < MIN_TRACK_SEPARATION_M || outbound_length < MIN_TRACK_SEPARATION_M {
@@ -274,6 +321,7 @@ impl PlanExecution {
             from,
             to,
             index: self.active_index,
+            path: resolve_path(self.active_index, to.path),
         })
     }
 

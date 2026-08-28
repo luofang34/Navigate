@@ -7,7 +7,7 @@
 //! operation, sustained link loss, explicit contingency command — is the
 //! host platform's decision; this crate only executes the selection.
 
-use navigate_contract::{FlightPlan, PlanRole, PlanValidationError};
+use navigate_contract::{FlightPlan, LegPath, PlanRole, PlanValidationError};
 
 use crate::execution::{ExecutionConfig, PlanExecution};
 
@@ -129,6 +129,35 @@ pub enum PlanActivationError {
         field: &'static str,
         /// The rejected value.
         value: f64,
+    },
+    /// A leg declares a path terminator this build has no sequencer for
+    /// (NAV-LG-005). The plan is valid; this executor cannot fly it.
+    #[error("plan {plan} leg {index} ({ident}) declares a {path} leg this build cannot fly")]
+    UnsupportedLegKind {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// The waypoint the leg runs to.
+        ident: String,
+        /// The path terminator that has no sequencer.
+        path: LegPath,
+    },
+    /// A course-to-fix leg declares its course against magnetic north.
+    /// Navigate has no magnetic variation model, and it does not guess
+    /// a variation (NAV-LG-005).
+    #[error(
+        "plan {plan} leg {index} ({ident}) declares a magnetic course {course_rad} and no variation model exists"
+    )]
+    MagneticCourseUnsupported {
+        /// Offending plan id.
+        plan: String,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// The waypoint the leg runs to.
+        ident: String,
+        /// The declared magnetic course.
+        course_rad: f64,
     },
 }
 

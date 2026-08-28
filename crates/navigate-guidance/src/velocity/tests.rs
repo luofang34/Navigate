@@ -4,17 +4,17 @@
 //! so a per-axis regression cannot pass.
 
 use navigate_contract::{
-    AltitudeConstraint, ClockDomainId, DurationNanos, GeodeticPosition, GuidanceSetpoint,
-    MonotonicNanos, NedVelocity, SolutionQuality, Waypoint,
+    AltitudeConstraint, GeodeticPosition, GuidanceSetpoint, LateralReference, NedVelocity,
+    SolutionQuality, Waypoint,
 };
 use navigate_geodesy::{cross_track_m, initial_bearing_rad, wgs84};
 
-use crate::config::{GuidanceConfig, VelocityGuidanceConfig};
-use crate::derive::guide;
-use crate::refusal::GuidanceRefusal;
+use crate::config::VelocityGuidanceConfig;
 use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
 
 use super::guide_velocity;
+
+mod refusal;
 
 fn velocity_of(setpoint: GuidanceSetpoint) -> NedVelocity {
     match setpoint {
@@ -42,7 +42,15 @@ fn on_track_eastbound_commands_cruise_due_east() {
     let (from, to) = equator_leg();
     let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(velocity.north_mps.abs() < 1e-6, "on track: {velocity:?}");
     assert!(
@@ -66,7 +74,15 @@ fn right_of_track_corrects_northward_at_the_configured_gain() {
     let own_pos = right_of_equator(4.0, 0.5);
     let own = solution(SolutionQuality::Good, own_pos, now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     let cross_m = cross_track_m(&own_pos, &from, &to.position).expect("valid track");
     assert!(
@@ -95,7 +111,7 @@ fn left_of_track_corrects_southward() {
     let own = solution(SolutionQuality::Good, own_pos, now());
     let command = guide_velocity(
         &own,
-        Some(&from),
+        LateralReference::track(from),
         &to,
         now(),
         CLOCK,
@@ -114,7 +130,15 @@ fn a_hundred_meters_right_of_track_saturates_the_cap_without_rotating_the_comman
     let (from, to) = equator_leg();
     let own = solution(SolutionQuality::Good, right_of_equator(100.0, 0.5), now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(
         velocity.north_mps > 0.0,
@@ -143,7 +167,15 @@ fn a_huge_cross_track_stays_within_the_horizontal_cap() {
         now(),
     );
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(velocity.north_mps > 0.0, "still corrects toward the track");
     assert!(
@@ -159,7 +191,15 @@ fn direct_to_is_pure_bearing_aligned_velocity() {
     let to = Waypoint::new("DCT".into(), deg(11.0, 21.0, 0.0));
     let own = solution(SolutionQuality::Good, own_pos, now());
     let config = VelocityGuidanceConfig::default();
-    let command = guide_velocity(&own, None, &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::PresentPosition,
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     let bearing_rad = initial_bearing_rad(&own_pos, &to.position);
     assert!(
@@ -188,7 +228,15 @@ fn inside_the_slowdown_radius_speed_scales_with_distance_remaining() {
         0.0,
     );
     let own = solution(SolutionQuality::Good, own_pos, now());
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(
         (speed_mps(velocity) - config.cruise_mps / 2.0).abs() < 1e-6,
@@ -206,7 +254,15 @@ fn the_approach_speed_floor_holds_at_the_waypoint() {
         0.0,
     );
     let own = solution(SolutionQuality::Good, own_pos, now());
-    let command = guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &own,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     // Linear scaling alone would command 1/30 of cruise here; the floor
     // keeps the leg flyable, and terminating it stays navigate-fpl's call.
@@ -223,7 +279,15 @@ fn above_the_profile_descends_and_below_it_climbs() {
         .with_altitude(AltitudeConstraint::At(100.0));
     let config = VelocityGuidanceConfig::default();
     let above = solution(SolutionQuality::Good, deg(0.0, 0.5, 101.0), now());
-    let command = guide_velocity(&above, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &above,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(
         velocity.down_mps > 0.0,
@@ -234,7 +298,15 @@ fn above_the_profile_descends_and_below_it_climbs() {
         "one meter above at the configured gain: {velocity:?}"
     );
     let below = solution(SolutionQuality::Good, deg(0.0, 0.5, 99.0), now());
-    let command = guide_velocity(&below, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+    let command = guide_velocity(
+        &below,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("guides");
     let velocity = velocity_of(command.setpoint);
     assert!(
         velocity.down_mps < 0.0,
@@ -254,168 +326,19 @@ fn the_vertical_rate_is_capped_both_ways() {
         (0.0, -config.max_vertical_mps),
     ] {
         let own = solution(SolutionQuality::Good, deg(0.0, 0.5, altitude_m), now());
-        let command =
-            guide_velocity(&own, Some(&from), &to, now(), CLOCK, &config).expect("guides");
+        let command = guide_velocity(
+            &own,
+            LateralReference::track(from),
+            &to,
+            now(),
+            CLOCK,
+            &config,
+        )
+        .expect("guides");
         let velocity = velocity_of(command.setpoint);
         assert!(
             (velocity.down_mps - expected_mps).abs() < 1e-9,
             "at {altitude_m} m the rate must ride the cap: {velocity:?}"
         );
     }
-}
-
-#[test]
-fn unusable_quality_is_refused() {
-    let (from, to) = equator_leg();
-    let own = solution(SolutionQuality::Unusable, deg(0.0, 0.5, 0.0), now());
-    let refusal = guide_velocity(
-        &own,
-        Some(&from),
-        &to,
-        now(),
-        CLOCK,
-        &VelocityGuidanceConfig::default(),
-    )
-    .expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::IntegrityBelowFloor {
-            quality: SolutionQuality::Unusable,
-            floor: SolutionQuality::Degraded,
-        }
-    );
-}
-
-#[test]
-fn a_stale_solution_is_refused() {
-    let (from, to) = equator_leg();
-    let solved_at = MonotonicNanos::from_nanos(1_000);
-    let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), solved_at);
-    let config = VelocityGuidanceConfig::default();
-    let bound = config.admission.max_solution_age;
-    let at_bound = MonotonicNanos::from_nanos(solved_at.as_nanos() + bound.as_nanos());
-    assert!(guide_velocity(&own, Some(&from), &to, at_bound, CLOCK, &config).is_ok());
-    let past_bound = MonotonicNanos::from_nanos(at_bound.as_nanos() + 1);
-    let refusal =
-        guide_velocity(&own, Some(&from), &to, past_bound, CLOCK, &config).expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::SolutionStale {
-            age: DurationNanos::from_nanos(bound.as_nanos() + 1),
-            bound,
-        }
-    );
-}
-
-#[test]
-fn clock_inversion_is_refused() {
-    let (from, to) = equator_leg();
-    let solved_at = MonotonicNanos::from_nanos(10);
-    let earlier = MonotonicNanos::from_nanos(5);
-    let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), solved_at);
-    let refusal = guide_velocity(
-        &own,
-        Some(&from),
-        &to,
-        earlier,
-        CLOCK,
-        &VelocityGuidanceConfig::default(),
-    )
-    .expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::ClockInversion {
-            now: earlier,
-            solved_at,
-        }
-    );
-}
-
-#[test]
-fn now_read_on_another_clock_domain_is_refused_before_age_arithmetic() {
-    let (from, to) = equator_leg();
-    let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
-    let foreign = ClockDomainId::new(9);
-    let earlier = MonotonicNanos::from_nanos(0);
-    let refusal = guide_velocity(
-        &own,
-        Some(&from),
-        &to,
-        earlier,
-        foreign,
-        &VelocityGuidanceConfig::default(),
-    )
-    .expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::ClockDomainMismatch {
-            expected: CLOCK,
-            got: foreign,
-        }
-    );
-}
-
-#[test]
-fn an_implausible_target_is_refused_by_name() {
-    let (from, _) = equator_leg();
-    let bad = Waypoint::new("BAD".into(), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
-    let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
-    let refusal = guide_velocity(
-        &own,
-        Some(&from),
-        &bad,
-        now(),
-        CLOCK,
-        &VelocityGuidanceConfig::default(),
-    )
-    .expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "BAD".into(),
-        }
-    );
-}
-
-#[test]
-fn a_leg_with_coincident_endpoints_is_refused_as_implausible() {
-    let anchor = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("ZERO".into(), anchor);
-    let own = solution(SolutionQuality::Good, deg(10.5, 20.5, 0.0), now());
-    let refusal = guide_velocity(
-        &own,
-        Some(&anchor),
-        &to,
-        now(),
-        CLOCK,
-        &VelocityGuidanceConfig::default(),
-    )
-    .expect_err("refuses");
-    assert_eq!(
-        refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "ZERO".into(),
-        }
-    );
-}
-
-#[test]
-fn both_derivations_judge_one_solution_identically() {
-    let (from, to) = equator_leg();
-    let solved_at = MonotonicNanos::from_nanos(1_000);
-    let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), solved_at);
-    let admission = GuidanceConfig::default();
-    let config = VelocityGuidanceConfig::default();
-    assert_eq!(config.admission, admission, "one admission vocabulary");
-    let past_bound = MonotonicNanos::from_nanos(
-        solved_at.as_nanos() + admission.max_solution_age.as_nanos() + 1,
-    );
-    let deviation_refusal =
-        guide(&own, Some(&from), &to, past_bound, CLOCK, &admission).expect_err("refuses");
-    let velocity_refusal =
-        guide_velocity(&own, Some(&from), &to, past_bound, CLOCK, &config).expect_err("refuses");
-    assert_eq!(
-        deviation_refusal, velocity_refusal,
-        "the shared admission helper cannot let the two derivations drift"
-    );
 }

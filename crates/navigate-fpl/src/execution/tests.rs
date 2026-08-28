@@ -4,6 +4,8 @@ use navigate_contract::PlanRole;
 
 use super::*;
 
+mod leg_paths;
+
 /// Meters per degree of arc on the mean-radius sphere the geodesy layer
 /// uses; exact along the equator, where these fixtures live.
 const M_PER_DEG: f64 = 111_194.926;

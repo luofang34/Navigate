@@ -16,7 +16,9 @@
 //! below that floor the bearing is numerically meaningless.
 //! [`along_track_m`] is the reserved along-track half of the
 //! track-deviation pair — leg-progress and abeam-capture extensions
-//! consume it.
+//! consume it. [`cross_track_from_course_m`] takes a position and a
+//! direction instead of two endpoints, which is what a published course
+//! gives, and so has no degenerate case to refuse.
 
 use core::f64::consts::TAU;
 
@@ -76,6 +78,28 @@ pub fn cross_track_m(
     // positive.
     let sine = (distance_angle.sin() * relative_bearing.sin()).clamp(-1.0, 1.0);
     Ok(sine.asin() * wgs84::MEAN_RADIUS_M)
+}
+
+/// Signed cross-track distance in meters from `point` to the course
+/// line: the great circle through `anchor` whose true bearing at
+/// `anchor`, in the direction of flight, is `course_rad`. Positive when
+/// the point lies right of the course, matching [`cross_track_m`].
+///
+/// A course line needs one position and one direction, so — unlike a
+/// two-endpoint track — it has no degenerate case to refuse: a point at
+/// the anchor lies on the line and reads zero. A non-finite course or
+/// position yields a non-finite result rather than a refusal, because
+/// the caller screens those before it reaches guidance geometry.
+#[must_use]
+pub fn cross_track_from_course_m(
+    point: &GeodeticPosition,
+    anchor: &GeodeticPosition,
+    course_rad: f64,
+) -> f64 {
+    let distance_angle = central_angle_rad(anchor, point);
+    let relative_bearing = initial_bearing_rad(anchor, point) - course_rad;
+    let sine = (distance_angle.sin() * relative_bearing.sin()).clamp(-1.0, 1.0);
+    sine.asin() * wgs84::MEAN_RADIUS_M
 }
 
 /// Signed along-track distance in meters: how far along the great
@@ -218,6 +242,48 @@ mod tests {
         let end = deg(0.0, 1.0);
         let on_track = cross_track_m(&deg(0.0, 0.4), &start, &end).expect("valid track");
         assert!(on_track.abs() < 1e-6, "on-track point: {on_track}");
+    }
+
+    #[test]
+    fn a_course_line_agrees_with_the_two_point_track_that_carries_it() {
+        // The course line through the track's end, carrying the track's
+        // own bearing at that end, IS the track's great circle, so both
+        // helpers must read the same deviation with the same sign.
+        let start = deg(0.0, 0.0);
+        let end = deg(0.0, 1.0);
+        let course = initial_bearing_rad(&end, &deg(0.0, 2.0));
+        for point in [deg(-0.1, 0.5), deg(0.1, 0.5), deg(-0.05, 1.4)] {
+            let track = cross_track_m(&point, &start, &end).expect("valid track");
+            let line = cross_track_from_course_m(&point, &end, course);
+            assert!(
+                (track - line).abs() < 1e-6,
+                "track {track} vs course line {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_course_line_is_positive_right_of_course() {
+        // Eastbound course through (0°, 1°E); right of it is south.
+        let fix = deg(0.0, 1.0);
+        let eastbound = core::f64::consts::FRAC_PI_2;
+        let south = cross_track_from_course_m(&deg(-0.1, 0.5), &fix, eastbound);
+        let north = cross_track_from_course_m(&deg(0.1, 0.5), &fix, eastbound);
+        assert!((south - 11_119.5).abs() < 1.0, "south of course: {south}");
+        assert!((north + 11_119.5).abs() < 1.0, "north of course: {north}");
+    }
+
+    #[test]
+    fn a_course_line_has_no_degenerate_case_to_refuse() {
+        // The anchor itself lies on its own course line, and so does a
+        // point directly ahead of it — neither refuses, where a
+        // two-point track of zero length must.
+        let fix = deg(0.0, 20.0);
+        let eastbound = core::f64::consts::FRAC_PI_2;
+        assert!(cross_track_from_course_m(&fix, &fix, eastbound).abs() < 1e-9);
+        // An eastbound course line from the equator is the equator.
+        let ahead = cross_track_from_course_m(&deg(0.0, 20.5), &fix, eastbound);
+        assert!(ahead.abs() < 1e-6, "a point on the course line: {ahead}");
     }
 
     #[test]
