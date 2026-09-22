@@ -8,7 +8,9 @@ members = [
     "crates/navigate-guidance",
     "crates/navigate-egpws",
     "tools/navrun",
+    "crates/navigate-visual",
 ]
+exclude = ["tools/visual-bench"]
 
 [workspace.package]
 edition = "2024"
@@ -27,6 +29,7 @@ thiserror = { version = "2.0.18", default-features = false }
 nalgebra = { version = "0.34.1", default-features = false, features = ["std"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+image = { version = "0.25.10", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
