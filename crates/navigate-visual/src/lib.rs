@@ -2,7 +2,7 @@
 //!
 //! Supply an undistorted [`Frame`], a camera [`PosePrior`], and a [`ReferenceView`]
 //! rendered with the frame's intrinsics. [`Localizer`] returns a camera pose or
-//! a rejection. Frames are independent. The host owns video decoding, map data,
+//! a rejection. Cross-frame correlation is unspecified. The host owns map data,
 //! camera calibration, coordinate conversion, and navigation fusion.
 //!
 //! The default matcher needs overlapping views with similar appearance. It
@@ -52,20 +52,26 @@
 //! ```
 
 mod camera;
+mod candidates;
 mod error;
 mod frame;
+mod geometry;
 mod localizer;
 mod matching;
 mod pose_solver;
+mod retrieval;
 
 #[cfg(feature = "gpu")]
 mod gpu;
 
 pub use camera::{CameraModel, CameraPose, PosePrior};
+pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
+pub use geometry::PoseVerifier;
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};
+pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
 
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;

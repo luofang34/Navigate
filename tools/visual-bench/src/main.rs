@@ -17,6 +17,8 @@ mod cli;
 mod coordinates;
 mod error;
 mod fixture;
+mod matches;
+mod offline_pack;
 mod package;
 mod renderer;
 mod scenario;
@@ -25,6 +27,7 @@ mod stream;
 mod track;
 mod trial;
 mod video;
+mod worker;
 
 use error::BenchError;
 use std::path::Path;

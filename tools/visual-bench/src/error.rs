@@ -5,6 +5,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum BenchError {
+    #[error("offline data access failed: {0}")]
+    Data(#[from] navigate_data::DataError),
     #[error("invalid video presentation time {value:?} at frame {frame}")]
     Timestamp {
         frame: usize,

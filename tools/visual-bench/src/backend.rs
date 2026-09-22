@@ -15,9 +15,19 @@ pub(crate) enum BackendKind {
 pub(crate) enum Backend {
     Cpu(PyramidalMatcher),
     Gpu(Box<GpuPyramidalMatcher>),
+    Matches(crate::matches::VerifiedMatches),
 }
 
 impl Backend {
+    pub fn validate_reference(
+        &self,
+        reference: &navigate_visual::ReferenceView,
+    ) -> Result<(), VisualError> {
+        match self {
+            Self::Matches(matches) => matches.validate_depth(reference),
+            _ => Ok(()),
+        }
+    }
     pub async fn new(kind: BackendKind) -> Result<Self, VisualError> {
         match kind {
             BackendKind::Cpu => Ok(Self::Cpu(PyramidalMatcher)),
@@ -31,6 +41,7 @@ impl ImageMatcher for Backend {
         match self {
             Self::Cpu(m) => m.identity(),
             Self::Gpu(m) => m.identity(),
+            Self::Matches(m) => m.identity(),
         }
     }
     fn match_images_blocking(
@@ -41,6 +52,7 @@ impl ImageMatcher for Backend {
         match self {
             Self::Cpu(m) => m.match_images_blocking(reference, query),
             Self::Gpu(m) => m.match_images_blocking(reference, query),
+            Self::Matches(m) => m.match_images_blocking(reference, query),
         }
     }
 }

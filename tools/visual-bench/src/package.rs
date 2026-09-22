@@ -1,8 +1,10 @@
 //! Bind one immutable set of files to display and localization.
 //!
 //! `map.json` is a [`Manifest`]. Asset paths are relative to its directory.
-//! Every asset must match its SHA-256. Each tile contains opaque 512 × 512
-//! imagery and opaque 256 × 256 Terrarium elevation. Terrarium height in meters
+//! Every asset must match its SHA-256. Imagery uses 512 × 512 RGBA pixels.
+//! Alpha marks missing imagery. Elevation uses opaque 256 × 256 Terrarium pixels.
+//! Version 2 permits imagery and elevation at independent zoom levels.
+//! Terrarium height in meters
 //! is `R*256 + G + B/256 - 32768`. The prior uses the declared vertical datum.
 //!
 //! The tool loads one selected package into memory. Both display rendering and
@@ -33,14 +35,16 @@ pub(crate) struct Artifact {
 pub(crate) struct Tile {
     /// XYZ tile coordinate in `[zoom, x, y]` order.
     pub xyz: [u32; 3],
-    pub imagery: Artifact,
-    pub elevation: Artifact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imagery: Option<Artifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation: Option<Artifact>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
-    /// Manifest contract version. Only version 1 is supported.
+    /// Version 1 pairs sources. Version 2 also permits independent source tiles.
     pub schema_version: u32,
     /// Immutable selection label shared by display and localization.
     pub release_id: String,
@@ -54,8 +58,8 @@ pub(crate) struct Manifest {
 
 pub(crate) struct DecodedTile {
     pub xyz: [u32; 3],
-    pub imagery: RgbaImage,
-    pub elevation: RgbaImage,
+    pub imagery: Option<RgbaImage>,
+    pub elevation: Option<RgbaImage>,
 }
 
 pub(crate) struct MapPackage {
@@ -73,7 +77,7 @@ impl MapPackage {
                 path: path.clone(),
                 source,
             })?;
-        if manifest.schema_version != 1
+        if ![1, 2].contains(&manifest.schema_version)
             || manifest.tiles.is_empty()
             || manifest.release_id.is_empty()
             || manifest.elevation_datum.is_empty()
@@ -95,27 +99,14 @@ impl MapPackage {
                     reason: format!("invalid or repeated tile {:?}", tile.xyz),
                 });
             }
-            let decoded = DecodedTile {
-                xyz: tile.xyz,
-                imagery: load_image_blocking(root, &tile.imagery)?,
-                elevation: load_image_blocking(root, &tile.elevation)?,
-            };
-            if decoded.imagery.dimensions() != (512, 512)
-                || decoded.elevation.dimensions() != (256, 256)
-                || decoded
-                    .imagery
-                    .pixels()
-                    .chain(decoded.elevation.pixels())
-                    .any(|p| p[3] != 255)
-            {
-                return Err(BenchError::Package {
-                    reason: format!(
-                        "tile {:?} needs opaque 512px imagery and 256px Terrarium DEM",
-                        tile.xyz
-                    ),
-                });
-            }
-            tiles.push(decoded);
+            tiles.push(decode_tile_blocking(root, tile, manifest.schema_version)?);
+        }
+        if !tiles.iter().any(|tile| tile.imagery.is_some())
+            || !tiles.iter().any(|tile| tile.elevation.is_some())
+        {
+            return Err(BenchError::Package {
+                reason: "package needs imagery and elevation sources".into(),
+            });
         }
         Ok(Self {
             revision: MapRevision {
@@ -126,6 +117,48 @@ impl MapPackage {
             tiles,
         })
     }
+}
+
+fn decode_tile_blocking(root: &Path, tile: &Tile, version: u32) -> Result<DecodedTile, BenchError> {
+    if (tile.imagery.is_none() && tile.elevation.is_none())
+        || (version == 1 && (tile.imagery.is_none() || tile.elevation.is_none()))
+    {
+        return Err(BenchError::Package {
+            reason: format!(
+                "tile {:?} lacks required sources for schema {version}",
+                tile.xyz
+            ),
+        });
+    }
+    let imagery = tile
+        .imagery
+        .as_ref()
+        .map(|asset| load_image_blocking(root, asset))
+        .transpose()?;
+    let elevation = tile
+        .elevation
+        .as_ref()
+        .map(|asset| load_image_blocking(root, asset))
+        .transpose()?;
+    if imagery
+        .as_ref()
+        .is_some_and(|image| image.dimensions() != (512, 512))
+        || elevation.as_ref().is_some_and(|image| {
+            image.dimensions() != (256, 256) || image.pixels().any(|p| p[3] != 255)
+        })
+    {
+        return Err(BenchError::Package {
+            reason: format!(
+                "tile {:?} needs 512px imagery or opaque 256px Terrarium DEM",
+                tile.xyz
+            ),
+        });
+    }
+    Ok(DecodedTile {
+        xyz: tile.xyz,
+        imagery,
+        elevation,
+    })
 }
 
 pub(crate) fn digest(bytes: &[u8]) -> String {

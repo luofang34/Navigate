@@ -22,6 +22,32 @@ pub struct Frame {
     pub image: GrayImage,
 }
 
+impl Frame {
+    /// Bind exact pixels, calibration and capture stamp to a processing identity.
+    ///
+    /// This digest is not an independence claim. Different stamps can still
+    /// share image or map evidence. The host must retain capture-stream identity.
+    pub fn evidence_sha256(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"navigate-visual-frame-v1");
+        hash.update(self.stamp.sequence.to_le_bytes());
+        hash.update(self.stamp.capture_time_ns.to_le_bytes());
+        hash.update(self.camera.width.to_le_bytes());
+        hash.update(self.camera.height.to_le_bytes());
+        for value in [
+            self.camera.fx,
+            self.camera.fy,
+            self.camera.cx,
+            self.camera.cy,
+        ] {
+            hash.update(value.to_le_bytes());
+        }
+        hash.update(self.image.as_raw());
+        format!("{hash:x}", hash = hash.finalize())
+    }
+}
+
 /// The immutable map selection shared with the display renderer.
 ///
 /// Pin one installed source selection for display and localization. The host
@@ -43,6 +69,10 @@ pub struct MapRevision {
 /// distance along the camera optical axis, not Euclidean range. Convert reversed
 /// GPU depth before construction. Exclude sky, missing terrain, and missing
 /// imagery. The reference and prior must use the same local frame and datum.
+/// Depth is a supplied world-model surface, not independently verified scene
+/// geometry. Terrain and richer surfaces can use the same optical-depth input.
+/// Source errors, geographic registration and shared evidence remain unknown
+/// unless the host has separate information about them.
 pub struct ReferenceView {
     /// Map release used to render this reference.
     pub map: MapRevision,

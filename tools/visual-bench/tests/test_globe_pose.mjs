@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+const source=(await fs.readFile(new URL('../webapp/geography.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const {toGlobePose,localPosition}=await import('data:text/javascript,'+encodeURIComponent(source));
+const pack={anchor_lat_lon:[40.54,-74.45]};
+const pose={position_enu_m:[0,0,110],eye_to_enu_xyzw:[0,0,0,1]};
+const globe=toGlobePose(pack,pose);
+assert.ok(Math.abs(globe.position_enu_m[2]-110)<1e-8);
+assert.ok(Math.hypot(...globe.position_enu_m.slice(0,2))<1e-8);
+assert.ok(Math.abs(globe.eye_to_enu_xyzw[3]-1)<1e-10);
+const offset={position_enu_m:localPosition(pack,40.545,-74.44,110),eye_to_enu_xyzw:[.1,0,0,Math.sqrt(.99)]};
+const result=toGlobePose(pack,offset);
+assert.ok(result.position_enu_m[0]>800&&result.position_enu_m[0]<900);
+assert.ok(result.position_enu_m[2]<110);
+assert.ok(Math.abs(Math.hypot(...result.eye_to_enu_xyzw)-1)<1e-12);
+assert.deepEqual(pose,{position_enu_m:[0,0,110],eye_to_enu_xyzw:[0,0,0,1]});

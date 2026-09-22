@@ -3,7 +3,7 @@
 use crate::package::Manifest;
 use cgmath::Matrix4;
 use maplibre::render::camera::EyeFrustum;
-use nalgebra::Vector2;
+use nalgebra::{Vector2, Vector3};
 use navigate_visual::{CameraModel, CameraPose};
 
 pub(super) fn eye_transform(pose: CameraPose) -> Matrix4<f64> {
@@ -26,7 +26,10 @@ pub(super) fn frustum(camera: CameraModel) -> EyeFrustum {
     }
 }
 
-pub(super) struct Coverage(Vec<[f64; 4]>);
+pub(super) struct Coverage {
+    imagery: Vec<[f64; 4]>,
+    elevation: Vec<[f64; 4]>,
+}
 
 impl Coverage {
     pub fn new(manifest: &Manifest) -> Self {
@@ -34,25 +37,39 @@ impl Coverage {
         let anchor_x = (lon + 180.0) / 360.0;
         let anchor_y = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
         let scale = std::f64::consts::TAU * 6_371_008.8 * lat.to_radians().cos();
-        Self(
-            manifest
+        let bounds = |tile: &crate::package::Tile| {
+            let [z, x, y] = tile.xyz;
+            let n = f64::from(1 << z);
+            [
+                (f64::from(x) / n - anchor_x) * scale,
+                (f64::from(x + 1) / n - anchor_x) * scale,
+                (anchor_y - f64::from(y + 1) / n) * scale,
+                (anchor_y - f64::from(y) / n) * scale,
+            ]
+        };
+        Self {
+            imagery: manifest
                 .tiles
                 .iter()
-                .map(|tile| {
-                    let [z, x, y] = tile.xyz;
-                    let n = f64::from(1 << z);
-                    [
-                        (f64::from(x) / n - anchor_x) * scale,
-                        (f64::from(x + 1) / n - anchor_x) * scale,
-                        (anchor_y - f64::from(y + 1) / n) * scale,
-                        (anchor_y - f64::from(y) / n) * scale,
-                    ]
-                })
+                .filter(|tile| tile.imagery.is_some())
+                .map(bounds)
                 .collect(),
-        )
+            elevation: manifest
+                .tiles
+                .iter()
+                .filter(|tile| tile.elevation.is_some())
+                .map(bounds)
+                .collect(),
+        }
     }
 
-    pub fn mask(&self, depths: &mut [f32], camera: CameraModel, pose: CameraPose) {
+    pub fn mask(
+        &self,
+        depths: &mut [f32],
+        camera: CameraModel,
+        pose: CameraPose,
+        surface_valid: impl Fn(Vector3<f64>) -> bool,
+    ) {
         for (index, depth) in depths.iter_mut().enumerate() {
             if !depth.is_finite() || *depth <= 0.0 {
                 *depth = 0.0;
@@ -63,9 +80,16 @@ impl Coverage {
                 (index / camera.width as usize) as f64,
             );
             let world = camera.unproject(&pose, pixel, f64::from(*depth));
-            if !self.0.iter().any(|[west, east, south, north]| {
-                world.x >= *west && world.x < *east && world.y >= *south && world.y < *north
-            }) {
+            let contains = |bounds: &[f64; 4]| {
+                world.x >= bounds[0]
+                    && world.x < bounds[1]
+                    && world.y >= bounds[2]
+                    && world.y < bounds[3]
+            };
+            if !self.imagery.iter().any(contains)
+                || !self.elevation.iter().any(contains)
+                || !surface_valid(world)
+            {
                 *depth = 0.0;
             }
         }

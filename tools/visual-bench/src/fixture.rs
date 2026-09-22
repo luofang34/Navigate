@@ -22,24 +22,29 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
                     i64::from(y) * 512 + i64::from(py),
                 )
             });
-            let elevation = RgbaImage::from_fn(256, 256, |px, py| {
-                let wx = (f64::from(x) - f64::from(CENTER[0])) * 256.0 + f64::from(px);
-                let wy = (f64::from(y) - f64::from(CENTER[1])) * 256.0 + f64::from(py);
-                let height = 450.0
-                    + 180.0 * (wx / 95.0).sin() * (wy / 120.0).cos()
-                    + 300.0 * (-((wx - 180.0).powi(2) + (wy + 260.0).powi(2)) / 40000.0).exp();
-                let encoded = ((height + 32768.0) * 256.0).round() as u32;
-                Rgba([
-                    (encoded >> 16) as u8,
-                    (encoded >> 8) as u8,
-                    encoded as u8,
-                    255,
-                ])
-            });
             tiles.push(Tile {
                 xyz: [ZOOM, x, y],
-                imagery: save_blocking(root, &format!("{ZOOM}-{x}-{y}.png"), &imagery)?,
-                elevation: save_blocking(root, &format!("{ZOOM}-{x}-{y}.dem.png"), &elevation)?,
+                imagery: Some(save_blocking(
+                    root,
+                    &format!("{ZOOM}-{x}-{y}.png"),
+                    &imagery,
+                )?),
+                elevation: None,
+            });
+        }
+    }
+    let dem_zoom = ZOOM - 2;
+    for y in (CENTER[1] - 2) / 4..=(CENTER[1] + 2) / 4 {
+        for x in (CENTER[0] - 2) / 4..=(CENTER[0] + 2) / 4 {
+            let elevation = elevation_image(dem_zoom, x, y);
+            tiles.push(Tile {
+                xyz: [dem_zoom, x, y],
+                imagery: None,
+                elevation: Some(save_blocking(
+                    root,
+                    &format!("{dem_zoom}-{x}-{y}.dem.png"),
+                    &elevation,
+                )?),
             });
         }
     }
@@ -48,7 +53,7 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
     let mercator_y = std::f64::consts::PI * (1.0 - 2.0 * (f64::from(CENTER[1]) + 0.5) / n);
     let lat = mercator_y.sinh().atan().to_degrees();
     let manifest = Manifest {
-        schema_version: 1,
+        schema_version: 2,
         release_id: "synthetic-terrain-v1".into(),
         anchor_lat_lon: [lat, lon],
         elevation_datum: "synthetic-msl".into(),
@@ -63,6 +68,28 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
     write_blocking(&path, &bytes)?;
     tracing::info!(path = %path.display(), lat, lon, "prepared shared map package");
     Ok(())
+}
+
+fn elevation_image(zoom: u32, x: u32, y: u32) -> RgbaImage {
+    let factor = f64::from(1 << (ZOOM - zoom));
+    RgbaImage::from_fn(256, 256, |px, py| {
+        let wx = (f64::from(x) * factor - f64::from(CENTER[0])) * 256.0
+            + (f64::from(px) + 0.5) * factor
+            - 0.5;
+        let wy = (f64::from(y) * factor - f64::from(CENTER[1])) * 256.0
+            + (f64::from(py) + 0.5) * factor
+            - 0.5;
+        let height = 450.0
+            + 180.0 * (wx / 95.0).sin() * (wy / 120.0).cos()
+            + 300.0 * (-((wx - 180.0).powi(2) + (wy + 260.0).powi(2)) / 40000.0).exp();
+        let encoded = ((height + 32768.0) * 256.0).round() as u32;
+        Rgba([
+            (encoded >> 16) as u8,
+            (encoded >> 8) as u8,
+            encoded as u8,
+            255,
+        ])
+    })
 }
 
 fn hash(x: i64, y: i64) -> u64 {

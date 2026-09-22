@@ -1,0 +1,12 @@
+import {execFileSync} from 'node:child_process';
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+import {dirname,resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=dirname(fileURLToPath(import.meta.url)),crate=resolve(root,'wasm-preview'),output=resolve(root,'webapp/wasm');
+execFileSync('cargo',['build','--release','--target','wasm32-unknown-unknown'],{cwd:crate,stdio:'inherit'});
+const metadata=JSON.parse(execFileSync('cargo',['metadata','--no-deps','--format-version','1'],{cwd:crate,encoding:'utf8'}));
+mkdirSync(output,{recursive:true});
+execFileSync('wasm-bindgen',[resolve(metadata.target_directory,'wasm32-unknown-unknown/release/navigate_visual_preview.wasm'),'--target','web','--out-dir',output],{stdio:'inherit'});
+const path=resolve(output,'navigate_visual_preview.js'),call='const ret = arg0.requestDevice(arg1);',source=readFileSync(path,'utf8');
+if(source.split(call).length!==2)throw Error('Generated WebGPU binding changed. Inspect the device compatibility adapter.');
+writeFileSync(path,"import {requestDeviceCompatible} from '../gpu-compat.js';\n"+source.replace(call,'const ret = requestDeviceCompatible(arg0, arg1);'));

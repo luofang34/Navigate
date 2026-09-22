@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {hypotheses,frameLabel} from '../webapp/hypotheses.js';
+const first={accepted:true,candidate_id:1,position_enu_m:[0,0,100]};
+const second={accepted:true,candidate_id:2,position_enu_m:[500,0,100]};
+const unresolved={accepted:false,decision:'unresolved',candidate_hypotheses:[first,{accepted:false},second]};
+assert.deepEqual(hypotheses(unresolved),[first,second]);
+assert.equal(frameLabel(unresolved),'Unresolved alternatives');
+assert.equal(hypotheses(unresolved)[1].position_enu_m[0],500);
+assert.deepEqual(hypotheses({accepted:false}),[]);
+assert.deepEqual(hypotheses(first),[first]);

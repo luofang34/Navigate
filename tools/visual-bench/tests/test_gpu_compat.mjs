@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {requestDeviceCompatible} from '../webapp/gpu-compat.js';
+const descriptor={requiredLimits:{maxInterStageShaderComponents:0,maxTextureDimension2D:8192}};
+let received;
+const modern={limits:{maxInterStageShaderVariables:16},requestDevice(value){received=value;return Promise.resolve('device')}};
+assert.equal(await requestDeviceCompatible(modern,descriptor),'device');
+assert.deepEqual(received.requiredLimits,{maxTextureDimension2D:8192,maxInterStageShaderVariables:16});
+assert.equal(descriptor.requiredLimits.maxInterStageShaderComponents,0);
+const legacy={limits:{maxInterStageShaderComponents:60},requestDevice(value){received=value;return Promise.resolve('legacy')}};
+assert.equal(await requestDeviceCompatible(legacy,descriptor),'legacy');assert.equal(received,descriptor);

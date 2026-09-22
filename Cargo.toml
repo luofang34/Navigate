@@ -9,8 +9,11 @@ members = [
     "crates/navigate-egpws",
     "tools/navrun",
     "crates/navigate-visual",
+    "crates/navigate-data",
+    "crates/navigate-data-fs",
+    "crates/navigate-imagery",
 ]
-exclude = ["tools/visual-bench"]
+exclude = ["tools/visual-bench", "tools/visual-inference", "tools/visual-service"]
 
 [workspace.package]
 edition = "2024"

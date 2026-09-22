@@ -19,6 +19,33 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Keep one offline renderer resident and handle JSON Lines requests.
+    Worker { package: PathBuf, prior: PathBuf },
+    /// Verify immutable package chunks through the native byte-range store.
+    VerifyPack { manifest: PathBuf, root: PathBuf },
+    /// Fit image-bound external correspondences using rendered terrain depth.
+    #[command(
+        after_help = "Use render to export the candidate image and optical depth. The Python matchers/superglue.py adapter writes the correspondence JSON. Supply a grayscale query PNG. --prior controls admission bounds; --reference-prior initializes the image search. Geometry covariance excludes map and camera calibration errors."
+    )]
+    Refine {
+        #[command(flatten)]
+        input: TrialArgs,
+        /// Candidate camera configuration used to render the matched reference.
+        #[arg(long)]
+        reference_prior: PathBuf,
+        /// JSON correspondences bound to query pixels, reference pixels and depth.
+        #[arg(long)]
+        matches: PathBuf,
+    },
+    /// Export a candidate PNG, float32 optical depth, and content digests.
+    #[command(
+        after_help = "The output PNG has matching .depth.bin and .depth.json sidecars. Depth is row-major little-endian float32 in metres along the optical axis. Zero marks missing imagery or terrain. The digests bind external correspondences to the exact reference."
+    )]
+    Render {
+        package: PathBuf,
+        prior: PathBuf,
+        output: PathBuf,
+    },
     /// Generate a procedural offline imagery and elevation package.
     Prepare { package: PathBuf },
     /// Compare estimates with withheld synthetic camera poses. Fails if limits are exceeded.
@@ -98,6 +125,20 @@ pub(crate) async fn run_blocking() -> Result<(), BenchError> {
         Err(error) => return Err(BenchError::Arguments(error)),
     };
     match cli.command {
+        Command::Worker { package, prior } => crate::worker::run_blocking(&package, &prior).await,
+        Command::VerifyPack { manifest, root } => {
+            crate::offline_pack::verify_blocking(&manifest, &root).await
+        }
+        Command::Refine {
+            input,
+            reference_prior,
+            matches,
+        } => crate::trial::refine_blocking(&input, &reference_prior, &matches).await,
+        Command::Render {
+            package,
+            prior,
+            output,
+        } => crate::trial::render_blocking(&package, &prior, &output).await,
         Command::Prepare { package } => crate::fixture::prepare_blocking(&package),
         Command::Evaluate { package, output } => {
             crate::scenario::evaluate_blocking(&package, &output, cli.backend).await

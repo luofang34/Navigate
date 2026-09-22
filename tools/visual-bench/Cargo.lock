@@ -2333,6 +2333,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-data"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "navigate-data-fs"
+version = "0.1.0"
+dependencies = [
+ "navigate-data",
+ "tokio",
+]
+
+[[package]]
 name = "navigate-visual"
 version = "0.1.0"
 dependencies = [
@@ -2340,6 +2355,7 @@ dependencies = [
  "image",
  "nalgebra",
  "pollster",
+ "sha2",
  "thiserror 2.0.20",
  "wgpu",
 ]
@@ -4020,6 +4036,8 @@ dependencies = [
  "image",
  "maplibre",
  "nalgebra",
+ "navigate-data",
+ "navigate-data-fs",
  "navigate-visual",
  "serde",
  "serde_json",

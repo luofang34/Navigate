@@ -8,6 +8,8 @@ publish = false
 [workspace]
 
 [dependencies]
+navigate-data = { path = "../../crates/navigate-data" }
+navigate-data-fs = { path = "../../crates/navigate-data-fs" }
 navigate-visual = { path = "../../crates/navigate-visual", features = ["gpu"] }
 clap = { version = "4", features = ["derive"] }
 maplibre = { path = "../../../maplibre-rs-experimental/maplibre", features = ["headless", "thread-safe-futures"] }

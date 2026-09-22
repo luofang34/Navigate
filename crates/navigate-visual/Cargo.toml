@@ -10,6 +10,7 @@ default = []
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
+sha2 = "0.10"
 nalgebra.workspace = true
 thiserror.workspace = true
 image.workspace = true
