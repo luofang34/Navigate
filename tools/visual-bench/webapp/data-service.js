@@ -1,5 +1,5 @@
 export class DataService {
-  constructor(fetcher=fetch){this.fetch=fetcher;this.static=false;this.catalog=[]}
+  constructor(fetcher=(...args)=>globalThis.fetch(...args)){this.fetch=fetcher;this.static=false;this.catalog=[]}
   async request(url,value){
     if(this.static){
       if(url==='/api/catalog')return this.catalog;

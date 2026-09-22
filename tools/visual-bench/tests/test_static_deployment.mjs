@@ -8,3 +8,9 @@ assert.deepEqual(await service.request('/api/offline-plan',{region_id:'region'})
 await assert.rejects(service.request('/api/coverage-download',{}),/Rust package service/);
 assert.equal(requests.length,3);
 assert.ok(requests.every(([,options])=>!options.method),'static deployment uses file GET requests');
+
+const originalFetch=globalThis.fetch;
+try {
+  globalThis.fetch=function(url){assert.equal(this,globalThis,'native browser fetch requires the global receiver');assert.equal(url,'/api/catalog');return Promise.resolve(Response.json([]));};
+  assert.deepEqual(await new DataService().request('/api/catalog'),[]);
+} finally {globalThis.fetch=originalFetch;}

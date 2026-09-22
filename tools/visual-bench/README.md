@@ -21,6 +21,9 @@ uses this feature. These libraries remain separate from the demo UI.
 Use Rust, Node.js, `wasm-bindgen-cli`, and the `wasm32-unknown-unknown` target.
 Use the `wasm-bindgen-cli` version in `wasm-preview/Cargo.lock`.
 Put the MapLibre fork beside Navigate. The renderer dependency uses this layout.
+Use `fix/wasm-offline-preview` at commit
+`a9475dadc04cd26da7a6ecefdfcc83c83d0f4104`, or a later commit that includes
+[the required renderer changes](https://github.com/luofang34/maplibre-rs-experimental/pull/32).
 Run commands from the Navigate root:
 
 ```sh
