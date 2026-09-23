@@ -13,7 +13,7 @@ export class LocalMatcher {
     const ranked=[],features=[];
     for(const [i,reference] of references.entries()){progress(`GPU reference features ${i+1}/${references.length}`);features.push(await this.matcher.features(reference.image,reference.key))}
     for(const [q,query] of queries.entries()){
-      progress(`GPU retrieval orientation ${q+1}/${queries.length}`);const f=await this.matcher.features(query.image,query.key);this.matcher.gpu.phase('retrieval');const scores=await this.matcher.retrieval.rankMany(features,f);
+      progress(`GPU retrieval orientation ${q+1}/${queries.length}`);const f=await this.matcher.features(query.image,query.key);this.matcher.gpu.phase('retrieval');const scores=[];for(let start=0;start<features.length;start+=160)scores.push(...await this.matcher.retrieval.rankMany(features.slice(start,start+160),f));
       for(const [r,score] of scores.entries())ranked.push({reference_index:r,query_index:q,score});
     }
     ranked.sort((a,b)=>b.score-a.score);return ranked.slice(0,limit).map(({reference_index,query_index})=>({reference_index,query_index}));

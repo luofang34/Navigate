@@ -8,16 +8,22 @@ export function missionSummary(frames) {
 
 export function resultSummary(frame, hypothesis) {
   const fixed = (value, places) => Number.isFinite(value) ? value.toFixed(places) : 'Unknown';
+  const reasons=[...new Set((frame.candidate_hypotheses||[]).filter(h=>!h.accepted&&h.reason).map(h=>h.reason))];
+  const rejection=[frame.reason||'No evaluated candidate passed the geometric checks.',...reasons].join(' ');
   return {
     title: hypothesis ? frameLabel(frame) : 'Visual observation rejected',
     location: hypothesis ? `${fixed(hypothesis.latitude_deg, 7)}, ${fixed(hypothesis.longitude_deg, 7)}` : '',
     explanation: hypothesis
       ? 'Geometric support is not a calibrated probability of the correct location.'
-      : frame.reason || 'No evaluated candidate passed the geometric checks.',
+      : rejection,
     metrics: hypothesis ? [
       ['Geometric inliers', Number.isFinite(hypothesis.inliers) ? String(hypothesis.inliers) : 'Unknown'],
       ['Reprojection RMS', `${fixed(hypothesis.reprojection_rms_px, 2)} px`],
       ['Absolute accuracy', 'Not measured'],
+    ] : frame.retrieval ? [
+      ['Reference crops', String(frame.retrieval.map_crops)],
+      ['Pose candidates', String(frame.retrieval.pose_candidates)],
+      ['Candidates checked', String(frame.retrieval.evaluated_candidates)],
     ] : [],
   };
 }

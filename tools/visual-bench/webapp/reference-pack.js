@@ -22,6 +22,6 @@ export class ReferencePack {
       const alpha=new Uint8Array(640*640),pixels=new Uint8Array(640*640);for(let i=0;i<alpha.length;i++){alpha[i]=data[i*4+3];pixels[i]=(77*data[i*4]+150*data[i*4+1]+29*data[i*4+2])>>>8}
       result.push({key:`${this.pack.pack_id}/${x}/${y}/${size}`,image:{gray:pixels,valid:alpha,width:640,height:640},world:p=>{const mx=(x+(p[0]+.5)*size/640-.5)/512+x0,my=(y+(p[1]+.5)*size/640-.5)/512+y0;const ix=Math.max(0,Math.min(639,Math.round(p[0]))),iy=Math.max(0,Math.min(639,Math.round(p[1])));if(alpha[iy*640+ix]!==255)return null;try{return this.world(z,mx,my)}catch{return null}}});
     }
-    if(!result.length)throw Error('No valid reference imagery overlaps this prior');if(result.length>160)throw Error('Prior requires too many browser search crops. Reduce the search radius or split the area.');return result;
+    if(!result.length)throw Error('No valid reference imagery overlaps this prior');return result;
   }
 }

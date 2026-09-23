@@ -13,3 +13,8 @@ assert.deepEqual(result.metrics,[['Geometric inliers','57'],['Reprojection RMS',
 assert.equal(JSON.stringify(result).includes('99.9'),false,'backend confidence does not become a location probability');
 const rejected=resultSummary({accepted:false,reason:'Terrain is unavailable'});
 assert.equal(rejected.title,'Visual observation rejected');assert.equal(rejected.location,'');assert.deepEqual(rejected.metrics,[]);assert.equal(rejected.explanation,'Terrain is unavailable');
+
+const failed=resultSummary({accepted:false,reason:'No candidate passed.',retrieval:{map_crops:280,pose_candidates:2,evaluated_candidates:2},candidate_hypotheses:[{accepted:false,reason:'Only 8 visual inliers; need 20'},{accepted:false,reason:'Only 8 visual inliers; need 20'}]});
+assert.equal(failed.explanation,'No candidate passed. Only 8 visual inliers; need 20');
+assert.deepEqual(failed.metrics,[['Reference crops','280'],['Pose candidates','2'],['Candidates checked','2']]);
+assert.equal(failed.location,'');
