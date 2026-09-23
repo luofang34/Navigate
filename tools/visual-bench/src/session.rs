@@ -3,17 +3,16 @@
 use crate::{
     BenchError,
     backend::{Backend, BackendKind},
-    coordinates::MapFrame,
     package::MapPackage,
     renderer::ReferenceRenderer,
 };
-use navigate_visual::{CameraModel, Frame, Localizer, LocalizerConfig, PosePrior};
+use navigate_visual::{CameraModel, Frame, LocalFrame, Localizer, LocalizerConfig, PosePrior};
 
 pub(crate) struct Session {
     renderer: ReferenceRenderer,
     localizer: Localizer<Backend>,
     pub camera: CameraModel,
-    pub frame: MapFrame,
+    pub frame: LocalFrame,
     map_context: serde_json::Value,
 }
 
@@ -31,11 +30,11 @@ impl Session {
         camera: CameraModel,
         backend: Backend,
     ) -> Result<Self, BenchError> {
-        let frame = MapFrame::new(package.manifest.anchor_lat_lon);
+        let frame = package.frame;
         let map_context = serde_json::json!({"map_release":package.revision.release_id,
             "map_manifest_sha256":package.revision.manifest_sha256,
             "anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,
-            "coordinate_model":"local-mercator"});
+            "coordinate_model":"local-mercator","renderer_revision":crate::RENDERER_REVISION.trim()});
         Ok(Self {
             frame,
             camera,
@@ -78,7 +77,7 @@ impl Session {
 
 pub(crate) fn estimate_report(
     map_context: &serde_json::Value,
-    map_frame: MapFrame,
+    map_frame: LocalFrame,
     frame: &Frame,
     estimate: &Result<navigate_visual::Estimate, navigate_visual::VisualError>,
     total_ms: f64,
@@ -95,7 +94,7 @@ pub(crate) fn estimate_report(
     report["geographic_accuracy"] = "not_independently_measured".into();
     match estimate {
         Ok(estimate) => {
-            let [lon, lat, alt] = map_frame.longitude_latitude_altitude(estimate.pose.position);
+            let [lat, lon, alt] = map_frame.geodetic(estimate.pose.position);
             report["accepted"] = true.into();
             report["longitude_deg"] = lon.into();
             report["latitude_deg"] = lat.into();

@@ -3,13 +3,12 @@ mod observation;
 mod record;
 use crate::{
     BenchError,
-    coordinates::MapFrame,
     package::MapPackage,
     renderer::ReferenceRenderer,
     stream::{PriorRecord, write_record_blocking},
     trial::{config_blocking, export_reference_blocking},
 };
-use navigate_visual::{CameraModel, FrameStamp, ReferenceView, VisualError};
+use navigate_visual::{CameraModel, FrameStamp, LocalFrame, ReferenceView, VisualError};
 use observation::{Observation, Refinement};
 use record::CandidateRecord;
 use serde::Deserialize;
@@ -43,7 +42,7 @@ struct Worker {
     renderer: ReferenceRenderer,
     reference: Option<(u64, ReferenceView)>,
     camera: CameraModel,
-    frame: MapFrame,
+    frame: LocalFrame,
     map_context: serde_json::Value,
     observation: Option<Observation>,
 }
@@ -51,8 +50,8 @@ impl Worker {
     async fn new(package: &Path, prior: &Path) -> Result<Self, BenchError> {
         let camera = config_blocking(prior)?.camera.model();
         let package = MapPackage::open_blocking(package)?;
-        let frame = MapFrame::new(package.manifest.anchor_lat_lon);
-        let map_context = serde_json::json!({"map_release":package.revision.release_id,"map_manifest_sha256":package.revision.manifest_sha256,"anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,"coordinate_model":"local-mercator","reference_geometry":"rendered_world_model; not independently verified scene geometry"});
+        let frame = package.frame;
+        let map_context = serde_json::json!({"map_release":package.revision.release_id,"map_manifest_sha256":package.revision.manifest_sha256,"anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,"coordinate_model":"local-mercator","renderer_revision":crate::RENDERER_REVISION.trim(),"reference_geometry":"rendered_world_model; not independently verified scene geometry"});
         Ok(Self {
             renderer: ReferenceRenderer::new(package, camera).await?,
             reference: None,

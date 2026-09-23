@@ -1,10 +1,9 @@
 //! Projection and coverage in MapLibre's local Mercator frame.
 
-use crate::package::Manifest;
 use cgmath::Matrix4;
-use maplibre::render::camera::EyeFrustum;
 use nalgebra::{Vector2, Vector3};
-use navigate_visual::{CameraModel, CameraPose};
+use navigate_imagery::{Package, Tile, TileRecord};
+use navigate_visual::{CameraModel, CameraPose, LocalFrame};
 
 pub(super) fn eye_transform(pose: CameraPose) -> Matrix4<f64> {
     let mut m = pose.orientation.to_homogeneous();
@@ -15,30 +14,17 @@ pub(super) fn eye_transform(pose: CameraPose) -> Matrix4<f64> {
     Matrix4::from_cols(column(0), column(1), column(2), column(3))
 }
 
-pub(super) fn frustum(camera: CameraModel) -> EyeFrustum {
-    EyeFrustum {
-        left: (camera.cx + 0.5) / camera.fx,
-        right: (f64::from(camera.width) - camera.cx - 0.5) / camera.fx,
-        top: (camera.cy + 0.5) / camera.fy,
-        bottom: (f64::from(camera.height) - camera.cy - 0.5) / camera.fy,
-        near: 10.0,
-        far: 100000.0,
-    }
-}
-
 pub(super) struct Coverage {
     imagery: Vec<[f64; 4]>,
     elevation: Vec<[f64; 4]>,
 }
 
 impl Coverage {
-    pub fn new(manifest: &Manifest) -> Self {
-        let [lat, lon] = manifest.anchor_lat_lon;
-        let anchor_x = (lon + 180.0) / 360.0;
-        let anchor_y = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
-        let scale = std::f64::consts::TAU * 6_371_008.8 * lat.to_radians().cos();
-        let bounds = |tile: &crate::package::Tile| {
-            let [z, x, y] = tile.xyz;
+    pub fn new(manifest: &Package, frame: LocalFrame) -> Self {
+        let [anchor_x, anchor_y] = frame.mercator_xy(Vector3::zeros());
+        let scale = frame.mercator_scale_m();
+        let bounds = |tile: &TileRecord| {
+            let Tile(z, x, y) = tile.xyz;
             let n = f64::from(1 << z);
             [
                 (f64::from(x) / n - anchor_x) * scale,

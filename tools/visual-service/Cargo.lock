@@ -434,8 +434,7 @@ dependencies = [
 [[package]]
 name = "gdal"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e26906e99e54000acd7f6328f85d161e6280390b9b596e06dbed0637a6e29717"
+source = "git+https://github.com/georust/gdal?rev=c0a6266b987a2c2d44aea9956c2cae1ed71445cf#c0a6266b987a2c2d44aea9956c2cae1ed71445cf"
 dependencies = [
  "bitflags",
  "chrono",
@@ -448,8 +447,7 @@ dependencies = [
 [[package]]
 name = "gdal-sys"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cceef1cc08a1f031c5717cb645bb361a3114470cc142cc96bc5e62b79695632e"
+source = "git+https://github.com/georust/gdal?rev=c0a6266b987a2c2d44aea9956c2cae1ed71445cf#c0a6266b987a2c2d44aea9956c2cae1ed71445cf"
 dependencies = [
  "pkg-config",
  "semver",
@@ -893,12 +891,23 @@ dependencies = [
 name = "navigate-imagery"
 version = "0.1.0"
 dependencies = [
- "gdal",
  "image",
- "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "navigate-imagery-provider"
+version = "0.1.0"
+dependencies = [
+ "gdal",
+ "image",
+ "navigate-imagery",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]
@@ -911,6 +920,7 @@ dependencies = [
  "clap",
  "http-body-util",
  "navigate-imagery",
+ "navigate-imagery-provider",
  "serde",
  "serde_json",
  "tempfile",

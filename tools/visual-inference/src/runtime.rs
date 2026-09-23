@@ -58,12 +58,12 @@ pub(super) fn run_blocking(args: &Args) -> Result<(), ProbeError> {
     let started = Instant::now();
     let mut session = session_blocking(args)?;
     let load_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let (times, values) = measure(&mut session, &inputs, args.repetitions)?;
+    let (times, values) = measure(&mut session, &inputs, args)?;
     let profile = session
         .end_profiling()
         .map_err(|source| context("finish provider profile", source))?;
     let nodes = provider_nodes_blocking(Path::new(&profile))?;
-    let report = serde_json::json!({"requested_provider":format!("{:?}",args.provider),"load_ms":load_ms,"warm_inference_ms":times,"profile":profile,"provider_node_events":nodes,"outputs":values,"scope":"Model only. Core ML selection permits CPU execution. Provider node placement does not prove exclusive GPU or ANE use."});
+    let report = serde_json::json!({"requested_provider":format!("{:?}",args.provider),"load_ms":load_ms,"warm_inference_ms":times,"profile":profile,"provider_node_events":nodes,"outputs":values,"scope":"Model only. Accelerator selection permits CPU operators. Provider node placement does not measure hardware utilization."});
     let output = args.output.join("result.json");
     fs::write(
         &output,
@@ -80,36 +80,69 @@ fn session_blocking(args: &Args) -> Result<Session, ProbeError> {
         .map_err(|source| context("set CPU threads", source))?
         .with_profiling(args.output.join("profile"))
         .map_err(|source| context("enable provider profiling", source))?;
-    if !matches!(args.provider, Provider::Cpu) {
-        let units = if matches!(args.provider, Provider::CoremlAne) {
-            ComputeUnits::CPUAndNeuralEngine
-        } else {
-            ComputeUnits::CPUAndGPU
-        };
-        let provider = ep::CoreML::default()
-            .with_compute_units(units)
-            .with_model_format(ModelFormat::MLProgram)
-            .with_profile_compute_plan(true)
-            .with_model_cache_dir(args.output.join("coreml-cache").display())
-            .build()
-            .error_on_failure();
-        builder = builder
-            .with_execution_providers([provider])
-            .map_err(|source| context("register requested Core ML provider", source))?;
-    }
+    builder = builder
+        .with_execution_providers(providers(args)?)
+        .map_err(|source| context("register requested execution providers", source))?;
     let session = builder
         .commit_from_file(&args.model)
         .map_err(|source| context(format!("load {}", args.model.display()), source))?;
     Ok(session)
 }
+fn providers(args: &Args) -> Result<Vec<ep::ExecutionProviderDispatch>, ProbeError> {
+    let cuda = || {
+        ep::CUDA::default()
+            .with_device_id(args.device_id)
+            .build()
+            .error_on_failure()
+    };
+    Ok(match args.provider {
+        Provider::Cpu => vec![],
+        Provider::Cuda => vec![cuda()],
+        Provider::TensorRt => {
+            let workspace = usize::try_from(args.workspace_mib)
+                .ok()
+                .and_then(|value| value.checked_mul(1024 * 1024))
+                .ok_or_else(|| {
+                    ProbeError::Input("TensorRT workspace exceeds this host's address size".into())
+                })?;
+            vec![
+                ep::TensorRT::default()
+                    .with_device_id(args.device_id)
+                    .with_max_workspace_size(workspace)
+                    .with_engine_cache(true)
+                    .with_engine_cache_path(args.output.join("tensorrt-cache").display())
+                    .build()
+                    .error_on_failure(),
+                cuda(),
+            ]
+        }
+        Provider::CoremlAne | Provider::CoremlGpu => {
+            let units = if matches!(args.provider, Provider::CoremlAne) {
+                ComputeUnits::CPUAndNeuralEngine
+            } else {
+                ComputeUnits::CPUAndGPU
+            };
+            vec![
+                ep::CoreML::default()
+                    .with_compute_units(units)
+                    .with_static_input_shapes(true)
+                    .with_model_format(ModelFormat::MLProgram)
+                    .with_profile_compute_plan(true)
+                    .with_model_cache_dir(args.output.join("coreml-cache").display())
+                    .build()
+                    .error_on_failure(),
+            ]
+        }
+    })
+}
 fn measure(
     session: &mut Session,
     inputs: &[(String, DynValue)],
-    repetitions: u32,
+    args: &Args,
 ) -> Result<(Vec<f64>, serde_json::Map<String, serde_json::Value>), ProbeError> {
     let mut times = Vec::new();
     let mut values = serde_json::Map::new();
-    for index in 0..=repetitions {
+    for index in 0..=args.repetitions {
         let start = Instant::now();
         let supplied: Vec<_> = inputs
             .iter()
@@ -122,12 +155,22 @@ fn measure(
         if index > 0 {
             times.push(elapsed);
         }
-        if index == repetitions {
-            for (name, value) in output.iter() {
+        if index == args.repetitions {
+            for (output_index, (name, value)) in output.iter().enumerate() {
                 let data = if let Ok((shape, data)) = value.try_extract_tensor::<i64>() {
                     serde_json::json!({"shape":shape.to_vec(),"data":data})
                 } else if let Ok((shape, data)) = value.try_extract_tensor::<f32>() {
-                    serde_json::json!({"shape":shape.to_vec(),"data":if data.len()<=4096 {Some(data)}else{None},"elements":data.len(),"sum":data.iter().map(|x|f64::from(*x)).sum::<f64>()})
+                    let path = if args.save_outputs {
+                        let file = format!("output-{output_index}.f32");
+                        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        fs::write(args.output.join(&file), bytes).map_err(|source| {
+                            context(format!("save output tensor {name}"), source)
+                        })?;
+                        Some(file)
+                    } else {
+                        None
+                    };
+                    serde_json::json!({"file":path,"shape":shape.to_vec(),"data":if data.len()<=4096 {Some(data)}else{None},"elements":data.len(),"sum":data.iter().map(|x|f64::from(*x)).sum::<f64>()})
                 } else {
                     serde_json::json!({"unsupported_output_type":true})
                 };

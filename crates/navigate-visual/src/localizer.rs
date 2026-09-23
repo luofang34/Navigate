@@ -1,7 +1,8 @@
 //! Frame admission and geometric pose acceptance.
 
 use crate::{
-    CameraPose, Frame, FrameStamp, ImageMatcher, MapRevision, PosePrior, ReferenceView, VisualError,
+    CameraPose, Frame, FrameStamp, ImageMatcher, LocalFrame, MapRevision, PosePrior, ReferenceView,
+    VisualError,
 };
 use nalgebra::SMatrix;
 
@@ -54,13 +55,15 @@ pub struct Estimate {
     pub observation_sha256: String,
     /// Selected map release.
     pub map: MapRevision,
-    /// Camera pose in the map anchor's local east, north, up frame.
+    /// Frame of `pose` and of the position axes of `geometry_covariance`.
+    pub frame: LocalFrame,
+    /// Camera pose in `frame`.
     pub pose: CameraPose,
     /// Acceptance evidence.
     pub quality: EstimateQuality,
     /// Local linearized covariance from image residuals only.
     ///
-    /// First three axes are ENU position in metres. Last three are local camera
+    /// First three axes are position along the `frame` axes (east, north, up) in metres. Last three are local camera
     /// rotation in radians. Map, calibration, and association errors are excluded.
     /// A fusion adapter must account for these errors before admission.
     /// Unknown map error and shared-evidence correlation are not zero.

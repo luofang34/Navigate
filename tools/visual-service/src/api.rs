@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use navigate_imagery::{CoverageRequest, plan};
+use navigate_imagery_provider::NaipProvider;
 use serde_json::{Value, json};
 use tower_http::services::ServeDir;
 
@@ -100,7 +101,7 @@ async fn offline(State(state): State<App>, Json(value): Json<Value>) -> ApiResul
     Ok(Json(json!(region.manifest)))
 }
 async fn coverage(Json(request): Json<CoverageRequest>) -> ApiResult {
-    plan(request)
+    plan(request, &NaipProvider::terms())
         .map(|p| Json(json!(p)))
         .map_err(|e| failure(StatusCode::BAD_REQUEST, e))
 }
@@ -108,7 +109,8 @@ async fn download(
     State(state): State<App>,
     Json(request): Json<CoverageRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let plan = plan(request).map_err(|e| failure(StatusCode::BAD_REQUEST, e))?;
+    let plan =
+        plan(request, &NaipProvider::terms()).map_err(|e| failure(StatusCode::BAD_REQUEST, e))?;
     let job = state
         .jobs
         .submit(plan)

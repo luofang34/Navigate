@@ -24,9 +24,9 @@
 //! ```
 //! use image::GrayImage;
 //! use nalgebra::{UnitQuaternion, Vector3};
-//! use navigate_visual::{CameraModel, CameraPose, Frame, FrameStamp, Localizer,
-//!     LocalizerConfig, MapRevision, PosePrior, PyramidalMatcher, ReferenceView,
-//!     VisualError};
+//! use navigate_visual::{CameraModel, CameraPose, Frame, FrameStamp, LocalFrame,
+//!     Localizer, LocalizerConfig, MapRevision, PosePrior, PyramidalMatcher,
+//!     ReferenceView, VisualError};
 //!
 //! let camera = CameraModel {
 //!     width: 64, height: 64, fx: 55.0, fy: 55.0, cx: 31.5, cy: 31.5,
@@ -43,6 +43,7 @@
 //! let reference = ReferenceView {
 //!     map: MapRevision { release_id: "selected-release".into(),
 //!         manifest_sha256: "a".repeat(64) },
+//!     frame: LocalFrame::anchor_mercator(47.0, 11.0)?,
 //!     pose, image: GrayImage::new(64, 64), depth_m: vec![1000.0; 64 * 64],
 //! };
 //! let mut localizer = Localizer::new(PyramidalMatcher, LocalizerConfig::default())?;
@@ -56,6 +57,7 @@ mod candidates;
 mod error;
 mod frame;
 mod geometry;
+mod local_frame;
 mod localizer;
 mod matching;
 mod pose_solver;
@@ -69,6 +71,7 @@ pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
 pub use geometry::PoseVerifier;
+pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};

@@ -3,7 +3,7 @@ pub(crate) enum ServiceError {
     #[error("service I/O failed")]
     Io(#[from] std::io::Error),
     #[error("package operation failed")]
-    Imagery(#[from] navigate_imagery::ImageryError),
+    Imagery(#[from] navigate_imagery_provider::ProviderError),
     #[error("background initialization failed")]
     Join(#[from] tokio::task::JoinError),
     #[error("invalid public origin")]

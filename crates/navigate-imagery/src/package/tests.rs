@@ -12,6 +12,7 @@ fn empty() -> Package {
         files: vec![],
         tiles: vec![],
         provenance: Some(serde_json::json!({"registration_error":"unknown"})),
+        supersedes: None,
         pack_id: String::new(),
     }
 }
@@ -21,7 +22,7 @@ fn ranges_recover_original_bytes_and_bind_source_identity() {
     let mut chunks = std::collections::BTreeMap::new();
     let mut builder = PackageBuilder::new(empty(), |sha: &str, data: &[u8]| {
         chunks.insert(sha.to_owned(), data.to_vec());
-        Ok(())
+        Ok::<(), crate::ImageryError>(())
     })
     .expect("builder");
     let a = vec![17; 3 * 1024 * 1024];
@@ -51,7 +52,8 @@ fn ranges_recover_original_bytes_and_bind_source_identity() {
 
 #[test]
 fn corruption_duplicate_roles_and_missing_geometry_are_rejected() {
-    let mut builder = PackageBuilder::new(empty(), |_, _| Ok(())).expect("builder");
+    let mut builder =
+        PackageBuilder::new(empty(), |_, _| Ok::<(), crate::ImageryError>(())).expect("builder");
     assert!(
         builder
             .add(Tile(16, 1, 1), false, b"tile", "wrong")
@@ -66,4 +68,93 @@ fn corruption_duplicate_roles_and_missing_geometry_are_rejected() {
             .is_err()
     );
     assert!(builder.finish().is_err());
+}
+
+type Store = std::collections::BTreeMap<String, Vec<u8>>;
+
+fn parent(chunks: &mut Store) -> Package {
+    let mut builder = PackageBuilder::new(empty(), |sha: &str, data: &[u8]| {
+        chunks.insert(sha.to_owned(), data.to_vec());
+        Ok::<(), crate::ImageryError>(())
+    })
+    .expect("builder");
+    let imagery = vec![1; 1024];
+    let terrain = vec![2; 1024];
+    builder
+        .add(Tile(16, 19212, 24674), false, &imagery, &digest(&imagery))
+        .expect("imagery");
+    builder
+        .add(Tile(16, 19212, 24674), true, &terrain, &digest(&terrain))
+        .expect("terrain");
+    builder.finish().expect("parent")
+}
+
+#[test]
+fn a_derived_package_replaces_one_asset_and_names_every_producer() {
+    let mut chunks = Store::new();
+    let parent = parent(&mut chunks);
+    let refined = vec![9; 1024];
+    let mut builder = PackageBuilder::from_parent(&parent, "flight-7".into(), |sha, data| {
+        chunks.insert(sha.to_owned(), data.to_vec());
+        Ok::<(), crate::ImageryError>(())
+    })
+    .expect("derived builder");
+    builder
+        .add(Tile(16, 19212, 24674), false, &refined, &digest(&refined))
+        .expect("replace imagery once");
+    let child = builder.finish().expect("child");
+    assert_eq!(child.supersedes.as_deref(), Some(parent.pack_id.as_str()));
+    assert_eq!(child.region_id, parent.region_id);
+    assert_eq!(child.release_id, "flight-7");
+    assert_ne!(child.pack_id, parent.pack_id);
+    assert_eq!(child.compute_pack_id().expect("digest"), child.pack_id);
+    let tile = &child.tiles[0];
+    let imagery = tile.imagery.as_ref().expect("imagery");
+    let terrain = tile.elevation.as_ref().expect("terrain");
+    assert_eq!(imagery.sha256, digest(&refined));
+    assert_eq!(imagery.produced_by, None);
+    assert_eq!(terrain.produced_by.as_deref(), Some("source-1"));
+    let referenced: Vec<_> = [imagery, terrain].map(|a| a.chunk.clone()).into();
+    assert!(child.files.iter().all(|f| referenced.contains(&f.sha256)));
+}
+
+#[test]
+fn a_derived_package_refuses_a_second_replacement_and_a_tampered_parent() {
+    let mut chunks = Store::new();
+    let parent = parent(&mut chunks);
+    let bytes = vec![5; 64];
+    let mut builder = PackageBuilder::from_parent(&parent, "flight-8".into(), |_, _| {
+        Ok::<(), crate::ImageryError>(())
+    })
+    .expect("builder");
+    let tile = Tile(16, 19212, 24674);
+    builder
+        .add(tile, true, &bytes, &digest(&bytes))
+        .expect("first replacement");
+    assert!(builder.add(tile, true, &bytes, &digest(&bytes)).is_err());
+    let mut tampered = parent.clone();
+    tampered.attribution = "changed".into();
+    assert!(
+        PackageBuilder::from_parent(&tampered, "flight-9".into(), |_, _| Ok::<
+            (),
+            crate::ImageryError,
+        >(()))
+        .is_err()
+    );
+    assert!(
+        PackageBuilder::from_parent(&parent, "source-1".into(), |_, _| Ok::<
+            (),
+            crate::ImageryError,
+        >(()))
+        .is_err()
+    );
+}
+
+#[test]
+fn packages_without_lineage_keep_their_existing_pack_id() {
+    let mut chunks = Store::new();
+    let parent = parent(&mut chunks);
+    let text = serde_json::to_string(&parent).expect("json");
+    assert!(!text.contains("supersedes"));
+    assert!(!text.contains("produced_by"));
 }

@@ -1,7 +1,7 @@
 //! One query owns all candidate refinements and their common prior.
 use crate::{
-    BenchError, coordinates::MapFrame, matches::VerifiedMatches, read_blocking,
-    session::estimate_report, stream::write_record_blocking, trial::writer_blocking,
+    BenchError, matches::VerifiedMatches, read_blocking, session::estimate_report,
+    stream::write_record_blocking, trial::writer_blocking,
 };
 use navigate_visual::{
     CameraModel, CandidateDecision, CandidateId, CandidateResults, Frame, FrameStamp, ImageMatcher,
@@ -127,7 +127,7 @@ pub(super) struct Refinement<'a> {
     pub matches: &'a Path,
     pub output: &'a Path,
     pub map_context: &'a serde_json::Value,
-    pub map_frame: MapFrame,
+    pub map_frame: navigate_visual::LocalFrame,
 }
 
 #[cfg(test)]

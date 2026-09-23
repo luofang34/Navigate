@@ -2,8 +2,8 @@
 //!
 //! Run `visual-bench --help` for command usage. [`package`] defines the shared
 //! source-data contract. [`stream`] defines streamed frame input. [`video`]
-//! describes decoding and prior association. [`coordinates`] describes the
-//! coordinate model. [`track`] describes geographic track output.
+//! describes decoding and prior association. [`navigate_visual::LocalFrame`]
+//! describes the coordinate model. [`track`] describes geographic track output.
 //!
 //! Build this tool beside the MapLibre fork with
 //! `cargo build --release --manifest-path tools/visual-bench/Cargo.toml`.
@@ -14,7 +14,6 @@
 
 mod backend;
 mod cli;
-mod coordinates;
 mod error;
 mod fixture;
 mod matches;
@@ -28,6 +27,9 @@ mod track;
 mod trial;
 mod video;
 mod worker;
+
+/// MapLibre fork commit that renders every reference, recorded with each result.
+const RENDERER_REVISION: &str = include_str!("../MAPLIBRE_REVISION");
 
 use error::BenchError;
 use std::path::Path;
@@ -61,3 +63,6 @@ async fn main() -> Result<(), BenchError> {
         .init();
     cli::run_blocking().await
 }
+
+#[cfg(test)]
+mod tests;

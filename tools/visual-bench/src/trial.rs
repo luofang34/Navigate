@@ -129,8 +129,7 @@ pub(crate) async fn render_blocking(
 ) -> Result<(), BenchError> {
     let input = config_blocking(prior)?;
     let package = MapPackage::open_blocking(package)?;
-    let map_frame = crate::coordinates::MapFrame::new(package.manifest.anchor_lat_lon);
-    let pose = input.prior.prior(map_frame)?.pose;
+    let pose = input.prior.prior(package.frame)?.pose;
     let mut renderer =
         crate::renderer::ReferenceRenderer::new(package, input.camera.model()).await?;
     let reference = renderer.render_blocking(pose)?;

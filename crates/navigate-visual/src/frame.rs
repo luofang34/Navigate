@@ -1,6 +1,6 @@
 //! Frame inputs and map reference identity.
 
-use crate::{CameraModel, CameraPose, VisualError};
+use crate::{CameraModel, CameraPose, LocalFrame, VisualError};
 use image::GrayImage;
 
 /// Frame ordering within one capture stream.
@@ -76,6 +76,8 @@ pub struct MapRevision {
 pub struct ReferenceView {
     /// Map release used to render this reference.
     pub map: MapRevision,
+    /// Frame of `pose`, of the depth surface, and of every pose solved from them.
+    pub frame: LocalFrame,
     /// Pose of the reference camera in the map's local frame.
     pub pose: CameraPose,
     /// Reference image in the query camera's calibrated projection.
@@ -87,6 +89,7 @@ pub struct ReferenceView {
 impl ReferenceView {
     pub(crate) fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
         frame.camera.validate()?;
+        self.frame.validate()?;
         self.pose.validate()?;
         if frame.image.dimensions() != self.image.dimensions() {
             return Err(VisualError::Dimensions {

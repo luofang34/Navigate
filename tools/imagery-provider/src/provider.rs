@@ -3,10 +3,11 @@ use super::{
     files::{Overview, chunk_blocking, png, publish_blocking, read_blocking, write_blocking},
     raster_error,
 };
-use crate::{
-    CoveragePlan, ImageryError, Package, PackageBuilder, Tile, digest, error::invalid, tile_bounds,
-};
+use crate::{ProviderError, error::invalid};
 use image::RgbaImage;
+use navigate_imagery::{
+    CoveragePlan, Package, PackageBuilder, SourceTerms, Tile, digest, tile_bounds,
+};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path, time::Duration};
@@ -19,19 +20,27 @@ pub struct NaipProvider {
     client: Client,
 }
 
-fn http(operation: &'static str) -> impl FnOnce(reqwest::Error) -> ImageryError {
-    move |source| ImageryError::Provider {
+fn http(operation: &'static str) -> impl FnOnce(reqwest::Error) -> ProviderError {
+    move |source| ProviderError::Provider {
         operation,
         source: source.without_url(),
     }
 }
 
 impl NaipProvider {
+    /// Name and use terms that NAIP coverage plans carry.
+    pub fn terms() -> SourceTerms {
+        SourceTerms {
+            provider: "Microsoft Planetary Computer / USDA NAIP".into(),
+            offline_use: "Public domain; retain attribution".into(),
+        }
+    }
+
     /// Create an HTTP client with bounded request time.
     ///
     /// # Errors
     /// Returns a TLS or client configuration error.
-    pub fn new_blocking() -> Result<Self, ImageryError> {
+    pub fn new_blocking() -> Result<Self, ProviderError> {
         Ok(Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(120))
@@ -40,7 +49,7 @@ impl NaipProvider {
         })
     }
 
-    fn search_blocking(&self, bounds: [f64; 4]) -> Result<Vec<Value>, ImageryError> {
+    fn search_blocking(&self, bounds: [f64; 4]) -> Result<Vec<Value>, ProviderError> {
         let result: Value = self
             .client
             .post(API)
@@ -72,7 +81,7 @@ impl NaipProvider {
             .collect())
     }
 
-    fn token_blocking(&self) -> Result<String, ImageryError> {
+    fn token_blocking(&self) -> Result<String, ProviderError> {
         let value: Value = self
             .client
             .get("https://planetarycomputer.microsoft.com/api/sas/v1/token/naip")
@@ -96,8 +105,8 @@ impl NaipProvider {
         plan: &CoveragePlan,
         state: &Path,
         mut progress: impl FnMut(String),
-    ) -> Result<Region, ImageryError> {
-        let checked = crate::plan(plan.requested.clone())?;
+    ) -> Result<Region, ProviderError> {
+        let checked = navigate_imagery::plan(plan.requested.clone(), &Self::terms())?;
         if checked.imagery_tiles != plan.imagery_tiles {
             return Err(invalid("coverage plan differs from its request"));
         }
@@ -118,6 +127,7 @@ impl NaipProvider {
             files: vec![],
             tiles: vec![],
             provenance: Some(identity),
+            supersedes: None,
             pack_id: String::new(),
         };
         let mut builder =
@@ -147,7 +157,7 @@ impl NaipProvider {
     fn open_sources_blocking(
         &self,
         items: &[Value],
-    ) -> Result<Vec<([f64; 4], GdalRaster)>, ImageryError> {
+    ) -> Result<Vec<([f64; 4], GdalRaster)>, ProviderError> {
         for (key, value) in [
             ("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR"),
             ("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif"),
@@ -183,14 +193,14 @@ impl NaipProvider {
             .collect()
     }
 
-    fn imagery_blocking<F: FnMut(&str, &[u8]) -> Result<(), ImageryError>>(
+    fn imagery_blocking<F: FnMut(&str, &[u8]) -> Result<(), ProviderError>>(
         &self,
         plan: &CoveragePlan,
         sources: &mut [([f64; 4], GdalRaster)],
         builder: &mut PackageBuilder<F>,
         overview: &mut Overview,
         progress: &mut impl FnMut(String),
-    ) -> Result<BTreeSet<Tile>, ImageryError> {
+    ) -> Result<BTreeSet<Tile>, ProviderError> {
         let mut terrain = BTreeSet::new();
         for (index, tile) in plan.imagery_tiles.iter().enumerate() {
             let bounds = tile_bounds(*tile);
@@ -221,7 +231,11 @@ impl NaipProvider {
         Ok(terrain)
     }
 
-    fn terrain_blocking(&self, state: &Path, Tile(z, x, y): Tile) -> Result<Vec<u8>, ImageryError> {
+    fn terrain_blocking(
+        &self,
+        state: &Path,
+        Tile(z, x, y): Tile,
+    ) -> Result<Vec<u8>, ProviderError> {
         let path = state
             .join("provider-cache")
             .join(format!("terrain-{z}-{x}-{y}.png"));

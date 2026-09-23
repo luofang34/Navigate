@@ -90,7 +90,6 @@ impl Session {
         reference: &ReferenceView,
         pairs: &[PixelMatch],
         backend: &str,
-        anchor: [f64; 2],
     ) -> Result<Value, PreviewError> {
         if self.active != Some(id) {
             return Err(PreviewError::Input {
@@ -109,13 +108,7 @@ impl Session {
             Ok(e) => {
                 let p = e.pose.position;
                 let q = e.pose.orientation.quaternion();
-                let [lat, lon] = anchor;
-                let scale = 6_371_008.8 * lat.to_radians().cos();
-                let latitude = (lat.to_radians().tan().asinh() + p.y / scale)
-                    .sinh()
-                    .atan()
-                    .to_degrees();
-                let longitude = lon + (p.x / scale).to_degrees();
+                let [latitude, longitude, _] = e.frame.geodetic(p);
                 json!({"candidate_id":id,"accepted":true,"acceptance_stage":"geometry_and_prior","position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"latitude_deg":latitude,"longitude_deg":longitude,"altitude_m":p.z,"inliers":e.quality.inliers,"depth_matches":e.quality.depth_matches,"reprojection_rms_px":e.quality.reprojection_rms_px,"occupied_cells":e.quality.occupied_cells,"condition_number":e.quality.condition_number,"geometry_covariance":(0..6).map(|row|(0..6).map(|col|e.geometry_covariance[(row,col)]).collect::<Vec<_>>()).collect::<Vec<_>>(),"geometry_covariance_axes":["east_m","north_m","up_m","camera_rx_rad","camera_ry_rad","camera_rz_rad"],"covariance_scope":"local image geometry only; excludes map, calibration and association errors","backend":e.backend,"observation_sha256":e.observation_sha256,"map_release_id":e.map.release_id,"map_manifest_sha256":e.map.manifest_sha256})
             }
             Err(e) => {
@@ -219,15 +212,7 @@ impl Preview {
         let reference = self.reference.as_ref().ok_or_else(|| PreviewError::Input {
             reason: "no rendered reference".into(),
         })?;
-        Ok(session
-            .refine(
-                id,
-                reference,
-                &pairs,
-                &backend,
-                self.manifest.anchor_lat_lon,
-            )?
-            .to_string())
+        Ok(session.refine(id, reference, &pairs, &backend)?.to_string())
     }
     /// Preserve all evaluated alternatives without adding confidence across refinements.
     pub fn select(&self) -> Result<String, JsValue> {

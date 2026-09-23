@@ -9,6 +9,8 @@ pub(crate) enum PreviewError {
     Json(#[from] serde_json::Error),
     #[error("preview data: {0}")]
     Data(#[from] navigate_data::DataError),
+    #[error("preview package: {0}")]
+    Imagery(#[from] navigate_imagery::ImageryError),
     #[error("decode tile {uri}: {source}")]
     Image {
         uri: String,

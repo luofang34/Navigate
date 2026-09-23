@@ -26,7 +26,7 @@ fn main() -> Result<(), ServiceError> {
 async fn run(config: Config) -> Result<(), ServiceError> {
     let init = config.clone();
     let regions = tokio::task::spawn_blocking(move || {
-        navigate_imagery::native::load_catalog_blocking(&init.state, init.catalog.as_deref())
+        navigate_imagery_provider::load_catalog_blocking(&init.state, init.catalog.as_deref())
     })
     .await??;
     let (jobs, handle) = jobs::start(config.state.clone(), regions);

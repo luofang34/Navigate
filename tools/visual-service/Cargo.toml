@@ -7,7 +7,8 @@ publish = false
 [workspace]
 
 [dependencies]
-navigate-imagery = { path = "../../crates/navigate-imagery", features = ["native"] }
+navigate-imagery = { path = "../../crates/navigate-imagery" }
+navigate-imagery-provider = { path = "../imagery-provider" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }

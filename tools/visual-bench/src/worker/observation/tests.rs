@@ -29,7 +29,8 @@ fn refinements_keep_alternatives_and_failed_evidence_invalidates_a_candidate() {
             matches: &matches,
             output: &dir.path().join(name),
             map_context: &context,
-            map_frame: MapFrame::new([40.0, -74.0]),
+            map_frame: navigate_visual::LocalFrame::anchor_mercator(40.0, -74.0)
+                .expect("valid anchor"),
         })
     };
     let first = fit(&mut observation, &reference, 1, "first.json").expect("first");
@@ -91,6 +92,7 @@ fn fixture(dir: &Path) -> (Observation, ReferenceView) {
     )
     .expect("observation");
     let reference = ReferenceView {
+        frame: navigate_visual::LocalFrame::anchor_mercator(40.0, -74.0).expect("valid anchor"),
         pose,
         image,
         depth_m: vec![80.0; 96 * 72],

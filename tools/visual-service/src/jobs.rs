@@ -1,7 +1,5 @@
-use navigate_imagery::{
-    CoveragePlan,
-    native::{NaipProvider, Region},
-};
+use navigate_imagery::CoveragePlan;
+use navigate_imagery_provider::{NaipProvider, ProviderError, Region};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -23,7 +21,7 @@ pub(crate) struct Jobs {
 enum Command {
     Start(CoveragePlan, oneshot::Sender<Result<Value, &'static str>>),
     Progress(String, String),
-    Complete(String, Result<Region, navigate_imagery::ImageryError>),
+    Complete(String, Box<Result<Region, ProviderError>>),
     Stop,
 }
 
@@ -86,7 +84,7 @@ async fn run(state: PathBuf, jobs: Jobs, mut receiver: mpsc::Receiver<Command>) 
                 }
             }
             Command::Complete(id, result) => {
-                complete(&jobs, id, result).await;
+                complete(&jobs, id, *result).await;
                 active = false;
             }
             Command::Stop => {
@@ -116,11 +114,13 @@ fn launch(state: PathBuf, sender: mpsc::Sender<Command>, id: String, plan: Cover
                     .ok();
             })
         });
-        sender.blocking_send(Command::Complete(id, result)).ok();
+        sender
+            .blocking_send(Command::Complete(id, Box::new(result)))
+            .ok();
     });
 }
 
-async fn complete(jobs: &Jobs, id: String, result: Result<Region, navigate_imagery::ImageryError>) {
+async fn complete(jobs: &Jobs, id: String, result: Result<Region, ProviderError>) {
     let mut state = jobs.snapshot.write().await;
     match result {
         Ok(region) => {

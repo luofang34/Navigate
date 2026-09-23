@@ -27,12 +27,12 @@ use wasm_bindgen::prelude::*;
 pub struct Preview {
     pub(crate) map: HeadlessMap,
     pub(crate) camera: Camera,
-    anchor: ExternalAnchor,
-    tick: u64,
+    pub(crate) anchor: ExternalAnchor,
     pub(crate) depth: wgpu::Texture,
     pub(crate) camera_session: Option<crate::session::Session>,
     pub(crate) reference: Option<navigate_visual::ReferenceView>,
     pub(crate) manifest: Manifest,
+    pub(crate) frame: navigate_visual::LocalFrame,
     pub(crate) coverage: crate::coverage::Coverage,
     pub(crate) globe: bool,
     pub(crate) surface: Option<wgpu::Surface<'static>>,
@@ -89,7 +89,16 @@ impl Preview {
         let pose: Pose = serde_json::from_str(&pose_json).map_err(PreviewError::from)?;
         let transform = pose.transform()?;
         self.draw(transform)?;
-        crate::readback::read(&self.map).await.map_err(Into::into)
+        let texture = self.map.head_texture().ok_or_else(|| PreviewError::Input {
+            reason: "renderer has no color target".into(),
+        })?;
+        maplibre::headless::map::reference::read_texture(
+            &self.map,
+            texture,
+            wgpu::TextureAspect::All,
+        )
+        .await
+        .map_err(|e| render_error("preview readback", e).into())
     }
 }
 impl Preview {
@@ -103,10 +112,12 @@ impl Preview {
         frames: usize,
     ) -> Result<(), PreviewError> {
         for _ in 0..frames {
-            self.tick = self.tick.wrapping_add(1);
+            // Continue the map clock, which reference renders also advance.
+            let timestamp =
+                self.map.frame_input_mut().timestamp + std::time::Duration::from_millis(16);
             self.map
                 .run_xr_frame(XrFrame {
-                    timestamp: std::time::Duration::from_millis(self.tick.wrapping_mul(16)),
+                    timestamp,
                     opaque_environment: true,
                     placement: ScenePlacement {
                         anchor: self.anchor,
@@ -141,7 +152,7 @@ impl Preview {
         canvas: Option<(web_sys::HtmlCanvasElement, wgpu::TextureFormat)>,
     ) -> Result<Self, PreviewError> {
         let manifest: Manifest = serde_json::from_str(&manifest_json)?;
-        manifest.validate()?;
+        manifest.validate_for_reading()?;
         let camera: Camera = serde_json::from_str(&camera_json)?;
         camera.validate()?;
         let (kernel, renderer) = create_headless_renderer_with_settings(
@@ -177,17 +188,21 @@ impl Preview {
             position: LatLon::new(manifest.anchor_lat_lon[0], manifest.anchor_lat_lon[1]),
             altitude_meters: 0.0,
         };
+        let frame = navigate_visual::LocalFrame::anchor_mercator(
+            manifest.anchor_lat_lon[0],
+            manifest.anchor_lat_lon[1],
+        )?;
         let depth = reference_depth(&map, camera);
         let mut preview = Self {
             map,
             camera,
             anchor,
-            tick: 0,
             depth,
             camera_session: None,
             reference: None,
             coverage: crate::coverage::Coverage::new(&manifest),
             manifest,
+            frame,
             globe,
             surface,
         };
@@ -204,7 +219,7 @@ pub(crate) async fn load(
     let mut imagery = Vec::new();
     let mut elevation = Vec::new();
     for tile in &manifest.tiles {
-        let [z, x, y] = tile.xyz;
+        let navigate_imagery::Tile(z, x, y) = tile.xyz;
         let coords = WorldTileCoords::from((x as i32, y as i32, (z as u8).into()));
         if let Some(asset) = &tile.imagery {
             imagery.push(AvailableRasterLayerData {
@@ -228,7 +243,7 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .tiles
         .iter()
         .filter(|t| t.imagery.is_some())
-        .map(|t| t.xyz[0])
+        .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
     let imax = if globe { 18 } else { imax };
@@ -236,7 +251,7 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .tiles
         .iter()
         .filter(|t| t.elevation.is_some())
-        .map(|t| t.xyz[0])
+        .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
     Ok(serde_json::from_value(
