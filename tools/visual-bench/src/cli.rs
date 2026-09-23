@@ -78,7 +78,7 @@ enum Command {
 
 #[derive(Args)]
 pub(crate) struct TrialArgs {
-    /// Shared verified imagery and elevation package directory.
+    /// Published package manifest, or a source folder with `map.json`.
     pub package: PathBuf,
     /// Image or video path.
     pub input: PathBuf,

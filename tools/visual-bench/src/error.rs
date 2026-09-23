@@ -59,6 +59,8 @@ pub(crate) enum BenchError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    #[error("map package rule failed")]
+    Imagery(#[from] navigate_imagery::ImageryError),
     #[error("visual observation failed")]
     Visual(#[from] navigate_visual::VisualError),
     #[error("synthetic acceptance failed for {failed} cases")]

@@ -1,8 +1,8 @@
 //! Projection and coverage in MapLibre's local Mercator frame.
 
-use crate::package::Manifest;
 use cgmath::Matrix4;
 use nalgebra::{Vector2, Vector3};
+use navigate_imagery::{Package, Tile, TileRecord};
 use navigate_visual::{CameraModel, CameraPose, LocalFrame};
 
 pub(super) fn eye_transform(pose: CameraPose) -> Matrix4<f64> {
@@ -20,11 +20,11 @@ pub(super) struct Coverage {
 }
 
 impl Coverage {
-    pub fn new(manifest: &Manifest, frame: LocalFrame) -> Self {
+    pub fn new(manifest: &Package, frame: LocalFrame) -> Self {
         let [anchor_x, anchor_y] = frame.mercator_xy(Vector3::zeros());
         let scale = frame.mercator_scale_m();
-        let bounds = |tile: &crate::package::Tile| {
-            let [z, x, y] = tile.xyz;
+        let bounds = |tile: &TileRecord| {
+            let Tile(z, x, y) = tile.xyz;
             let n = f64::from(1 << z);
             [
                 (f64::from(x) / n - anchor_x) * scale,

@@ -13,11 +13,12 @@ fn nonzero_terrain() -> MapPackage {
         .atan()
         .to_degrees();
     let manifest = serde_json::from_value(serde_json::json!({
-        "schema_version": 2, "release_id": "nonzero-alpha-test", "anchor_lat_lon": [lat, lon],
-        "elevation_datum": "test", "attribution": "test fixture",
+        "schema_version": 1, "region_id": "test", "release_id": "nonzero-alpha-test",
+        "anchor_lat_lon": [lat, lon], "elevation_datum": "test", "attribution": "test fixture",
+        "files": [],
         "tiles": [
-            {"xyz": [16,32768,32768], "imagery": {"path": "image.png", "sha256": "a".repeat(64)}},
-            {"xyz": [14,8192,8192], "elevation": {"path": "dem.png", "sha256": "b".repeat(64)}}
+            {"xyz": [16,32768,32768], "imagery": {"chunk": "c".repeat(64), "offset": 0, "length": 1, "sha256": "a".repeat(64)}},
+            {"xyz": [14,8192,8192], "elevation": {"chunk": "c".repeat(64), "offset": 1, "length": 1, "sha256": "b".repeat(64)}}
         ]
     }))
     .expect("test manifest");
@@ -82,7 +83,7 @@ async fn terrain_height_and_missing_imagery_control_depth() {
 #[ignore = "requires a GPU adapter"]
 async fn loaded_dem_cannot_validate_a_coarser_fallback_surface() {
     let mut package = nonzero_terrain();
-    package.manifest.tiles[1].xyz = [22, 2097184, 2097184];
+    package.manifest.tiles[1].xyz = navigate_imagery::Tile(22, 2097184, 2097184);
     package.tiles[1].xyz = [22, 2097184, 2097184];
     let camera = CameraModel {
         width: 64,

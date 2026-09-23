@@ -172,7 +172,7 @@ fn style(package: &MapPackage) -> Result<Style, BenchError> {
         .tiles
         .iter()
         .filter(|tile| tile.imagery.is_some())
-        .map(|t| t.xyz[0])
+        .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
     let dem_maxzoom = package
@@ -180,7 +180,7 @@ fn style(package: &MapPackage) -> Result<Style, BenchError> {
         .tiles
         .iter()
         .filter(|tile| tile.elevation.is_some())
-        .map(|tile| tile.xyz[0])
+        .map(|tile| tile.xyz.0)
         .max()
         .unwrap_or(0);
     serde_json::from_value(serde_json::json!({

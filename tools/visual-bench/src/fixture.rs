@@ -1,11 +1,8 @@
 //! A deterministic terrain package for renderer verification.
 
-use crate::{
-    BenchError, directory_blocking,
-    package::{Artifact, Manifest, Tile, digest},
-    read_blocking, write_blocking,
-};
+use crate::{BenchError, directory_blocking, package::digest, read_blocking, write_blocking};
 use image::{Rgba, RgbaImage};
+use navigate_imagery::{SourceAsset, SourceManifest, SourceTile, Tile};
 use std::path::Path;
 
 const ZOOM: u32 = 13;
@@ -22,8 +19,8 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
                     i64::from(y) * 512 + i64::from(py),
                 )
             });
-            tiles.push(Tile {
-                xyz: [ZOOM, x, y],
+            tiles.push(SourceTile {
+                xyz: Tile(ZOOM, x, y),
                 imagery: Some(save_blocking(
                     root,
                     &format!("{ZOOM}-{x}-{y}.png"),
@@ -37,8 +34,8 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
     for y in (CENTER[1] - 2) / 4..=(CENTER[1] + 2) / 4 {
         for x in (CENTER[0] - 2) / 4..=(CENTER[0] + 2) / 4 {
             let elevation = elevation_image(dem_zoom, x, y);
-            tiles.push(Tile {
-                xyz: [dem_zoom, x, y],
+            tiles.push(SourceTile {
+                xyz: Tile(dem_zoom, x, y),
                 imagery: None,
                 elevation: Some(save_blocking(
                     root,
@@ -52,13 +49,14 @@ pub(crate) fn prepare_blocking(root: &Path) -> Result<(), BenchError> {
     let lon = (f64::from(CENTER[0]) + 0.5) / n * 360.0 - 180.0;
     let mercator_y = std::f64::consts::PI * (1.0 - 2.0 * (f64::from(CENTER[1]) + 0.5) / n);
     let lat = mercator_y.sinh().atan().to_degrees();
-    let manifest = Manifest {
+    let manifest = SourceManifest {
         schema_version: 2,
         release_id: "synthetic-terrain-v1".into(),
         anchor_lat_lon: [lat, lon],
         elevation_datum: "synthetic-msl".into(),
         attribution: "Procedural test data. No real terrain or imagery accuracy claim.".into(),
         tiles,
+        provenance: None,
     };
     let path = root.join("map.json");
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(|source| BenchError::Json {
@@ -118,13 +116,13 @@ fn texture(x: i64, y: i64) -> Rgba<u8> {
     ])
 }
 
-fn save_blocking(root: &Path, name: &str, image: &RgbaImage) -> Result<Artifact, BenchError> {
+fn save_blocking(root: &Path, name: &str, image: &RgbaImage) -> Result<SourceAsset, BenchError> {
     let path = root.join(name);
     image.save(&path).map_err(|source| BenchError::Image {
         path: path.clone(),
         source,
     })?;
-    Ok(Artifact {
+    Ok(SourceAsset {
         path: name.into(),
         sha256: digest(&read_blocking(&path)?),
     })

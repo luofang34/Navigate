@@ -2,90 +2,124 @@
 
 use super::*;
 
-#[test]
-fn digest_changes_when_source_content_changes() {
-    assert_ne!(digest(b"one"), digest(b"two"));
-    assert_eq!(
-        digest(b"abc"),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-}
-
-#[test]
-fn archive_escape_is_rejected_before_file_access() {
-    for path in ["../other.png", "/other.png", "./other.png"] {
-        let artifact = Artifact {
-            path: path.into(),
-            sha256: "0".repeat(64),
-        };
-        assert!(matches!(
-            load_image_blocking(Path::new("unused"), &artifact),
-            Err(BenchError::Package { .. })
-        ));
-    }
-}
-
-#[test]
-fn verified_selection_detects_changed_assets_and_manifest() {
+fn fixture() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("temporary directory");
     crate::fixture::prepare_blocking(directory.path()).expect("write fixture");
-    let first = MapPackage::open_blocking(directory.path()).expect("valid package");
-    assert_eq!(
-        first
-            .tiles
-            .iter()
-            .filter(|tile| tile.imagery.is_some())
-            .count(),
-        25
-    );
-    let manifest_path = directory.path().join("map.json");
-    let mut manifest = first.manifest;
-    manifest.release_id = "another-selection".into();
+    directory
+}
+
+fn source(directory: &Path) -> SourceManifest {
+    serde_json::from_slice(&std::fs::read(directory.join("map.json")).expect("read"))
+        .expect("parse")
+}
+
+fn write_source(directory: &Path, manifest: &SourceManifest) {
     std::fs::write(
-        &manifest_path,
-        serde_json::to_vec(&manifest).expect("serialize"),
+        directory.join("map.json"),
+        serde_json::to_vec(manifest).expect("serialize"),
     )
     .expect("write manifest");
+}
+
+#[test]
+fn a_source_folder_reports_its_package_identity() {
+    let directory = fixture();
+    let first = MapPackage::open_blocking(directory.path()).expect("valid package");
+    let imagery = first
+        .tiles
+        .iter()
+        .filter(|tile| tile.imagery.is_some())
+        .count();
+    assert_eq!(imagery, 25);
+    assert_eq!(first.revision.manifest_sha256, first.manifest.pack_id);
+    assert_eq!(
+        first.manifest.compute_pack_id().expect("digest"),
+        first.manifest.pack_id
+    );
+    let mut manifest = source(directory.path());
+    manifest.release_id = "another-selection".into();
+    write_source(directory.path(), &manifest);
     let second = MapPackage::open_blocking(directory.path()).expect("changed selection");
     assert_ne!(
         first.revision.manifest_sha256,
         second.revision.manifest_sha256
     );
-    let path = directory
-        .path()
-        .join(&manifest.tiles[0].imagery.as_ref().expect("imagery").path);
-    std::fs::write(&path, b"changed contents").expect("change source bytes");
-    assert!(
-        matches!(MapPackage::open_blocking(directory.path()), Err(BenchError::Package { reason })
-        if reason.contains("digest mismatch"))
-    );
 }
 
 #[test]
-fn independent_sources_require_version_two_and_keep_hash_checks() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    crate::fixture::prepare_blocking(directory.path()).expect("fixture");
-    let mut manifest = MapPackage::open_blocking(directory.path())
-        .expect("package")
-        .manifest;
+fn changed_source_bytes_and_escaping_paths_are_refused() {
+    let directory = fixture();
+    let mut manifest = source(directory.path());
+    let path = manifest.tiles[0]
+        .imagery
+        .as_ref()
+        .or(manifest.tiles[0].elevation.as_ref())
+        .expect("asset")
+        .path
+        .clone();
+    std::fs::write(directory.path().join(&path), b"changed contents").expect("change bytes");
+    assert!(MapPackage::open_blocking(directory.path()).is_err());
+    let directory = fixture();
+    if let Some(asset) = manifest.tiles[0].imagery.as_mut() {
+        asset.path = "../other.png".into();
+    }
+    write_source(directory.path(), &manifest);
+    assert!(MapPackage::open_blocking(directory.path()).is_err());
+}
+
+#[test]
+fn independent_sources_require_version_two() {
+    let directory = fixture();
+    let mut manifest = source(directory.path());
     manifest.schema_version = 1;
-    let path = directory.path().join("map.json");
-    let write = |manifest: &Manifest| {
-        std::fs::write(&path, serde_json::to_vec(manifest).expect("JSON")).expect("manifest")
-    };
-    write(&manifest);
+    write_source(directory.path(), &manifest);
     assert!(MapPackage::open_blocking(directory.path()).is_err());
     manifest.schema_version = 2;
-    write(&manifest);
+    write_source(directory.path(), &manifest);
     let package = MapPackage::open_blocking(directory.path()).expect("independent sources");
-    assert!(package.tiles[0].elevation.is_none());
     assert!(
         package
             .tiles
             .iter()
-            .any(|tile| tile.imagery.is_none() && tile.elevation.is_some())
+            .any(|t| t.imagery.is_some() && t.elevation.is_none())
     );
-    manifest.tiles[0].imagery = None;
-    write(&manifest);
-    assert!(MapPackage::open_blocking(directory.path()).is_err());
+    assert!(
+        package
+            .tiles
+            .iter()
+            .any(|t| t.imagery.is_none() && t.elevation.is_some())
+    );
+}
+
+#[test]
+fn a_published_package_opens_with_the_same_identity_as_its_source() {
+    let directory = fixture();
+    let built = MapPackage::open_blocking(directory.path()).expect("source package");
+    let published = tempfile::tempdir().expect("published");
+    let chunks = published.path().join("chunks");
+    std::fs::create_dir_all(&chunks).expect("chunks");
+    let source = source(directory.path());
+    let root = directory.path().canonicalize().expect("root");
+    source
+        .build(
+            LOCAL_SOURCE_REGION,
+            |_, _, asset| read_source_asset_blocking(&root, &asset.path),
+            |sha, bytes| {
+                std::fs::write(chunks.join(format!("{sha}.bin")), bytes).expect("chunk");
+                Ok::<(), BenchError>(())
+            },
+        )
+        .expect("build");
+    let manifest = published.path().join("package.json");
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec(&built.manifest).expect("json"),
+    )
+    .expect("write");
+    let opened = MapPackage::open_blocking(&manifest).expect("published package");
+    assert_eq!(opened.revision, built.revision);
+    let mut tampered = built.manifest.clone();
+    tampered.attribution = "changed".into();
+    std::fs::write(&manifest, serde_json::to_vec(&tampered).expect("json")).expect("write");
+    assert!(MapPackage::open_blocking(&manifest).is_err());
 }

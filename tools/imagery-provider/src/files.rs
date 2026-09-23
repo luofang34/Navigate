@@ -1,6 +1,6 @@
 use crate::{ProviderError, error::invalid};
 use image::{DynamicImage, Rgba, RgbaImage, imageops};
-use navigate_imagery::{Package, PackageBuilder, Tile, digest, tile_envelope};
+use navigate_imagery::{Package, SourceManifest, Tile, digest, tile_envelope};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -178,22 +178,10 @@ impl Overview {
     }
 }
 
-#[derive(Deserialize)]
-struct SourceAsset {
-    path: PathBuf,
-    sha256: String,
-}
-#[derive(Deserialize)]
-struct SourceTile {
-    xyz: Tile,
-    imagery: Option<SourceAsset>,
-    elevation: Option<SourceAsset>,
-}
-
-/// Convert an existing schema-2 reference folder to verified offline chunks.
+/// Convert a local source folder with `map.json` into verified offline chunks.
 ///
 /// # Errors
-/// Rejects unsupported schemas, corrupt assets, path escapes, or file failures.
+/// Rejects invalid sources, corrupt assets, path escapes, or file failures.
 pub fn import_region_blocking(
     source: &Path,
     state: &Path,
@@ -201,47 +189,35 @@ pub fn import_region_blocking(
     label: &str,
 ) -> Result<Region, ProviderError> {
     let source = source.canonicalize().map_err(io_error(source))?;
-    let mut value: serde_json::Value =
+    let manifest: SourceManifest =
         serde_json::from_slice(&read_blocking(&source.join("map.json"))?)?;
-    if value["schema_version"] != 2 {
-        return Err(invalid("source map requires schema 2"));
-    }
-    let mut tiles: Vec<SourceTile> = serde_json::from_value(value["tiles"].take())?;
-    tiles.sort_by_key(|t| t.xyz);
-    value["schema_version"] = 1.into();
-    value["region_id"] = id.into();
-    value["tiles"] = serde_json::json!([]);
-    value["files"] = serde_json::json!([]);
-    let manifest: Package = serde_json::from_value(value)?;
     let mut overview = Overview::new(
-        tiles
+        manifest
+            .tiles
             .iter()
             .filter(|t| t.imagery.is_some())
             .map(|t| t.xyz)
             .collect(),
     )?;
-    let mut builder =
-        PackageBuilder::new(manifest, |sha, bytes| chunk_blocking(state, sha, bytes))?;
-    for tile in tiles {
-        for (elevation, asset) in [(false, tile.imagery), (true, tile.elevation)] {
-            let Some(asset) = asset else {
-                continue;
-            };
+    let package = manifest.build(
+        id,
+        |xyz, elevation, asset| {
             let path = source
-                .join(asset.path)
+                .join(&asset.path)
                 .canonicalize()
                 .map_err(io_error(&source))?;
             if !path.starts_with(&source) {
                 return Err(invalid("source asset escapes package directory"));
             }
             let bytes = read_blocking(&path)?;
-            builder.add(tile.xyz, elevation, &bytes, &asset.sha256)?;
             if !elevation {
-                overview.add(tile.xyz, &image::load_from_memory(&bytes)?.to_rgba8());
+                overview.add(xyz, &image::load_from_memory(&bytes)?.to_rgba8());
             }
-        }
-    }
-    publish_blocking(state, builder.finish()?, label.into(), overview)
+            Ok(bytes)
+        },
+        |sha, bytes| chunk_blocking(state, sha, bytes),
+    )?;
+    publish_blocking(state, package, label.into(), overview)
 }
 
 /// Load saved catalogues and optionally import local schema-2 packages.
@@ -280,3 +256,6 @@ pub fn load_catalog_blocking(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests;
