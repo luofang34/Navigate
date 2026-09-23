@@ -2,6 +2,12 @@ name: VNAV Pages
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/visual-bench/**'
+      - 'crates/navigate-visual/**'
+      - 'crates/navigate-imagery/**'
+      - '.github/workflows/vnav-pages.yml'
   push:
     branches: [main]
     paths:
@@ -14,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: vnav-pages
+  group: vnav-pages-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,10 +30,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
         with:
           path: Navigate
+      - name: Read the renderer revision
+        id: renderer
+        working-directory: Navigate
+        shell: bash
+        run: |
+          revision=$(tr -d '[:space:]' < tools/visual-bench/MAPLIBRE_REVISION)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
         with:
           repository: luofang34/maplibre-rs-experimental
-          ref: 5c323427e29c1796003c5e7052b2887f6d35c173
+          ref: ${{ steps.renderer.outputs.revision }}
           path: maplibre-rs-experimental
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -63,6 +77,7 @@ jobs:
           path: site
 
   deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
