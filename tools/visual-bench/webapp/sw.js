@@ -1,4 +1,4 @@
-const CACHE='navigate-visual-shell-v9';
+const CACHE='navigate-visual-shell-v10';
 const SHELL=['/','/index.html','/context/earth.json','/context/earth.png','/app.css','/app.js','/hypotheses.js','/storage.js','/map.js','/gpu-compat.js','/wasm/navigate_visual_preview.js','/wasm/navigate_visual_preview_bg.wasm','/calibration.js','/matching-options.js','/crop-plan.js','/dynamic-coverage.js','/data-service.js','/observation.js','/reference-pack.js','/browser-pipeline.js','/localization.js','/localization-worker.js','/geography.js','/camera-clearance.js','/inference/local.js','/inference/backend.js','/inference/worker.js','/inference/learned.js','/inference/retrieval-gpu.js','/inference/gpu-metrics.js','/inference/superpoint.js'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
