@@ -7,6 +7,7 @@ use navigate_contract::{
 };
 use navigate_fusion::{Observation, ObservationValue};
 use navigate_visual::{Estimate, MapRevision};
+use std::collections::HashSet;
 
 use crate::{VisualErrorBudget, VisualFusionError};
 
@@ -32,6 +33,16 @@ pub struct VisualFix {
     pub observation_sha256: String,
 }
 
+/// Host assessment of shared errors between this fix and the filter state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvidenceIndependence {
+    /// Shared image, map, calibration, or prior error has not been excluded.
+    Unknown,
+    /// The host has validated independence from all evidence in the filter state.
+    /// This includes residual map and calibration error across earlier fixes.
+    ValidatedIndependent,
+}
+
 /// Converts the visual estimates of one capture stream into position fixes.
 ///
 /// One frame gives at most one fix. A second estimate from the same frame
@@ -41,7 +52,8 @@ pub struct VisualFix {
 pub struct VisualFixSource {
     identity: VisualSourceIdentity,
     budget: VisualErrorBudget,
-    last: Option<(u64, String)>,
+    last: Option<u64>,
+    admitted: HashSet<String>,
 }
 
 impl VisualFixSource {
@@ -58,16 +70,24 @@ impl VisualFixSource {
             identity,
             budget,
             last: None,
+            admitted: HashSet::new(),
         })
     }
 
     /// Convert one accepted visual estimate into a fusion position fix.
     ///
     /// # Errors
-    /// Refuses repeated frame evidence, frames out of capture order,
+    /// Refuses unknown correlation, repeated frame evidence, frames out of capture order,
     /// positions outside geodetic range, and unusable covariances. A refusal
     /// does not change the state of the source.
-    pub fn convert(&mut self, estimate: &Estimate) -> Result<VisualFix, VisualFusionError> {
+    pub fn convert(
+        &mut self,
+        estimate: &Estimate,
+        independence: EvidenceIndependence,
+    ) -> Result<VisualFix, VisualFusionError> {
+        if independence != EvidenceIndependence::ValidatedIndependent {
+            return Err(VisualFusionError::UnknownCorrelation);
+        }
         self.check_order(estimate)?;
         let position = estimate.pose.position;
         let [lat, lon, alt] = estimate.frame.geodetic(position);
@@ -95,10 +115,8 @@ impl VisualFixSource {
             },
             SourceComposition::of(SensorClass::VisualLandmark),
         );
-        self.last = Some((
-            estimate.stamp.capture_time_ns,
-            estimate.observation_sha256.clone(),
-        ));
+        self.last = Some(estimate.stamp.capture_time_ns);
+        self.admitted.insert(estimate.observation_sha256.clone());
         Ok(VisualFix {
             observation,
             map: estimate.map.clone(),
@@ -107,17 +125,17 @@ impl VisualFixSource {
     }
 
     fn check_order(&self, estimate: &Estimate) -> Result<(), VisualFusionError> {
-        let Some((previous_ns, digest)) = &self.last else {
-            return Ok(());
-        };
-        if *digest == estimate.observation_sha256 {
+        if self.admitted.contains(&estimate.observation_sha256) {
             return Err(VisualFusionError::RepeatedEvidence {
-                observation_sha256: digest.clone(),
+                observation_sha256: estimate.observation_sha256.clone(),
             });
         }
-        if estimate.stamp.capture_time_ns <= *previous_ns {
+        let Some(previous_ns) = self.last else {
+            return Ok(());
+        };
+        if estimate.stamp.capture_time_ns <= previous_ns {
             return Err(VisualFusionError::FrameOrder {
-                previous_ns: *previous_ns,
+                previous_ns,
                 received_ns: estimate.stamp.capture_time_ns,
             });
         }
@@ -141,12 +159,23 @@ fn ned_covariance(
         .fixed_view::<3, 3>(0, 0)
         .into_owned();
     let axes = Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0);
-    let mut ned = axes * enu * axes.transpose();
+    let geometric = axes * enu * axes.transpose();
+    if (geometric - geometric.transpose()).norm() > 1e-9
+        || !geometric.iter().all(|v| v.is_finite())
+        || geometric
+            .symmetric_eigen()
+            .eigenvalues
+            .iter()
+            .any(|v| *v < 0.0)
+    {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
     let model_error_m = estimate.frame.model_error_m(estimate.pose.position);
     let (horizontal, vertical) = budget.variances_m2(model_error_m);
-    ned[(0, 0)] += horizontal;
-    ned[(1, 1)] += horizontal;
-    ned[(2, 2)] += vertical;
+    // Cauchy bounds unknown cross-covariance: Cov(X + Y) <= 2(Cov(X) + Cov(Y)).
+    // The trace bounds the largest eigenvalue of the external error covariance.
+    let external_bound = 2.0 * horizontal + vertical;
+    let ned = 2.0 * geometric + Matrix3::identity() * (2.0 * external_bound);
     let usable = ned.iter().all(|v| v.is_finite())
         && ned.symmetric_eigen().eigenvalues.iter().all(|v| *v >= 0.0);
     if !usable {

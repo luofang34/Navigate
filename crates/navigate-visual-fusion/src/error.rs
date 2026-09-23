@@ -5,6 +5,9 @@ use thiserror::Error;
 /// A visual estimate cannot become a fusion observation.
 #[derive(Debug, Error, PartialEq)]
 pub enum VisualFusionError {
+    /// The host has not excluded shared errors with the filter state.
+    #[error("visual fix correlation with the filter state is unknown")]
+    UnknownCorrelation,
     /// A budget term is missing, zero, negative, or not finite.
     #[error("visual error budget term {field} must be finite and positive")]
     InvalidBudget {

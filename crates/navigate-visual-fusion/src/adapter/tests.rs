@@ -82,7 +82,10 @@ fn zero_or_missing_budget_terms_are_refused() {
 fn fix_axes_move_to_ned_and_carry_the_budget() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     let fix = source
-        .convert(&estimate(5, 1_000, "one", 0.0))
+        .convert(
+            &estimate(5, 1_000, "one", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("fix");
     let ObservationValue::PositionFix {
         position,
@@ -93,9 +96,9 @@ fn fix_axes_move_to_ned_and_carry_the_budget() {
     };
     let (n, e, d) = covariance.diagonal();
     // North takes the frame's north variance (9), east the east variance (4).
-    assert!((n - (9.0 + 9.0 + 1.0)).abs() < 1e-9);
-    assert!((e - (4.0 + 9.0 + 1.0)).abs() < 1e-9);
-    assert!((d - (16.0 + 25.0 + 1.0 + 4.0)).abs() < 1e-9);
+    assert!((n - (2.0 * 9.0 + 192.0)).abs() < 1e-9);
+    assert!((e - (2.0 * 4.0 + 192.0)).abs() < 1e-9);
+    assert!((d - (2.0 * 16.0 + 192.0)).abs() < 1e-9);
     assert!((position.altitude_m - 948.0).abs() < 1e-9);
     assert!((position.latitude_rad.to_degrees() - 47.0).abs() < 1e-9);
     assert!(
@@ -109,9 +112,17 @@ fn fix_axes_move_to_ned_and_carry_the_budget() {
 #[test]
 fn far_positions_carry_the_frame_model_error() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
-    let near = source.convert(&estimate(1, 1, "near", 0.0)).expect("fix");
+    let near = source
+        .convert(
+            &estimate(1, 1, "near", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
+        .expect("fix");
     let far = source
-        .convert(&estimate(2, 2, "far", 40_000.0))
+        .convert(
+            &estimate(2, 2, "far", 40_000.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("fix");
     let east = |fix: &VisualFix| match fix.observation.value {
         ObservationValue::PositionFix { covariance, .. } => covariance.diagonal().1,
@@ -124,23 +135,39 @@ fn far_positions_carry_the_frame_model_error() {
 fn repeated_evidence_and_old_frames_are_refused() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     source
-        .convert(&estimate(1, 100, "frame-a", 0.0))
+        .convert(
+            &estimate(1, 100, "frame-a", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("fix");
     assert_eq!(
-        source.convert(&estimate(2, 200, "frame-a", 0.0)).err(),
+        source
+            .convert(
+                &estimate(2, 200, "frame-a", 0.0),
+                EvidenceIndependence::ValidatedIndependent
+            )
+            .err(),
         Some(VisualFusionError::RepeatedEvidence {
             observation_sha256: "frame-a".into()
         })
     );
     assert_eq!(
-        source.convert(&estimate(3, 100, "frame-b", 0.0)).err(),
+        source
+            .convert(
+                &estimate(3, 100, "frame-b", 0.0),
+                EvidenceIndependence::ValidatedIndependent
+            )
+            .err(),
         Some(VisualFusionError::FrameOrder {
             previous_ns: 100,
             received_ns: 100
         })
     );
     source
-        .convert(&estimate(4, 300, "frame-c", 0.0))
+        .convert(
+            &estimate(4, 300, "frame-c", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("later frame");
 }
 
@@ -148,7 +175,10 @@ fn repeated_evidence_and_old_frames_are_refused() {
 fn the_navigation_filter_admits_a_visual_fix() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     let fix = source
-        .convert(&estimate(1, 1_000_000, "admit", 0.0))
+        .convert(
+            &estimate(1, 1_000_000, "admit", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("fix");
     let mut filter = NavigationFilter::new(FusionConfig::default(), CLOCK);
     let outcome = filter.ingest(&fix.observation, MonotonicNanos::from_nanos(1_000_000));
@@ -159,9 +189,79 @@ fn the_navigation_filter_admits_a_visual_fix() {
 fn a_foreign_clock_domain_is_rejected_by_the_filter() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     let fix = source
-        .convert(&estimate(1, 1_000_000, "clock", 0.0))
+        .convert(
+            &estimate(1, 1_000_000, "clock", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
         .expect("fix");
     let mut filter = NavigationFilter::new(FusionConfig::default(), ClockDomainId::new(9));
     let outcome = filter.ingest(&fix.observation, MonotonicNanos::from_nanos(1_000_000));
     assert!(!outcome.is_accepted());
+}
+
+#[test]
+fn unknown_correlation_is_refused_without_consuming_evidence() {
+    let mut source = VisualFixSource::new(identity(), budget()).expect("budget");
+    let frame = estimate(1, 100, "a", 0.0);
+    assert_eq!(
+        source.convert(&frame, EvidenceIndependence::Unknown).err(),
+        Some(VisualFusionError::UnknownCorrelation)
+    );
+    source
+        .convert(&frame, EvidenceIndependence::ValidatedIndependent)
+        .expect("validated fix");
+    source
+        .convert(
+            &estimate(2, 200, "b", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
+        .expect("next fix");
+    assert!(matches!(
+        source.convert(
+            &estimate(3, 300, "a", 0.0),
+            EvidenceIndependence::ValidatedIndependent
+        ),
+        Err(VisualFusionError::RepeatedEvidence { .. })
+    ));
+}
+
+#[test]
+fn a_positive_budget_cannot_hide_invalid_geometry_covariance() {
+    let mut source = VisualFixSource::new(identity(), budget()).expect("budget");
+    let mut frame = estimate(1, 100, "a", 0.0);
+    frame.geometry_covariance[(0, 0)] = -1.0;
+    assert_eq!(
+        source
+            .convert(&frame, EvidenceIndependence::ValidatedIndependent)
+            .err(),
+        Some(VisualFusionError::InvalidCovariance)
+    );
+}
+
+#[test]
+fn covariance_bounds_perfectly_correlated_error_terms() {
+    let mut source = VisualFixSource::new(identity(), budget()).expect("budget");
+    let mut frame = estimate(1, 100, "a", 0.0);
+    let enu_error = Vector3::new(2.0, 3.0, -4.0);
+    frame
+        .geometry_covariance
+        .fixed_view_mut::<3, 3>(0, 0)
+        .copy_from(&(enu_error * enu_error.transpose() + Matrix3::identity() * 0.01));
+    let fix = source
+        .convert(&frame, EvidenceIndependence::ValidatedIndependent)
+        .expect("fix");
+    let ObservationValue::PositionFix { covariance, .. } = fix.observation.value else {
+        panic!("position fix expected");
+    };
+    let [nn, ne, nd, ee, ed, dd] = covariance.upper_triangle();
+    let bound = Matrix3::new(nn, ne, nd, ne, ee, ed, nd, ed, dd);
+    let total_error = Vector3::new(3.0 + 4.0, 2.0 + 4.0, 4.0 + 8.0);
+    let correlated = total_error * total_error.transpose();
+    assert!(
+        (bound - correlated)
+            .symmetric_eigen()
+            .eigenvalues
+            .iter()
+            .all(|v| *v >= -1e-9)
+    );
 }

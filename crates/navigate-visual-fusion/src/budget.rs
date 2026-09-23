@@ -57,13 +57,10 @@ impl VisualErrorBudget {
 
     /// Horizontal and vertical variances in square metres, with the frame-model error.
     pub(crate) fn variances_m2(&self, model_error_m: f64) -> (f64, f64) {
-        let model = model_error_m * model_error_m;
-        let calibration = self.calibration_m * self.calibration_m;
-        let horizontal = self.map_horizontal_m * self.map_horizontal_m + calibration + model;
-        let vertical = self.map_vertical_m * self.map_vertical_m
-            + calibration
-            + self.vertical_datum_m * self.vertical_datum_m
-            + model;
+        let horizontal = (self.map_horizontal_m + self.calibration_m + model_error_m).powi(2);
+        let vertical =
+            (self.map_vertical_m + self.calibration_m + self.vertical_datum_m + model_error_m)
+                .powi(2);
         (horizontal, vertical)
     }
 

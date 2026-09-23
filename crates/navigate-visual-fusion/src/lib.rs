@@ -20,6 +20,6 @@ mod adapter;
 mod budget;
 mod error;
 
-pub use adapter::{VisualFix, VisualFixSource, VisualSourceIdentity};
+pub use adapter::{EvidenceIndependence, VisualFix, VisualFixSource, VisualSourceIdentity};
 pub use budget::{VerticalDatum, VisualErrorBudget};
 pub use error::VisualFusionError;

@@ -52,8 +52,11 @@ does not change `navigate-contract` or `navigate-fusion`.
 - The host supplies `VisualErrorBudget`. Each term must be finite and
   more than zero. Unknown error is not zero error. The adapter refuses
   a budget with a zero term.
-- The adapter turns the frame axes into north, east, down. It adds the
-  budget and the frame model error to the covariance.
+- The host must validate independence from all evidence in the filter state.
+  This includes shared map and calibration error. The adapter refuses unknown
+  correlation. A large error budget does not establish independence.
+- The adapter turns the frame axes into north, east, down. It bounds the
+  combined covariance without assuming independent error terms.
 - The adapter converts altitude to height above the WGS84 ellipsoid.
   The host declares the vertical datum of the map.
 - The composition is `SensorClass::VisualLandmark`.
@@ -77,11 +80,11 @@ draft until the joint RFC (ADR-0005).
   shows that the filter admits a fix from the adapter.
 - The budget is the host's claim. The adapter does not measure map
   error. The filter cannot detect a budget that is too small.
-- Fixes from one map release share map error. The filter treats each
-  fix as independent. The budget must therefore be conservative. A
-  correlated measurement model is future work. It needs a new
-  `ObservationValue` variant, and ADR-0003 records such a change as a
-  new measurement model.
+- Fixes can share map, image, calibration, and prior error. The filter treats
+  fixes as independent. A host must not feed a fix to this filter unless it
+  has validated independence from the state. This adapter does not implement
+  correlated fusion. Repeated frame digests are refused across the full source
+  lifetime. The host must preserve capture identities when it retries a frame.
 - The flat frame limits the useful range. Far from the anchor, the
   model error term makes the fix weak. A globe-mode reference with a
   true local frame is a new `LocalFrame` variant. It does not change the
