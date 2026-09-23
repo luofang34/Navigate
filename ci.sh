@@ -19,6 +19,9 @@ echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
     cargo doc --no-deps --workspace
 
+echo "== visual tools =="
+./scripts/check-visual-tools.sh
+
 echo "== cargo build --release =="
 cargo build --release --workspace
 

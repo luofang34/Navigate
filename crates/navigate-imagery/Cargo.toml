@@ -1,9 +1,10 @@
 [package]
 name = "navigate-imagery"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 description = "Offline imagery coverage planning and verified package construction"
-publish = false
 
 [features]
 default = []
