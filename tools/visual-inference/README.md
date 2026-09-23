@@ -1,4 +1,79 @@
-# Rust inference probe
+# Native visual matchers and inference probe
+
+
+The Rust library target is `navigate_visual_onnx`. It supplies two concrete
+implementations of `navigate_visual::ImageMatcher`: XFeat with mutual descriptor
+matching, and SuperPoint with SuperGlue. The host supplies ONNX files. The library
+does not download or embed model weights.
+
+Initialize the runtime once in the host. Keep an adapter resident for repeated
+calls. Model selection and execution-provider selection are separate. The adapter
+owns image resizing, pixel transforms, detector decoding, feature limits, model
+loading, and runtime setup. It returns `PixelMatch` values in input-image pixels.
+It does not return a geographic confidence score.
+
+Add the package as a path dependency. Its package name is
+`visual-inference-probe`; its library name is `navigate_visual_onnx`.
+
+```rust,no_run
+use navigate_visual::{ImageMatcher, Localizer, LocalizerConfig};
+use navigate_visual_onnx::{ExecutionConfig, MatcherFiles, OnnxMatcher, initialize_blocking};
+use std::path::Path;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+initialize_blocking(Path::new("/path/to/libonnxruntime.dylib"))?;
+let matcher = OnnxMatcher::load_blocking(
+    MatcherFiles::XFeat { model: "/path/to/xfeat.onnx".into() },
+    ExecutionConfig::default(),
+    2048,
+)?;
+let localizer = Localizer::new(matcher, LocalizerConfig::default())?;
+# let _ = localizer;
+# Ok(())
+# }
+```
+
+A different model or hardware implementation can implement `ImageMatcher`
+directly. It need not use ONNX. The shared `PoseVerifier` retains the geometry
+policy. Search candidates and map rendering remain outside the matcher. The
+adapter cannot change prior bounds or convert repeated fits into new evidence.
+The native library is not linked into the web bundle.
+
+## Local model comparison
+
+```sh
+cargo run --release --manifest-path tools/visual-inference/Cargo.toml \
+  --bin matcher_compare -- /path/to/suite.json /path/to/new-report.json
+```
+
+The suite defines `library`, `models`, and `cases`. Paths are relative to the
+suite file. A model has `kind: "xfeat"` and `path`, or `kind: "superglue"`
+with `detector`, `matcher`, and `image_size`. The latter size must be the
+image size embedded in the SuperGlue export's coordinate normalization. The
+adapter handles the detector's separate fixed or dynamic input size.
+
+Each case supplies a query image, reference image, optical depth file, camera
+calibration, reference pose, navigation prior, map identity, and content digests.
+See `src/comparison/input.rs` for the exact input fields. Depth is little-endian
+float32. Digests bind decoded grayscale pixels and raw depth bytes. Unknown
+fields are errors. The tool rejects mismatched evidence before inference.
+
+The tool first checks identical images, a known translation, blank input, and
+incompatible dimensions. Both models then use the same cases and the same Rust
+pose verifier. CPU execution uses four threads and a 2048-keypoint limit.
+The report separates model loading, matching, and geometry time. It records model
+identities, reference identities, rejections, and runtime failures. A runtime
+failure makes the command fail. A geometric rejection is a measured outcome.
+
+This comparison uses supplied reference candidates. It does not measure search
+recall. Candidates from one matcher can bias the comparison. Test wide-area
+retrieval separately, with the same prior and candidate budget for each matcher.
+Rendered depth is not independently verified geometry. An accepted fit is not
+an independent geographic accuracy measurement. The three map screenshots in
+the supplied folder need an image-alignment evaluation, not an airborne-pose
+accuracy claim.
+
+## Model execution probe
 
 This separate tool measures an ONNX model through Rust `ort`. It supports CPU,
 Core ML GPU, and Core ML Neural Engine selection. It does not link into the
