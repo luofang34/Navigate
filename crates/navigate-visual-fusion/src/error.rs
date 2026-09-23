@@ -26,6 +26,9 @@ pub enum VisualFusionError {
         /// Evidence digest of the repeated frame.
         observation_sha256: String,
     },
+    /// The frame and the navigation solution use different clock domains.
+    #[error("frame and solution clock domains differ")]
+    ClockDomainMismatch,
     /// The frame capture time does not follow the last converted frame.
     #[error("frame capture time {received_ns} does not follow {previous_ns}")]
     FrameOrder {

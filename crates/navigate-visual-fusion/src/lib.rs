@@ -19,7 +19,9 @@
 mod adapter;
 mod budget;
 mod error;
+mod prior;
 
 pub use adapter::{EvidenceIndependence, VisualFix, VisualFixSource, VisualSourceIdentity};
 pub use budget::{VerticalDatum, VisualErrorBudget};
 pub use error::VisualFusionError;
+pub use prior::{FrameCapture, search_prior};
