@@ -27,8 +27,9 @@ jobs:
           git -C ../maplibre-rs-experimental checkout --detach "$(tr -d '[:space:]' < tools/visual-bench/MAPLIBRE_REVISION)"
 
       # The imagery provider and the visual service link the system GDAL library.
-      - name: Install GDAL
-        run: sudo apt-get update && sudo apt-get install -y libgdal-dev
+      # The MapLibre fork's build script compiles protobuf schemas with protoc.
+      - name: Install GDAL and protoc
+        run: sudo apt-get update && sudo apt-get install -y libgdal-dev protobuf-compiler
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
