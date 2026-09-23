@@ -281,3 +281,55 @@ fn unresolved_places_remain_distinct_and_foreign_evidence_is_rejected() {
     frame.camera.fx += 0.1;
     assert_ne!(frame.evidence_sha256(), identity);
 }
+
+#[test]
+fn majority_outliers_do_not_hide_nonplanar_oblique_consensus() {
+    let (frame, mut reference, mut prior, mut pairs, mut truth) = scene();
+    let rotation = UnitQuaternion::from_euler_angles(1.2, -0.3, 2.0);
+    for pose in [&mut reference.pose, &mut prior.pose, &mut truth] {
+        pose.position = rotation * pose.position;
+        pose.orientation = rotation * pose.orientation;
+    }
+    let original = pairs.clone();
+    let mut seed = 7123_u64;
+    for (index, pair) in pairs.iter_mut().enumerate() {
+        if index % 4 != 0 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            pair.query = Vector2::new(
+                8.0 + ((seed >> 32) % 300) as f64,
+                8.0 + ((seed >> 16) % 220) as f64,
+            );
+        }
+    }
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("policy");
+    let result = verifier
+        .verify(&frame, &reference, &prior, &pairs, "outlier-test")
+        .expect("distributed surface consensus");
+    assert!((result.pose.position - truth.position).norm() < 0.1);
+    assert!(result.quality.inliers >= original.len() / 4);
+    assert!(result.quality.inliers < pairs.len() / 2);
+    let repeated = verifier
+        .verify(&frame, &reference, &prior, &pairs, "outlier-test")
+        .expect("repeat");
+    assert_eq!(result.geometry_covariance, repeated.geometry_covariance);
+    assert_eq!(result.quality.inliers, repeated.quality.inliers);
+}
+
+#[test]
+fn random_correspondences_do_not_pass_consensus_acceptance() {
+    let (frame, reference, prior, mut pairs, _) = scene();
+    let mut seed = 9231_u64;
+    for pair in &mut pairs {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        pair.query = Vector2::new(
+            8.0 + ((seed >> 32) % 300) as f64,
+            8.0 + ((seed >> 16) % 220) as f64,
+        );
+    }
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("policy");
+    assert!(
+        verifier
+            .verify(&frame, &reference, &prior, &pairs, "negative-test")
+            .is_err()
+    );
+}
