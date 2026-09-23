@@ -103,3 +103,30 @@ async fn loaded_dem_cannot_validate_a_coarser_fallback_surface() {
     let reference = renderer.render_blocking(pose).expect("fallback reference");
     assert!(reference.depth_m.iter().all(|depth| *depth == 0.0));
 }
+
+#[tokio::test]
+#[ignore = "requires a GPU adapter"]
+async fn the_bench_renderer_serves_the_navigate_reference_port() {
+    use navigate_visual::ReferenceRenderer as _;
+    let camera = CameraModel {
+        width: 64,
+        height: 64,
+        fx: 200.0,
+        fy: 200.0,
+        cx: 31.5,
+        cy: 31.5,
+    };
+    let mut renderer = ReferenceRenderer::new(nonzero_terrain(), camera)
+        .await
+        .expect("renderer");
+    let identity = navigate_visual::ReferenceRenderer::identity(&renderer);
+    assert_eq!(identity.revision.len(), 40);
+    assert_eq!(identity.style_sha256.len(), 64);
+    let poses = [100.0, 120.0].map(|z| CameraPose {
+        position: Vector3::new(0.0, 0.0, z),
+        orientation: UnitQuaternion::identity(),
+    });
+    let views = renderer.render_batch_blocking(&poses).expect("batch");
+    assert_eq!(views.len(), 2);
+    assert!(views.iter().all(|v| v.depth_m.iter().any(|d| *d > 0.0)));
+}

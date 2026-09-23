@@ -61,7 +61,9 @@ mod local_frame;
 mod localizer;
 mod matching;
 mod pose_solver;
+mod reference;
 mod retrieval;
+mod search;
 
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -74,7 +76,9 @@ pub use geometry::PoseVerifier;
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};
+pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
+pub use search::{SearchConfig, SearchPrior, SearchTier};
 
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;
