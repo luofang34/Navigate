@@ -20,6 +20,12 @@ pub struct Asset {
     pub length: usize,
     /// Encoded tile content digest.
     pub sha256: String,
+    /// Release that produced this asset, when it is not the package release.
+    ///
+    /// A derived package keeps the assets of its parent. Each kept asset names
+    /// the earlier release, so a reader can see which assets new evidence changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_by: Option<String>,
 }
 
 /// Reference assets at one map tile address.
@@ -68,9 +74,26 @@ pub struct Package {
     /// Source identities and processing information. Unknown uncertainty stays unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<serde_json::Value>,
+    /// `pack_id` of the package that this package replaces in the same region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
     /// Manifest digest, excluding this field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pack_id: String,
+}
+
+impl Package {
+    /// Digest of the manifest with an empty `pack_id`.
+    ///
+    /// # Errors
+    /// Propagates serialization errors.
+    pub fn compute_pack_id(&self) -> Result<String, ImageryError> {
+        let mut unsigned = self.clone();
+        unsigned.pack_id.clear();
+        Ok(digest(&serde_json::to_vec(&serde_json::to_value(
+            &unsigned,
+        )?)?))
+    }
 }
 
 /// Incremental chunk construction with an application-supplied storage writer.
@@ -78,6 +101,7 @@ pub struct PackageBuilder<F> {
     manifest: Package,
     body: Vec<u8>,
     pending: Vec<(usize, bool)>,
+    inherited: std::collections::BTreeSet<(Tile, bool)>,
     write: F,
 }
 
@@ -104,6 +128,53 @@ impl<F: FnMut(&str, &[u8]) -> Result<(), ImageryError>> PackageBuilder<F> {
             write,
             body: Vec::new(),
             pending: Vec::new(),
+            inherited: std::collections::BTreeSet::new(),
+        })
+    }
+
+    /// Start a package that keeps the tiles of `parent` and replaces some of them.
+    ///
+    /// The new package has the region of the parent, the new `release_id`,
+    /// and `supersedes` set to the parent `pack_id`. The parent chunks are
+    /// content-addressed, so kept tiles are not written again. [`Self::add`]
+    /// may replace each kept tile role once, for example with imagery or
+    /// elevation that new flights refined.
+    ///
+    /// # Errors
+    /// Rejects a parent whose `pack_id` does not match its manifest, and an
+    /// empty or unchanged release identity.
+    pub fn from_parent(
+        parent: &Package,
+        release_id: String,
+        write: F,
+    ) -> Result<Self, ImageryError> {
+        if parent.pack_id.is_empty() || parent.compute_pack_id()? != parent.pack_id {
+            return Err(invalid("parent pack_id does not match its manifest"));
+        }
+        if release_id.is_empty() || release_id == parent.release_id {
+            return Err(invalid("a derived package needs a new release identity"));
+        }
+        let mut manifest = parent.clone();
+        manifest.supersedes = Some(parent.pack_id.clone());
+        manifest.pack_id.clear();
+        let mut inherited = std::collections::BTreeSet::new();
+        for tile in &mut manifest.tiles {
+            for (elevation, asset) in [(false, &mut tile.imagery), (true, &mut tile.elevation)] {
+                if let Some(asset) = asset {
+                    asset
+                        .produced_by
+                        .get_or_insert_with(|| parent.release_id.clone());
+                    inherited.insert((tile.xyz, elevation));
+                }
+            }
+        }
+        manifest.release_id = release_id;
+        Ok(Self {
+            manifest,
+            write,
+            body: Vec::new(),
+            pending: Vec::new(),
+            inherited,
         })
     }
 
@@ -150,14 +221,16 @@ impl<F: FnMut(&str, &[u8]) -> Result<(), ImageryError>> PackageBuilder<F> {
         } else {
             &mut record.imagery
         };
-        if slot.is_some() {
+        if slot.is_some() && !self.inherited.remove(&(xyz, elevation)) {
             return Err(invalid(format!("duplicate tile role at {xyz:?}")));
         }
+
         *slot = Some(Asset {
             chunk: String::new(),
             offset: self.body.len(),
             length: bytes.len(),
             sha256: sha.into(),
+            produced_by: None,
         });
         self.pending.push((index, elevation));
         self.body.extend_from_slice(bytes);
@@ -205,8 +278,23 @@ impl<F: FnMut(&str, &[u8]) -> Result<(), ImageryError>> PackageBuilder<F> {
             ));
         }
         self.manifest.tiles.sort_by_key(|t| t.xyz);
-        self.manifest.pack_id =
-            digest(&serde_json::to_vec(&serde_json::to_value(&self.manifest)?)?);
+        let used: std::collections::BTreeSet<&str> = self
+            .manifest
+            .tiles
+            .iter()
+            .flat_map(|t| [&t.imagery, &t.elevation])
+            .flatten()
+            .map(|a| a.chunk.as_str())
+            .collect();
+        let files = self
+            .manifest
+            .files
+            .iter()
+            .filter(|f| used.contains(f.sha256.as_str()))
+            .cloned()
+            .collect();
+        self.manifest.files = files;
+        self.manifest.pack_id = self.manifest.compute_pack_id()?;
         Ok(self.manifest)
     }
 }

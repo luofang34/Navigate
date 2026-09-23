@@ -118,6 +118,7 @@ impl NaipProvider {
             files: vec![],
             tiles: vec![],
             provenance: Some(identity),
+            supersedes: None,
             pack_id: String::new(),
         };
         let mut builder =
