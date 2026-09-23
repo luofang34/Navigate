@@ -13,7 +13,7 @@ impl Coverage {
             terrain: BTreeMap::new(),
         };
         for tile in &manifest.tiles {
-            let [z, x, y] = tile.xyz;
+            let navigate_imagery::Tile(z, x, y) = tile.xyz;
             if tile.imagery.is_some() {
                 value.imagery.entry(z).or_default().insert((x, y));
             }

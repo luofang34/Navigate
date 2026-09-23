@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 navigate-visual = { path = "../../../crates/navigate-visual" }
 navigate-data = { path = "../../../crates/navigate-data" }
+navigate-imagery = { path = "../../../crates/navigate-imagery" }
 maplibre = { path = "../../../../maplibre-rs-experimental/maplibre", features = ["headless"] }
 wgpu = "22.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

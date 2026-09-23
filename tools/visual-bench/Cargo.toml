@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 navigate-data = { path = "../../crates/navigate-data" }
 navigate-data-fs = { path = "../../crates/navigate-data-fs" }
+navigate-imagery = { path = "../../crates/navigate-imagery" }
 navigate-visual = { path = "../../crates/navigate-visual", features = ["gpu"] }
 clap = { version = "4", features = ["derive"] }
 maplibre = { path = "../../../maplibre-rs-experimental/maplibre", features = ["headless", "thread-safe-futures"] }

@@ -36,7 +36,10 @@ impl BrowserStore {
             sizes: manifest
                 .files
                 .iter()
-                .map(|c| (format!("pilotage://chunks/{}.bin", c.sha256), c.size))
+                .map(|c| {
+                    let size = u64::try_from(c.size).unwrap_or(u64::MAX);
+                    (format!("pilotage://chunks/{}.bin", c.sha256), size)
+                })
                 .collect(),
         }
     }
@@ -51,7 +54,12 @@ impl BrowserStore {
         }
         let uri = DataUri::parse(format!("pilotage://chunks/{}.bin", asset.chunk))?;
         let file = self.open(&uri).await?;
-        let bytes = file.read_at(asset.offset, asset.length).await?;
+        let bytes = file
+            .read_at(
+                u64::try_from(asset.offset).unwrap_or(u64::MAX),
+                asset.length,
+            )
+            .await?;
         if format!("{:x}", Sha256::digest(&bytes)) != asset.sha256 {
             return Err(PreviewError::Input {
                 reason: format!("tile checksum failed: {}", uri.as_str()),

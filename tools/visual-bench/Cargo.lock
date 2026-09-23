@@ -2348,6 +2348,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-imagery"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "navigate-visual"
 version = "0.1.0"
 dependencies = [
@@ -4038,6 +4049,7 @@ dependencies = [
  "nalgebra",
  "navigate-data",
  "navigate-data-fs",
+ "navigate-imagery",
  "navigate-visual",
  "serde",
  "serde_json",

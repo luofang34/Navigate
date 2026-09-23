@@ -142,7 +142,7 @@ impl Preview {
         canvas: Option<(web_sys::HtmlCanvasElement, wgpu::TextureFormat)>,
     ) -> Result<Self, PreviewError> {
         let manifest: Manifest = serde_json::from_str(&manifest_json)?;
-        manifest.validate()?;
+        manifest.validate_for_reading()?;
         let camera: Camera = serde_json::from_str(&camera_json)?;
         camera.validate()?;
         let (kernel, renderer) = create_headless_renderer_with_settings(
@@ -210,7 +210,7 @@ pub(crate) async fn load(
     let mut imagery = Vec::new();
     let mut elevation = Vec::new();
     for tile in &manifest.tiles {
-        let [z, x, y] = tile.xyz;
+        let navigate_imagery::Tile(z, x, y) = tile.xyz;
         let coords = WorldTileCoords::from((x as i32, y as i32, (z as u8).into()));
         if let Some(asset) = &tile.imagery {
             imagery.push(AvailableRasterLayerData {
@@ -234,7 +234,7 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .tiles
         .iter()
         .filter(|t| t.imagery.is_some())
-        .map(|t| t.xyz[0])
+        .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
     let imax = if globe { 18 } else { imax };
@@ -242,7 +242,7 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .tiles
         .iter()
         .filter(|t| t.elevation.is_some())
-        .map(|t| t.xyz[0])
+        .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
     Ok(serde_json::from_value(

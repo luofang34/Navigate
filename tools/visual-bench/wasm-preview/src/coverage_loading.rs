@@ -17,7 +17,9 @@ impl Preview {
         }
         let manifest: Manifest =
             serde_json::from_str(&manifest_json).map_err(PreviewError::from)?;
-        manifest.validate()?;
+        manifest
+            .validate_for_reading()
+            .map_err(PreviewError::from)?;
         crate::preview::load(
             &mut self.map,
             &manifest,
