@@ -19,3 +19,6 @@ const cached={...pack,tiles:[tile]};let cachedAttachments=0;
 const cachedLoader=new CoverageLoader({request:()=>{throw Error('Unexpected provider request')},download:async()=>{},attach:async p=>{assert.equal(p,cached);cachedAttachments++},installed:async()=>[],available:async()=>[cached],remember:async()=>{},status:()=>{}});
 cachedLoader.enabled=true;await cachedLoader.update({bounds:[lon-.00001,lat-.00001,lon+.00001,lat+.00001],zoom:16});
 assert.equal(cachedAttachments,1,'stored packages are reused without provider access');
+
+const closePose=toGlobePose(pack,{position_enu_m:[0,0,110],eye_to_enu_xyzw:[0,0,0,1]});assert.equal(viewCoverage(pack,closePose,110).zoom,18,'low altitude requests detailed imagery');
+cachedLoader.enabled=false;await cachedLoader.update({bounds:[lon-.00001,lat-.00001,lon+.00001,lat+.00001],zoom:16});assert.equal(cachedAttachments,2,'cached detail loads without enabling provider requests');

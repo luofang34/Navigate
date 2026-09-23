@@ -231,7 +231,7 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .map(|t| t.xyz[0])
         .max()
         .unwrap_or(0);
-    let imax = if globe { 17 } else { imax };
+    let imax = if globe { 18 } else { imax };
     let dmax = manifest
         .tiles
         .iter()

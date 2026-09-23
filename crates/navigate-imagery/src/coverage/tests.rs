@@ -44,3 +44,17 @@ fn malformed_and_oversized_selections_fail_before_provider_access() {
         assert!(plan(request).is_err());
     }
 }
+
+#[test]
+fn detailed_area_uses_zoom_18_and_preserves_provider_limits() {
+    let request: CoverageRequest =
+        serde_json::from_str(r#"{"bounds":[-74.46,40.54,-74.458,40.542],"zoom":18}"#)
+            .expect("request");
+    let result = plan(request).expect("detailed plan");
+    assert!(!result.imagery_tiles.is_empty());
+    assert!(result.imagery_tiles.iter().all(|tile| tile.0 == 18));
+    let invalid: CoverageRequest =
+        serde_json::from_str(r#"{"bounds":[-74.46,40.54,-74.458,40.542],"zoom":19}"#)
+            .expect("request");
+    assert!(plan(invalid).is_err());
+}

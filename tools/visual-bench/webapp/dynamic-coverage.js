@@ -9,9 +9,9 @@ export function viewCoverage(pack,pose,height) {
   const b=world.reduce((sum,v,i)=>sum+v*ray[i],0),c=world.reduce((sum,v)=>sum+v*v,0)-r*r,disc=b*b-c;
   if(disc<0)return null;const distance=-b-Math.sqrt(disc);if(distance<0)return null;
   const hit=world.map((v,i)=>v+distance*ray[i]),latitude=Math.asin(hit[1]/r)*180/Math.PI,longitude=Math.atan2(hit[0],hit[2])*180/Math.PI;
-  const radius=Math.max(300,Math.min(2000,height*1.2)),dy=radius/r*180/Math.PI,dx=dy/Math.cos(latitude*Math.PI/180);
+  const radius=Math.max(100,Math.min(2000,height*1.2)),dy=radius/r*180/Math.PI,dx=dy/Math.cos(latitude*Math.PI/180);
   if(Math.abs(latitude)>75||Math.abs(longitude)+dx>=180)return null;
-  return {bounds:[longitude-dx,latitude-dy,longitude+dx,latitude+dy],zoom:height>1800?14:16};
+  return {bounds:[longitude-dx,latitude-dy,longitude+dx,latitude+dy],zoom:height<400?18:height<1600?17:height<3000?16:14};
 }
 
 export function covers(pack,selection) {
@@ -30,13 +30,14 @@ export function covers(pack,selection) {
 export class CoverageLoader {
   constructor({request,download,attach,installed,available,remember,status}){Object.assign(this,{request,download,attach,installed,available,remember,status});this.enabled=false;this.pending=null;this.failed=new Set()}
   async update(selection) {
-    if(!this.enabled||!selection||this.pending)return;
+    if(!selection||this.pending)return;
     const key=JSON.stringify(selection);if(this.failed.has(key))return;
     this.pending=key;
     try {
       const known=await this.installed();if(known.some(p=>covers(p,selection)))return;
       const cached=(await this.available?.()??[]).find(p=>covers(p,selection));
-      if(cached){await this.download(cached,()=>{});if(this.enabled)await this.attach(cached);this.status('Viewed area loaded from offline storage.');return;}
+      if(cached){await this.download(cached,()=>{});await this.attach(cached);this.status('Viewed area loaded from offline storage.');return;}
+      if(!this.enabled){this.status('Higher detail is not cached. Enable viewed-area downloads to fetch it.');return;}
       const plan=await this.request('/api/coverage-plan',selection);
       this.status(`Loading viewed area · ${plan.imagery_tiles.length} imagery tiles`);
       let job=await this.request('/api/coverage-download',selection);

@@ -14,7 +14,7 @@ pub struct CoverageRequest {
     /// Route corridor half-width in metres.
     #[serde(default = "default_buffer")]
     pub buffer_m: f64,
-    /// Imagery zoom from 14 to 17.
+    /// Imagery zoom from 14 to 18.
     #[serde(default = "default_zoom")]
     pub zoom: u32,
 }
@@ -51,8 +51,8 @@ pub struct CoveragePlan {
 /// # Errors
 /// Rejects malformed, polar, antimeridian, empty, or oversized selections.
 pub fn plan(request: CoverageRequest) -> Result<CoveragePlan, ImageryError> {
-    if !(14..=17).contains(&request.zoom) {
-        return Err(invalid("imagery zoom must be 14..=17"));
+    if !(14..=18).contains(&request.zoom) {
+        return Err(invalid("imagery zoom must be 14..=18"));
     }
     let (limits, points, radius) = selection(&request)?;
     let [x0, y0, x1, y1] = limits.map(|v| v.floor() as i64);

@@ -22,7 +22,7 @@ Use Rust, Node.js, `wasm-bindgen-cli`, and the `wasm32-unknown-unknown` target.
 Use the `wasm-bindgen-cli` version in `wasm-preview/Cargo.lock`.
 Put the MapLibre fork beside Navigate. The renderer dependency uses this layout.
 Use `fix/wasm-offline-preview` at commit
-`a9475dadc04cd26da7a6ecefdfcc83c83d0f4104`, or a later commit that includes
+`5c323427e29c1796003c5e7052b2887f6d35c173`, or a later commit that includes
 [the required renderer changes](https://github.com/luofang34/maplibre-rs-experimental/pull/32).
 Run commands from the Navigate root:
 
@@ -109,14 +109,24 @@ New provider coverage requires the Rust service deployment.
 7. Select a frame and a geometric hypothesis. Use **Cancel processing** to stop.
 
 Drag the map to pan. Use right-drag or Shift-drag to turn the camera. Use the
-wheel to change height, or WASD to move. **Globe overview** opens the globe.
-**Reset camera** returns to the selected pose. The display uses a direct wgpu
+wheel or the in-frame **+** and **−** controls to change height. Use WASD to move.
+Globe projection is always active. Zoom out to see the globe. The in-frame
+**Reset camera** control returns to the selected pose. The display uses a direct wgpu
 canvas at the screen pixel ratio. Display size does not change calibration.
+Terrain uses tile-relative globe coordinates to retain small features at low altitude.
+
+Camera clearance uses the loaded DEM beneath the camera. Its minimum is 10% of
+the entered AGL, limited to 20 through 100 metres. A missing DEM is unknown.
+The display then stays at least 10 km above the package datum. These controls
+protect the preview camera. They do not provide an aircraft terrain warning.
+A display adjustment does not change the estimated pose or its evidence.
 
 Enable **Load imagery and terrain as the map moves** to fetch the viewed area.
 This sends that area to Microsoft Planetary Computer and Mapzen/AWS. Downloads
 use the same verified packages and OPFS storage as area and route downloads.
-The loader reuses stored coverage and permits one request at a time. Globe-scale
+The loader reuses stored coverage even when provider downloads are disabled.
+It requests zoom 18 below 400 metres and permits one request at a time.
+Source resolution still limits image detail. It does not create new source detail. Globe-scale
 views use coarse context. A view retains at most four display packages. Select a
 region to start another view. Select a downloaded region to use it for localization.
 Dynamic display data cannot change an active observation's reference data or prior.
@@ -156,7 +166,7 @@ Source elevation datum and absolute registration error remain unverified.
 `POST /api/coverage-plan` validates an area or route without provider access.
 `POST /api/coverage-download` creates a package job. Use `GET /api/downloads/{id}`
 for progress. Areas use `bounds: [west,south,east,north]`. Routes use longitude,
-latitude pairs and `buffer_m`. Imagery zoom is 14 to 17. The limit is 400 imagery
+latitude pairs and `buffer_m`. Imagery zoom is 14 to 18. The limit is 400 imagery
 tiles. Antimeridian and polar selections are unsupported. Split large routes.
 
 The download area is separate from the precise navigation prior. A larger area
@@ -217,5 +227,7 @@ an adapter. Browser tests use ignored local files `webapp/models/test-input.png`
 and `test-video.mp4`. Run `tests/browser_server.mjs` with a loopback service URL,
 a report path, and an optional port. Open `/qa-quality.html` to compare matching
 detail, `/qa-performance.html?run=1&report=1` for GPU and camera checks, or
-`/qa-flow.html` for image/video interaction checks. The production service has no
+`/qa-flow.html` for image/video interaction checks, or `/qa-map.html` for
+terrain clearance and the rendered difference between coarse and fine NAIP data.
+The map test needs prepared zoom-16 and zoom-17 NAIP packages. The production service has no
 test-report endpoint. Browser tests do not establish geographic accuracy.

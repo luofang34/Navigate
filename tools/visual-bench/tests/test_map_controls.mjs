@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import {constrainCamera,minimumClearance} from '../webapp/camera-clearance.js';
+Object.assign(globalThis,{constrainCamera,minimumClearance});
 const source=(await fs.readFile(new URL('../webapp/map.js',import.meta.url),'utf8')).replace(/^(import|export \{).*\n/gm,'');
 const {MapView}=await import('data:text/javascript,'+encodeURIComponent(source));
 globalThis.ResizeObserver=class {observe(){}};
@@ -15,7 +17,8 @@ class Canvas extends EventTarget {
 }
 const canvas=new Canvas(),map=new MapView(canvas),frames=[];
 map.calibration={width:640,height:360,fx:460,fy:460,cx:319.5,cy:179.5};
-map.preview={present:pose=>frames.push(JSON.parse(pose)),resize_display:value=>{map.resized=JSON.parse(value)}};
+map.pack={anchor_lat_lon:[40.54,-74.45]};
+map.preview={terrain_elevation_cached:()=>100,present:pose=>frames.push(JSON.parse(pose)),resize_display:value=>{map.resized=JSON.parse(value)}};
 map.pose={position_enu_m:[0,0,800],eye_to_enu_xyzw:[0,0,0,1]};map.base=structuredClone(map.pose);
 const fire=(type,data={})=>{const e=new Event(type,{cancelable:true});Object.assign(e,data);canvas.dispatchEvent(e)};
 fire('pointerdown',{clientX:100,clientY:100,pointerId:1,button:0});
@@ -31,3 +34,6 @@ assert.notDeepEqual(map.pose.eye_to_enu_xyzw,[0,0,0,1]);assert.ok(Math.abs(Math.
 await map.reset();fire('keydown',{key:'w'});await map.idle;assert.ok(map.pose.position_enu_m[1]>0);
 const before=map.height();fire('wheel',{deltaY:100});await map.idle;assert.ok(map.height()>before);
 await map.globe();const height=map.height();map.rotate(.2,.1);assert.ok(Math.abs(map.height()-height)<1e-6);await map.reset();assert.deepEqual(map.pose,map.base);
+
+await map.move(2,-100000);assert.ok(map.height()>=119.999,'wheel and zoom cannot enter terrain');assert.equal(JSON.parse(canvas.dataset.clearance).known,true);
+map.preview.terrain_elevation_cached=()=>undefined;await map.move(0,20);assert.ok(map.height()>=9999.99,'missing terrain enforces a conservative browsing floor');assert.equal(canvas.dataset.projection,'globe');

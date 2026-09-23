@@ -7,6 +7,18 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl Preview {
+    /// Loaded terrain elevation in the package datum; missing data remains unknown.
+    pub fn terrain_elevation_cached(&self, latitude: f64, longitude: f64) -> Option<f64> {
+        if !latitude.is_finite()
+            || !longitude.is_finite()
+            || latitude.abs() > 85.0
+            || longitude.abs() > 180.0
+        {
+            return None;
+        }
+        self.map
+            .terrain_elevation_at(maplibre::coords::LatLon::new(latitude, longitude))
+    }
     /// Create a globe renderer that presents directly to a browser WebGPU canvas.
     pub async fn create_display(
         manifest_json: String,
