@@ -23,5 +23,8 @@ let bytes=existsSync(path)?readFileSync(path):null;
 if(!bytes||createHash('sha256').update(bytes).digest('hex')!==sha256){const response=await fetch(source);if(!response.ok)throw Error(`Model download failed: ${response.status}`);bytes=Buffer.from(await response.arrayBuffer())}
 if(bytes.length!==2681450||createHash('sha256').update(bytes).digest('hex')!==sha256)throw Error('XFeat release checksum mismatch');
 writeFileSync(path,bytes);
-writeFileSync(resolve(models,'manifest.json'),JSON.stringify({xfeat:{url:'/models/xfeat.onnx',size:bytes.length,sha256}},null,2));
-writeFileSync(resolve(models,'provenance.json'),JSON.stringify({algorithm:'XFeat sparse features and mutual nearest descriptor matching',license:'Apache-2.0',source,source_commit:'bc1acfa02489efc491d6f5891d07bea87f29ec19',sha256,modified:false},null,2));
+const gluePath=resolve(root,'../model-assets/lighterglue.onnx'),glue=readFileSync(gluePath),glueProvenance=JSON.parse(readFileSync(resolve(root,'../model-assets/lighterglue.json'),'utf8'));
+if(glue.length!==glueProvenance.size||createHash('sha256').update(glue).digest('hex')!==glueProvenance.sha256)throw Error('LighterGlue asset checksum mismatch');
+writeFileSync(resolve(models,'lighterglue.onnx'),glue);
+writeFileSync(resolve(models,'manifest.json'),JSON.stringify({xfeat:{url:'/models/xfeat.onnx',size:bytes.length,sha256},lighterglue:{url:'/models/lighterglue.onnx',size:glue.length,sha256:glueProvenance.sha256}},null,2));
+writeFileSync(resolve(models,'provenance.json'),JSON.stringify({xfeat:{algorithm:'XFeat sparse features',license:'Apache-2.0',source,source_commit:'bc1acfa02489efc491d6f5891d07bea87f29ec19',sha256,modified:false},lighterglue:glueProvenance},null,2));

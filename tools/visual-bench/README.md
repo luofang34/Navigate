@@ -33,7 +33,8 @@ cargo build --release --manifest-path tools/visual-service/Cargo.toml
 ```
 
 The model preparation command downloads the Apache-2.0 XFeat ONNX release.
-It checks the pinned SHA-256 digest. It installs the pinned ONNX browser runtime.
+It checks the pinned SHA-256 digest. It copies the checked LighterGlue asset from
+`model-assets/`. It installs the pinned ONNX browser runtime.
 The public export includes their licences and model provenance.
 Model loading starts when the user requests matching.
 
@@ -42,7 +43,9 @@ The native provider requires GDAL development files and PROJ data. GDAL 3.6 to
 On a machine with several installations, select one consistent set of headers,
 libraries, and `pkg-config` metadata. Do not substitute a different ABI version.
 
-The public matcher uses XFeat features and mutual nearest descriptor matches.
+The public matcher uses XFeat features and LighterGlue assignments.
+Descriptor retrieval selects a shortlist before the learned matcher runs.
+A cached XFeat-only package can still use mutual nearest descriptor matches.
 Its adapter owns preprocessing, feature limits, descriptor filters, and GPU setup.
 The release uses an 800 by 600 coordinate system. The adapter preserves image
 aspect ratio and maps model coordinates back to input pixels.
@@ -257,7 +260,7 @@ The public export excludes these test pages and private input files.
 
 `prepare_globe_context.py` generates the display context from Natural Earth GeoJSON.
 It uses Pillow from `requirements-web.txt`. It is not a service or web runtime
-dependency. Use `prepare_browser_models.mjs` to install the public XFeat model.
+dependency. Use `prepare_browser_models.mjs` to install the public matcher models.
 
 ## Browser matcher boundary
 
@@ -273,8 +276,9 @@ A retrieval result is not an accepted pose. Alternatives stay separate.
 
 The public example image is made from the reference map. It checks the pipeline.
 It does not measure independent geographic accuracy. In the nine-frame DJI
-browser check, balanced mode produced geometric hypotheses for seven frames
-with the supplied reference data. It produced none with public NAIP data.
+browser check, balanced mode produced accepted geometric hypotheses for eight frames
+with the supplied reference data. It produced no accepted hypotheses with public
+NAIP data. The accepted supplied-data cases retained unresolved alternatives.
 These checks used a 500 m search radius and an assumed 110 m camera height
 above ground. They did not establish correct geographic associations.
 Night operation and absolute geographic accuracy have not been validated.

@@ -3,7 +3,6 @@ import {createHash} from 'node:crypto';
 import {resolve,dirname,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const webapp=resolve(dirname(fileURLToPath(import.meta.url)),'webapp');
-const modelNames=new Set(['xfeat.onnx','manifest.json','provenance.json']);
 const runtimeNames=new Set(['ort.webgpu.min.mjs','ort-wasm-simd-threaded.jsep.mjs','ort-wasm-simd-threaded.jsep.wasm','ort-wasm-simd-threaded.asyncify.mjs','ort-wasm-simd-threaded.asyncify.wasm','LICENSE','package-integrity.json']);
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const hashPattern=/^[a-f0-9]{64}$/;
@@ -13,9 +12,14 @@ export async function exportSite(state,output,regions,source=webapp){
   if(destination===source||destination.startsWith(source+'/')||destination===state||destination.startsWith(state+'/'))throw Error('Export outside source directories');
   await mkdir(destination,{recursive:true});if((await readdir(destination)).length)throw Error('Export requires an empty output directory');
   const models=JSON.parse(await readFile(resolve(source,'models/manifest.json'),'utf8'));
-  if(Object.keys(models).length!==1||!models.xfeat)throw Error('Public export requires the redistributable XFeat model');
-  const model=await readFile(resolve(source,'models/xfeat.onnx'));
-  if(digest(model)!==models.xfeat.sha256||model.length!==models.xfeat.size)throw Error('Model checksum mismatch');
+  if(!models.xfeat||Object.keys(models).some(name=>!['xfeat','lighterglue'].includes(name)))throw Error('Public export requires redistributable matcher models');
+  const modelNames=new Set(['manifest.json','provenance.json']);
+  for(const [name,entry] of Object.entries(models)){
+    if(entry.url!==`/models/${name}.onnx`)throw Error('Invalid public model URL');
+    const model=await readFile(resolve(source,`models/${name}.onnx`));
+    if(digest(model)!==entry.sha256||model.length!==entry.size)throw Error(`Model checksum mismatch: ${name}`);
+    modelNames.add(`${name}.onnx`);
+  }
   const catalog=[],chunks=new Map(),packs=[];
   for(const id of [...new Set(regions)]){
     const item=JSON.parse(await readFile(resolve(state,`catalog/${id}.json`),'utf8'));

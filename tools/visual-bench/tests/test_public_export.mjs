@@ -9,8 +9,8 @@ const digest=b=>createHash('sha256').update(b).digest('hex'),data=Buffer.from('p
 try{
  for(const name of ['webapp/models','webapp/runtime','state/chunks','state/packs','state/catalog'])await mkdir(join(root,name),{recursive:true});
  await writeFile(join(source,'index.html'),'public shell');await writeFile(join(source,'models/xfeat.onnx'),model);
- await writeFile(join(source,'models/manifest.json'),JSON.stringify({xfeat:{sha256:digest(model),size:model.length}}));
- for(const name of ['models/superglue.onnx','models/test-input.png','qa-private.js'])await writeFile(join(source,name),'must not publish');
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify({xfeat:{url:'/models/xfeat.onnx',sha256:digest(model),size:model.length}}));
+ for(const name of ['models/lighterglue.onnx','models/superglue.onnx','models/test-input.png','qa-private.js'])await writeFile(join(source,name),'must not publish');
  await writeFile(join(state,'chunks',sha+'.bin'),data);await writeFile(join(state,'chunks','unused.bin'),'private');
  await writeFile(join(state,'catalog/demo.jpg'),'thumbnail');await writeFile(join(state,'catalog/demo.json'),JSON.stringify({id:'demo',pack_id:id,manifest:{private_path:'/private/file'}}));
  await writeFile(join(state,'catalog/private.json'),JSON.stringify({id:'private'}));
@@ -22,6 +22,18 @@ try{
  assert.deepEqual(await readdir(join(output,'chunks')),[sha+'.bin']);assert.equal((await readdir(output)).includes('qa-private.js'),false);
  const catalog=JSON.parse(await readFile(join(output,'catalog.json')));assert.equal(catalog.length,1);assert.equal(catalog[0].manifest,undefined);
  await assert.rejects(exportSite(state,output,['demo'],source),/empty output/);
+ const matcherManifest={xfeat:{url:'/models/xfeat.onnx',sha256:digest(model),size:model.length},lighterglue:{url:'/models/lighterglue.onnx',sha256:digest(model),size:model.length}};
+ await writeFile(join(source,'models/lighterglue.onnx'),model);await writeFile(join(source,'models/manifest.json'),JSON.stringify(matcherManifest));
+ await exportSite(state,join(root,'learned'),['demo'],source);
+ assert.deepEqual((await readdir(join(root,'learned/models'))).sort(),['lighterglue.onnx','manifest.json','xfeat.onnx']);
+ await writeFile(join(source,'models/lighterglue.onnx'),'tampered');
+ await assert.rejects(exportSite(state,join(root,'tampered-matcher'),['demo'],source),/Model checksum mismatch: lighterglue/);
+ await writeFile(join(source,'models/lighterglue.onnx'),model);
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify({...matcherManifest,superglue:matcherManifest.xfeat}));
+ await assert.rejects(exportSite(state,join(root,'restricted-matcher'),['demo'],source),/redistributable matcher/);
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify({...matcherManifest,lighterglue:{...matcherManifest.lighterglue,url:'https://example.invalid/model'}}));
+ await assert.rejects(exportSite(state,join(root,'external-matcher'),['demo'],source),/Invalid public model URL/);
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify(matcherManifest));
  await writeFile(join(state,'chunks',sha+'.bin'),'tampered');await assert.rejects(exportSite(state,join(root,'tampered'),['demo'],source),/checksum mismatch/);
  console.info('Public export selection, model allowlist, private fixture exclusion and checksum checks passed');
 }finally{await rm(root,{recursive:true,force:true})}

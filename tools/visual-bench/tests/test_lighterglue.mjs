@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {lighterGlueInputs,lighterGluePairs} from '../webapp/inference/lighterglue-decode.js';
+const f={count:2,modelPixels:new Float32Array([400,300,800,600]),descriptors:new Float32Array(128)};
+f.descriptors[0]=1;f.descriptors[3]=1;
+const input=lighterGlueInputs(f);assert.deepEqual([...input.keypoints],[0,0,1,.75]);assert.equal(input.descriptors[0],1);assert.equal(input.descriptors[65],1);
+assert.deepEqual(lighterGluePairs(new Float32Array([.8,.2,.01,.7,.6,.01,.01,.02,.09].map(Math.log)),3,3),[[0,0]]);
+assert.deepEqual(lighterGluePairs(new Float32Array([.8,.01,.02,.02,.03,.7].map(Math.log)),2,3),[[0,0],[1,2]]);
+assert.deepEqual(lighterGluePairs(new Float32Array(),0,2),[]);assert.deepEqual(lighterGluePairs(new Float32Array(),2,0),[]);
+assert.throws(()=>lighterGluePairs(new Float32Array([NaN]),1,1),/Non-finite/);assert.throws(()=>lighterGluePairs(new Float32Array([Infinity]),1,1),/Non-finite/);
+assert.throws(()=>lighterGluePairs(new Float32Array(),1,1),/shape/);f.descriptors[0]=NaN;assert.throws(()=>lighterGlueInputs(f),/Non-finite/);
+console.info('LighterGlue coordinates, descriptor layout, mutual assignment, threshold, empty and invalid evidence checks passed');
