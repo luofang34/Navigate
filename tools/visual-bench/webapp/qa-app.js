@@ -18,10 +18,13 @@ async function run(){
  check('image creates a saved result',Boolean(result));check('image has geometric hypotheses',result.candidate_hypotheses.some(h=>h.accepted));
  check('matched pose controls are available',$('hypotheses').options.length>0&&!$('reset').disabled);report.processing_ms=result.processing_ms;report.geographic_accuracy=result.geographic_accuracy;
  await emit('video upload');await upload(w,'/models/test-video.mp4','local-test-video.mp4','video/mp4');
+ check('new upload clears old pose evidence',!$('result').querySelector('.metrics')&&!$('hypotheses').options.length&&!$('frames').options.length&&!$('missions').value&&!$('details').textContent&&!$('compute-status').textContent);
+ check('saved evidence survives a new upload',Boolean(await get('missions',mission.id)));
+ check('new upload labels the map as reference context',$('map-label').textContent==='REFERENCE VIEW · NO CAMERA POSE FOR THIS OBSERVATION');
  check('video controls available',!$('video-controls').hidden&&!$('video').hidden);
  const time=Math.min(.5,$('video').duration/2),shown=event($('query'),'load');$('frame-time').value=String(time);$('frame-time').onchange();await shown;
  check('selected video frame decoded',Math.abs($('video').currentTime-time)<.05);check('video frame enables matching',!$('locate').disabled);
- report.video_time_s=$('video').currentTime;await emit('video frame matching');await $('locate').onclick();
+ report.video_time_s=$('video').currentTime;await emit('video frame matching');const processing=$('locate').onclick();check('new run has no stale estimate',$('result').textContent==='Preparing this observation.'&&!$('hypotheses').options.length);await processing;
  const video=await get('missions',$('missions').value),observation=video?.view.frames[0];check('selected video frame creates a result',Math.abs(observation.requested_time_s-time)<.05);check('video frame runs in browser',video.view.input.processing==='browser-local');report.video_decision=observation.decision;
  if(observation.retrieval.pose_candidates===0&&observation.retrieval.evaluated_candidates===0){check('empty retrieval is separate from geometry',$('result').textContent.includes('No location candidate found')&&$('result').textContent.includes('Geometric checks did not run'));}
 }
