@@ -15,7 +15,12 @@ export async function frameAt(input,time,camera){let actual=time,timing='still i
   }
   const image=gray(input.source,camera.width,camera.height);const blob=await new Promise(resolve=>image.canvas.toBlob(resolve,'image/png'));if(!blob)throw Error('Could not encode the observation frame');return {...image,blob,time:actual,requested_time_s:time,timing};
 }
-export function rotate(image,angle){const radians=angle*Math.PI/180,c=Math.cos(radians),s=Math.sin(radians);const width=Math.ceil((Math.abs(c)*image.width+Math.abs(s)*image.height)/8)*8,height=Math.ceil((Math.abs(s)*image.width+Math.abs(c)*image.height)/8)*8;
+export function rotationGeometry(width,height,angle){
+  const radians=angle*Math.PI/180,c=Math.cos(radians),s=Math.sin(radians);
+  const padded=v=>Math.ceil((v-1e-9)/8)*8,targetWidth=padded(Math.abs(c)*width+Math.abs(s)*height),targetHeight=padded(Math.abs(s)*width+Math.abs(c)*height);
+  return {width:targetWidth,height:targetHeight,radians,unrotate(p){const x=p[0]+.5-targetWidth/2,y=p[1]+.5-targetHeight/2;return [c*x-s*y+(width-1)/2,s*x+c*y+(height-1)/2]}};
+}
+export function rotate(image,angle){const transform=rotationGeometry(image.width,image.height,angle),{width,height,radians}=transform;
   const target=canvas();target.width=width;target.height=height;const ctx=target.getContext('2d');ctx.translate(width/2,height/2);ctx.rotate(-radians);ctx.drawImage(image.canvas,-image.width/2,-image.height/2);
-  return {...gray(target,width,height),unrotate(p){const x=p[0]-width/2,y=p[1]-height/2;return [c*x-s*y+image.width/2,s*x+c*y+image.height/2]}};
+  return {...gray(target,width,height),unrotate:transform.unrotate};
 }

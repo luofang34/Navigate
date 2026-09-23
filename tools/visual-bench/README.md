@@ -148,10 +148,12 @@ A rejected frame shows the region overview. Unresolved candidates remain separat
 
 ## Match detail and accuracy
 
-Fast mode uses a 640-pixel observation and one crop scale. Balanced mode uses a
-960-pixel observation and three crop scales. Detailed mode uses 1280 pixels and
-five scales. Retrieval uses a 640-pixel image in all modes. Pose refinement uses
-the selected observation resolution and a larger feature budget at higher detail.
+Fast mode uses a 640-pixel observation, one crop scale, and eight headings.
+Balanced mode uses a 960-pixel observation, five scales, and 36 headings.
+Detailed mode uses 1280 pixels, five scales, and 36 headings. Retrieval uses a
+640-pixel image in all modes. Pose refinement uses the selected observation
+resolution and a larger feature budget at higher detail. The wider search takes
+more processing time. It does not reduce the geometric acceptance requirements.
 Invalid source pixels and their immediate borders cannot produce features.
 
 Retrieval remains bounded. It can miss a valid place or orientation. More inliers
@@ -233,10 +235,22 @@ an adapter. Browser tests use ignored local files `webapp/models/test-input.png`
 and `test-video.mp4`. Run `tests/browser_server.mjs` with a loopback service URL,
 a report path, and an optional port. Open `/qa-quality.html` to compare matching
 detail, `/qa-performance.html?run=1&report=1` for GPU and camera checks, or
-`/qa-flow.html` for image/video interaction checks, or `/qa-map.html` for
+`/qa-app.html` for upload, selected video frame, saved result, and theme checks.
+Use `/qa-flow.html` for frame decoding checks. Use `/qa-map.html` for
 terrain clearance and the rendered difference between coarse and fine NAIP data.
 The map test needs prepared zoom-16 and zoom-17 NAIP packages. The production service has no
 test-report endpoint. Browser tests do not establish geographic accuracy.
+
+For the nine-frame DJI evaluation, put the local `DJI_0029_frame_1.png` through
+`DJI_0029_frame_5.png` and `DJI_0030_frame_1.png` through
+`DJI_0030_frame_4.png` files in `webapp/models/test-frames/`. Open
+`/qa-dataset.html?region=<region-id>`. The default profile is `balanced`.
+The default prior uses the package centre. Set `lat`, `lon`, `radius`, and `agl`
+in the local test URL to select another prior. Angles use degrees. Distances use
+metres. Keep precise test priors in the local test URL.
+The report records each retrieval result and geometric decision. A completed
+evaluation can contain rejected frames. It is not a successful localization check.
+The public export excludes these test pages and private input files.
 
 ## Optional asset maintenance
 
@@ -257,7 +271,9 @@ The pipeline owns priors, rendered references, pose checks, and final decisions.
 A retrieval result is not an accepted pose. Alternatives stay separate.
 
 The public example image is made from the reference map. It checks the pipeline.
-It does not measure independent geographic accuracy. The DJI test frame has
-geometric support with its supplied reference data. It does not pass with the
-public NAIP package in the checked run. Fast mode can also reject that frame.
+It does not measure independent geographic accuracy. In the nine-frame DJI
+browser check, balanced mode produced geometric hypotheses for six frames
+with the supplied reference data. It produced none with public NAIP data.
+These checks used a 500 m search radius and an assumed 110 m camera height
+above ground. They did not establish correct geographic associations.
 Night operation and absolute geographic accuracy have not been validated.
