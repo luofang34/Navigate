@@ -11,7 +11,7 @@ for(const base of ['http://localhost/','https://example.github.io/Navigate/']){
   let install;handlers.install({waitUntil:p=>install=p});await install;
   assert.ok(resources.every(url=>url.startsWith(base)),'app shell remains under the deployment prefix');
   let response;handlers.fetch({request:{method:'GET',url:base},respondWith:p=>response=p});
-  assert.equal(await(await response).text(),'current shell');assert.equal(selected,'navigate-vnav-shell-v13');
+  assert.equal(await(await response).text(),'current shell');assert.equal(selected,'navigate-vnav-shell-v14');
   for(const path of ['api/catalog','chunks/hash.bin','jobs/id','models/model.onnx']){
     let intercepted=false;handlers.fetch({request:{method:'GET',url:base+path},respondWith:()=>intercepted=true});assert.equal(intercepted,false,path+' bypasses the app-shell cache');
   }
