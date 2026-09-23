@@ -13,3 +13,19 @@ const result=await matcher.retrievePairs(references,[{image:{id:710},key:'query/
 assert.deepEqual(result,[{reference_index:710,query_index:0},{reference_index:170,query_index:1}]);
 assert.equal(seen.length,731*2);assert.equal(new Set(seen).size,731);
 console.info('Full prior coverage, explicit work limits, and cross-batch candidate ranking passed');
+
+// Buffers referenced by a queued batch must stay live until that batch is submitted.
+const {DescriptorRetrieval}=await import('../webapp/inference/retrieval-gpu.js');
+const usage=globalThis.GPUBufferUsage;globalThis.GPUBufferUsage={STORAGE:1,COPY_DST:2};
+try {
+  const gpu=new DescriptorRetrieval();gpu.uploads=new Map();gpu.device={createBuffer:()=>({destroyed:false,destroy(){this.destroyed=true}}),queue:{writeBuffer(){}}};
+  const query={descriptors:new Float32Array(64)};
+  for(let batch=0;batch<5;batch++){
+    const queued=[];
+    for(let i=0;i<160;i++){
+      queued.push(gpu.descriptors({descriptors:new Float32Array(64)}),gpu.descriptors(query));
+      assert.ok(queued.every(b=>!b.destroyed),'descriptor eviction cannot invalidate a pending GPU batch');
+    }
+    assert.ok(gpu.uploads.size<=192,'GPU descriptor memory stays bounded');
+  }
+} finally {if(usage===undefined)delete globalThis.GPUBufferUsage;else globalThis.GPUBufferUsage=usage;}
