@@ -25,7 +25,7 @@ use maplibre::{
     style::Style,
     terrain::{DefaultDemTransferables, TerrainPlugin},
 };
-use navigate_visual::{CameraModel, CameraPose, MapRevision, ReferenceView};
+use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceView};
 use std::time::Duration;
 
 pub(crate) struct ReferenceRenderer {
@@ -34,6 +34,7 @@ pub(crate) struct ReferenceRenderer {
     camera: CameraModel,
     anchor: ExternalAnchor,
     revision: MapRevision,
+    frame: LocalFrame,
     tick: u64,
     coverage: geometry::Coverage,
 }
@@ -76,7 +77,7 @@ impl ReferenceRenderer {
             altitude_meters: 0.0,
         };
         let style = style(&package)?;
-        let coverage = geometry::Coverage::new(&package.manifest);
+        let coverage = geometry::Coverage::new(&package.manifest, package.frame);
         let plugins: Vec<Box<dyn Plugin<_>>> = vec![
             Box::new(RenderPlugin),
             Box::new(RasterPlugin::<DefaultRasterTransferables>::default()),
@@ -109,6 +110,7 @@ impl ReferenceRenderer {
             camera,
             anchor,
             revision: package.revision,
+            frame: package.frame,
             tick: 0,
             coverage,
         })
@@ -174,20 +176,14 @@ impl ReferenceRenderer {
                     as f32
             })
             .collect();
-        let lat = self.anchor.position.latitude.to_radians();
-        let anchor_x = (self.anchor.position.longitude + 180.0) / 360.0;
-        let anchor_y = (1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0;
-        let scale = std::f64::consts::TAU * 6_371_008.8 * lat.cos();
         self.coverage.mask(&mut depth_m, camera, pose, |world| {
             self.map
-                .rendered_terrain_sample_cached([
-                    anchor_x + world.x / scale,
-                    anchor_y - world.y / scale,
-                ])
+                .rendered_terrain_sample_cached(self.frame.mercator_xy(world))
                 .is_some_and(|sample| sample.covered && sample.dem_loaded)
         });
         Ok(ReferenceView {
             map: self.revision.clone(),
+            frame: self.frame,
             pose,
             image,
             depth_m,

@@ -27,6 +27,7 @@ fn nonzero_terrain() -> MapPackage {
             release_id: "nonzero-alpha-test".into(),
             manifest_sha256: "c".repeat(64),
         },
+        frame: navigate_visual::LocalFrame::anchor_mercator(lat, lon).expect("valid anchor"),
         tiles: vec![
             DecodedTile {
                 xyz: [16, 32768, 32768],

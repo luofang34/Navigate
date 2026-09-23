@@ -4,7 +4,7 @@ use crate::package::Manifest;
 use cgmath::Matrix4;
 use maplibre::render::camera::EyeFrustum;
 use nalgebra::{Vector2, Vector3};
-use navigate_visual::{CameraModel, CameraPose};
+use navigate_visual::{CameraModel, CameraPose, LocalFrame};
 
 pub(super) fn eye_transform(pose: CameraPose) -> Matrix4<f64> {
     let mut m = pose.orientation.to_homogeneous();
@@ -32,11 +32,9 @@ pub(super) struct Coverage {
 }
 
 impl Coverage {
-    pub fn new(manifest: &Manifest) -> Self {
-        let [lat, lon] = manifest.anchor_lat_lon;
-        let anchor_x = (lon + 180.0) / 360.0;
-        let anchor_y = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
-        let scale = std::f64::consts::TAU * 6_371_008.8 * lat.to_radians().cos();
+    pub fn new(manifest: &Manifest, frame: LocalFrame) -> Self {
+        let [anchor_x, anchor_y] = frame.mercator_xy(Vector3::zeros());
+        let scale = frame.mercator_scale_m();
         let bounds = |tile: &crate::package::Tile| {
             let [z, x, y] = tile.xyz;
             let n = f64::from(1 << z);

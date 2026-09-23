@@ -85,6 +85,7 @@ impl PoseVerifier {
             stamp: frame.stamp,
             observation_sha256: frame.evidence_sha256(),
             map: reference.map.clone(),
+            frame: reference.frame,
             pose,
             quality,
             geometry_covariance: covariance,

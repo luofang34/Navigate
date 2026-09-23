@@ -33,6 +33,7 @@ pub struct Preview {
     pub(crate) camera_session: Option<crate::session::Session>,
     pub(crate) reference: Option<navigate_visual::ReferenceView>,
     pub(crate) manifest: Manifest,
+    pub(crate) frame: navigate_visual::LocalFrame,
     pub(crate) coverage: crate::coverage::Coverage,
     pub(crate) globe: bool,
     pub(crate) surface: Option<wgpu::Surface<'static>>,
@@ -177,6 +178,10 @@ impl Preview {
             position: LatLon::new(manifest.anchor_lat_lon[0], manifest.anchor_lat_lon[1]),
             altitude_meters: 0.0,
         };
+        let frame = navigate_visual::LocalFrame::anchor_mercator(
+            manifest.anchor_lat_lon[0],
+            manifest.anchor_lat_lon[1],
+        )?;
         let depth = reference_depth(&map, camera);
         let mut preview = Self {
             map,
@@ -188,6 +193,7 @@ impl Preview {
             reference: None,
             coverage: crate::coverage::Coverage::new(&manifest),
             manifest,
+            frame,
             globe,
             surface,
         };

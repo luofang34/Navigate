@@ -70,6 +70,7 @@ fn scene() -> (Frame, ReferenceView, PosePrior, Vec<PixelMatch>, CameraPose) {
             release_id: "fixture".into(),
             manifest_sha256: "a".repeat(64),
         },
+        frame: LocalFrame::anchor_mercator(47.0, 11.0).expect("valid anchor"),
         pose,
         image: GrayImage::new(320, 240),
         depth_m,

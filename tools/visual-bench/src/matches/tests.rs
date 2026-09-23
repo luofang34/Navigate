@@ -19,6 +19,7 @@ fn fixture() -> (VerifiedMatches, ReferenceView) {
         }],
     };
     let reference = ReferenceView {
+        frame: navigate_visual::LocalFrame::anchor_mercator(47.0, 11.0).expect("valid anchor"),
         map: MapRevision {
             release_id: "test".into(),
             manifest_sha256: "a".repeat(64),

@@ -22,6 +22,7 @@ fn scene() -> (Session, ReferenceView, Vec<PixelMatch>) {
     let session =
         Session::new(camera, vec![100; 160 * 120], prior, 0, 0.0).expect("fixture observation");
     let reference = ReferenceView {
+        frame: navigate_visual::LocalFrame::anchor_mercator(40.0, -74.0).expect("valid anchor"),
         map: MapRevision {
             release_id: "surface-test".into(),
             manifest_sha256: "a".repeat(64),
@@ -50,23 +51,11 @@ fn repeat_refinement_replaces_shared_evidence_without_gaining_precision() {
     let (mut session, reference, pairs) = scene();
     session.invalidate(1).expect("candidate");
     let first = session
-        .refine(
-            1,
-            &reference,
-            &pairs,
-            "custom-classical-test",
-            [40.0, -74.0],
-        )
+        .refine(1, &reference, &pairs, "custom-classical-test")
         .expect("fit");
     assert_eq!(first["accepted"], true);
     let second = session
-        .refine(
-            1,
-            &reference,
-            &pairs,
-            "custom-classical-test",
-            [40.0, -74.0],
-        )
+        .refine(1, &reference, &pairs, "custom-classical-test")
         .expect("repeat fit");
     assert_eq!(first["geometry_covariance"], second["geometry_covariance"]);
     assert_eq!(
@@ -78,7 +67,7 @@ fn repeat_refinement_replaces_shared_evidence_without_gaining_precision() {
     );
     session.invalidate(2).expect("alternative");
     session
-        .refine(2, &reference, &pairs, "another-backend", [40.0, -74.0])
+        .refine(2, &reference, &pairs, "another-backend")
         .expect("alternative fit");
     assert_eq!(session.select()["decision"], "unresolved");
     assert!(session.select().get("position_enu_m").is_none());
@@ -89,7 +78,7 @@ fn missing_depth_and_interrupted_replacements_cannot_reuse_an_accepted_pose() {
     session.invalidate(7).expect("candidate");
     assert_eq!(
         session
-            .refine(7, &reference, &pairs, "matcher", [40.0, -74.0])
+            .refine(7, &reference, &pairs, "matcher")
             .expect("fit")["accepted"],
         true
     );
@@ -98,7 +87,7 @@ fn missing_depth_and_interrupted_replacements_cannot_reuse_an_accepted_pose() {
     reference.depth_m.fill(0.0);
     assert_eq!(
         session
-            .refine(7, &reference, &pairs, "matcher", [40.0, -74.0])
+            .refine(7, &reference, &pairs, "matcher")
             .expect("rejected report")["accepted"],
         false
     );

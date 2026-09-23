@@ -62,6 +62,7 @@ impl Preview {
                 release_id: self.manifest.release_id.clone(),
                 manifest_sha256: self.manifest.pack_id.clone(),
             },
+            frame: self.frame,
             pose,
             image: GrayImage::from_raw(camera.width, camera.height, image.clone()).ok_or_else(
                 || PreviewError::Input {
@@ -81,10 +82,6 @@ impl Preview {
         camera: navigate_visual::CameraModel,
         pose: navigate_visual::CameraPose,
     ) {
-        let [lat, lon] = self.manifest.anchor_lat_lon;
-        let ax = (lon + 180.0) / 360.0;
-        let ay = (1.0 - lat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
-        let scale = std::f64::consts::TAU * 6_371_008.8 * lat.to_radians().cos();
         for (i, d) in depth.iter_mut().enumerate() {
             if *d <= 0.0 {
                 continue;
@@ -94,7 +91,7 @@ impl Preview {
                 (i / camera.width as usize) as f64,
             );
             let world = camera.unproject(&pose, p, f64::from(*d));
-            let xy = [ax + world.x / scale, ay - world.y / scale];
+            let xy = self.frame.mercator_xy(world);
             let terrain = self.map.rendered_terrain_sample_cached(xy);
             if !self.coverage.supports(xy) || !terrain.is_some_and(|t| t.covered && t.dem_loaded) {
                 *d = 0.0;

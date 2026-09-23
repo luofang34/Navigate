@@ -1,7 +1,7 @@
 //! Camera priors. Exactly one position and one orientation representation is required.
 
-use crate::coordinates::MapFrame;
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+use navigate_visual::LocalFrame;
 use navigate_visual::{CameraPose, PosePrior, VisualError};
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ pub(crate) struct PriorRecord {
 }
 
 impl PriorRecord {
-    pub fn prior(&self, frame: MapFrame) -> Result<PosePrior, VisualError> {
+    pub fn prior(&self, frame: LocalFrame) -> Result<PosePrior, VisualError> {
         let position = match (self.position_enu_m, self.geodetic_lat_lon_alt_m) {
             (Some(position), None) => Vector3::from_row_slice(&position),
             (None, Some(position)) => frame.local(position)?,

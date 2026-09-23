@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn heading_and_tilt_place_the_camera_optical_axis() {
-    let frame = MapFrame::new([47.0, 11.0]);
+    let frame = navigate_visual::LocalFrame::anchor_mercator(47.0, 11.0).expect("valid anchor");
     let mut record = PriorRecord {
         position_enu_m: None,
         geodetic_lat_lon_alt_m: Some([47.0, 11.0, 1000.0]),

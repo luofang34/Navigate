@@ -2,8 +2,8 @@
 //!
 //! Run `visual-bench --help` for command usage. [`package`] defines the shared
 //! source-data contract. [`stream`] defines streamed frame input. [`video`]
-//! describes decoding and prior association. [`coordinates`] describes the
-//! coordinate model. [`track`] describes geographic track output.
+//! describes decoding and prior association. [`navigate_visual::LocalFrame`]
+//! describes the coordinate model. [`track`] describes geographic track output.
 //!
 //! Build this tool beside the MapLibre fork with
 //! `cargo build --release --manifest-path tools/visual-bench/Cargo.toml`.
@@ -14,7 +14,6 @@
 
 mod backend;
 mod cli;
-mod coordinates;
 mod error;
 mod fixture;
 mod matches;

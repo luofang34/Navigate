@@ -16,7 +16,7 @@
 
 use crate::{BenchError, read_blocking};
 use image::RgbaImage;
-use navigate_visual::MapRevision;
+use navigate_visual::{LocalFrame, MapRevision};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -64,6 +64,7 @@ pub(crate) struct DecodedTile {
 
 pub(crate) struct MapPackage {
     pub revision: MapRevision,
+    pub frame: LocalFrame,
     pub manifest: Manifest,
     pub tiles: Vec<DecodedTile>,
 }
@@ -108,11 +109,13 @@ impl MapPackage {
                 reason: "package needs imagery and elevation sources".into(),
             });
         }
+        let [lat, lon] = manifest.anchor_lat_lon;
         Ok(Self {
             revision: MapRevision {
                 release_id: manifest.release_id.clone(),
                 manifest_sha256: digest(&bytes),
             },
+            frame: LocalFrame::anchor_mercator(lat, lon)?,
             manifest,
             tiles,
         })
