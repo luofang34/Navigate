@@ -2,8 +2,9 @@
 
 XFeat with LighterGlue is the current candidate for a common matcher. Both model
 projects use Apache-2.0. The native adapter and a browser WebGPU model test pass
-on the available Apple M3 Max. The production browser search still uses XFeat
-with mutual descriptor matching. This evaluation does not change that path.
+on the available Apple M3 Max. The browser adapter also uses LighterGlue.
+The model loads when matching starts. An older cached XFeat-only package can
+still use mutual descriptor matching.
 
 ## Measured quality
 
@@ -64,7 +65,15 @@ Chrome WebGPU produced the same selected LighterGlue matches as native CPU for
 real translated-image features at 512 and 1024 keypoints. The tests recorded
 691 GPU compute dispatches per inference. All scores were finite. Maximum model
 score differences were below 0.000151. This checks model execution and assignment.
-It does not check browser image search, reference rendering, or camera movement.
+It does not measure independent geographic accuracy.
+
+The full browser search produced accepted geometric hypotheses for 8 of 9 DJI
+frames with the supplied reference imagery. The same profile produced no
+accepted hypotheses with public NAIP imagery. The prior radius was 500 m. The
+assumed camera height was 110 m above ground. The minimum remained 20 inliers.
+All eight accepted cases retained unresolved geographic alternatives.
+These tests included retrieval, rendered references, and geometric verification.
+They did not establish correct geographic associations or camera accuracy.
 
 ## Deployment boundary
 
@@ -79,10 +88,10 @@ can use these without a Python process during inference.
 
 | Target | Runtime path to validate | Artifact | Status |
 | --- | --- | --- | --- |
-| Web | ONNX Runtime Web, WebGPU with WASM fallback | ONNX | LighterGlue model parity and GPU dispatch checked |
+| Web | ONNX Runtime Web, WebGPU with WASM fallback | ONNX | Model parity, GPU dispatch, and full search checked |
 | Apple native | Rust `ort`, Core ML and CPU | Dense float16 ONNX plus float32 matcher | Native image suite checked |
 | Jetson | Rust `ort`, TensorRT, then CUDA, then CPU | ONNX and device-specific engine cache | No board measurement |
-| RK3588 | RKNN Runtime through a Rust adapter | RKNN compiled for the board | No compiler or board measurement |
+| RK3588 | RKNN Runtime through a Rust adapter | RKNN compiled for the board | Compiler and simulator checked; no board measurement |
 | Raspberry Pi with Hailo | HailoRT through a Rust adapter | HEF compiled for the installed Hailo device | No compiler or board measurement |
 
 The documented ONNX Runtime RKNPU provider targets RK1808. It is not proof of
@@ -90,11 +99,20 @@ RK3588 support. Use RKNN Toolkit2 and RKNN Runtime for RK3588. HailoRT supplies
 native C/C++ interfaces. The Hailo device type and runtime version must match the
 compiled artifact. No RKNN or Hailo placeholder adapter is added here.
 
-The next device work should compile the fixed-shape convolutional detector first.
+The fixed-shape convolutional detector compiles with RKNN Toolkit2 2.3.2 for
+RK3588. The unquantized artifact is 2,138,010 bytes. The vendor simulator ran one
+real preprocessed image. Its maximum absolute differences from float32 ONNX
+Runtime were 0.01509 for descriptors, 0.07387 for logits, and 0.001577 for
+reliability. All outputs were finite and had the required shapes.
+This is a compiler and tensor check. It is not a board latency, power, selected
+match, or pose-acceptance measurement. See [RK3588 checks](RK3588.md).
+
 Keep keypoint selection, interpolation, normalization, and sparse matching on the
 host until a measured device path is available. Jetson can also accelerate the
 matcher. Test quantization with representative query and reference images. Check
 selected matches and pose acceptance as well as tensor error and latency.
+Hailo-8 and Hailo-8L require a different compiler and runtime family from Hailo-10H.
+No Hailo compiler result is available for this model.
 
 Hide backend selection from the normal user workflow. A packaged application
 should select a tested artifact and runtime from detected device capabilities.
