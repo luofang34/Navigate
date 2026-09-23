@@ -1,38 +1,59 @@
 //! Logical resource names have no platform filesystem syntax.
 use crate::DataError;
 /// A resource name that a host storage adapter resolves.
+///
+/// The form is `scheme://path`. The host names the scheme and decides what
+/// storage root it selects. This crate gives no meaning to a scheme.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DataUri(String);
+pub struct DataUri {
+    value: String,
+    path_start: usize,
+}
 impl DataUri {
-    /// Parse a logical `pilotage://` resource name.
+    /// Parse a logical `scheme://path` resource name.
     ///
     /// # Errors
-    /// Rejects empty components, relative traversal, and platform path separators.
+    /// Rejects a missing or invalid scheme, the `file` scheme, empty
+    /// components, relative traversal, and platform path separators.
     pub fn parse(value: impl Into<String>) -> Result<Self, DataError> {
         let value = value.into();
-        let valid = value.strip_prefix("pilotage://").is_some_and(|path| {
-            !path.is_empty()
-                && path.split('/').all(|part| {
-                    !part.is_empty()
-                        && part != "."
-                        && part != ".."
-                        && part
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        let parts = value.split_once("://");
+        let valid_scheme = parts.is_some_and(|(scheme, _)| {
+            scheme != "file"
+                && scheme.starts_with(|c: char| c.is_ascii_lowercase())
+                && scheme.chars().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '-' | '.')
                 })
         });
-        if !valid {
+        let valid = valid_scheme
+            && parts.is_some_and(|(_, path)| {
+                !path.is_empty()
+                    && path.split('/').all(|part| {
+                        !part.is_empty()
+                            && part != "."
+                            && part != ".."
+                            && part
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                    })
+            });
+        let Some((scheme, _)) = parts.filter(|_| valid) else {
             return Err(DataError::InvalidUri { uri: value });
-        }
-        Ok(Self(value))
+        };
+        let path_start = scheme.len() + "://".len();
+        Ok(Self { value, path_start })
     }
     /// The complete logical resource name.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.value
+    }
+    /// The host-defined scheme that selects a storage root.
+    pub fn scheme(&self) -> &str {
+        &self.value[..self.path_start - "://".len()]
     }
     /// The platform-independent components below the storage root.
     pub fn relative_path(&self) -> &str {
-        &self.0[11..]
+        &self.value[self.path_start..]
     }
 }
 #[cfg(test)]
