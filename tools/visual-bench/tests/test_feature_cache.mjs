@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {FeatureCache} from '../webapp/inference/feature-cache.js';
+import {XFeatMatcher} from '../webapp/inference/xfeat.js';
+const feature=(length=1)=>({pixels:new Float32Array(length),modelPixels:new Float32Array(length),scores:new Float32Array(length),descriptors:new Float32Array(length)});
+const cache=new FeatureCache(32,2),a=feature(),b=feature(),c=feature();
+cache.insert('a',a);cache.insert('b',b);assert.equal(cache.bytes,32);assert.equal(cache.get_cached('a'),a);
+cache.insert('c',c);assert.equal(cache.get_cached('b'),undefined);assert.equal(cache.get_cached('a'),a);assert.equal(cache.get_cached('c'),c);
+cache.insert('a',feature(3));assert.equal(cache.get_cached('a'),undefined,'an oversized replacement must not return stale features');assert.equal(cache.bytes,16);
+const shared=new Float32Array(8);cache.insert('shared',{pixels:shared.subarray(0,1),modelPixels:shared.subarray(1,2),scores:shared.subarray(2,3),descriptors:shared.subarray(3,4)});
+assert.equal(cache.bytes,32,'retain the full backing buffer without double-counting shared views');assert.equal(cache.get_cached('c'),undefined);
+cache.clear();assert.equal(cache.bytes,0);assert.equal(cache.entries.size,0);
+const empty=feature(0),entries=new FeatureCache(0,2);for(let i=0;i<3;i++)entries.insert(String(i),empty);assert.equal(entries.entries.size,2);assert.equal(entries.get_cached('0'),undefined,'zero-byte features still respect the entry limit');
+assert.throws(()=>new FeatureCache(-1,2),/budget/);assert.throws(()=>new FeatureCache(32,1.5),/budget/);
+
+const matcher=new XFeatMatcher();matcher.cache=new FeatureCache(1024,2);matcher.referenceCache=new FeatureCache(4096,8);matcher.Tensor=class {dispose(){}};matcher.metrics={feature_runs:0};matcher.gpu={phase(){}};
+let calls=0;matcher.point={async run(){calls++;return {keypoints:{dims:[1,2],data:new Float32Array([400,300]),dispose(){}},scores:{data:new Float32Array([.9]),dispose(){}},descriptors:{dims:[1,64],data:new Float32Array(64).fill(.125),dispose(){}}}}};
+const image={width:64,height:64,gray:Uint8Array.from({length:4096},(_,i)=>i%256)};
+const first=await matcher.features(image,'package-a/crop-1',512,'reference');
+for(let i=0;i<4;i++)await matcher.features(image,'observation-'+i,512);
+assert.equal(await matcher.features(image,'package-a/crop-1',512,'reference'),first);assert.equal(calls,5,'frame-cache churn does not rerun reference inference');
+await matcher.features(image,'package-b/crop-1',512,'reference');assert.equal(calls,6,'a different reference package must rerun inference');
+await matcher.features(image,'package-a/crop-1',1024,'reference');assert.equal(calls,7,'a different feature limit must rerun inference');
+assert.equal(matcher.referenceCache.hits,1);assert.ok(matcher.referenceCache.bytes<=4096);assert.ok(matcher.cache.bytes<=1024);
+console.info('Feature cache budgets, LRU eviction, shared buffers, identities and cross-frame reference reuse passed');

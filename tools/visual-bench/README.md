@@ -294,3 +294,11 @@ The packed reference buffer uses at most 16 MiB. Score scratch storage uses
 smaller dispatch groups. The descriptor cache holds at most 192 buffers.
 This reduces data uploads and GPU dispatches. It does not reduce the number
 of descriptor comparisons or geometric checks.
+
+Reference feature arrays have a separate 128 MiB cache with at most 1,024 entries.
+Their keys include the package identity, crop, and feature limit. Query and
+refinement feature arrays use a 32 MiB cache with at most 192 entries.
+Frame processing cannot evict the reference feature arrays. A package change
+uses different keys. A cache entry reuses model output only. The pipeline still
+runs geometric verification and evidence checks for each observation.
+The reported cache hit, miss, and byte counts describe the worker lifetime.
