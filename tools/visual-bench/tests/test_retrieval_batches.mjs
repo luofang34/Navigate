@@ -18,3 +18,22 @@ await assert.rejects(ranker.rankGrid(references,queries,-1),/limit/);
 ranker.rankMany=async()=>[NaN];await assert.rejects(ranker.rankGrid([references[0]],queries,1),/scores/);
 ranker.rankMany=async()=>[];await assert.rejects(ranker.rankGrid([references[0]],queries,1),/scores/);
 console.info('Retrieval batch reuse, stable ranking, bounded uploads, empty work and invalid scores passed');
+
+const batched=new DescriptorRetrieval();batched.dimensions=64;let prepared=0,released=0;
+const packedReferences=references.map(f=>({...f,count:2})),packedQueries=queries.map(f=>({...f,count:2}));
+batched.batched={prepare(batch){prepared++;return {batch,close(){released++}}},async rank({batch},query){return batch.map(reference=>score(reference,query))}};
+assert.deepEqual(await batched.rankGrid(packedReferences,packedQueries,64),expected);
+assert.equal(prepared,3);assert.equal(released,prepared,'each packed reference batch is released after its queries');
+batched.batched.rank=async()=>{throw Error('device lost')};
+await assert.rejects(batched.rankGrid(packedReferences,packedQueries,64),/device lost/);
+assert.equal(released,prepared,'a failed GPU batch releases its reference buffers');
+console.info('Batched ranking preserves candidate order and releases references on success and failure');
+
+let pipelines=0,buffers=0,destroyedBuffers=0;
+const initializationFailure={
+ createShaderModule:()=>({}),
+ async createComputePipelineAsync(){if(++pipelines===4)throw Error('unsupported shader');return {}},
+ createBuffer(){buffers++;return {destroy(){destroyedBuffers++}}}
+};
+await assert.rejects(DescriptorRetrieval.create(initializationFailure,64),/unsupported shader/);
+assert.equal(destroyedBuffers,buffers,'shader setup failure releases all allocated scratch buffers');

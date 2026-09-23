@@ -238,7 +238,8 @@ The native imagery tests need a compatible GDAL installation. GPU tests require
 an adapter. Browser tests use ignored local files `webapp/models/test-input.png`
 and `test-video.mp4`. Run `tests/browser_server.mjs` with a loopback service URL,
 a report path, and an optional port. Open `/qa-quality.html` to compare matching
-detail, `/qa-performance.html?run=1&report=1` for GPU and camera checks, or
+detail, `/qa-retrieval.html` for scalar and batched GPU score comparison,
+`/qa-performance.html?run=1&report=1` for GPU and camera checks, or
 `/qa-app.html` for upload, selected video frame, saved result, and theme checks.
 Use `/qa-flow.html` for frame decoding checks. Use `/qa-map.html` for
 terrain clearance and the rendered difference between coarse and fine NAIP data.
@@ -286,6 +287,10 @@ above ground. They did not establish correct geographic associations.
 Night operation and absolute geographic accuracy have not been validated.
 
 The descriptor search keeps one reference batch in GPU memory while it tests
-all camera views. It retains all planned reference crops and the same tie order.
-The cache holds at most 192 descriptor buffers. This reduces data uploads.
-It does not reduce the number of descriptor comparisons or geometric checks.
+all camera views. It scores several references in one GPU dispatch. It retains
+all planned reference crops, comparison thresholds, and the same tie order.
+The packed reference buffer uses at most 16 MiB. Score scratch storage uses
+64 MiB. Batched nearest-neighbour storage uses 1 MiB. Larger comparisons use
+smaller dispatch groups. The descriptor cache holds at most 192 buffers.
+This reduces data uploads and GPU dispatches. It does not reduce the number
+of descriptor comparisons or geometric checks.
