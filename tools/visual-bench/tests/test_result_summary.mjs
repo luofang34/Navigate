@@ -18,3 +18,15 @@ const failed=resultSummary({accepted:false,reason:'No candidate passed.',retriev
 assert.equal(failed.explanation,'No candidate passed. Only 8 visual inliers; need 20');
 assert.deepEqual(failed.metrics,[['Reference crops','280'],['Pose candidates','2'],['Candidates checked','2']]);
 assert.equal(failed.location,'');
+
+const noCandidate=resultSummary({accepted:false,reason:'No evaluated candidate passed geometry.',retrieval:{map_crops:803,pose_candidates:0,evaluated_candidates:0},candidate_hypotheses:[]});
+assert.equal(noCandidate.title,'No location candidate found');
+assert.match(noCandidate.explanation,/Geometric checks did not run/);
+assert.equal(noCandidate.location,'');
+assert.deepEqual(noCandidate.metrics,[['Reference crops','803'],['Pose candidates','0'],['Candidates checked','0']]);
+const unavailable=resultSummary({accepted:false,reason:'Terrain is unavailable',retrieval:{map_crops:0}});
+assert.equal(unavailable.explanation,'Terrain is unavailable');
+assert.deepEqual(unavailable.metrics,[['Reference crops','0'],['Pose candidates','Unknown'],['Candidates checked','Unknown']]);
+const evaluated=resultSummary({accepted:false,retrieval:{map_crops:803,pose_candidates:0,evaluated_candidates:0},candidate_hypotheses:[{accepted:false,reason:'Missing rendered depth'}]});
+assert.match(evaluated.explanation,/Missing rendered depth/);
+assert.equal(evaluated.title,'Visual observation rejected','candidate evidence takes precedence over inconsistent retrieval counts');

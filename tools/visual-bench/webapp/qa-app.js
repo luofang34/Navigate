@@ -23,6 +23,7 @@ async function run(){
  check('selected video frame decoded',Math.abs($('video').currentTime-time)<.05);check('video frame enables matching',!$('locate').disabled);
  report.video_time_s=$('video').currentTime;await emit('video frame matching');await $('locate').onclick();
  const video=await get('missions',$('missions').value),observation=video?.view.frames[0];check('selected video frame creates a result',Math.abs(observation.requested_time_s-time)<.05);check('video frame runs in browser',video.view.input.processing==='browser-local');report.video_decision=observation.decision;
+ if(observation.retrieval.pose_candidates===0&&observation.retrieval.evaluated_candidates===0){check('empty retrieval is separate from geometry',$('result').textContent.includes('No location candidate found')&&$('result').textContent.includes('Geometric checks did not run'));}
 }
 let deadline;
 try{
