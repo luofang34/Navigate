@@ -240,10 +240,9 @@ test-report endpoint. Browser tests do not establish geographic accuracy.
 
 ## Optional asset maintenance
 
-`prepare_browser_models.py` converts the probe exports to dynamic browser inputs.
 `prepare_globe_context.py` generates the display context from Natural Earth GeoJSON.
-These maintenance tools use `requirements-web.txt`. They are not service or web
-runtime dependencies. The Node model installer accepts browser-ready ONNX files.
+It uses Pillow from `requirements-web.txt`. It is not a service or web runtime
+dependency. Use `prepare_browser_models.mjs` to install the public XFeat model.
 
 ## Browser matcher boundary
 

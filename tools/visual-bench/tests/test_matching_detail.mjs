@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {cropPlan} from '../webapp/crop-plan.js';
 import {matchingOptions} from '../webapp/matching-options.js';
 import {cameraForImage} from '../webapp/calibration.js';
-import {decode} from '../webapp/inference/superpoint.js';
 const fast=matchingOptions('fast'),detail=matchingOptions('balanced');
 const a=cameraForImage(3840,2160,82.1,fast.longEdge),b=cameraForImage(3840,2160,82.1,detail.longEdge);
 assert.ok(b.width>a.width);assert.ok(Math.abs(b.fx/a.fx-b.width/a.width)<1e-12);assert.ok(Math.abs(b.fy/a.fy-b.height/a.height)<1e-12);
@@ -10,10 +9,3 @@ const plans=cropPlan({width:1024,height:1024,baseSize:1500,center:[512,512],metr
 assert.equal(new Set(plans.map(p=>p.scale)).size,3);
 assert.ok(plans.some(p=>p.x<0&&p.y<0),'a crop larger than the package uses a masked border');
 assert.ok(plans.length<=160);
-const scores={dims:[1,65,8,8],data:new Float32Array(65*64).fill(-20)};
-scores.data.fill(20,64*64);scores.data[64*64+4*8+4]=-20;scores.data[0*64+4*8+4]=20;
-const descriptors={dims:[1,256,8,8],data:new Float32Array(256*64).fill(1/16)};
-const mask=new Uint8Array(64*64).fill(255);
-assert.equal(decode(scores,descriptors,64,64,512,mask).count,1);
-mask[32*64+32]=0;
-assert.equal(decode(scores,descriptors,64,64,512,mask).count,0,'invalid source pixels cannot create matching features');
