@@ -32,6 +32,22 @@ let localizer = Localizer::new(matcher, LocalizerConfig::default())?;
 # }
 ```
 
+Use `OnnxMatcher::load_preferred_blocking` to hide device choices in the host.
+Supply an ordered list of `MatcherCandidate` values. Each value has model files
+and an `ExecutionConfig`. For example, try a dense float16 detector with
+`Provider::CoreMlAne`, then a float32 model with `Provider::Cpu`. Include the
+CPU choice explicitly. The loader tries real session creation and returns
+`MatcherSelection` with the selected index and earlier errors. It does not
+retry a frame on another backend if inference fails. The selected provider does
+not prove that every operator runs on that device.
+
+The native CI gate runs unit tests without model files. To run the real-model
+fallback test, set `NAVIGATE_TEST_ORT`, `NAVIGATE_TEST_XFEAT`, and
+`NAVIGATE_TEST_IMAGE`. Then run the ignored test
+`selection::tests::cpu_fallback_runs_real_image_matching`. Use a runtime without
+CUDA and a textured image. This checks an explicit CPU fallback and image pixel
+matches. It does not check geographic accuracy.
+
 A different model or hardware implementation can implement `ImageMatcher`
 directly. It need not use ONNX. The shared `PoseVerifier` retains the geometry
 policy. Search candidates and map rendering remain outside the matcher. The

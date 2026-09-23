@@ -12,9 +12,12 @@ mod features;
 mod lighterglue;
 mod native_runtime;
 mod preprocessing;
+mod selection;
 mod superpoint;
 mod xfeat;
 mod xfeat_dense;
 
 pub use adapter::{MatcherFiles, OnnxMatcher};
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
+
+pub use selection::{CandidateFailure, MatcherCandidate, MatcherSelection, SelectionError};
