@@ -1,5 +1,6 @@
+import {assetUrl} from './asset-url.js';
 export class DataService {
-  constructor(fetcher=(...args)=>globalThis.fetch(...args)){this.fetch=fetcher;this.static=false;this.catalog=[]}
+  constructor(fetcher=(...args)=>globalThis.fetch(...args),base=assetUrl('./')){this.fetch=fetcher;this.base=base;this.static=false;this.catalog=[]}
   async request(url,value){
     if(this.static){
       if(url==='/api/catalog')return this.catalog;
@@ -11,5 +12,5 @@ export class DataService {
       try{this.catalog=await this.json('/catalog.json');this.static=true;return this.catalog}catch{throw error}
     }
   }
-  async json(url,value){const response=await this.fetch(url,value===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});const result=await response.json();if(!response.ok)throw Error(result.error||response.statusText);return result}
+  async json(url,value){const response=await this.fetch(assetUrl(url,this.base),value===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});const result=await response.json();if(!response.ok)throw Error(result.error||response.statusText);return result}
 }

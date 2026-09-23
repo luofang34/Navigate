@@ -1,4 +1,4 @@
-import init,{Preview,propose} from '/wasm/navigate_visual_preview.js';
+import init,{Preview,propose} from './wasm/navigate_visual_preview.js';
 import {LocalMatcher} from './inference/local.js';
 import {ReferencePack} from './reference-pack.js';
 import {read} from './storage.js';

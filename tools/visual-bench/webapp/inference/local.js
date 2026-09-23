@@ -1,13 +1,14 @@
+import {assetUrl} from '../asset-url.js';
 import {downloadFiles,read,get,put} from '../storage.js';
 export class LocalMatcher {
   constructor(options={}){this.options=options}
-  async initialize(progress){let manifest;try{const response=await fetch('/models/manifest.json');if(!response.ok)throw Error('Browser models are not prepared');manifest=await response.json();await put('state','models',manifest)}catch(e){manifest=await get('state','models');if(!manifest)throw e}
-    const files=Object.values(manifest);await downloadFiles(files,(n,total)=>progress(`Browser model data ${(n/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`));
+  async initialize(progress){let manifest;try{const response=await fetch(assetUrl('models/manifest.json'));if(!response.ok)throw Error('Browser models are not prepared');manifest=await response.json();await put('state','public-xfeat-models-v1',manifest)}catch(e){manifest=await get('state','public-xfeat-models-v1');if(!manifest)throw e}
+    if(!manifest.xfeat||Object.keys(manifest).length!==1)throw Error('The public demo requires the XFeat model manifest');const files=Object.values(manifest);await downloadFiles(files,(n,total)=>progress(`Browser model data ${(n/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`));
     const models={};for(const [name,f] of Object.entries(manifest))models[name]=new Uint8Array(await read(`pilotage://chunks/${f.sha256}.bin`,0,f.size));
-    progress('Loading browser inference runtime…');const {LearnedMatcher}=await import('./learned.js');
-    progress('Initializing browser WebGPU / WASM models…');this.matcher=await LearnedMatcher.create(models);this.identity=this.matcher.identity+'/'+files.map(f=>f.sha256).join('/');
+    progress('Loading browser inference runtime…');const {XFeatMatcher}=await import('./xfeat.js');
+    progress('Initializing browser WebGPU / WASM models…');this.matcher=await XFeatMatcher.create(models);this.identity=this.matcher.identity+'/'+files.map(f=>f.sha256).join('/');
   }
-  async matchImages(reference,query,keys={}){const limit=keys.stage==='refinement'?(this.options.keypoints??512):512;const q=await this.matcher.features(query,keys.query,limit);return {pairs:q.count<6?[]:await this.matcher.pairs(await this.matcher.features(reference,keys.reference,limit),q),backend_identity:this.identity}}
+  async matchImages(reference,query,keys={}){const limit=keys.stage==='refinement'?Math.min(4096,Math.max(2048,(this.options.keypoints??1024)*3)):2048;const q=await this.matcher.features(query,keys.query,limit);return {pairs:q.count<6?[]:await this.matcher.pairs(await this.matcher.features(reference,keys.reference,limit),q),backend_identity:this.identity}}
   async retrievePairs(references,queries,limit,progress){
     const ranked=[],features=[];
     for(const [i,reference] of references.entries()){progress(`GPU reference features ${i+1}/${references.length}`);features.push(await this.matcher.features(reference.image,reference.key))}

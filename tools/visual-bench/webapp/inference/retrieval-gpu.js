@@ -39,11 +39,11 @@ struct Shape { n:u32, m:u32, index:u32 }
  if(u32(best[shape.m+r].x)==q && v.y>0.65 && (1.0-v.y)<0.81*(1.0-v.z)){atomicAdd(&ranks[shape.index],1u);}
 }`;
 export class DescriptorRetrieval {
-  static async create(device){const self=new DescriptorRetrieval();self.device=device;self.uploads=new Map();self.dispatches=0;
-    self.matrix=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:matrix}),entryPoint:'main'}});
+  static async create(device,dimensions=256,{minimumSimilarity=.65,maximumDistanceRatio=.81}={}){if(![64,256].includes(dimensions))throw Error('Unsupported descriptor width');const self=new DescriptorRetrieval();self.device=device;self.matchPolicy={minimumSimilarity,maximumDistanceRatio};self.uploads=new Map();self.dispatches=0;
+    self.matrix=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:matrix.replace('k<256u','k<'+dimensions+'u')}),entryPoint:'main'}});
     self.nearest=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:nearest}),entryPoint:'main'}});
-    self.rank=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:rank}),entryPoint:'main'}});
-    const buffer=(size,usage)=>device.createBuffer({size,usage});self.shape=buffer(160*256,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);self.scores=buffer(512*512*4,GPUBufferUsage.STORAGE);self.best=buffer(1024*16,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);self.ranks=buffer(160*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC);self.readback=buffer(160*4,GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ);return self;
+    self.rank=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:rank.replace('v.y>0.65','v.y>'+minimumSimilarity.toFixed(6)).replace('<0.81*','<'+maximumDistanceRatio.toFixed(6)+'*')}),entryPoint:'main'}});
+    const buffer=(size,usage)=>device.createBuffer({size,usage});self.shape=buffer(160*256,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);self.scores=buffer(4096*4096*4,GPUBufferUsage.STORAGE);self.best=buffer(8192*16,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);self.ranks=buffer(160*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC);self.readback=buffer(160*4,GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ);self.pairReadback=buffer(8192*16,GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ);return self;
   }
   descriptors(f){if(this.uploads.has(f))return this.uploads.get(f);const buffer=this.device.createBuffer({size:f.descriptors.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});this.device.queue.writeBuffer(buffer,0,f.descriptors);this.uploads.set(f,buffer);if(this.uploads.size>192){const [key,old]=this.uploads.entries().next().value;old.destroy();this.uploads.delete(key)}return buffer}
   async rankMany(firsts,second){
@@ -60,5 +60,26 @@ export class DescriptorRetrieval {
     pass.end();encoder.copyBufferToBuffer(this.ranks,0,this.readback,0,firsts.length*4);d.queue.submit([encoder.finish()]);
     await this.readback.mapAsync(GPUMapMode.READ,0,firsts.length*4);const result=[...new Uint32Array(this.readback.getMappedRange(0,firsts.length*4))];this.readback.unmap();return result;
   }
-  close(){for(const b of this.uploads.values())b.destroy();for(const b of [this.shape,this.scores,this.best,this.ranks,this.readback])b.destroy()}
+  async matchPairs(first,second){
+    if(first.count>4096||second.count>4096)throw Error('Too many matching features');
+    const d=this.device;d.queue.writeBuffer(this.shape,0,new Uint32Array([first.count,second.count,0,0]));
+    const encoder=d.createCommandEncoder(),pass=encoder.beginComputePass();
+    const group=(pipeline,buffers)=>d.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:buffers.map((buffer,binding)=>({binding,resource:{buffer,...(buffer===this.shape?{size:16}:{})}}))});
+    pass.setPipeline(this.matrix);pass.setBindGroup(0,group(this.matrix,[this.descriptors(first),this.descriptors(second),this.scores,this.shape]));pass.dispatchWorkgroups(Math.ceil(first.count/16),Math.ceil(second.count/16));
+    pass.setPipeline(this.nearest);pass.setBindGroup(0,group(this.nearest,[this.scores,this.best,this.shape]));pass.dispatchWorkgroups(Math.ceil((first.count+second.count)/64));pass.end();
+    const size=(first.count+second.count)*16;encoder.copyBufferToBuffer(this.best,0,this.pairReadback,0,size);d.queue.submit([encoder.finish()]);
+    await this.pairReadback.mapAsync(GPUMapMode.READ,0,size);
+    try {return mutualPairs(new Float32Array(this.pairReadback.getMappedRange(0,size)),first.count,second.count,this.matchPolicy)}finally{this.pairReadback.unmap()}
+  }
+  close(){for(const b of this.uploads.values())b.destroy();for(const b of [this.shape,this.scores,this.best,this.ranks,this.readback,this.pairReadback])b.destroy()}
+}
+
+export function mutualPairs(best,n,m,{minimumSimilarity=.65,maximumDistanceRatio=.81}={}){
+  const pairs=[];
+  for(let q=0;q<m;q++){
+    const r=best[q*4],reverse=(m+r)*4;
+    if(!Number.isInteger(r)||r<0||r>=n)continue;
+    if(best[reverse]===q&&best[q*4+1]>minimumSimilarity&&(1-best[q*4+1])<maximumDistanceRatio*(1-best[q*4+2])&&(1-best[reverse+1])<maximumDistanceRatio*(1-best[reverse+2]))pairs.push([r,q]);
+  }
+  return pairs;
 }

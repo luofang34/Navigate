@@ -1,0 +1,9 @@
+{
+  "kind": "map-derived synthetic image",
+  "purpose": "Pipeline example. Not independent location validation.",
+  "pack_id": "42dd4536acc1adfc2a02b013bb380cbf2b1bece81622c70902d57ba56c0f6dfb",
+  "latitude": 40.544,
+  "longitude": -74.456,
+  "height_agl_m": 110,
+  "diagonal_sensor_fov_deg": 82.1
+}

@@ -21,34 +21,35 @@ uses this feature. These libraries remain separate from the demo UI.
 Use Rust, Node.js, `wasm-bindgen-cli`, and the `wasm32-unknown-unknown` target.
 Use the `wasm-bindgen-cli` version in `wasm-preview/Cargo.lock`.
 Put the MapLibre fork beside Navigate. The renderer dependency uses this layout.
-Use `fix/wasm-offline-preview` at commit
+Use the MapLibre fork at commit
 `5c323427e29c1796003c5e7052b2887f6d35c173`, or a later commit that includes
 [the required renderer changes](https://github.com/luofang34/maplibre-rs-experimental/pull/32).
 Run commands from the Navigate root:
 
 ```sh
 node tools/visual-bench/build_web.mjs
-node tools/visual-bench/prepare_browser_models.mjs /path/to/browser-ready-models
+node tools/visual-bench/prepare_browser_models.mjs
 cargo build --release --manifest-path tools/visual-service/Cargo.toml
 ```
 
-The model folder must contain `superpoint.onnx` and `superglue.onnx`. SuperPoint
-must have dynamic image dimensions, dense scores, and normalized descriptors.
-The current SuperGlue adapter expects keypoint normalization for a 640 by 360
-export. Model export is external to the runtime. Existing Python research and
-export tools remain optional. They are not required to serve or run this demo.
-The model preparation command copies caller-supplied models and installs the
-pinned ONNX browser runtime. It records SHA-256 identities.
+The model preparation command downloads the Apache-2.0 XFeat ONNX release.
+It checks the pinned SHA-256 digest. It installs the pinned ONNX browser runtime.
+The public export includes their licences and model provenance.
+Model loading starts when the user requests matching.
 
 The native provider requires GDAL development files and PROJ data. GDAL 3.6 to
 3.12 works with the selected Rust binding. GDAL 3.13 requires a newer binding.
 On a machine with several installations, select one consistent set of headers,
 libraries, and `pkg-config` metadata. Do not substitute a different ABI version.
 
-The demo does not distribute model weights. The upstream
-[SuperGlue licence](https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/LICENSE)
-limits those weights to noncommercial research. Use a suitable model licence
-for deployment. No crate or model is published by these commands.
+The public matcher uses XFeat features and mutual nearest descriptor matches.
+Its adapter owns preprocessing, feature limits, descriptor filters, and GPU setup.
+The release uses an 800 by 600 coordinate system. The adapter preserves image
+aspect ratio and maps model coordinates back to input pixels.
+Higher matching detail increases the feature budget and geometry resolution.
+It does not increase this model's internal image resolution.
+The optional [model probe](../visual-inference/README.md) is separate from the
+public demo. Do not put research-only SuperGlue weights in the public site.
 
 ## Start the Rust service
 
@@ -82,21 +83,26 @@ docker run --rm -p 8080:8080 -v navigate-data:/data \
   -e NAVIGATE_ORIGIN=https://navigate.example navigate-visual
 ```
 
-The runtime image contains Rust, GDAL, and browser assets. It does not contain
-Python or model export tools. The local Docker build has not been verified.
+The runtime image contains the Rust executable, GDAL, and browser assets. It does not contain
+Python or model export tools. Build and test the image in your deployment environment.
 
 ## Static WASM deployment
 
 Export verified packages and prepared browser assets to a static site folder:
 
 ```sh
-node tools/visual-bench/export_web.mjs target/visual-web-data target/visual-site
+node tools/visual-bench/export_web.mjs target/visual-web-data target/visual-site \
+  naip-2864a5ec8e4abb24
 ```
 
 Serve that folder through HTTPS or localhost. The browser reads `catalog.json`,
 package manifests, and chunks with ordinary file requests. Image and video
 localization runs in the browser. Prepared packages work without a server API.
 New provider coverage requires the Rust service deployment.
+The export requires an empty output directory and explicit region IDs.
+It checks chunk hashes and exports only selected NAIP packages.
+It excludes test media, test pages, and research-only model weights.
+See [Pages deployment](PAGES.md) for the public build.
 
 ## Use the demo
 
@@ -231,3 +237,28 @@ detail, `/qa-performance.html?run=1&report=1` for GPU and camera checks, or
 terrain clearance and the rendered difference between coarse and fine NAIP data.
 The map test needs prepared zoom-16 and zoom-17 NAIP packages. The production service has no
 test-report endpoint. Browser tests do not establish geographic accuracy.
+
+## Optional asset maintenance
+
+`prepare_browser_models.py` converts the probe exports to dynamic browser inputs.
+`prepare_globe_context.py` generates the display context from Natural Earth GeoJSON.
+These maintenance tools use `requirements-web.txt`. They are not service or web
+runtime dependencies. The Node model installer accepts browser-ready ONNX files.
+
+## Browser matcher boundary
+
+Supply a matcher to the `LocalizationPipeline` constructor. Implement
+`initialize(progress)`, `matchImages(reference, query, keys)`, and `close()`.
+Images contain `gray`, `width`, and `height`. A reference can contain a
+`valid` pixel mask. Coordinates use input pixel centres.
+Return `{pairs, backend_identity}`. Each pair contains `reference: [x, y]`
+and `query: [x, y]`. Keep model tensors and backend scores inside the adapter.
+An optional `retrievePairs` method returns reference and query indices.
+The pipeline owns priors, rendered references, pose checks, and final decisions.
+A retrieval result is not an accepted pose. Alternatives stay separate.
+
+The public example image is made from the reference map. It checks the pipeline.
+It does not measure independent geographic accuracy. The DJI test frame has
+geometric support with its supplied reference data. It does not pass with the
+public NAIP package in the checked run. Fast mode can also reject that frame.
+Night operation and absolute geographic accuracy have not been validated.

@@ -1,10 +1,11 @@
-import * as ort from '/runtime/ort.webgpu.min.mjs';
+import {assetUrl} from '../asset-url.js';
+import * as ort from '../runtime/ort.webgpu.min.mjs';
 import {instrumentDevice} from './gpu-metrics.js';
 import {DescriptorRetrieval} from './retrieval-gpu.js';
 import {decode} from './superpoint.js';
 export class LearnedMatcher {
   static async create(models){
-    ort.env.wasm.numThreads=1;ort.env.wasm.wasmPaths='/runtime/';
+    ort.env.wasm.numThreads=1;ort.env.wasm.wasmPaths=assetUrl('runtime/');
     const self=new LearnedMatcher();self.cache=new Map();self.metrics={feature_runs:0,match_runs:0};
     const adapter=await navigator.gpu?.requestAdapter({powerPreference:'high-performance'});if(!adapter)throw Error('A WebGPU adapter is required for browser matching');
     self.metrics.adapter={vendor:adapter.info?.vendor,architecture:adapter.info?.architecture,description:adapter.info?.description};

@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {missionSummary,resultSummary} from '../webapp/result-summary.js';
+const first={accepted:true,candidate_id:1,inliers:57,reprojection_rms_px:1.73,latitude_deg:40.54,longitude_deg:-74.45};
+const second={...first,candidate_id:2,latitude_deg:40.55};
+const unresolved={accepted:false,decision:'unresolved',candidate_hypotheses:[first,second],confidence:.999};
+assert.equal(missionSummary([unresolved]),'2 geometric hypotheses · 0 unique among evaluated · 1 frames saved locally');
+assert.equal(missionSummary([{accepted:false,decision:'rejected'}]),'0 geometric hypotheses · 0 unique among evaluated · 1 frames saved locally');
+assert.equal(missionSummary([{...first,decision:'unique_among_evaluated'}]),'1 geometric hypotheses · 1 unique among evaluated · 1 frames saved locally');
+const result=resultSummary(unresolved,first);
+assert.equal(result.title,'Unresolved alternatives');
+assert.match(result.explanation,/not a calibrated probability/);
+assert.deepEqual(result.metrics,[['Geometric inliers','57'],['Reprojection RMS','1.73 px'],['Absolute accuracy','Not measured']]);
+assert.equal(JSON.stringify(result).includes('99.9'),false,'backend confidence does not become a location probability');
+const rejected=resultSummary({accepted:false,reason:'Terrain is unavailable'});
+assert.equal(rejected.title,'Visual observation rejected');assert.equal(rejected.location,'');assert.deepEqual(rejected.metrics,[]);assert.equal(rejected.explanation,'Terrain is unavailable');

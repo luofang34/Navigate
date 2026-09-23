@@ -1,0 +1,38 @@
+# Sokoly Systems — canonical visual identity values.
+#
+# Single source of truth for the brand. The LaTeX encoding lives in
+# sokoly-identity.sty; this file is the machine-readable form for non-LaTeX
+# surfaces (the QuoteGen Rust config, the XLSX export, future web/print).
+# When a value changes here, update sokoly-identity.sty to match (and any
+# consumer guard test that pins these values).
+
+[fonts]
+main = "PT Sans"
+mono = "Courier New"
+
+# RGB, 0-255 per channel.
+[colors]
+primary   = [0, 87, 183]      # links, titles, article numbers
+secondary = [52, 73, 94]      # subtitles, labels
+accent    = [231, 76, 60]     # emphasis / pricing
+success   = [39, 174, 96]     # totals / positive
+lightgray = [236, 240, 241]   # rules, fills
+darkgray  = [127, 140, 141]   # footers, muted text
+
+# Logo variants — see LOGO.md for which to use where.
+# Each variant has two colourways: -black (light bg) and -white (reversed, dark bg).
+[logo]
+dir        = "assets/logo"
+mark       = "sokoly-logomark-black.pdf"         # bare falcon (icons, avatars, watermark)
+horizontal = "sokoly-logo-horizontal-black.pdf"  # mark + wordmark + tagline (default header)
+stacked    = "sokoly-logo-stacked-black.pdf"     # mark above wordmark (covers, title pages)
+raster     = "sokoly-logo-horizontal-black.png"  # raster fallback
+colourways = ["black", "white"]
+
+[contact]
+company    = "Sokoly Systems Incorporation"
+company_uk = "ТОВ «СОКОЛИ СИСТЕМЗ ІНКОРПОРЕЙШН»"
+email      = "sales@sokolysystems.com"
+phone      = "+380 97 364 4034"
+website    = "https://sokolysystems.com"
+address_uk = "03057, Україна, місто Київ, вулиця Бродських Сім'ї, будинок 5/1 офіс 26"

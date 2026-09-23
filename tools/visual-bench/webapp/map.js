@@ -1,4 +1,5 @@
-import init,{Preview} from '/wasm/navigate_visual_preview.js';
+import {assetUrl} from './asset-url.js';
+import init,{Preview} from './wasm/navigate_visual_preview.js';
 import {localPosition,toGlobePose} from './geography.js';
 export {localPosition,toGlobePose} from './geography.js';
 import {constrainCamera,minimumClearance} from './camera-clearance.js';
@@ -15,7 +16,7 @@ export class MapView{
     canvas.addEventListener('keydown',e=>{const move={w:[1,20],s:[1,-20],a:[0,-20],d:[0,20]}[e.key.toLowerCase()];if(move){e.preventDefault();canvas.focus();this.move(move[0],move[1]*Math.max(1,this.height()/200)).catch(console.error)}});
   }
   async load(pack,camera){await this.dataIdle;await this.idle;initialized??=init();await initialized;if(!navigator.gpu)throw Error('WebGPU is unavailable. Open this local page in a WebGPU-enabled browser.');
-    if(this.preview)this.preview.free();this.preview=null;this.pose=null;this.base=null;this.calibration=camera;this.sizeCanvas();this.preview=await Preview.create_display(JSON.stringify(pack),JSON.stringify(this.displayCamera()),read,this.canvas,navigator.gpu.getPreferredCanvasFormat());const context=await(await fetch('/context/earth.json')).json(),bytes=new Uint8Array(await(await fetch(context.url)).arrayBuffer());if(await sha256(bytes)!==context.sha256)throw Error('Globe context checksum failed');this.preview.set_globe_context(bytes);this.pack=pack;this.pack_id=pack.pack_id;this.displayPacks=new Map([[pack.pack_id,pack]]);
+    if(this.preview)this.preview.free();this.preview=null;this.pose=null;this.base=null;this.calibration=camera;this.sizeCanvas();this.preview=await Preview.create_display(JSON.stringify(pack),JSON.stringify(this.displayCamera()),read,this.canvas,navigator.gpu.getPreferredCanvasFormat());const context=await(await fetch(assetUrl('context/earth.json'))).json(),bytes=new Uint8Array(await(await fetch(assetUrl(context.url))).arrayBuffer());if(await sha256(bytes)!==context.sha256)throw Error('Globe context checksum failed');this.preview.set_globe_context(bytes);this.pack=pack;this.pack_id=pack.pack_id;this.displayPacks=new Map([[pack.pack_id,pack]]);
   }
   async setCalibration(camera){await this.dataIdle;await this.idle;this.calibration=camera;this.sizeCanvas();this.preview.resize_display(JSON.stringify(this.displayCamera()));await this.draw()}
   async addPack(pack){if(this.displayPacks?.has(pack.pack_id))return;if(this.displayPacks?.size>=4)throw Error('Four display packages are loaded. Select a region to start a new view.');await this.dataIdle;await this.idle;this.loading=true;let complete;this.dataIdle=new Promise(resolve=>complete=resolve);try{await this.preview.add_display_package(JSON.stringify(pack),read);this.displayPacks??=new Map();this.displayPacks.set(pack.pack_id,pack)}finally{this.loading=false;complete()}await this.draw()}
