@@ -12,7 +12,7 @@ for(const base of ['http://localhost/','https://example.github.io/Navigate/']){
   assert.ok(resources.every(url=>url.startsWith(base)),'app shell remains under the deployment prefix');
   for(const path of ['inference/lighterglue.js','inference/lighterglue-decode.js'])assert.ok(resources.includes(base+path),'learned matcher remains available offline');
   let response;handlers.fetch({request:{method:'GET',url:base},respondWith:p=>response=p});
-  assert.equal(await(await response).text(),'current shell');assert.equal(selected,'navigate-vnav-shell-v17');
+  assert.equal(await(await response).text(),'current shell');assert.equal(selected,'navigate-vnav-shell-v18');
   for(const path of ['api/catalog','chunks/hash.bin','jobs/id','models/model.onnx']){
     let intercepted=false;handlers.fetch({request:{method:'GET',url:base+path},respondWith:()=>intercepted=true});assert.equal(intercepted,false,path+' bypasses the app-shell cache');
   }

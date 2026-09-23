@@ -1,4 +1,4 @@
-const CACHE='navigate-vnav-shell-v17';
+const CACHE='navigate-vnav-shell-v18';
 const ROOT=new URL('./',self.location.href);
 const SHELL=['/','/index.html','/context/earth.json','/context/earth.png','/credits.html','/assets/demo-frame.jpg','/assets/demo-frame.json','/assets/sokoly-mark-white.svg','/app.css','/app.js','/asset-url.js','/result-summary.js','/assets/sokoly-mark.svg','/assets/pt-sans-regular.ttf','/assets/pt-sans-bold.ttf','/hypotheses.js','/storage.js','/map.js','/gpu-compat.js','/wasm/navigate_visual_preview.js','/wasm/navigate_visual_preview_bg.wasm','/calibration.js','/matching-options.js','/crop-plan.js','/dynamic-coverage.js','/data-service.js','/observation.js','/reference-pack.js','/browser-pipeline.js','/localization.js','/localization-worker.js','/geography.js','/camera-clearance.js','/inference/lighterglue.js','/inference/lighterglue-decode.js','/inference/xfeat.js','/inference/xfeat-decode.js','/inference/local.js','/inference/retrieval-gpu.js','/inference/gpu-metrics.js'];
 const resources=SHELL.map(path=>new URL(path.slice(1),ROOT).href);

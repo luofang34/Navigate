@@ -39,13 +39,30 @@ struct Shape { n:u32, m:u32, index:u32 }
  if(u32(best[shape.m+r].x)==q && v.y>0.65 && (1.0-v.y)<0.81*(1.0-v.z)){atomicAdd(&ranks[shape.index],1u);}
 }`;
 export class DescriptorRetrieval {
-  static async create(device,dimensions=256,{minimumSimilarity=.65,maximumDistanceRatio=.81}={}){if(![64,256].includes(dimensions))throw Error('Unsupported descriptor width');const self=new DescriptorRetrieval();self.device=device;self.matchPolicy={minimumSimilarity,maximumDistanceRatio};self.uploads=new Map();self.dispatches=0;
+  static async create(device,dimensions=256,{minimumSimilarity=.65,maximumDistanceRatio=.81}={}){if(![64,256].includes(dimensions))throw Error('Unsupported descriptor width');const self=new DescriptorRetrieval();self.device=device;self.matchPolicy={minimumSimilarity,maximumDistanceRatio};self.uploads=new Map();self.dispatches=0;self.uploadCount=0;self.uploadBytes=0;
     self.matrix=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:matrix.replace('k<256u','k<'+dimensions+'u')}),entryPoint:'main'}});
     self.nearest=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:nearest}),entryPoint:'main'}});
     self.rank=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:rank.replace('v.y>0.65','v.y>'+minimumSimilarity.toFixed(6)).replace('<0.81*','<'+maximumDistanceRatio.toFixed(6)+'*')}),entryPoint:'main'}});
     const buffer=(size,usage)=>device.createBuffer({size,usage});self.shape=buffer(160*256,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST);self.scores=buffer(4096*4096*4,GPUBufferUsage.STORAGE);self.best=buffer(8192*16,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);self.ranks=buffer(160*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC);self.readback=buffer(160*4,GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ);self.pairReadback=buffer(8192*16,GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ);return self;
   }
-  descriptors(f){if(this.uploads.has(f)){const buffer=this.uploads.get(f);this.uploads.delete(f);this.uploads.set(f,buffer);return buffer;}const buffer=this.device.createBuffer({size:f.descriptors.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});this.device.queue.writeBuffer(buffer,0,f.descriptors);this.uploads.set(f,buffer);if(this.uploads.size>192){const [key,old]=this.uploads.entries().next().value;old.destroy();this.uploads.delete(key)}return buffer}
+  descriptors(f){if(this.uploads.has(f)){const buffer=this.uploads.get(f);this.uploads.delete(f);this.uploads.set(f,buffer);return buffer;}const buffer=this.device.createBuffer({size:f.descriptors.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});this.device.queue.writeBuffer(buffer,0,f.descriptors);this.uploadCount++;this.uploadBytes+=f.descriptors.byteLength;this.uploads.set(f,buffer);if(this.uploads.size>192){const [key,old]=this.uploads.entries().next().value;old.destroy();this.uploads.delete(key)}return buffer}
+  async rankGrid(firsts,seconds,limit,progress=()=>{}){
+    if(!Number.isSafeInteger(limit)||limit<0)throw Error('Invalid retrieval result limit');
+    if(!limit||!firsts.length||!seconds.length)return [];
+    const ranked=[];
+    // A reference batch fits the GPU cache and stays resident across camera headings.
+    for(let start=0;start<firsts.length;start+=160){
+      const batch=firsts.slice(start,start+160);
+      for(const [q,second] of seconds.entries()){
+        progress(`Searching area ${Math.floor(start/160)+1}/${Math.ceil(firsts.length/160)} · view ${q+1}/${seconds.length}`);
+        const scores=await this.rankMany(batch,second);
+        if(scores.length!==batch.length||scores.some(score=>!Number.isFinite(score)))throw Error('Invalid retrieval scores');
+        for(const [index,score] of scores.entries())ranked.push({reference_index:start+index,query_index:q,score});
+      }
+    }
+    ranked.sort((a,b)=>b.score-a.score||a.query_index-b.query_index||a.reference_index-b.reference_index);
+    return ranked.slice(0,limit).map(({reference_index,query_index})=>({reference_index,query_index}));
+  }
   async rankMany(firsts,second){
     if(firsts.length>160)throw Error('Too many retrieval references');if(second.count<6)return firsts.map(()=>0);
     const d=this.device,shape=new Uint32Array(firsts.length*64);for(let i=0;i<firsts.length;i++)shape.set([firsts[i].count,second.count,i],i*64);d.queue.writeBuffer(this.shape,0,shape);

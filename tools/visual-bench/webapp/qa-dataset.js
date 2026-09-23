@@ -15,7 +15,7 @@ try{
  for(const [sequence,name] of names.entries()){
   await emit('matching '+name);const bitmap=await createImageBitmap(await(await fetch('./models/test-frames/'+name)).blob());const frame={...gray(bitmap,camera.width,camera.height),time:sequence};bitmap.close();
   const result=await pipeline.estimate(frame,report.prior,sequence,()=>{});
-  report.cases.push({name,decision:result.decision,processing_ms:result.processing_ms,retrieval:result.retrieval,hypotheses:result.candidate_hypotheses,execution:result.execution,geometric_acceptance:result.candidate_hypotheses.some(h=>h.accepted)});await emit('finished '+name);
+  report.cases.push({name,decision:result.decision,processing_ms:result.processing_ms,stage_ms:result.stage_ms,retrieval:result.retrieval,hypotheses:result.candidate_hypotheses,execution:result.execution,geometric_acceptance:result.candidate_hypotheses.some(h=>h.accepted)});await emit('finished '+name);
  }
  report.geometrically_accepted=report.cases.filter(c=>c.geometric_acceptance).length;report.total=report.cases.length;report.finished_at=new Date().toISOString();document.title=report.geometrically_accepted+'/'+report.total+' real-image geometric results';await emit('complete');
 }catch(error){report.error=String(error);await emit('failed')}finally{pipeline?.close()}
