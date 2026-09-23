@@ -25,7 +25,7 @@ enum Command {
     VerifyPack { manifest: PathBuf, root: PathBuf },
     /// Fit image-bound external correspondences using rendered terrain depth.
     #[command(
-        after_help = "Use render to export the candidate image and optical depth. The Python matchers/superglue.py adapter writes the correspondence JSON. Supply a grayscale query PNG. --prior controls admission bounds; --reference-prior initializes the image search. Geometry covariance excludes map and camera calibration errors."
+        after_help = "Use render to export the candidate image and optical depth. Supply correspondence JSON from an external matcher with the exported image and depth digests. Supply a grayscale query PNG. --prior controls admission bounds; --reference-prior initializes the image search. Geometry covariance excludes map and camera calibration errors."
     )]
     Refine {
         #[command(flatten)]
