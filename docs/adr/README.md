@@ -15,3 +15,4 @@ lifecycle rules.
 | [0005](0005-contract-crate-boundary.md) | External consumers pin a pure-types contract crate; aiding stays draft until a joint RFC | Accepted |
 | [0006](0006-one-leg-vocabulary-for-path-terminators-and-vertical-legs.md) | One leg vocabulary carries path terminators and vertical procedure legs | Accepted |
 | [0007](0007-visual-positions-enter-fusion-through-one-adapter.md) | Visual positions enter fusion through one adapter with a declared error budget | Proposed |
+| [0008](0008-navigation-means-join-through-measurement-models.md) | Navigation means join through measurement models and one propagator seam | Proposed |

@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 mod publication;
+mod reserved;
 
 use navigate_contract::{
     ClockDomainId, GeodeticPosition, MonotonicNanos, NedVelocity, ObservationStamp, SensorClass,
