@@ -56,7 +56,12 @@ impl PoseVerifier {
         let points = depth_correspondences(frame, reference, matches);
         let depth_matches = points.len();
         self.require_inliers(depth_matches)?;
-        let first = pose_solver::optimize(&frame.camera, &points, reference.pose)?;
+        let first = pose_solver::initialize(
+            &frame.camera,
+            &points,
+            reference.pose,
+            self.config.inlier_threshold_px,
+        );
         let inliers: Vec<_> = points
             .into_iter()
             .filter(|point| {

@@ -6,9 +6,20 @@ use nalgebra::{SMatrix, SVector, Vector2, Vector3};
 pub(crate) type Matrix6 = SMatrix<f64, 6, 6>;
 type Vector6 = SVector<f64, 6>;
 
+#[derive(Clone)]
 pub(crate) struct Correspondence {
     pub world: Vector3<f64>,
     pub pixel: Vector2<f64>,
+}
+
+mod consensus;
+pub(crate) fn initialize(
+    camera: &CameraModel,
+    points: &[Correspondence],
+    initial: CameraPose,
+    threshold: f64,
+) -> CameraPose {
+    consensus::initialize(camera, points, initial, threshold)
 }
 
 pub(crate) fn optimize(
