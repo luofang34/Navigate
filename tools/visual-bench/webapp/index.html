@@ -7,16 +7,17 @@
   <meta name="description" content="VNAV by Sokoly. Explore visual positioning with local images, offline reference data, and an interactive globe.">
   <title>VNAV · Navigate by Sokoly</title>
   <link rel="icon" href="./assets/sokoly-mark.svg" type="image/svg+xml">
+  <script src="./theme.js"></script>
   <link rel="stylesheet" href="./app.css">
 </head>
 <body>
 <a class="skip-link" href="#workspace">Skip to workspace</a>
 <header class="site-header">
   <a class="identity" href="./" aria-label="VNAV by Sokoly home">
-    <img src="./assets/sokoly-mark.svg" width="38" height="40" alt="Sokoly">
+    <img class="mark-light" src="./assets/sokoly-mark.svg" width="38" height="40" alt="Sokoly"><img class="mark-dark" src="./assets/sokoly-mark-white.svg" width="38" height="40" alt="Sokoly">
     <span><strong>VNAV<span class="wordmark-dot">.</span></strong><small>NAVIGATE BY SOKOLY</small></span>
   </a>
-  <div class="header-right"><span class="research-label">Visual positioning / Research tool</span><span id="connection" class="tag">Local processing</span></div>
+  <div class="header-right"><label class="theme-control">Theme<select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><span class="research-label">Visual positioning / Research tool</span><span id="connection" class="tag">Local processing</span></div>
 </header>
 <main>
   <aside aria-label="Observation setup">
