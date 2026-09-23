@@ -1,0 +1,12 @@
+*
+!Dockerfile.web
+!requirements-service.txt
+!webserver/
+!webserver/**
+!webapp/
+!webapp/**
+webapp/models/test-*
+webapp/*-check.html
+webapp/qa*
+**/__pycache__
+webserver/jobs.py

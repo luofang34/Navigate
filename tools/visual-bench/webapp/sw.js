@@ -1,0 +1,7 @@
+const CACHE='navigate-visual-shell-v9';
+const SHELL=['/','/index.html','/context/earth.json','/context/earth.png','/app.css','/app.js','/hypotheses.js','/storage.js','/map.js','/gpu-compat.js','/wasm/navigate_visual_preview.js','/wasm/navigate_visual_preview_bg.wasm','/calibration.js','/matching-options.js','/crop-plan.js','/dynamic-coverage.js','/data-service.js','/observation.js','/reference-pack.js','/browser-pipeline.js','/localization.js','/localization-worker.js','/geography.js','/camera-clearance.js','/inference/local.js','/inference/backend.js','/inference/worker.js','/inference/learned.js','/inference/retrieval-gpu.js','/inference/gpu-metrics.js','/inference/superpoint.js'];
+self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(event.request.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/')||url.pathname.startsWith('/chunks/')||url.pathname.startsWith('/jobs/')||url.pathname.endsWith('.onnx'))return;
+  event.respondWith(fetch(event.request).then(response=>{if(response.ok){const copy=response.clone();event.waitUntil(caches.open(CACHE).then(cache=>cache.put(event.request,copy)))}return response}).catch(()=>caches.open(CACHE).then(cache=>cache.match(event.request)).then(response=>response||new Response('Offline resource is unavailable',{status:503}))));
+});

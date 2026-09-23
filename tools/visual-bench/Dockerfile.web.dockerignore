@@ -1,0 +1,8 @@
+**/target
+**/.git
+**/node_modules
+**/__pycache__
+**/.env
+tools/visual-bench/webapp/models/test-*
+tools/visual-bench/webapp/qa*
+tools/visual-bench/webapp/*-check.html

@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>GPU retrieval check</title><pre id="result">Checking</pre><script type="module">
+import {checkGpuRetrieval} from './qa-gpu.js';
+const result={};try{result.gpu_algorithm=await checkGpuRetrieval();document.title='PASS GPU retrieval'}catch(e){result.error=String(e);document.title='FAIL GPU retrieval'}document.getElementById('result').textContent=JSON.stringify(result);await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result)});
+</script>

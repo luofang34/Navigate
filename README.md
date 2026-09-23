@@ -53,10 +53,16 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-fpl` | Flight-plan validation and leg-sequencing execution |
 | `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
 | `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
+| `navigate-visual` | Camera pose observations from calibrated images, a pose prior, and rendered map references |
 | `tools/navrun` | Deterministic scripted scenario runner exercising fusion → plan → guidance end to end |
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
 records.
+
+Build the visual API documentation with `cargo doc -p navigate-visual --open`.
+Run `cargo run --manifest-path tools/visual-bench/Cargo.toml -- --help` for
+image, video, and stream commands. The development tool uses the sibling
+MapLibre fork.
 
 ## Quality gates
 

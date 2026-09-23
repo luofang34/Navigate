@@ -1,0 +1,32 @@
+[package]
+name = "navigate-visual-preview"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[lib]
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+navigate-visual = { path = "../../../crates/navigate-visual" }
+navigate-data = { path = "../../../crates/navigate-data" }
+maplibre = { path = "../../../../maplibre-rs-experimental/maplibre", features = ["headless"] }
+wgpu = "22.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+wasm-bindgen = "0.2.121"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+cgmath = "0.18"
+nalgebra = { version = "0.34.1", default-features = false, features = ["std"] }
+futures-channel = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Performance", "console", "HtmlCanvasElement"] }
+[profile.release]
+opt-level = 2
+[lints.rust]
+unsafe_code = "forbid"
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {cameraForImage} from '../webapp/calibration.js';
+const video=cameraForImage(3840,2160,82.1),photo=cameraForImage(4000,3000,82.1),portrait=cameraForImage(2160,3840,82.1);
+assert.deepEqual([video.width,video.height],[640,360]);
+assert.deepEqual([photo.width,photo.height],[640,480]);
+assert.deepEqual([portrait.width,portrait.height],[360,640]);
+assert.ok(Math.abs(photo.fx-photo.fy)<1e-10);
+assert.ok(Math.abs(portrait.fx-video.fx)<1e-10);
+assert.ok(Math.abs((photo.width/2)/photo.fx-(video.width/2)/video.fx)<1e-10);
+assert.throws(()=>cameraForImage(0,100,82.1));
+assert.throws(()=>cameraForImage(100,100,NaN));
