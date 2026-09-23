@@ -18,6 +18,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      # The visual tools build against the sibling MapLibre fork at the pinned commit.
+      - name: Check out the pinned MapLibre fork
+        run: |
+          git clone --filter=blob:none https://github.com/luofang34/maplibre-rs-experimental.git ../maplibre-rs-experimental
+          git -C ../maplibre-rs-experimental checkout --detach "$(tr -d '[:space:]' < tools/visual-bench/MAPLIBRE_REVISION)"
+
+      # The imagery provider and the visual service link the system GDAL library.
+      - name: Install GDAL
+        run: sudo apt-get update && sudo apt-get install -y libgdal-dev
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2

@@ -22,6 +22,9 @@ RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
 echo "== visual tools =="
 ./scripts/check-visual-tools.sh
 
+echo "== native tools =="
+./scripts/check-native-tools.sh
+
 echo "== cargo build --release =="
 cargo build --release --workspace
 

@@ -9,7 +9,7 @@ fail=0
 while IFS= read -r f; do
     echo "FAIL: $f — mod.rs is banned; use foo.rs + foo/ instead" >&2
     fail=1
-done < <(find crates tools -name mod.rs -type f 2>/dev/null)
+done < <(find crates tools -path '*/target' -prune -o -name mod.rs -type f -print 2>/dev/null)
 
 while IFS= read -r f; do
     lines=$(wc -l < "$f")
@@ -17,7 +17,7 @@ while IFS= read -r f; do
         echo "FAIL: $f — $lines lines exceeds the 500-line limit" >&2
         fail=1
     fi
-done < <(find crates tools -name '*.rs' -type f 2>/dev/null)
+done < <(find crates tools -path '*/target' -prune -o -name '*.rs' -type f -print 2>/dev/null)
 
 while IFS= read -r f; do
     lines=$(wc -l < "$f")
@@ -29,6 +29,6 @@ while IFS= read -r f; do
         echo "FAIL: $f — lib.rs must open with a crate-level //! doc comment" >&2
         fail=1
     fi
-done < <(find crates tools -name lib.rs -type f 2>/dev/null)
+done < <(find crates tools -path '*/target' -prune -o -name lib.rs -type f -print 2>/dev/null)
 
 exit "$fail"
