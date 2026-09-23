@@ -16,9 +16,9 @@ assert.deepEqual(pack.anchor_lat_lon,[40.54,-74.45]);
 const tile={xyz:[16,19214,24677],imagery:{chunk:'test'}},n=2**16;
 const lon=(tile.xyz[1]+.5)/n*360-180,lat=Math.atan(Math.sinh(Math.PI*(1-2*(tile.xyz[2]+.5)/n)))*180/Math.PI;
 const cached={...pack,tiles:[tile]};let cachedAttachments=0;
-const cachedLoader=new CoverageLoader({request:()=>{throw Error('Unexpected provider request')},download:async()=>{},attach:async p=>{assert.equal(p,cached);cachedAttachments++},installed:async()=>[],available:async()=>[cached],remember:async()=>{},status:()=>{}});
+const cachedLoader=new CoverageLoader({request:()=>{throw Error('Unexpected provider request')},download:async()=>{},attach:async p=>{assert.equal(p,cached);cachedAttachments++},installed:async()=>[],available:async()=>[{pack_id:"legacy",manifest_url:"/older-package.json"},null,{tiles:null},cached],remember:async()=>{},status:()=>{}});
 cachedLoader.enabled=true;await cachedLoader.update({bounds:[lon-.00001,lat-.00001,lon+.00001,lat+.00001],zoom:16});
-assert.equal(cachedAttachments,1,'stored packages are reused without provider access');
+assert.equal(cachedAttachments,1,'legacy records cannot prevent reuse of a valid stored package');
 
 const closePose=toGlobePose(pack,{position_enu_m:[0,0,110],eye_to_enu_xyzw:[0,0,0,1]});assert.equal(viewCoverage(pack,closePose,110).zoom,18,'low altitude requests detailed imagery');
 cachedLoader.enabled=false;await cachedLoader.update({bounds:[lon-.00001,lat-.00001,lon+.00001,lat+.00001],zoom:16});assert.equal(cachedAttachments,2,'cached detail loads without enabling provider requests');

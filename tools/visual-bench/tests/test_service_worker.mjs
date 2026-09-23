@@ -10,7 +10,7 @@ vm.runInNewContext(await fs.readFile(new URL('../webapp/sw.js',import.meta.url),
 let response;
 handlers.fetch({request:{method:'GET',url:'http://localhost/'},respondWith:p=>{response=p}});
 assert.equal(await (await response).text(),'current shell');
-assert.equal(selected,'navigate-visual-shell-v9');
+assert.equal(selected,'navigate-visual-shell-v10');
 let intercepted=false;
 handlers.fetch({request:{method:'GET',url:'http://localhost/api/catalog'},respondWith:()=>{intercepted=true}});
 assert.equal(intercepted,false);

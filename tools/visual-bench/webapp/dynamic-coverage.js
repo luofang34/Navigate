@@ -15,6 +15,7 @@ export function viewCoverage(pack,pose,height) {
 }
 
 export function covers(pack,selection) {
+  if(!Array.isArray(pack?.tiles))return false;
   const [w,s,e,n]=selection.bounds,z=selection.zoom,count=2**z;
   const position=(lon,lat)=>[(lon+180)/360*count,(1-Math.asinh(Math.tan(lat*Math.PI/180))/Math.PI)/2*count];
   const [x0,y0]=position(w,n),[x1,y1]=position(e,s);
