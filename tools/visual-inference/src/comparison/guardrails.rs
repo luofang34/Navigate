@@ -7,6 +7,7 @@ pub(super) fn check_blocking(
     matcher: &mut impl ImageMatcher,
     image: &GrayImage,
 ) -> Result<Value, Error> {
+    tracing::info!(check = "image identity", "matcher control");
     let identity = matcher.match_images_blocking(image, image)?;
     if identity.len() < 100
         || identity
@@ -21,6 +22,7 @@ pub(super) fn check_blocking(
             shifted.put_pixel(x, y, *image.get_pixel(x - 24, y - 16));
         }
     }
+    tracing::info!(check = "known translation", "matcher control");
     let pairs = matcher.match_images_blocking(image, &shifted)?;
     let mut errors: Vec<_> = pairs
         .iter()

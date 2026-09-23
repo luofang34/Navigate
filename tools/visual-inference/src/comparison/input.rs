@@ -1,7 +1,7 @@
 //! Explicit fixed-reference comparison inputs.
 use nalgebra::{Quaternion, UnitQuaternion};
 use navigate_visual::{CameraModel, CameraPose, PosePrior};
-use navigate_visual_onnx::MatcherFiles;
+use navigate_visual_onnx::{ExecutionConfig, MatcherFiles, Provider};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 #[derive(Deserialize)]
@@ -10,12 +10,24 @@ pub(super) struct Suite {
     pub library: PathBuf,
     pub models: Vec<Model>,
     pub cases: Vec<Case>,
+    #[serde(default = "default_keypoints")]
+    pub keypoints: usize,
+    #[serde(default)]
+    pub provider: RunProvider,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Model {
     Xfeat {
         path: PathBuf,
+    },
+    XfeatLighterglue {
+        detector: PathBuf,
+        matcher: PathBuf,
+    },
+    XfeatDense {
+        detector: PathBuf,
+        matcher: Option<PathBuf>,
     },
     Superglue {
         detector: PathBuf,
@@ -28,6 +40,14 @@ impl Model {
         match self {
             Self::Xfeat { path } => MatcherFiles::XFeat {
                 model: root.join(path),
+            },
+            Self::XfeatLighterglue { detector, matcher } => MatcherFiles::XFeatLighterGlue {
+                detector: root.join(detector),
+                matcher: root.join(matcher),
+            },
+            Self::XfeatDense { detector, matcher } => MatcherFiles::XFeatDense {
+                detector: root.join(detector),
+                matcher: matcher.as_ref().map(|p| root.join(p)),
             },
             Self::Superglue {
                 detector,
@@ -115,5 +135,29 @@ impl Prior {
             position_radius_m: self.position_radius_m,
             attitude_radius_rad: self.attitude_radius_rad,
         })
+    }
+}
+
+fn default_keypoints() -> usize {
+    2048
+}
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RunProvider {
+    #[default]
+    Cpu,
+    CoremlAne,
+    CoremlGpu,
+}
+impl RunProvider {
+    pub fn execution(&self) -> ExecutionConfig {
+        ExecutionConfig {
+            provider: match self {
+                Self::Cpu => Provider::Cpu,
+                Self::CoremlAne => Provider::CoreMlAne,
+                Self::CoremlGpu => Provider::CoreMlGpu,
+            },
+            threads: 4,
+        }
     }
 }

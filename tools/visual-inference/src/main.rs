@@ -42,6 +42,9 @@ struct Args {
     inputs: PathBuf,
     #[arg(long)]
     output: PathBuf,
+    /// Save float32 output tensors for numerical comparison.
+    #[arg(long)]
+    save_outputs: bool,
     #[arg(long, value_enum, default_value = "cpu")]
     provider: Provider,
     #[arg(long,default_value_t=10,value_parser=clap::value_parser!(u32).range(1..=10000))]

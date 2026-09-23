@@ -1,17 +1,34 @@
 //! Model selection is separate from execution provider selection.
-use crate::{ExecutionConfig, InferenceError, features, native_runtime, superpoint, xfeat};
+use crate::{
+    ExecutionConfig, InferenceError, features, lighterglue, native_runtime, superpoint, xfeat,
+    xfeat_dense,
+};
 use image::GrayImage;
 use navigate_visual::{ImageMatcher, PixelMatch, VisualError};
 use ort::{session::Session, value::Tensor};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-/// Exports supported by the two concrete native adapters.
+/// Exports supported by the concrete native adapters.
 pub enum MatcherFiles {
     /// Sparse XFeat export with 800 by 600 model coordinates.
     XFeat {
         /// Model path. Weights are not supplied by this library.
         model: PathBuf,
+    },
+    /// Sparse XFeat and normalized-keypoint LighterGlue exports.
+    XFeatLighterGlue {
+        /// Sparse XFeat detector.
+        detector: PathBuf,
+        /// LighterGlue log-assignment model.
+        matcher: PathBuf,
+    },
+    /// Dense XFeat export with host preprocessing and sparse decoding.
+    XFeatDense {
+        /// Fixed 800 by 576 dense detector.
+        detector: PathBuf,
+        /// Optional LighterGlue matcher; absent uses mutual descriptors.
+        matcher: Option<PathBuf>,
     },
     /// Dense SuperPoint and dynamic-keypoint SuperGlue exports.
     SuperGlue {
@@ -24,7 +41,11 @@ pub enum MatcherFiles {
     },
 }
 enum Model {
-    XFeat(Session),
+    XFeat {
+        detector: Session,
+        matcher: Option<Session>,
+        dense: bool,
+    },
     SuperGlue {
         detector: Session,
         matcher: Session,
@@ -55,44 +76,7 @@ impl OnnxMatcher {
                 "keypoint limit must be 32 through 4096".into(),
             ));
         }
-        let (model, identity) = match files {
-            MatcherFiles::XFeat { model } => {
-                let hash = digest_blocking(&model)?;
-                (
-                    Model::XFeat(native_runtime::session_blocking(&model, &execution)?),
-                    format!("xfeat-mutual-v1/{hash}"),
-                )
-            }
-            MatcherFiles::SuperGlue {
-                detector,
-                matcher,
-                image_size,
-            } => {
-                if image_size
-                    .iter()
-                    .any(|d| *d < 64 || *d > 1920 || d % 8 != 0)
-                {
-                    return Err(InferenceError::Invalid(
-                        "SuperGlue normalization size must match its export".into(),
-                    ));
-                }
-                let identity = format!(
-                    "superpoint-superglue-v1/{}/{}/{}x{}",
-                    digest_blocking(&detector)?,
-                    digest_blocking(&matcher)?,
-                    image_size[0],
-                    image_size[1]
-                );
-                (
-                    Model::SuperGlue {
-                        detector: native_runtime::session_blocking(&detector, &execution)?,
-                        matcher: native_runtime::session_blocking(&matcher, &execution)?,
-                        size: image_size,
-                    },
-                    identity,
-                )
-            }
-        };
+        let (model, identity) = load_model_blocking(files, &execution)?;
         Ok(Self {
             model,
             identity: format!(
@@ -112,10 +96,22 @@ impl OnnxMatcher {
             return Ok(vec![]);
         }
         match &mut self.model {
-            Model::XFeat(session) => {
-                let a = xfeat::extract(session, first, self.keypoints)?;
-                let b = xfeat::extract(session, second, self.keypoints)?;
-                Ok(features::mutual(&a, &b))
+            Model::XFeat {
+                detector,
+                matcher,
+                dense,
+            } => {
+                let extract = if *dense {
+                    xfeat_dense::extract
+                } else {
+                    xfeat::extract
+                };
+                let a = extract(detector, first, self.keypoints)?;
+                let b = extract(detector, second, self.keypoints)?;
+                match matcher {
+                    Some(session) => lighterglue::match_features(session, &a, &b),
+                    None => Ok(features::mutual(&a, &b)),
+                }
             }
             Model::SuperGlue {
                 detector,
@@ -222,4 +218,96 @@ fn glue(
             )
         })
         .collect()
+}
+
+fn load_model_blocking(
+    files: MatcherFiles,
+    execution: &ExecutionConfig,
+) -> Result<(Model, String), InferenceError> {
+    Ok(match files {
+        MatcherFiles::XFeat { model } => {
+            let hash = digest_blocking(&model)?;
+            (
+                Model::XFeat {
+                    detector: native_runtime::session_blocking(&model, execution)?,
+                    matcher: None,
+                    dense: false,
+                },
+                format!("xfeat-mutual-v1/{hash}"),
+            )
+        }
+        MatcherFiles::XFeatLighterGlue { detector, matcher } => {
+            let identity = format!(
+                "xfeat-lighterglue-v1/{}/{}",
+                digest_blocking(&detector)?,
+                digest_blocking(&matcher)?
+            );
+            (
+                Model::XFeat {
+                    detector: native_runtime::session_blocking(&detector, execution)?,
+                    matcher: Some(native_runtime::session_blocking(&matcher, execution)?),
+                    dense: false,
+                },
+                identity,
+            )
+        }
+        MatcherFiles::XFeatDense { detector, matcher } => {
+            load_dense_blocking(detector, matcher, execution)?
+        }
+        MatcherFiles::SuperGlue {
+            detector,
+            matcher,
+            image_size,
+        } => {
+            if image_size
+                .iter()
+                .any(|d| *d < 64 || *d > 1920 || d % 8 != 0)
+            {
+                return Err(InferenceError::Invalid(
+                    "SuperGlue normalization size must match its export".into(),
+                ));
+            }
+            let identity = format!(
+                "superpoint-superglue-v1/{}/{}/{}x{}",
+                digest_blocking(&detector)?,
+                digest_blocking(&matcher)?,
+                image_size[0],
+                image_size[1]
+            );
+            (
+                Model::SuperGlue {
+                    detector: native_runtime::session_blocking(&detector, execution)?,
+                    matcher: native_runtime::session_blocking(&matcher, execution)?,
+                    size: image_size,
+                },
+                identity,
+            )
+        }
+    })
+}
+
+fn load_dense_blocking(
+    detector: PathBuf,
+    matcher: Option<PathBuf>,
+    execution: &ExecutionConfig,
+) -> Result<(Model, String), InferenceError> {
+    let identity = format!(
+        "xfeat-dense-v1/{}/{}",
+        digest_blocking(&detector)?,
+        matcher
+            .as_ref()
+            .map(|p| digest_blocking(p))
+            .transpose()?
+            .unwrap_or_else(|| "mutual".into())
+    );
+    Ok((
+        Model::XFeat {
+            detector: native_runtime::session_blocking(&detector, execution)?,
+            matcher: matcher
+                .map(|p| native_runtime::session_blocking(&p, execution))
+                .transpose()?,
+            dense: true,
+        },
+        identity,
+    ))
 }

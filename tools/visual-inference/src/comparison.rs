@@ -8,7 +8,7 @@ use navigate_visual::{
     Frame, FrameStamp, ImageMatcher, LocalFrame, LocalizerConfig, MapRevision, PoseVerifier,
     ReferenceView,
 };
-use navigate_visual_onnx::{ExecutionConfig, OnnxMatcher, Provider, initialize_blocking};
+use navigate_visual_onnx::{OnnxMatcher, initialize_blocking};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Instant};
@@ -33,11 +33,8 @@ pub(super) fn run_blocking() -> Result<(), Error> {
         let start = Instant::now();
         let mut matcher = OnnxMatcher::load_blocking(
             model.files(root),
-            ExecutionConfig {
-                provider: Provider::Cpu,
-                threads: 4,
-            },
-            2048,
+            suite.provider.execution(),
+            suite.keypoints,
         )?;
         let load_ms = start.elapsed().as_secs_f64() * 1000.0;
         let first = suite.cases.first().ok_or("suite has no cases")?;

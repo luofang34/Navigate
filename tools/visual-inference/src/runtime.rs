@@ -58,7 +58,7 @@ pub(super) fn run_blocking(args: &Args) -> Result<(), ProbeError> {
     let started = Instant::now();
     let mut session = session_blocking(args)?;
     let load_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let (times, values) = measure(&mut session, &inputs, args.repetitions)?;
+    let (times, values) = measure(&mut session, &inputs, args)?;
     let profile = session
         .end_profiling()
         .map_err(|source| context("finish provider profile", source))?;
@@ -105,11 +105,11 @@ fn session_blocking(args: &Args) -> Result<Session, ProbeError> {
 fn measure(
     session: &mut Session,
     inputs: &[(String, DynValue)],
-    repetitions: u32,
+    args: &Args,
 ) -> Result<(Vec<f64>, serde_json::Map<String, serde_json::Value>), ProbeError> {
     let mut times = Vec::new();
     let mut values = serde_json::Map::new();
-    for index in 0..=repetitions {
+    for index in 0..=args.repetitions {
         let start = Instant::now();
         let supplied: Vec<_> = inputs
             .iter()
@@ -122,12 +122,22 @@ fn measure(
         if index > 0 {
             times.push(elapsed);
         }
-        if index == repetitions {
-            for (name, value) in output.iter() {
+        if index == args.repetitions {
+            for (output_index, (name, value)) in output.iter().enumerate() {
                 let data = if let Ok((shape, data)) = value.try_extract_tensor::<i64>() {
                     serde_json::json!({"shape":shape.to_vec(),"data":data})
                 } else if let Ok((shape, data)) = value.try_extract_tensor::<f32>() {
-                    serde_json::json!({"shape":shape.to_vec(),"data":if data.len()<=4096 {Some(data)}else{None},"elements":data.len(),"sum":data.iter().map(|x|f64::from(*x)).sum::<f64>()})
+                    let path = if args.save_outputs {
+                        let file = format!("output-{output_index}.f32");
+                        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        fs::write(args.output.join(&file), bytes).map_err(|source| {
+                            context(format!("save output tensor {name}"), source)
+                        })?;
+                        Some(file)
+                    } else {
+                        None
+                    };
+                    serde_json::json!({"file":path,"shape":shape.to_vec(),"data":if data.len()<=4096 {Some(data)}else{None},"elements":data.len(),"sum":data.iter().map(|x|f64::from(*x)).sum::<f64>()})
                 } else {
                     serde_json::json!({"unsupported_output_type":true})
                 };

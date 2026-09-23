@@ -117,6 +117,7 @@ pub(crate) fn session_blocking(
         builder = builder
             .with_execution_providers([ep::CoreML::default()
                 .with_compute_units(units)
+                .with_static_input_shapes(true)
                 .with_model_format(ep::coreml::ModelFormat::MLProgram)
                 .build()
                 .error_on_failure()])
