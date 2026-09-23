@@ -51,7 +51,7 @@ impl Worker {
         let camera = config_blocking(prior)?.camera.model();
         let package = MapPackage::open_blocking(package)?;
         let frame = package.frame;
-        let map_context = serde_json::json!({"map_release":package.revision.release_id,"map_manifest_sha256":package.revision.manifest_sha256,"anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,"coordinate_model":"local-mercator","reference_geometry":"rendered_world_model; not independently verified scene geometry"});
+        let map_context = serde_json::json!({"map_release":package.revision.release_id,"map_manifest_sha256":package.revision.manifest_sha256,"anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,"coordinate_model":"local-mercator","renderer_revision":crate::RENDERER_REVISION.trim(),"reference_geometry":"rendered_world_model; not independently verified scene geometry"});
         Ok(Self {
             renderer: ReferenceRenderer::new(package, camera).await?,
             reference: None,

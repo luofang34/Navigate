@@ -28,6 +28,9 @@ mod trial;
 mod video;
 mod worker;
 
+/// MapLibre fork commit that renders every reference, recorded with each result.
+const RENDERER_REVISION: &str = include_str!("../MAPLIBRE_REVISION");
+
 use error::BenchError;
 use std::path::Path;
 
@@ -60,3 +63,6 @@ async fn main() -> Result<(), BenchError> {
         .init();
     cli::run_blocking().await
 }
+
+#[cfg(test)]
+mod tests;

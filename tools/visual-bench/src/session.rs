@@ -34,7 +34,7 @@ impl Session {
         let map_context = serde_json::json!({"map_release":package.revision.release_id,
             "map_manifest_sha256":package.revision.manifest_sha256,
             "anchor_lat_lon":package.manifest.anchor_lat_lon,"elevation_datum":package.manifest.elevation_datum,
-            "coordinate_model":"local-mercator"});
+            "coordinate_model":"local-mercator","renderer_revision":crate::RENDERER_REVISION.trim()});
         Ok(Self {
             frame,
             camera,
