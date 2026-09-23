@@ -22,7 +22,7 @@ fn ranges_recover_original_bytes_and_bind_source_identity() {
     let mut chunks = std::collections::BTreeMap::new();
     let mut builder = PackageBuilder::new(empty(), |sha: &str, data: &[u8]| {
         chunks.insert(sha.to_owned(), data.to_vec());
-        Ok(())
+        Ok::<(), crate::ImageryError>(())
     })
     .expect("builder");
     let a = vec![17; 3 * 1024 * 1024];
@@ -52,7 +52,8 @@ fn ranges_recover_original_bytes_and_bind_source_identity() {
 
 #[test]
 fn corruption_duplicate_roles_and_missing_geometry_are_rejected() {
-    let mut builder = PackageBuilder::new(empty(), |_, _| Ok(())).expect("builder");
+    let mut builder =
+        PackageBuilder::new(empty(), |_, _| Ok::<(), crate::ImageryError>(())).expect("builder");
     assert!(
         builder
             .add(Tile(16, 1, 1), false, b"tile", "wrong")
@@ -74,7 +75,7 @@ type Store = std::collections::BTreeMap<String, Vec<u8>>;
 fn parent(chunks: &mut Store) -> Package {
     let mut builder = PackageBuilder::new(empty(), |sha: &str, data: &[u8]| {
         chunks.insert(sha.to_owned(), data.to_vec());
-        Ok(())
+        Ok::<(), crate::ImageryError>(())
     })
     .expect("builder");
     let imagery = vec![1; 1024];
@@ -95,7 +96,7 @@ fn a_derived_package_replaces_one_asset_and_names_every_producer() {
     let refined = vec![9; 1024];
     let mut builder = PackageBuilder::from_parent(&parent, "flight-7".into(), |sha, data| {
         chunks.insert(sha.to_owned(), data.to_vec());
-        Ok(())
+        Ok::<(), crate::ImageryError>(())
     })
     .expect("derived builder");
     builder
@@ -122,8 +123,10 @@ fn a_derived_package_refuses_a_second_replacement_and_a_tampered_parent() {
     let mut chunks = Store::new();
     let parent = parent(&mut chunks);
     let bytes = vec![5; 64];
-    let mut builder =
-        PackageBuilder::from_parent(&parent, "flight-8".into(), |_, _| Ok(())).expect("builder");
+    let mut builder = PackageBuilder::from_parent(&parent, "flight-8".into(), |_, _| {
+        Ok::<(), crate::ImageryError>(())
+    })
+    .expect("builder");
     let tile = Tile(16, 19212, 24674);
     builder
         .add(tile, true, &bytes, &digest(&bytes))
@@ -131,8 +134,20 @@ fn a_derived_package_refuses_a_second_replacement_and_a_tampered_parent() {
     assert!(builder.add(tile, true, &bytes, &digest(&bytes)).is_err());
     let mut tampered = parent.clone();
     tampered.attribution = "changed".into();
-    assert!(PackageBuilder::from_parent(&tampered, "flight-9".into(), |_, _| Ok(())).is_err());
-    assert!(PackageBuilder::from_parent(&parent, "source-1".into(), |_, _| Ok(())).is_err());
+    assert!(
+        PackageBuilder::from_parent(&tampered, "flight-9".into(), |_, _| Ok::<
+            (),
+            crate::ImageryError,
+        >(()))
+        .is_err()
+    );
+    assert!(
+        PackageBuilder::from_parent(&parent, "source-1".into(), |_, _| Ok::<
+            (),
+            crate::ImageryError,
+        >(()))
+        .is_err()
+    );
 }
 
 #[test]

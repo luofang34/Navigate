@@ -19,7 +19,7 @@ fn package() -> (Package, Vec<u8>) {
     };
     let mut builder = PackageBuilder::new(manifest, |_, data| {
         stored = data.to_vec();
-        Ok(())
+        Ok::<(), crate::ImageryError>(())
     })
     .expect("builder");
     let (a, b) = (vec![3; 100], vec![4; 50]);

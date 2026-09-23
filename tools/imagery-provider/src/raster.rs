@@ -1,11 +1,12 @@
-use super::raster_error;
-use crate::{ImageryError, Tile, error::invalid};
+use crate::raster_error;
+use crate::{ProviderError, error::invalid};
 use gdal::{
     Dataset, GeoTransformEx,
     raster::GdalDataType,
     spatial_ref::{CoordTransform, SpatialRef},
 };
 use image::{Rgba, RgbaImage};
+use navigate_imagery::Tile;
 
 /// Source adapter for georeferenced imagery and validity.
 pub trait RasterSource {
@@ -13,7 +14,7 @@ pub trait RasterSource {
     ///
     /// # Errors
     /// Returns a source or reprojection failure.
-    fn tile_blocking(&mut self, tile: Tile) -> Result<RgbaImage, ImageryError>;
+    fn tile_blocking(&mut self, tile: Tile) -> Result<RgbaImage, ProviderError>;
 }
 
 /// GDAL range reader with Rust bilinear resampling and strict validity masks.
@@ -28,12 +29,12 @@ impl GdalRaster {
     ///
     /// # Errors
     /// Requires three unsigned 8-bit RGB bands and an invertible geotransform.
-    pub fn open_blocking(path: &str) -> Result<Self, ImageryError> {
+    pub fn open_blocking(path: &str) -> Result<Self, ProviderError> {
         let dataset = Dataset::open(path).map_err(raster_error("open source"))?;
         Self::from_dataset(dataset)
     }
 
-    fn from_dataset(dataset: Dataset) -> Result<Self, ImageryError> {
+    fn from_dataset(dataset: Dataset) -> Result<Self, ProviderError> {
         if dataset.raster_count() < 3 {
             return Err(invalid("source requires RGB bands"));
         }
@@ -65,7 +66,7 @@ impl GdalRaster {
         })
     }
 
-    fn coordinates(&self, tile: Tile, row: u32, rows: u32) -> Result<Vec<[f64; 2]>, ImageryError> {
+    fn coordinates(&self, tile: Tile, row: u32, rows: u32) -> Result<Vec<[f64; 2]>, ProviderError> {
         let step = 40_075_016.685_578_49 / (2_f64.powi(tile.0 as i32) * 512.0);
         let half = 20_037_508.342_789_244;
         let mut x = Vec::with_capacity((512 * rows) as usize);
@@ -93,7 +94,7 @@ impl GdalRaster {
         tile: Tile,
         row: u32,
         output: &mut RgbaImage,
-    ) -> Result<(), ImageryError> {
+    ) -> Result<(), ProviderError> {
         let points = self.coordinates(tile, row, 32)?;
         let size = self.dataset.raster_size();
         let Some(window) = Window::for_points(&points, size)? else {
@@ -130,7 +131,7 @@ impl GdalRaster {
 }
 
 impl RasterSource for GdalRaster {
-    fn tile_blocking(&mut self, tile: Tile) -> Result<RgbaImage, ImageryError> {
+    fn tile_blocking(&mut self, tile: Tile) -> Result<RgbaImage, ProviderError> {
         if tile.0 > 24 || tile.1 >= 1 << tile.0 || tile.2 >= 1 << tile.0 {
             return Err(invalid("invalid raster tile"));
         }
@@ -156,7 +157,10 @@ impl Window {
     fn size(self) -> (usize, usize) {
         (self.width, self.height)
     }
-    fn for_points(points: &[[f64; 2]], size: (usize, usize)) -> Result<Option<Self>, ImageryError> {
+    fn for_points(
+        points: &[[f64; 2]],
+        size: (usize, usize),
+    ) -> Result<Option<Self>, ProviderError> {
         if points.iter().flatten().any(|v| !v.is_finite()) {
             return Err(invalid("nonfinite raster transform"));
         }

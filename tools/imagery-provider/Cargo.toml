@@ -1,0 +1,31 @@
+[package]
+name = "navigate-imagery-provider"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "NAIP imagery provider, GDAL raster reader and file package publication for the visual tools"
+
+[workspace]
+
+[dependencies]
+navigate-imagery = { path = "../../crates/navigate-imagery" }
+# GDAL 3.13 bindings are on georust main but not in a crates.io release yet.
+gdal = { git = "https://github.com/georust/gdal", rev = "c0a6266b987a2c2d44aea9956c2cae1ed71445cf" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+let_underscore_must_use = "deny"
+let_underscore_future = "deny"
+await_holding_lock = "deny"

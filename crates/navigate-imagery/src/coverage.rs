@@ -25,6 +25,15 @@ fn default_zoom() -> u32 {
     16
 }
 
+/// Name and use terms of the data provider that fills a coverage plan.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SourceTerms {
+    /// Data provider label.
+    pub provider: String,
+    /// Offline use condition.
+    pub offline_use: String,
+}
+
 /// A bounded coverage plan. Creating it sends no network request.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CoveragePlan {
@@ -50,7 +59,7 @@ pub struct CoveragePlan {
 ///
 /// # Errors
 /// Rejects malformed, polar, antimeridian, empty, or oversized selections.
-pub fn plan(request: CoverageRequest) -> Result<CoveragePlan, ImageryError> {
+pub fn plan(request: CoverageRequest, terms: &SourceTerms) -> Result<CoveragePlan, ImageryError> {
     if !(14..=18).contains(&request.zoom) {
         return Err(invalid("imagery zoom must be 14..=18"));
     }
@@ -81,14 +90,14 @@ pub fn plan(request: CoverageRequest) -> Result<CoveragePlan, ImageryError> {
     }
     let bounds = tile_envelope(&tiles)?;
     Ok(CoveragePlan {
-        provider: "Microsoft Planetary Computer / USDA NAIP".into(),
+        provider: terms.provider.clone(),
         bounds,
         estimated_max_bytes: tiles.len() as u64 * 512 * 512 * 4,
         imagery_zoom: request.zoom,
         terrain_zoom: 14,
         requested: request,
         imagery_tiles: tiles,
-        offline_use: "Public domain; retain attribution".into(),
+        offline_use: terms.offline_use.clone(),
     })
 }
 
@@ -173,7 +182,11 @@ fn distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
 }
 
-pub(crate) fn tile_envelope(tiles: &[Tile]) -> Result<[f64; 4], ImageryError> {
+/// West, south, east, north envelope of a tile set in degrees.
+///
+/// # Errors
+/// Rejects an empty tile set.
+pub fn tile_envelope(tiles: &[Tile]) -> Result<[f64; 4], ImageryError> {
     if tiles.is_empty() {
         return Err(invalid("selection has no imagery tiles"));
     }

@@ -1,7 +1,6 @@
-use crate::{
-    ImageryError, Package, PackageBuilder, Tile, coverage::tile_envelope, digest, error::invalid,
-};
+use crate::{ProviderError, error::invalid};
 use image::{DynamicImage, Rgba, RgbaImage, imageops};
+use navigate_imagery::{Package, PackageBuilder, Tile, digest, tile_envelope};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -30,18 +29,18 @@ pub struct Region {
     pub manifest: Package,
 }
 
-pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> ImageryError + '_ {
-    |source| ImageryError::Io {
+pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> ProviderError + '_ {
+    |source| ProviderError::Io {
         path: path.to_owned(),
         source,
     }
 }
 
-pub(super) fn read_blocking(path: &Path) -> Result<Vec<u8>, ImageryError> {
+pub(super) fn read_blocking(path: &Path) -> Result<Vec<u8>, ProviderError> {
     std::fs::read(path).map_err(io_error(path))
 }
 
-pub(super) fn write_blocking(path: &Path, bytes: &[u8]) -> Result<(), ImageryError> {
+pub(super) fn write_blocking(path: &Path, bytes: &[u8]) -> Result<(), ProviderError> {
     let parent = path
         .parent()
         .ok_or_else(|| invalid("output path has no parent"))?;
@@ -54,7 +53,7 @@ pub(super) fn write_blocking(path: &Path, bytes: &[u8]) -> Result<(), ImageryErr
     Ok(())
 }
 
-pub(super) fn chunk_blocking(state: &Path, sha: &str, bytes: &[u8]) -> Result<(), ImageryError> {
+pub(super) fn chunk_blocking(state: &Path, sha: &str, bytes: &[u8]) -> Result<(), ProviderError> {
     let path = state.join("chunks").join(format!("{sha}.bin"));
     if path.exists() {
         if digest(&read_blocking(&path)?) != sha {
@@ -65,7 +64,7 @@ pub(super) fn chunk_blocking(state: &Path, sha: &str, bytes: &[u8]) -> Result<()
     write_blocking(&path, bytes)
 }
 
-pub(super) fn png(image: RgbaImage) -> Result<Vec<u8>, ImageryError> {
+pub(super) fn png(image: RgbaImage) -> Result<Vec<u8>, ProviderError> {
     let mut data = std::io::Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(image).write_to(&mut data, image::ImageFormat::Png)?;
     Ok(data.into_inner())
@@ -76,7 +75,7 @@ pub(super) fn publish_blocking(
     manifest: Package,
     label: String,
     overview: Overview,
-) -> Result<Region, ImageryError> {
+) -> Result<Region, ProviderError> {
     let id = &manifest.region_id;
     if id.is_empty()
         || !id
@@ -124,7 +123,7 @@ pub(super) struct Overview {
     origin: [u32; 2],
 }
 impl Overview {
-    pub(super) fn new(tiles: Vec<Tile>) -> Result<Self, ImageryError> {
+    pub(super) fn new(tiles: Vec<Tile>) -> Result<Self, ProviderError> {
         let z = tiles
             .iter()
             .map(|t| t.0)
@@ -174,8 +173,8 @@ impl Overview {
             i64::from(tile.2 - self.origin[1]) * 32,
         );
     }
-    fn bounds(&self) -> Result<[f64; 4], ImageryError> {
-        tile_envelope(&self.tiles)
+    fn bounds(&self) -> Result<[f64; 4], ProviderError> {
+        Ok(tile_envelope(&self.tiles)?)
     }
 }
 
@@ -200,7 +199,7 @@ pub fn import_region_blocking(
     state: &Path,
     id: &str,
     label: &str,
-) -> Result<Region, ImageryError> {
+) -> Result<Region, ProviderError> {
     let source = source.canonicalize().map_err(io_error(source))?;
     let mut value: serde_json::Value =
         serde_json::from_slice(&read_blocking(&source.join("map.json"))?)?;
@@ -252,7 +251,7 @@ pub fn import_region_blocking(
 pub fn load_catalog_blocking(
     state: &Path,
     catalog: Option<&Path>,
-) -> Result<BTreeMap<String, Region>, ImageryError> {
+) -> Result<BTreeMap<String, Region>, ProviderError> {
     let mut result = BTreeMap::new();
     for name in ["chunks", "packs", "catalog"] {
         let p = state.join(name);

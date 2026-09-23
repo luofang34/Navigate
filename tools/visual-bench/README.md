@@ -223,7 +223,7 @@ must not create confidence. No pose fusion or map write-back occurs here.
 
 ```sh
 ./ci.sh
-cargo test -p navigate-imagery --features native
+cargo test --manifest-path tools/imagery-provider/Cargo.toml
 cargo check -p navigate-imagery --target wasm32-unknown-unknown
 cargo test --manifest-path tools/visual-service/Cargo.toml
 cargo clippy --manifest-path tools/visual-service/Cargo.toml --all-targets -- -D warnings
