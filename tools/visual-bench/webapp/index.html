@@ -1,23 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0057b7">
+  <meta name="theme-color" content="#080e15">
   <meta name="description" content="VNAV by Sokoly. Explore visual positioning with local images, offline reference data, and an interactive globe.">
   <title>VNAV · Navigate by Sokoly</title>
   <link rel="icon" href="./assets/sokoly-mark.svg" type="image/svg+xml">
-  <script src="./theme.js"></script>
   <link rel="stylesheet" href="./app.css">
 </head>
 <body>
 <a class="skip-link" href="#workspace">Skip to workspace</a>
 <header class="site-header">
   <a class="identity" href="./" aria-label="VNAV by Sokoly home">
-    <img class="mark-light" src="./assets/sokoly-mark.svg" width="38" height="40" alt="Sokoly"><img class="mark-dark" src="./assets/sokoly-mark-white.svg" width="38" height="40" alt="Sokoly">
+    <img src="./assets/sokoly-mark-white.svg" width="38" height="40" alt="Sokoly">
     <span><strong>VNAV<span class="wordmark-dot">.</span></strong><small>NAVIGATE BY SOKOLY</small></span>
   </a>
-  <div class="header-right"><label class="theme-control">Theme<select id="theme" aria-label="Color theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><span class="research-label">Visual positioning / Research tool</span><span id="connection" class="tag">Local processing</span></div>
 </header>
 <main>
   <aside aria-label="Observation setup">
@@ -54,9 +52,9 @@
     <details class="storage-panel"><summary>Offline storage</summary><p id="storage-status" class="status"></p><button id="persist" class="secondary full">Keep downloaded data</button><p class="note">The browser can remove stored data. Packages are checked before use.</p></details>
   </aside>
   <article id="workspace" tabindex="-1">
-    <div class="workspace-title"><div><p class="eyebrow">FROM FRAME TO PLACE</p><h1>Visual positioning</h1><p>Inspect the evidence. Explore the alternatives.</p></div><span id="renderer-status" class="tag">WebGPU preview</span></div>
+    <div class="workspace-title"><div><h1>Visual positioning</h1><p>Find possible locations from a camera view.</p></div></div>
     <div class="views">
-      <div class="view observation-view"><div class="view-label">OBSERVATION <span>Local file</span></div><img id="query" alt="Selected camera observation"><div id="query-empty" class="empty"><span class="empty-glyph" aria-hidden="true">⌖</span><strong>Your perspective</strong><span>Add a camera image or select a video frame.</span></div></div>
+      <div class="view observation-view"><div class="view-label">OBSERVATION</div><img id="query" alt="Selected camera observation"><div id="query-empty" class="empty"><span class="empty-glyph" aria-hidden="true">⌖</span><strong>Your perspective</strong><span>Add a camera image or select a video frame.</span></div></div>
       <div class="view map-view"><div class="view-label" id="map-label">REFERENCE GLOBE</div><canvas id="map" width="640" height="360" tabindex="0" aria-label="Interactive globe: drag to pan, right-drag to look, wheel to zoom, WASD to move"></canvas><div id="map-empty" class="empty"><span class="empty-glyph globe-glyph" aria-hidden="true">◎</span><strong>A place to compare</strong><span>Store a reference area to open the globe.</span></div><div class="map-controls" aria-label="Map camera controls"><button id="zoom-in" aria-label="Zoom in" title="Zoom in" disabled>+</button><button id="zoom-out" aria-label="Zoom out" title="Zoom out" disabled>−</button><button id="globe" aria-label="Show globe" title="Show globe" disabled>◎</button><button id="reset" aria-label="Reset camera" title="Reset camera" disabled>↺</button></div></div>
     </div>
     <div class="map-toolbar"><span>Drag to pan · right-drag to look · scroll to zoom</span><span id="clearance-status" role="status"></span></div>
@@ -66,8 +64,8 @@
       <div id="result" class="result" aria-live="polite"><strong>No observation yet</strong><p>Choose coverage and add a camera frame to find possible locations.</p></div>
       <div class="timeline"><label>Saved observation<select id="missions"><option value="">No saved observations</option></select></label><label>Frame<select id="frames" disabled></select></label></div>
       <label>Geometrically accepted hypothesis<select id="hypotheses" disabled></select></label>
-      <p id="run-status" class="status" role="status"></p><p id="compute-status" class="note">Location probabilities are not calibrated. Multiple valid hypotheses stay separate.</p>
-      <details class="measurement-details"><summary>Data and measurement details</summary><pre id="details">No observation yet.</pre></details>
+      <p id="run-status" class="status" role="status"></p>
+      <details class="measurement-details"><summary>Data and measurement details</summary><p id="compute-status" class="note">Location probabilities are not calibrated. Multiple valid hypotheses stay separate.</p><pre id="details">No observation yet.</pre></details>
     </section>
     <footer><p id="attribution" class="note"></p><p>Research use. No independent geographic accuracy or night validation. Do not use this tool to navigate a vehicle.</p><a href="https://github.com/luofang34/Navigate" target="_blank" rel="noreferrer">Source & documentation <span aria-hidden="true">↗</span></a><a href="./credits.html">Data &amp; licences</a></footer>
   </article>

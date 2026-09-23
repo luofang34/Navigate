@@ -19,7 +19,7 @@ export class LocalizationPipeline {
     const shortlist=indices.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key}}));
     const retrievalEnd=performance.now();
     for(const [index,{crop,rotated,angle,keys}] of shortlist.entries()){
-      progress(`Learned matching ${index+1}/${shortlist.length} · ${candidates.length} proposals`);const {pairs}=await this.matcher.matchImages(crop.image,rotated,keys);if(pairs.length<12)continue;
+      progress(`Comparing images ${index+1}/${shortlist.length} · ${candidates.length} proposals`);const {pairs}=await this.matcher.matchImages(crop.image,rotated,keys);if(pairs.length<12)continue;
       const ground=pairs.flatMap(p=>{const world=crop.world(p.reference);return world?[{world,query:rotated.unrotate(p.query)}]:[]});const proposal=JSON.parse(propose(JSON.stringify(this.camera),JSON.stringify(ground)));
       if(!proposal.retrieved||proposal.retrieval_inliers<10)continue;
       if(Math.hypot(...proposal.position_enu_m.map((v,i)=>v-position[i]))>prior.radius_m)continue;
@@ -29,7 +29,7 @@ export class LocalizationPipeline {
     candidates.sort((a,b)=>b.retrieval_inliers-a.retrieval_inliers);
     const chosen=candidates.slice(0,this.options.candidates);
     for(let id=0;id<chosen.length;id++){let candidate=chosen[id];for(let pass=0;pass<this.options.refinements;pass++){
-      progress(`Browser geometry · candidate ${id+1}/${chosen.length} · refinement ${pass+1}`);
+      progress(`Checking camera pose · candidate ${id+1}/${chosen.length} · refinement ${pass+1}`);
       const gray=await this.renderer.render_reference(id,JSON.stringify(candidate));const {pairs,backend_identity}=await this.matcher.matchImages({gray,width:this.camera.width,height:this.camera.height},image,{query:`${observation}/query`,stage:'refinement'});
       const report=JSON.parse(this.renderer.refine(id,JSON.stringify(pairs),backend_identity));if(!report.accepted)break;candidate=report;
     }}
