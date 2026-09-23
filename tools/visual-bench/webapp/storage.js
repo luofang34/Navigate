@@ -1,3 +1,4 @@
+import {assetUrl} from './asset-url.js';
 const DB='navigate-visual-offline-v1';
 function database(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{for(const name of ['packs','state','missions'])r.result.createObjectStore(name)};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 export async function get(store,key){const db=await database();try{return await new Promise((resolve,reject)=>{const r=db.transaction(store).objectStore(store).get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}finally{db.close()}}
@@ -17,7 +18,7 @@ export async function downloadFiles(files,progress){
   progress(completed,total);
   for(const chunk of missing){
     const temp=await dir.getFileHandle(chunk.sha256+'.partial',{create:true});const writer=await temp.createWritable();
-    try{const response=await fetch(chunk.url);if(!response.ok||!response.body)throw Error(`Download failed: ${response.status}`);
+    try{const response=await fetch(assetUrl(chunk.url));if(!response.ok||!response.body)throw Error(`Download failed: ${response.status}`);
       const reader=response.body.getReader();let size=0;
       while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>chunk.size){await reader.cancel();throw Error('Chunk exceeds declared size')}await writer.write(value);progress(completed+size,total)}
       await writer.close();const file=await temp.getFile();
@@ -34,7 +35,7 @@ export async function download(pack,progress,{activate=true}={}){
 }
 export async function saveMission(job,pack){
   const dir=await directory(`pilotage/missions/${job.id}`,true);
-  for(const frame of job.view.frames){const response=await fetch(`/jobs/${job.id}/result/${frame.query}`);if(!response.ok)throw Error('Cannot save observation frame');const file=await dir.getFileHandle(frame.query,{create:true});await response.body.pipeTo(await file.createWritable())}
+  for(const frame of job.view.frames){const response=await fetch(assetUrl(`/jobs/${job.id}/result/${frame.query}`));if(!response.ok)throw Error('Cannot save observation frame');const file=await dir.getFileHandle(frame.query,{create:true});await response.body.pipeTo(await file.createWritable())}
   const mission={id:job.id,pack_id:pack.pack_id,view:job.view,saved_at:Date.now()};await put('missions',job.id,mission);return mission;
 }
 export async function queryBlob(mission,frame){return (await(await fileAt(`pilotage/missions/${mission.id}/${frame.query}`)).getFile())}

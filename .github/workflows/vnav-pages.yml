@@ -1,0 +1,75 @@
+name: VNAV Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/visual-bench/**'
+      - 'crates/navigate-visual/**'
+      - 'crates/navigate-imagery/**'
+      - '.github/workflows/vnav-pages.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vnav-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: Navigate
+      - uses: actions/checkout@v7
+        with:
+          repository: luofang34/maplibre-rs-experimental
+          ref: 5c323427e29c1796003c5e7052b2887f6d35c173
+          path: maplibre-rs-experimental
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Navigate/tools/visual-bench/wasm-preview
+      - name: Check browser behavior
+        working-directory: Navigate
+        run: |
+          for test in tools/visual-bench/tests/test_*.mjs; do node "$test"; done
+      - name: Build Rust WASM and public model assets
+        working-directory: Navigate
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+          node tools/visual-bench/build_web.mjs
+          node tools/visual-bench/prepare_browser_models.mjs
+      - name: Read the fixed public reference package
+        run: |
+          curl --fail --location --retry 3 https://github.com/luofang34/Navigate/releases/download/vnav-demo-data-20260922/naip-demo-data.tar.gz --output reference-data.tar.gz
+          echo '7a89acaea6a84b92a2b59e54882b82446cc71d4c75fc1ae9d623c7748d0272d8  reference-data.tar.gz' | sha256sum --check
+          mkdir reference-data
+          tar -xzf reference-data.tar.gz -C reference-data
+          node Navigate/tools/visual-bench/export_web.mjs reference-data site naip-2864a5ec8e4abb24
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

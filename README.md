@@ -59,6 +59,10 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
 records.
 
+The [visual positioning tool](tools/visual-bench/README.md) runs image and video
+matching in the browser. Its Rust service provides optional imagery downloads.
+The tool is separate from the navigation core.
+
 Build the visual API documentation with `cargo doc -p navigate-visual --open`.
 Run `cargo run --manifest-path tools/visual-bench/Cargo.toml -- --help` for
 image, video, and stream commands. The development tool uses the sibling

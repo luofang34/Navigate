@@ -1,6 +1,6 @@
 export class BrowserPipeline {
   constructor(){
-    this.worker=new Worker('/localization-worker.js',{type:'module'});this.pending=new Map();this.next=0;
+    this.worker=new Worker(new URL('./localization-worker.js',import.meta.url),{type:'module'});this.pending=new Map();this.next=0;
     this.worker.onmessage=({data})=>{const p=this.pending.get(data.id);if(!p)return;if(data.progress){p.progress(data.progress);return}this.pending.delete(data.id);data.error?p.reject(Error(data.error)):p.resolve(data.value)};
     this.worker.onerror=e=>this.fail(Error(e.message));
   }

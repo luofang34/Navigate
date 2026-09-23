@@ -5,9 +5,8 @@ Core ML GPU, and Core ML Neural Engine selection. It does not link into the
 navigation library or the browser bundle.
 
 Supply a compatible ONNX Runtime shared library with the required execution
-provider. The probe loads this library at run time. The Python `onnxruntime`
-package contains a suitable library on the tested Apple host. Use the file in
-its `capi` directory. The probe records model load time, warm inference times,
+provider. The probe loads this library at run time. Use an ONNX Runtime
+distribution for your target. The probe records model load time, warm inference times,
 outputs, and provider placement. It creates a new output directory.
 
 ```sh

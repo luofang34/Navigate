@@ -1,28 +1,76 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Navigate · Visual lab</title><link rel="stylesheet" href="/app.css">
-<body><header><div class="mark">N<span>↗</span></div><div><small>NAVIGATE / EXPERIMENTS</small><h1>Visual position lab</h1></div><div id="connection" class="tag">Browser processing</div></header>
-<main><aside><section><div class="step">01 / PREPARE</div><h2>Choose a prior region</h2><p>Choose installed coverage or download a new area or route. Click the overview to set the exact local prior.</p>
-<label>Region<select id="region"></select></label><div class="overview"><img id="overview" alt="Prepared satellite coverage"><span id="prior-dot"></span></div>
-<div class="pair"><label>Latitude<input id="latitude" type="number" step="any"></label><label>Longitude<input id="longitude" type="number" step="any"></label></div>
-<div class="pair"><label>Prior radius · m<input id="radius" type="number" min="20" max="2000" value="500"></label><label>Height AGL · m<input id="agl" type="number" min="10" max="2000" value="110"></label></div>
-<label>Sensor diagonal FOV · °<input id="fov" type="number" min="10" max="170" step=".1" value="82.1"></label><p class="note">Assumes a 4:3 sensor, full sensor long side, no zoom and no lens distortion. Camera orientation is unknown. A calibrated prior can be used through the CLI.</p>
-<button id="download">Download region</button><progress id="progress" max="1" value="0"></progress><p id="pack-status" class="status">Choose a region to prepare its data.</p></section>
-<section><details><summary>Download a new area or route</summary><p class="note">USDA NAIP imagery via Microsoft Planetary Computer. Terrain via Mapzen / AWS. Requests disclose the download area. The navigation prior stays local.</p>
-<label>Selection<select id="coverage-mode"><option value="area">Area</option><option value="route">Route corridor</option></select></label>
-<div id="area-fields"><div class="pair"><label>West<input id="west" type="number" step="any" value="-74.480"></label><label>South<input id="south" type="number" step="any" value="40.530"></label></div><div class="pair"><label>East<input id="east" type="number" step="any" value="-74.425"></label><label>North<input id="north-bound" type="number" step="any" value="40.565"></label></div></div>
-<div id="route-fields" hidden><label>Route · one longitude,latitude per line<textarea id="route-points" rows="3">-74.47,40.54
--74.44,40.55</textarea></label><label>Corridor half-width · m<input id="route-buffer" type="number" min="100" max="10000" value="1000"></label></div>
-<label>Imagery zoom<select id="coverage-zoom"><option>14</option><option>15</option><option>16</option><option selected>17</option><option>18</option></select></label><button id="fetch-coverage">Fetch and store coverage</button><p id="coverage-status" class="status">US coverage only. Source resolution varies. Large selections require smaller packages.</p></details></section>
-<section><div class="step">02 / OBSERVE</div><h2>Add an image or video</h2><label class="upload">Choose a file<input id="input" type="file" accept="image/png,image/jpeg,video/mp4,video/quicktime,video/webm,.mkv"></label><p id="input-name" class="note">PNG, JPEG, MP4, MOV, MKV or WebM · up to 256 MB</p>
-<video id="video" controls muted playsinline hidden style="width:100%"></video><div id="video-controls" hidden><label>Selected frame<input id="frame-time" type="range" min="0" max="1" step=".04" value="0"></label><p id="frame-time-label" class="note"></p><label>Video processing<select id="video-mode"><option value="frame">Selected frame</option><option value="sequence">Sample from selected frame</option></select></label></div>
-<div class="pair"><label>Sample interval · s<input id="period" type="number" value="1" min=".1" step=".1"></label><label>Maximum frames<input id="max-frames" type="number" value="10" min="1" max="120"></label></div>
-<label>Matching detail<select id="matching-quality"><option value="fast">Fast · 640 px · one scale</option><option value="balanced" selected>Balanced · 960 px · three scales</option><option value="detailed">Detailed · 1280 px · five scales</option></select></label><p class="note">Higher detail costs time and memory. It does not certify geographic accuracy.</p>
-<button id="locate" disabled>Estimate camera pose</button><button id="cancel" class="secondary" disabled>Cancel processing</button><p class="note">Matching runs in a browser worker through ONNX Runtime WebGPU/WASM. Rust/WASM checks pose geometry. MapLibre-rs uses wgpu. Input media stays in this browser. A visual fix is not a fused navigation solution.</p></section>
-<section><h3>Offline storage</h3><p id="storage-status" class="status"></p><button id="persist" class="secondary">Request persistent storage</button><p class="note">Browser data can be removed. Package checks run before use.</p></section></aside>
-<article><div class="workspace-title"><div><div class="step">03 / INSPECT</div><h2>Camera view</h2></div><span id="renderer-status" class="tag">WASM · WebGPU</span></div>
-<div class="views"><div class="view"><div class="view-label">INPUT FRAME</div><img id="query" alt="Choose an input image or video"><div id="query-empty" class="empty">Your camera observation</div></div><div class="view map-view"><div class="view-label" id="map-label">MAPLIBRE-RS · OFFLINE TERRAIN</div><canvas id="map" width="640" height="360" tabindex="0" aria-label="Interactive MapLibre camera view"></canvas><div id="map-empty" class="empty">Download a region to open the map</div><div class="map-controls" aria-label="Map camera controls"><button id="zoom-in" aria-label="Zoom in" title="Zoom in" disabled>+</button><button id="zoom-out" aria-label="Zoom out" title="Zoom out" disabled>−</button><button id="reset" aria-label="Reset camera" title="Reset camera" disabled>↺</button></div></div></div>
-<label><input id="dynamic-coverage" type="checkbox"> Load imagery and terrain as the map moves</label><p class="note">This sends the viewed area to Microsoft Planetary Computer and Mapzen/AWS. It does not change the navigation prior.</p><p id="dynamic-status" class="status">Dynamic coverage is off. Models load when matching starts.</p>
-<p id="clearance-status" class="note" role="status"></p><p class="note">Globe projection · drag to pan · right-drag or Shift-drag to look · wheel to zoom · WASD to move</p>
-<div id="result" class="result"><strong>Ready for a rough prior</strong><p>The selected region supplies both the map view and the visual reference data.</p></div>
-<div class="timeline"><label>Saved observation<select id="missions"><option value="">No saved observations</option></select></label><label>Frame<select id="frames" disabled></select></label></div><label>Geometrically accepted hypothesis<select id="hypotheses" disabled></select></label><p id="run-status" class="status" role="status"></p><p id="compute-status" class="note">GPU execution is checked during processing. Detailed imagery is limited to downloaded coverage.</p>
-<details><summary>Data and measurement details</summary><pre id="details">No observation yet.</pre></details><p id="attribution" class="note"></p><p class="note">Daytime research demo. No ground-truth accuracy or night performance has been established. Height uses the terrain package's declared datum.</p></article></main>
-<script type="module" src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0057b7">
+  <meta name="description" content="VNAV by Sokoly. Explore visual positioning with local images, offline reference data, and an interactive globe.">
+  <title>VNAV · Navigate by Sokoly</title>
+  <link rel="icon" href="./assets/sokoly-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+<header class="site-header">
+  <a class="identity" href="./" aria-label="VNAV by Sokoly home">
+    <img src="./assets/sokoly-mark.svg" width="38" height="40" alt="Sokoly">
+    <span><strong>VNAV<span class="wordmark-dot">.</span></strong><small>NAVIGATE BY SOKOLY</small></span>
+  </a>
+  <div class="header-right"><span class="research-label">Visual positioning / Research tool</span><span id="connection" class="tag">Local processing</span></div>
+</header>
+<main>
+  <aside aria-label="Observation setup">
+    <section class="setup-section">
+      <div class="section-heading"><span class="step">01</span><h2>Reference area</h2></div>
+      <p>Start with a rough location. Your precise prior stays in this browser.</p>
+      <label>Prepared coverage<select id="region" aria-label="Prepared coverage"></select></label>
+      <div class="overview" title="Click to set the prior"><img id="overview" alt="Prepared satellite coverage"><span id="prior-dot"></span><span class="overview-caption">Click to place the prior</span></div>
+      <div class="pair"><label>Latitude<input id="latitude" type="number" step="any"></label><label>Longitude<input id="longitude" type="number" step="any"></label></div>
+      <div class="pair"><label>Search radius <span>m</span><input id="radius" type="number" min="20" max="2000" value="500"></label><label>Height AGL <span>m</span><input id="agl" type="number" min="10" max="2000" value="110"></label></div>
+      <details class="compact"><summary>Camera assumptions</summary><label>Sensor diagonal FOV <span>°</span><input id="fov" type="number" min="10" max="170" step=".1" value="82.1"></label><p class="note">Assumes a 4:3 sensor, full sensor width, no zoom, and no lens distortion. Camera orientation is unknown. This is not measured calibration.</p></details>
+      <button id="download" class="secondary full">Store area offline <span aria-hidden="true">↓</span></button>
+      <progress id="progress" max="1" value="0" aria-label="Area download progress"></progress><p id="pack-status" class="status" role="status">Choose coverage to prepare its data.</p>
+      <details id="coverage-panel" class="compact"><summary>Download an area or route</summary>
+        <p class="note">NAIP imagery and Mapzen terrain. Requests disclose the download area to Microsoft Planetary Computer and AWS.</p>
+        <label>Selection<select id="coverage-mode"><option value="area">Area</option><option value="route">Route corridor</option></select></label>
+        <div id="area-fields"><div class="pair"><label>West<input id="west" type="number" step="any" value="-74.480"></label><label>South<input id="south" type="number" step="any" value="40.530"></label></div><div class="pair"><label>East<input id="east" type="number" step="any" value="-74.425"></label><label>North<input id="north-bound" type="number" step="any" value="40.565"></label></div></div>
+        <div id="route-fields" hidden><label>Route · longitude, latitude per line<textarea id="route-points" rows="3">-74.47,40.54
+-74.44,40.55</textarea></label><label>Corridor half-width <span>m</span><input id="route-buffer" type="number" min="100" max="10000" value="1000"></label></div>
+        <label>Imagery zoom<select id="coverage-zoom"><option>14</option><option>15</option><option>16</option><option selected>17</option><option>18</option></select></label><button id="fetch-coverage" class="secondary full">Fetch and store coverage</button><p id="coverage-status" class="status">US coverage only. Source resolution varies. Split large selections.</p>
+      </details>
+    </section>
+    <section class="setup-section">
+      <div class="section-heading"><span class="step">02</span><h2>Camera observation</h2></div>
+      <label class="upload"><span class="upload-title">Add an image or video <span aria-hidden="true">↗</span></span><input id="input" type="file" accept="image/png,image/jpeg,video/mp4,video/quicktime,video/webm,.mkv" aria-label="Choose an image or video"></label><p id="input-name" class="note">JPEG, PNG, MP4, MOV, MKV or WebM · up to 256 MB</p>
+      <p class="note"><a href="./assets/demo-frame.jpg" download="vnav-map-derived-example.jpg">Download an example image</a> · Made from the reference map.</p>
+      <video id="video" controls muted playsinline hidden></video>
+      <div id="video-controls" hidden><label>Selected frame<input id="frame-time" type="range" min="0" max="1" step=".04" value="0"></label><p id="frame-time-label" class="note"></p><label>Video processing<select id="video-mode"><option value="frame">Selected frame</option><option value="sequence">Sample from selected frame</option></select></label><div class="pair"><label>Interval <span>s</span><input id="period" type="number" value="1" min=".1" step=".1"></label><label>Maximum frames<input id="max-frames" type="number" value="10" min="1" max="120"></label></div></div>
+      <label>Matching detail<select id="matching-quality"><option value="fast">Fast · 640 px</option><option value="balanced" selected>Balanced · 960 px</option><option value="detailed">Detailed · 1280 px</option></select></label>
+      <p class="note">More detail needs more time. It does not establish geographic accuracy.</p>
+      <div class="action-stack"><button id="locate" class="primary full" disabled>Estimate camera pose <span aria-hidden="true">→</span></button><button id="cancel" class="text-button full" disabled>Cancel processing</button></div>
+      <p class="privacy-note"><span aria-hidden="true">◎</span> Photos and video stay on your device.</p>
+    </section>
+    <details class="storage-panel"><summary>Offline storage</summary><p id="storage-status" class="status"></p><button id="persist" class="secondary full">Keep downloaded data</button><p class="note">The browser can remove stored data. Packages are checked before use.</p></details>
+  </aside>
+  <article id="workspace" tabindex="-1">
+    <div class="workspace-title"><div><p class="eyebrow">FROM FRAME TO PLACE</p><h1>Visual positioning</h1><p>Inspect the evidence. Explore the alternatives.</p></div><span id="renderer-status" class="tag">WebGPU preview</span></div>
+    <div class="views">
+      <div class="view observation-view"><div class="view-label">OBSERVATION <span>Local file</span></div><img id="query" alt="Selected camera observation"><div id="query-empty" class="empty"><span class="empty-glyph" aria-hidden="true">⌖</span><strong>Your perspective</strong><span>Add a camera image or select a video frame.</span></div></div>
+      <div class="view map-view"><div class="view-label" id="map-label">REFERENCE GLOBE</div><canvas id="map" width="640" height="360" tabindex="0" aria-label="Interactive globe: drag to pan, right-drag to look, wheel to zoom, WASD to move"></canvas><div id="map-empty" class="empty"><span class="empty-glyph globe-glyph" aria-hidden="true">◎</span><strong>A place to compare</strong><span>Store a reference area to open the globe.</span></div><div class="map-controls" aria-label="Map camera controls"><button id="zoom-in" aria-label="Zoom in" title="Zoom in" disabled>+</button><button id="zoom-out" aria-label="Zoom out" title="Zoom out" disabled>−</button><button id="reset" aria-label="Reset camera" title="Reset camera" disabled>↺</button></div></div>
+    </div>
+    <div class="map-toolbar"><span>Drag to pan · right-drag to look · scroll to zoom</span><span id="clearance-status" role="status"></span></div>
+    <details class="display-options"><summary>Reference loading</summary><label class="check"><input id="dynamic-coverage" type="checkbox"> Load imagery and terrain as the map moves</label><p class="note">This sends the viewed area to the imagery providers. The navigation prior stays local.</p><p id="dynamic-status" class="status">Models load when matching starts.</p></details>
+    <section class="inspection" aria-label="Position estimate">
+      <div class="section-heading"><span class="step">03</span><h2>Geometric evidence</h2><span class="unvalidated">Accuracy unverified</span></div>
+      <div id="result" class="result" aria-live="polite"><strong>No observation yet</strong><p>Choose coverage and add a camera frame to find possible locations.</p></div>
+      <div class="timeline"><label>Saved observation<select id="missions"><option value="">No saved observations</option></select></label><label>Frame<select id="frames" disabled></select></label></div>
+      <label>Geometrically accepted hypothesis<select id="hypotheses" disabled></select></label>
+      <p id="run-status" class="status" role="status"></p><p id="compute-status" class="note">Location probabilities are not calibrated. Multiple valid hypotheses stay separate.</p>
+      <details class="measurement-details"><summary>Data and measurement details</summary><pre id="details">No observation yet.</pre></details>
+    </section>
+    <footer><p id="attribution" class="note"></p><p>Research use. No independent geographic accuracy or night validation. Do not use this tool to navigate a vehicle.</p><a href="https://github.com/luofang34/Navigate" target="_blank" rel="noreferrer">Source & documentation <span aria-hidden="true">↗</span></a><a href="./credits.html">Data &amp; licences</a></footer>
+  </article>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
