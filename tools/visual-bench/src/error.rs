@@ -59,13 +59,6 @@ pub(crate) enum BenchError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    #[error("GPU readback failed")]
-    Readback {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    #[error("MapLibre has no color texture")]
-    MissingTexture,
     #[error("visual observation failed")]
     Visual(#[from] navigate_visual::VisualError),
     #[error("synthetic acceptance failed for {failed} cases")]

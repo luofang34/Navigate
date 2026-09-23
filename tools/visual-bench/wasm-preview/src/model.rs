@@ -42,6 +42,16 @@ impl Camera {
             cy: self.cy,
         }
     }
+    pub fn intrinsics(&self) -> maplibre::headless::map::reference::PinholeIntrinsics {
+        maplibre::headless::map::reference::PinholeIntrinsics {
+            width: self.width,
+            height: self.height,
+            fx: self.fx,
+            fy: self.fy,
+            cx: self.cx,
+            cy: self.cy,
+        }
+    }
     pub fn frustum(&self) -> EyeFrustum {
         EyeFrustum {
             left: (self.cx + 0.5) / self.fx,

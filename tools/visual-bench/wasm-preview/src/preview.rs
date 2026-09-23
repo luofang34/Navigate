@@ -27,8 +27,7 @@ use wasm_bindgen::prelude::*;
 pub struct Preview {
     pub(crate) map: HeadlessMap,
     pub(crate) camera: Camera,
-    anchor: ExternalAnchor,
-    tick: u64,
+    pub(crate) anchor: ExternalAnchor,
     pub(crate) depth: wgpu::Texture,
     pub(crate) camera_session: Option<crate::session::Session>,
     pub(crate) reference: Option<navigate_visual::ReferenceView>,
@@ -90,7 +89,16 @@ impl Preview {
         let pose: Pose = serde_json::from_str(&pose_json).map_err(PreviewError::from)?;
         let transform = pose.transform()?;
         self.draw(transform)?;
-        crate::readback::read(&self.map).await.map_err(Into::into)
+        let texture = self.map.head_texture().ok_or_else(|| PreviewError::Input {
+            reason: "renderer has no color target".into(),
+        })?;
+        maplibre::headless::map::reference::read_texture(
+            &self.map,
+            texture,
+            wgpu::TextureAspect::All,
+        )
+        .await
+        .map_err(|e| render_error("preview readback", e).into())
     }
 }
 impl Preview {
@@ -104,10 +112,12 @@ impl Preview {
         frames: usize,
     ) -> Result<(), PreviewError> {
         for _ in 0..frames {
-            self.tick = self.tick.wrapping_add(1);
+            // Continue the map clock, which reference renders also advance.
+            let timestamp =
+                self.map.frame_input_mut().timestamp + std::time::Duration::from_millis(16);
             self.map
                 .run_xr_frame(XrFrame {
-                    timestamp: std::time::Duration::from_millis(self.tick.wrapping_mul(16)),
+                    timestamp,
                     opaque_environment: true,
                     placement: ScenePlacement {
                         anchor: self.anchor,
@@ -187,7 +197,6 @@ impl Preview {
             map,
             camera,
             anchor,
-            tick: 0,
             depth,
             camera_session: None,
             reference: None,

@@ -1,18 +1,19 @@
 //! MapLibre color and depth rendering from the shared map package.
 
 mod geometry;
-mod readback;
 #[cfg(test)]
 mod tests;
 
 use crate::{BenchError, package::MapPackage};
-use cgmath::{Matrix4, SquareMatrix};
 use image::{GrayImage, Luma};
 use maplibre::{
     coords::{LatLon, WorldTileCoords},
     headless::{
         HeadlessPlugin, create_headless_renderer_with_settings,
-        map::{HeadlessMap, ProcessedLayers},
+        map::{
+            HeadlessMap, ProcessedLayers,
+            reference::{PinholeIntrinsics, ReferenceTarget},
+        },
     },
     plugin::Plugin,
     raster::{AvailableRasterLayerData, DefaultRasterTransferables, RasterPlugin},
@@ -20,22 +21,19 @@ use maplibre::{
         RenderPlugin,
         settings::{BufferPoolSizes, Msaa, RendererSettings},
         view_state::ExternalAnchor,
-        xr::{EyeTarget, ScenePlacement, XrEye, XrFrame},
     },
     style::Style,
     terrain::{DefaultDemTransferables, TerrainPlugin},
 };
 use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceView};
-use std::time::Duration;
 
 pub(crate) struct ReferenceRenderer {
     map: HeadlessMap,
-    depth: wgpu::Texture,
+    target: ReferenceTarget,
     camera: CameraModel,
     anchor: ExternalAnchor,
     revision: MapRevision,
     frame: LocalFrame,
-    tick: u64,
     coverage: geometry::Coverage,
 }
 
@@ -90,71 +88,27 @@ impl ReferenceRenderer {
         ];
         let mut map = HeadlessMap::new(style, renderer, kernel, plugins).map_err(render_error)?;
         load_sources_blocking(&mut map, package.tiles)?;
-        let depth = map.device().create_texture(&wgpu::TextureDescriptor {
-            label: Some("visual reference depth"),
-            size: wgpu::Extent3d {
-                width: camera.width,
-                height: camera.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let target = ReferenceTarget::new(&map, intrinsics(camera)).map_err(render_error)?;
         Ok(Self {
             map,
-            depth,
+            target,
             camera,
             anchor,
             revision: package.revision,
             frame: package.frame,
-            tick: 0,
             coverage,
         })
     }
 
-    fn draw_blocking(&mut self, pose: CameraPose) -> Result<(), BenchError> {
+    pub fn render_blocking(&mut self, pose: CameraPose) -> Result<ReferenceView, BenchError> {
         pose.validate()?;
         let camera = self.camera;
-        let world_from_eye = geometry::eye_transform(pose);
-        let frustum = geometry::frustum(camera);
-        for _ in 0..4 {
-            self.tick = self.tick.wrapping_add(1);
-            self.map
-                .run_xr_frame(XrFrame {
-                    timestamp: Duration::from_millis(self.tick.wrapping_mul(16)),
-                    opaque_environment: true,
-                    placement: ScenePlacement {
-                        anchor: self.anchor,
-                        world_from_scene: Matrix4::identity(),
-                    },
-                    eyes: vec![XrEye {
-                        world_from_eye,
-                        frustum,
-                        target: EyeTarget {
-                            color: None,
-                            depth: Some(self.depth.create_view(&Default::default())),
-                        },
-                    }],
-                    request_overscan: 1.0,
-                    prefetch: None,
-                })
-                .map_err(render_error)?;
-        }
-        Ok(())
-    }
-
-    pub fn render_blocking(&mut self, pose: CameraPose) -> Result<ReferenceView, BenchError> {
-        self.draw_blocking(pose)?;
-        let camera = self.camera;
-        let frustum = geometry::frustum(camera);
-        let texture = self.map.head_texture().ok_or(BenchError::MissingTexture)?;
-        let rgba = readback::read_blocking(&self.map, texture, wgpu::TextureAspect::All)?;
-        let depths =
-            readback::read_blocking(&self.map, &self.depth, wgpu::TextureAspect::DepthOnly)?;
+        let render = self
+            .target
+            .render_blocking(&mut self.map, self.anchor, geometry::eye_transform(pose))
+            .map_err(render_error)?;
+        let rgba = render.rgba;
+        let mut depth_m = render.depth_m;
         let image = GrayImage::from_fn(camera.width, camera.height, |x, y| {
             let i = ((y * camera.width + x) * 4) as usize;
             Luma([((u32::from(rgba[i]) * 77
@@ -162,20 +116,6 @@ impl ReferenceRenderer {
                 + u32::from(rgba[i + 2]) * 29)
                 >> 8) as u8])
         });
-        let mut depth_m: Vec<f32> = depths
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(rgba.as_chunks::<4>().0.iter())
-            .map(|(b, color)| {
-                let d = f64::from(f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-                if d <= 0.0 || color[3] != 255 {
-                    return 0.0;
-                }
-                (frustum.near * frustum.far / (frustum.near + d * (frustum.far - frustum.near)))
-                    as f32
-            })
-            .collect();
         self.coverage.mask(&mut depth_m, camera, pose, |world| {
             self.map
                 .rendered_terrain_sample_cached(self.frame.mercator_xy(world))
@@ -188,6 +128,17 @@ impl ReferenceRenderer {
             image,
             depth_m,
         })
+    }
+}
+
+fn intrinsics(camera: CameraModel) -> PinholeIntrinsics {
+    PinholeIntrinsics {
+        width: camera.width,
+        height: camera.height,
+        fx: camera.fx,
+        fy: camera.fy,
+        cx: camera.cx,
+        cy: camera.cy,
     }
 }
 

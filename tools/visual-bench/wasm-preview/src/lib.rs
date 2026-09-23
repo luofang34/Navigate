@@ -6,7 +6,6 @@ mod display_tiles;
 mod error;
 mod model;
 mod preview;
-mod readback;
 mod storage;
 pub use preview::Preview;
 
