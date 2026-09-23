@@ -42,6 +42,8 @@ jobs:
         working-directory: Navigate
         run: |
           for test in tools/visual-bench/tests/test_*.mjs; do node "$test"; done
+      - name: Install renderer build dependency
+        run: sudo apt-get update && sudo apt-get install --yes protobuf-compiler
       - name: Build Rust WASM and public model assets
         working-directory: Navigate
         run: |
