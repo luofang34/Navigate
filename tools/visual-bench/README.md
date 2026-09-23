@@ -149,9 +149,10 @@ A rejected frame shows the region overview. Unresolved candidates remain separat
 ## Match detail and accuracy
 
 Fast mode uses a 640-pixel observation, one crop scale, and eight headings.
-Balanced mode uses a 960-pixel observation, five scales, and 36 headings.
-Detailed mode uses 1280 pixels, five scales, and 36 headings. Retrieval uses a
-640-pixel image in all modes. Pose refinement uses the selected observation
+Balanced mode uses a 960-pixel observation, five scales, and 72 headings.
+Detailed mode uses 1280 pixels, five scales, and 72 headings. Retrieval uses a
+640-pixel image in all modes. The denser modes retain all eight fast-mode headings.
+Pose refinement uses the selected observation
 resolution and a larger feature budget at higher detail. The wider search takes
 more processing time. It does not reduce the geometric acceptance requirements.
 Invalid source pixels and their immediate borders cannot produce features.
@@ -272,7 +273,7 @@ A retrieval result is not an accepted pose. Alternatives stay separate.
 
 The public example image is made from the reference map. It checks the pipeline.
 It does not measure independent geographic accuracy. In the nine-frame DJI
-browser check, balanced mode produced geometric hypotheses for six frames
+browser check, balanced mode produced geometric hypotheses for seven frames
 with the supplied reference data. It produced none with public NAIP data.
 These checks used a 500 m search radius and an assumed 110 m camera height
 above ground. They did not establish correct geographic associations.

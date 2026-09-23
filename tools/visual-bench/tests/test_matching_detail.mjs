@@ -14,7 +14,11 @@ assert.ok(plans.length<=160);
 const headings=headingAngles(detail.headings);
 for(let angle=0;angle<360;angle++){
   const error=Math.min(...headings.map(h=>Math.abs(((angle-h+540)%360)-180)));
-  assert.ok(error<=5,'the standard search covers headings within five degrees');
+  assert.ok(error<=2.5,'the standard search covers headings within two and a half degrees');
+}
+for(const mode of ['balanced','detailed']){
+  const dense=headingAngles(matchingOptions(mode).headings);
+  for(const angle of [...headingAngles(fast.headings),...headingAngles(36)])assert.ok(dense.includes(angle),'denser profiles retain coarse and ten-degree orientations');
 }
 for(const count of [0,3,73,NaN,4.5])assert.throws(()=>headingAngles(count),/heading search/);
 for(const angle of [0,10,45,90,180,270,350]){
