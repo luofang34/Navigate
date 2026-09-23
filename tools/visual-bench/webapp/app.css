@@ -11,3 +11,15 @@ article{padding:34px 36px 24px;min-width:0}.workspace-title{display:flex;align-i
 @media(max-width:1100px){main{grid-template-columns:296px minmax(0,1fr)}aside{padding:24px 20px}.site-header{padding:0 25px}article{padding:28px 23px}.workspace-title{align-items:flex-start}.workspace-title>.tag{display:none}.views{grid-template-columns:1fr}.view{aspect-ratio:16/9}.observation-view{aspect-ratio:2.3}.header-right .research-label{display:none}}
 @media(max-width:720px){.site-header{height:80px;padding:0 20px}.identity img{width:32px;height:34px}.identity{gap:20px}.identity strong{font-size:25px}.identity small{font-size:8px}.tag{font-size:10px}main{display:flex;flex-direction:column}aside{padding:22px 20px;border-right:0;border-bottom:1px solid var(--line)}article{padding:27px 20px}.workspace-title{margin-bottom:18px}h1{font-size:28px}.view{aspect-ratio:1.4}.observation-view{aspect-ratio:1.7}.map-toolbar{flex-direction:column;gap:4px}.map-toolbar span:last-child{text-align:left}.inspection{padding:20px 16px}.unvalidated{font-size:9px}.timeline{grid-template-columns:1fr}.metrics{gap:8px}.metric b{font-size:15px}.header-right .tag{max-width:130px;white-space:normal;text-align:center}.storage-panel{margin-top:20px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.mark-dark{display:none}.theme-control{margin:0;font-size:10px}.theme-control select{margin:2px 0 0;min-height:30px;padding:3px 20px 3px 7px;width:auto;font-size:12px}
+:root[data-theme=dark]{color-scheme:dark;--blue:#68adff;--ink:#e4ecf4;--slate:#c4d2df;--muted:#9cabb9;--line:#334452;--wash:#111b24;--paper:#1b2833;--success:#67d29b;--accent:#ff9a8c}
+[data-theme=dark] .mark-light{display:none}[data-theme=dark] .mark-dark{display:block}
+[data-theme=dark] :is(.tag,.secondary,.map-controls,.map-controls button,.skip-link){background:var(--paper);border-color:var(--line)}
+[data-theme=dark] :is(input,select,textarea,.view,.map-controls button+button){border-color:var(--line)}
+[data-theme=dark] :is(.secondary:hover:enabled,.map-controls button:hover:enabled,.upload input::file-selector-button){background:#2b4052}
+[data-theme=dark] :is(.overview,.view,.map-view){background:#15232e}
+[data-theme=dark] .upload{background:#15232e;border-color:#536b80}
+[data-theme=dark] :is(.view-label,.overview-caption){background:#1b2833ed;border-color:var(--line)}
+[data-theme=dark] .primary{background:#0057b7;color:#fff}[data-theme=dark] .primary:hover:enabled{background:#176bc6}
+[data-theme=dark] .empty{color:var(--muted)}[data-theme=dark] .empty strong{color:var(--slate)}
