@@ -1,3 +1,4 @@
+import {checkGlobeContext} from './qa-globe.js';
 import {checkGpuRetrieval} from './qa-gpu.js';
 import {BrowserPipeline} from './browser-pipeline.js';
 import {MapView,localPosition} from './map.js';
@@ -14,13 +15,13 @@ $('run').onclick=async()=>{let pipeline,raf,previous=performance.now(),gaps=[],a
   check('GPU retrieval handles partial workgroups and ties',await checkGpuRetrieval());
   const region=await(await fetch('/api/offline-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({region_id:new URLSearchParams(location.search).get('region')||(new URLSearchParams(location.search).has('synthetic')?'naip-2864a5ec8e4abb24':'new-jersey')})})).json();await download(region,(n,t)=>progress(`Verified package ${n}/${t}`));
   const bitmap=await createImageBitmap(await(await fetch('/models/test-input.png')).blob()),options=matchingOptions('balanced'),camera=cameraForImage(bitmap.width,bitmap.height,82.1,options.longEdge);let image={...gray(bitmap,camera.width,camera.height),time:0};bitmap.close();
-  const prior={latitude:40.5442,longitude:-74.4564,radius_m:500,agl_m:110};
+  const useDefaultPrior=new URLSearchParams(location.search).has('default-prior');const prior={latitude:useDefaultPrior?region.anchor_lat_lon[0]:40.5442,longitude:useDefaultPrior?region.anchor_lat_lon[1]:-74.4564,radius_m:500,agl_m:110};report.prior=prior;
   const map=new MapView($('map'));await map.load(region,camera);await map.setPose({position_enu_m:localPosition(region,prior.latitude,prior.longitude,800),eye_to_enu_xyzw:[0,0,0,1]});
   check('direct GPU presentation',$('map').dataset.presentation==='wgpu-direct');check('display resolution independent of matching',$('map').width>camera.width);
   const base=structuredClone(map.pose);map.pan(40,20);await map.draw();check('pan moves camera',Math.hypot(...map.pose.position_enu_m.map((v,i)=>v-base.position_enu_m[i]))>10);await map.reset();check('reset restores selected pose',JSON.stringify(map.pose)===JSON.stringify(base));
   map.rotate(.1,.1);await map.draw();check('look changes orientation',JSON.stringify(map.pose.eye_to_enu_xyzw)!==JSON.stringify(base.eye_to_enu_xyzw));await map.reset();
   $('map').style.width='700px';await map.draw();check('resize changes physical output',$('map').width!==800*Math.min(devicePixelRatio,2));
-  await map.globe();check('globe changes camera',map.height()>10_000_000);await map.reset();
+  await map.globe();check('globe changes camera',map.height()>10_000_000);check('globe shows land context',await checkGlobeContext(region,camera,map.pose));await map.reset();
   if(new URLSearchParams(location.search).has('synthetic')){
     const references=await ReferencePack.open(region),lat=40.544,lon=-74.456,pose={position_enu_m:localPosition(region,lat,lon,references.elevation(lat,lon)+110),eye_to_enu_xyzw:[0,0,Math.sin(.3),Math.cos(.3)]};
     const capture=await Preview.create(JSON.stringify(region),JSON.stringify(camera),read,false),pixels=await capture.render(JSON.stringify(pose));capture.free();

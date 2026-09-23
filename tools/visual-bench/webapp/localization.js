@@ -1,3 +1,4 @@
+import {headingAngles} from './matching-options.js';
 import init,{Preview,propose} from './wasm/navigate_visual_preview.js';
 import {LocalMatcher} from './inference/local.js';
 import {ReferencePack} from './reference-pack.js';
@@ -12,7 +13,7 @@ export class LocalizationPipeline {
     const observation=JSON.parse(this.renderer.select()).observation_sha256;const crops=this.references.crops(prior,this.camera,this.options.scales),candidates=[];let searched=0;
     const coarseWidth=Math.round(image.width/Math.max(image.width,image.height)*80)*8,coarseHeight=Math.round(image.height/Math.max(image.width,image.height)*80)*8;
     const coarse=gray(image.canvas,coarseWidth,coarseHeight);
-    const queries=Array.from({length:8},(_,i)=>{const rotated=rotate(coarse,i*45),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle:i*45,key:`${observation}/angle/${i*45}`}});
+    const queries=headingAngles(this.options.headings).map(angle=>{const rotated=rotate(coarse,angle),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle,key:`${observation}/angle/${angle}`}});
     searched=crops.length*queries.length;
     const indices=this.matcher.retrievePairs?await this.matcher.retrievePairs(crops,queries,this.options.shortlist,progress):queries.flatMap((_,q)=>crops.map((_,r)=>({reference_index:r,query_index:q})));
     const shortlist=indices.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key}}));

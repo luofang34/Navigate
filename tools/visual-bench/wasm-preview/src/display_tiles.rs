@@ -38,7 +38,10 @@ pub(crate) fn parents(tiles: &[AvailableRasterLayerData]) -> Vec<AvailableRaster
     }
     levels
         .into_iter()
-        .filter(|(key, _)| !supplied.contains(key))
+        // Partial overview tiles would hide the global context inside their tile footprint.
+        .filter(|(key, image)| {
+            key.0 > 0 && !supplied.contains(key) && image.pixels().all(|pixel| pixel[3] == 255)
+        })
         .map(|((z, x, y), image)| AvailableRasterLayerData {
             coords: WorldTileCoords::from((x, y, z.into())),
             source_layer: "imagery".into(),

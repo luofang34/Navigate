@@ -23,7 +23,7 @@ export class MapView{
   setMinimumClearance(agl){this.minimumClearance=minimumClearance(agl)}
   async setPose(pose){this.cameraAdjusted=false;const globePose=toGlobePose(this.pack,pose);this.base=structuredClone(globePose);this.pose=structuredClone(globePose);await this.draw();this.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'pose'}))}
   changed(){this.cameraAdjusted=false;this.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'free'}))}
-  async globe(){this.orbit=true;this.pose={position_enu_m:[0,0,15_000_000],eye_to_enu_xyzw:[0,0,0,1]};this.changed();await this.draw()}
+  async globe(){this.orbit=true;this.cameraAdjusted=false;this.pose={position_enu_m:[0,0,15_000_000],eye_to_enu_xyzw:[0,0,0,1]};await this.draw();this.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'globe'}))}
   async reset(){if(this.base){this.cameraAdjusted=false;this.orbit=false;this.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'reset'}));this.pose=structuredClone(this.base);await this.draw()}}
   height(){if(!this.pose)return 100;return Math.max(20,Math.hypot(this.pose.position_enu_m[0],this.pose.position_enu_m[1],this.pose.position_enu_m[2]+6371008.8)-6371008.8)}
   async move(axis,amount){if(this.pose){this.changed();if(axis===2){const p=this.pose.position_enu_m,v=[p[0],p[1],p[2]+6371008.8],r=Math.hypot(...v),next=Math.max(6371028.8,Math.min(46371008.8,r+amount));this.pose.position_enu_m=v.map((x,i)=>x*next/r-(i===2?6371008.8:0))}else this.pose.position_enu_m[axis]+=amount;await this.draw()}}
