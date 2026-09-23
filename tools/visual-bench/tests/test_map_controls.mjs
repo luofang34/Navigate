@@ -33,7 +33,12 @@ fire('pointerdown',{clientX:100,clientY:100,pointerId:2,button:2});fire('pointer
 assert.notDeepEqual(map.pose.eye_to_enu_xyzw,[0,0,0,1]);assert.ok(Math.abs(Math.hypot(...map.pose.eye_to_enu_xyzw)-1)<1e-12);
 await map.reset();fire('keydown',{key:'w'});await map.idle;assert.ok(map.pose.position_enu_m[1]>0);
 const before=map.height();fire('wheel',{deltaY:100});await map.idle;assert.ok(map.height()>before);
-await map.globe();const height=map.height();map.rotate(.2,.1);assert.ok(Math.abs(map.height()-height)<1e-6);await map.reset();assert.deepEqual(map.pose,map.base);
+const viewChanges=[];canvas.addEventListener('viewchange',event=>viewChanges.push(event.detail));
+const selectedPose=structuredClone(map.base);await map.globe();
+assert.deepEqual(viewChanges,['globe'],'the app receives a distinct globe-overview event');
+assert.deepEqual(map.base,selectedPose,'globe navigation preserves the selected camera pose');
+const height=map.height();assert.ok(height>10_000_000);map.rotate(.2,.1);assert.ok(Math.abs(map.height()-height)<1e-6);
+await map.reset();assert.deepEqual(map.pose,selectedPose);assert.equal(viewChanges.at(-1),'reset');
 
 await map.move(2,-100000);assert.ok(map.height()>=119.999,'wheel and zoom cannot enter terrain');assert.equal(JSON.parse(canvas.dataset.clearance).known,true);
 map.preview.terrain_elevation_cached=()=>undefined;await map.move(0,20);assert.ok(map.height()>=9999.99,'missing terrain enforces a conservative browsing floor');assert.equal(canvas.dataset.projection,'globe');
