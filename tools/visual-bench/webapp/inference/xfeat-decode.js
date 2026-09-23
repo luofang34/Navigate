@@ -10,14 +10,14 @@ export function decodeXFeat(result,image,limit=512,transform={scale:1,x:0,y:0}){
     if(supported)selected.push({i,x,y,score});
   }
   selected.sort((a,b)=>b.score-a.score);selected.length=Math.min(selected.length,limit);
-  const count=selected.length,pixels=new Float32Array(count*2),confidence=new Float32Array(count),data=new Float32Array(count*64);
+  const count=selected.length,pixels=new Float32Array(count*2),modelPixels=new Float32Array(count*2),confidence=new Float32Array(count),data=new Float32Array(count*64);
   for(const [j,p] of selected.entries()){
-    pixels.set([p.x,p.y],j*2);confidence[j]=p.score;let norm=0;
+    pixels.set([p.x,p.y],j*2);modelPixels.set([Number(keypoints.data[p.i*2]),Number(keypoints.data[p.i*2+1])],j*2);confidence[j]=p.score;let norm=0;
     for(let c=0;c<64;c++){const value=descriptors.data[p.i*64+c];if(!Number.isFinite(value))throw Error('Non-finite XFeat descriptor');norm+=value*value;data[c*count+j]=value}
     if(norm<=0)throw Error('Empty XFeat descriptor');
     for(let c=0;c<64;c++)data[c*count+j]/=Math.sqrt(norm);
   }
-  return {pixels,scores:confidence,descriptors:data,width,height,count};
+  return {pixels,modelPixels,scores:confidence,descriptors:data,width,height,count};
 }
 
 export function xfeatInput(image){
@@ -34,5 +34,5 @@ export function xfeatInput(image){
   return {data,width,height,transform:{scale,x:x+(scale-1)/2,y:y+(scale-1)/2}};
 }
 
-export function emptyXFeat(width,height){return {pixels:new Float32Array(),scores:new Float32Array(),descriptors:new Float32Array(),width,height,count:0}}
+export function emptyXFeat(width,height){return {pixels:new Float32Array(),modelPixels:new Float32Array(),scores:new Float32Array(),descriptors:new Float32Array(),width,height,count:0}}
 export function isEmptyXFeatOutput(error){return String(error).includes("Name:'/Where'")&&String(error).includes('Condition Shape: {1,0,2}, X Shape: {1,0}, Y Shape: {}')}

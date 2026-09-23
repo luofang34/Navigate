@@ -1,0 +1,17 @@
+{
+  "algorithm": "XFeat LighterGlue",
+  "license": "Apache-2.0",
+  "source": "https://github.com/verlab/accelerated_features",
+  "matcher_source": "https://github.com/cvg/LightGlue",
+  "weights_sha256": "766102df37f11189efe5b0811d1f47c72b22629b79bfabfcfff9d2a2f84654b8",
+  "sha256": "170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca",
+  "size": 4435329,
+  "modified": true,
+  "modifications": "Fixed-depth portable ONNX export with stable log-sigmoid; no weight training",
+  "exporter": "tools/visual-inference/export_lighterglue.py",
+  "export_versions": {
+    "torch": "2.8.0",
+    "kornia": "0.8.1",
+    "onnx": "1.18.0"
+  }
+}

@@ -14,7 +14,7 @@ assert.deepEqual(mutualPairs(best,2,2),[[1,0]]);
 best[12]=1;assert.deepEqual(mutualPairs(best,2,2),[]);
 console.info('XFeat validity, descriptor layout, limits, mutual matches and ambiguity checks passed');
 
-const transformed=decodeXFeat(result,{width:32,height:32},1,{scale:2,x:0,y:0});assert.deepEqual([...transformed.pixels],[8,8]);
+const transformed=decodeXFeat(result,{width:32,height:32},1,{scale:2,x:0,y:0});assert.deepEqual([...transformed.pixels],[8,8]);assert.deepEqual([...transformed.modelPixels],[16,16]);
 const input=xfeatInput({width:8,height:8,gray:new Uint8Array(64).fill(255)});assert.equal(input.width,800);assert.equal(input.height,600);assert.equal(input.data[300*800+400],1);assert.equal(input.data[300*800],0);assert.equal(input.transform.scale,75);
 
 assert.equal(emptyXFeat(640,360).count,0);assert.equal(isEmptyXFeatOutput(Error("Name:'/Where' Status Message: Where: X operand cannot broadcast on dim 1 Condition Shape: {1,0,2}, X Shape: {1,0}, Y Shape: {}")),true);assert.equal(isEmptyXFeatOutput(Error('WebGPU device lost')),false);

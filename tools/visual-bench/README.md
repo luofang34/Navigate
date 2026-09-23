@@ -33,7 +33,8 @@ cargo build --release --manifest-path tools/visual-service/Cargo.toml
 ```
 
 The model preparation command downloads the Apache-2.0 XFeat ONNX release.
-It checks the pinned SHA-256 digest. It installs the pinned ONNX browser runtime.
+It checks the pinned SHA-256 digest. It copies the checked LighterGlue asset from
+`model-assets/`. It installs the pinned ONNX browser runtime.
 The public export includes their licences and model provenance.
 Model loading starts when the user requests matching.
 
@@ -42,7 +43,9 @@ The native provider requires GDAL development files and PROJ data. GDAL 3.6 to
 On a machine with several installations, select one consistent set of headers,
 libraries, and `pkg-config` metadata. Do not substitute a different ABI version.
 
-The public matcher uses XFeat features and mutual nearest descriptor matches.
+The public matcher uses XFeat features and LighterGlue assignments.
+Descriptor retrieval selects a shortlist before the learned matcher runs.
+A cached XFeat-only package can still use mutual nearest descriptor matches.
 Its adapter owns preprocessing, feature limits, descriptor filters, and GPU setup.
 The release uses an 800 by 600 coordinate system. The adapter preserves image
 aspect ratio and maps model coordinates back to input pixels.
@@ -235,7 +238,8 @@ The native imagery tests need a compatible GDAL installation. GPU tests require
 an adapter. Browser tests use ignored local files `webapp/models/test-input.png`
 and `test-video.mp4`. Run `tests/browser_server.mjs` with a loopback service URL,
 a report path, and an optional port. Open `/qa-quality.html` to compare matching
-detail, `/qa-performance.html?run=1&report=1` for GPU and camera checks, or
+detail, `/qa-retrieval.html` for scalar and batched GPU score comparison,
+`/qa-performance.html?run=1&report=1` for GPU and camera checks, or
 `/qa-app.html` for upload, selected video frame, saved result, and theme checks.
 Use `/qa-flow.html` for frame decoding checks. Use `/qa-map.html` for
 terrain clearance and the rendered difference between coarse and fine NAIP data.
@@ -249,15 +253,17 @@ For the nine-frame DJI evaluation, put the local `DJI_0029_frame_1.png` through
 The default prior uses the package centre. Set `lat`, `lon`, `radius`, and `agl`
 in the local test URL to select another prior. Angles use degrees. Distances use
 metres. Keep precise test priors in the local test URL.
-The report records each retrieval result and geometric decision. A completed
-evaluation can contain rejected frames. It is not a successful localization check.
+The report records each retrieval result, geometric decision, and stage time.
+The GPU upload counters cover the worker lifetime. Compare counter differences
+when the worker processes more than one frame. A completed evaluation can contain
+rejected frames. It is not a successful localization check.
 The public export excludes these test pages and private input files.
 
 ## Optional asset maintenance
 
 `prepare_globe_context.py` generates the display context from Natural Earth GeoJSON.
 It uses Pillow from `requirements-web.txt`. It is not a service or web runtime
-dependency. Use `prepare_browser_models.mjs` to install the public XFeat model.
+dependency. Use `prepare_browser_models.mjs` to install the public matcher models.
 
 ## Browser matcher boundary
 
@@ -273,8 +279,26 @@ A retrieval result is not an accepted pose. Alternatives stay separate.
 
 The public example image is made from the reference map. It checks the pipeline.
 It does not measure independent geographic accuracy. In the nine-frame DJI
-browser check, balanced mode produced geometric hypotheses for seven frames
-with the supplied reference data. It produced none with public NAIP data.
+browser check, balanced mode produced accepted geometric hypotheses for eight frames
+with the supplied reference data. It produced no accepted hypotheses with public
+NAIP data. The accepted supplied-data cases retained unresolved alternatives.
 These checks used a 500 m search radius and an assumed 110 m camera height
 above ground. They did not establish correct geographic associations.
 Night operation and absolute geographic accuracy have not been validated.
+
+The descriptor search keeps one reference batch in GPU memory while it tests
+all camera views. It scores several references in one GPU dispatch. It retains
+all planned reference crops, comparison thresholds, and the same tie order.
+The packed reference buffer uses at most 16 MiB. Score scratch storage uses
+64 MiB. Batched nearest-neighbour storage uses 1 MiB. Larger comparisons use
+smaller dispatch groups. The descriptor cache holds at most 192 buffers.
+This reduces data uploads and GPU dispatches. It does not reduce the number
+of descriptor comparisons or geometric checks.
+
+Reference feature arrays have a separate 128 MiB cache with at most 1,024 entries.
+Their keys include the package identity, crop, and feature limit. Query and
+refinement feature arrays use a 32 MiB cache with at most 192 entries.
+Frame processing cannot evict the reference feature arrays. A package change
+uses different keys. A cache entry reuses model output only. The pipeline still
+runs geometric verification and evidence checks for each observation.
+The reported cache hit, miss, and byte counts describe the worker lifetime.
