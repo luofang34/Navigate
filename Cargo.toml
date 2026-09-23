@@ -9,6 +9,7 @@ members = [
     "crates/navigate-egpws",
     "tools/navrun",
     "crates/navigate-visual",
+    "crates/navigate-visual-fusion",
     "crates/navigate-data",
     "crates/navigate-data-fs",
     "crates/navigate-imagery",

@@ -54,6 +54,10 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
 | `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
 | `navigate-visual` | Camera pose observations from calibrated images, a pose prior, and rendered map references |
+| `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
+| `navigate-data` | Read interface for immutable navigation data on native and web hosts |
+| `navigate-data-fs` | File system implementation of the `navigate-data` read interface |
+| `navigate-imagery` | Coverage plans and content-addressed imagery packages |
 | `tools/navrun` | Deterministic scripted scenario runner exercising fusion → plan → guidance end to end |
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision

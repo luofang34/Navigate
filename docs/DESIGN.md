@@ -107,8 +107,9 @@ vocabulary; process topology is a deployment decision, not a contract one.
 
 ## What the skeleton deliberately defers
 
-- Celestial and visual measurement models (variants and seams are typed;
-  no implementations).
+- A celestial measurement model. Visual positions enter fusion as
+  position fixes through `navigate-visual-fusion` (ADR-0007). A
+  correlated visual measurement model and visual attitude are future work.
 - IMU mechanization propagation and filter-state growth.
 - Coupling admission-gate storm rates into the quality derivation
   (quality currently degrades on covariance bounds and source silence).

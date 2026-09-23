@@ -1351,6 +1351,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-visual-fusion"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "navigate-contract",
+ "navigate-fusion",
+ "navigate-visual",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "navrun"
 version = "0.1.0"
 dependencies = [
