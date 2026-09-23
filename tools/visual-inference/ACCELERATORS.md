@@ -90,9 +90,14 @@ can use these without a Python process during inference.
 | --- | --- | --- | --- |
 | Web | ONNX Runtime Web, WebGPU with WASM fallback | ONNX | Model parity, GPU dispatch, and full search checked |
 | Apple native | Rust `ort`, Core ML and CPU | Dense float16 ONNX plus float32 matcher | Native image suite checked |
-| Jetson | Rust `ort`, TensorRT, then CUDA, then CPU | ONNX and device-specific engine cache | No board measurement |
+| Jetson | Rust `ort`, TensorRT, then CUDA, then CPU | ONNX and device-specific engine cache | ARM64 build and missing-provider guard checked; no board measurement |
 | RK3588 | RKNN Runtime through a Rust adapter | RKNN compiled for the board | Compiler and simulator checked; no board measurement |
 | Raspberry Pi with Hailo | HailoRT through a Rust adapter | HEF compiled for the installed Hailo device | No compiler or board measurement |
+
+The Rust adapter accepts explicit CUDA and TensorRT requests. TensorRT uses CUDA
+for unsupported TensorRT operators. Missing requested providers are errors.
+The local guard checked this against a runtime without NVIDIA providers.
+This guard and the ARM64 build do not prove Jetson execution.
 
 The documented ONNX Runtime RKNPU provider targets RK1808. It is not proof of
 RK3588 support. Use RKNN Toolkit2 and RKNN Runtime for RK3588. HailoRT supplies

@@ -148,6 +148,8 @@ pub(super) enum RunProvider {
     Cpu,
     CoremlAne,
     CoremlGpu,
+    Cuda,
+    TensorRt,
 }
 impl RunProvider {
     pub fn execution(&self) -> ExecutionConfig {
@@ -156,8 +158,11 @@ impl RunProvider {
                 Self::Cpu => Provider::Cpu,
                 Self::CoremlAne => Provider::CoreMlAne,
                 Self::CoremlGpu => Provider::CoreMlGpu,
+                Self::Cuda => Provider::Cuda,
+                Self::TensorRt => Provider::TensorRt,
             },
             threads: 4,
+            ..ExecutionConfig::default()
         }
     }
 }

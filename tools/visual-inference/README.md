@@ -63,7 +63,8 @@ fields are errors. The tool rejects mismatched evidence before inference.
 The tool first checks identical images, a known translation, blank input, and
 incompatible dimensions. All models then use the same cases and the same Rust
 pose verifier. Execution uses four CPU threads. The default `keypoints` limit
-is 2048. The optional suite `provider` is `cpu`, `coreml_ane`, or `coreml_gpu`.
+is 2048. The optional suite `provider` is `cpu`, `coreml_ane`, `coreml_gpu`,
+`cuda`, or `tensor_rt`. NVIDIA suite runs use device zero.
 Core ML takes only static-shape graphs. Dynamic matching stays on the CPU.
 The report separates model loading, matching, and geometry time. It records model
 identities, reference identities, rejections, and runtime failures. A runtime
@@ -80,7 +81,7 @@ accuracy claim.
 ## Model execution probe
 
 This separate tool measures an ONNX model through Rust `ort`. It supports CPU,
-Core ML GPU, and Core ML Neural Engine selection. It does not link into the
+Core ML GPU, Core ML Neural Engine, CUDA, and TensorRT selection. It does not link into the
 navigation library or the browser bundle.
 
 Supply a compatible ONNX Runtime shared library with the required execution
@@ -100,7 +101,10 @@ tools/visual-inference/target/release/visual-inference-probe \
 
 The input manifest is a JSON array. Each item has `name`, `shape`, and `path`.
 Paths are relative to the manifest. Data files contain little-endian float32
-values. Use `cpu`, `coreml-gpu`, or `coreml-ane` for `--provider`.
+values. Use `cpu`, `coreml-gpu`, `coreml-ane`, `cuda`, or `tensor-rt` for
+`--provider`. NVIDIA runs accept `--device-id`. TensorRT runs accept
+`--workspace-mib`, with a default of 256 MiB. This limits builder workspace,
+not total GPU memory. The probe keeps engine caches in its new output directory.
 
 `export_models.py` exports the supplied external SuperPoint and SuperGlue models.
 Run it with `--help` for its inputs. SuperPoint timings cover the dense backbone
@@ -188,3 +192,51 @@ Open the printed loopback URL in a WebGPU browser. The page writes its result to
 the given local report path. It does not send tensors to an external service.
 This probe checks the matcher model. Test the full search and pose pipeline
 separately before changing the production browser adapter.
+
+## NVIDIA runtime selection
+
+The native adapter supports `Provider::Cuda` and `Provider::TensorRt`.
+TensorRT has priority over CUDA. ONNX Runtime can send remaining operators to
+CPU. An explicit CUDA or TensorRT request must register its provider. A missing
+provider is an error. It does not silently become a CPU benchmark.
+The application host owns these settings. They are not navigation inputs.
+
+```rust,no_run
+use navigate_visual_onnx::{ExecutionConfig, Provider};
+
+let execution = ExecutionConfig {
+    provider: Provider::TensorRt,
+    nvidia_device_id: 0,
+    tensor_rt_workspace_bytes: 256 * 1024 * 1024,
+    ..ExecutionConfig::default()
+};
+```
+
+The optional `engine_cache_directory` enables persistent TensorRT engines.
+The adapter uses model content for the cache prefix. The host must supply a new
+cache directory when the GPU, ONNX Runtime, or TensorRT version changes.
+Engine caches are not portable model assets. Keep sessions resident during use.
+No automatic float16 or integer conversion is enabled by this adapter.
+
+Use a GPU-enabled ONNX Runtime build that matches the Jetson JetPack, CUDA,
+TensorRT, and cuDNN versions. The Rust ARM64 Linux compile check passed.
+A local runtime without NVIDIA providers passed a negative execution test:
+CPU computation worked, and both explicit NVIDIA requests failed.
+This test does not prove execution or speed on Jetson.
+Physical-board tests must check operator placement, numeric outputs, selected
+matches, pose decisions, memory, and latency.
+
+Run the provider-failure test with a runtime that has no NVIDIA providers:
+
+```sh
+NAVIGATE_TEST_ORT=/absolute/path/to/libonnxruntime.so \
+  cargo test --manifest-path tools/visual-inference/Cargo.toml --lib \
+  unavailable_accelerators_cannot_become_cpu_success -- --ignored
+```
+
+The test fixture is a generated ONNX `Add(input, input)` graph. It has no learned
+weights or user imagery. Ordinary unit tests do not require a runtime library.
+
+[ONNX Runtime TensorRT requirements](https://onnxruntime.ai/docs/execution-providers/TensorRT-ExecutionProvider.html)
+and [CUDA requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)
+define the native runtime dependencies.

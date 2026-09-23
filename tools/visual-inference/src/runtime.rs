@@ -63,7 +63,7 @@ pub(super) fn run_blocking(args: &Args) -> Result<(), ProbeError> {
         .end_profiling()
         .map_err(|source| context("finish provider profile", source))?;
     let nodes = provider_nodes_blocking(Path::new(&profile))?;
-    let report = serde_json::json!({"requested_provider":format!("{:?}",args.provider),"load_ms":load_ms,"warm_inference_ms":times,"profile":profile,"provider_node_events":nodes,"outputs":values,"scope":"Model only. Core ML selection permits CPU execution. Provider node placement does not prove exclusive GPU or ANE use."});
+    let report = serde_json::json!({"requested_provider":format!("{:?}",args.provider),"load_ms":load_ms,"warm_inference_ms":times,"profile":profile,"provider_node_events":nodes,"outputs":values,"scope":"Model only. Accelerator selection permits CPU operators. Provider node placement does not measure hardware utilization."});
     let output = args.output.join("result.json");
     fs::write(
         &output,
@@ -80,27 +80,60 @@ fn session_blocking(args: &Args) -> Result<Session, ProbeError> {
         .map_err(|source| context("set CPU threads", source))?
         .with_profiling(args.output.join("profile"))
         .map_err(|source| context("enable provider profiling", source))?;
-    if !matches!(args.provider, Provider::Cpu) {
-        let units = if matches!(args.provider, Provider::CoremlAne) {
-            ComputeUnits::CPUAndNeuralEngine
-        } else {
-            ComputeUnits::CPUAndGPU
-        };
-        let provider = ep::CoreML::default()
-            .with_compute_units(units)
-            .with_model_format(ModelFormat::MLProgram)
-            .with_profile_compute_plan(true)
-            .with_model_cache_dir(args.output.join("coreml-cache").display())
-            .build()
-            .error_on_failure();
-        builder = builder
-            .with_execution_providers([provider])
-            .map_err(|source| context("register requested Core ML provider", source))?;
-    }
+    builder = builder
+        .with_execution_providers(providers(args)?)
+        .map_err(|source| context("register requested execution providers", source))?;
     let session = builder
         .commit_from_file(&args.model)
         .map_err(|source| context(format!("load {}", args.model.display()), source))?;
     Ok(session)
+}
+fn providers(args: &Args) -> Result<Vec<ep::ExecutionProviderDispatch>, ProbeError> {
+    let cuda = || {
+        ep::CUDA::default()
+            .with_device_id(args.device_id)
+            .build()
+            .error_on_failure()
+    };
+    Ok(match args.provider {
+        Provider::Cpu => vec![],
+        Provider::Cuda => vec![cuda()],
+        Provider::TensorRt => {
+            let workspace = usize::try_from(args.workspace_mib)
+                .ok()
+                .and_then(|value| value.checked_mul(1024 * 1024))
+                .ok_or_else(|| {
+                    ProbeError::Input("TensorRT workspace exceeds this host's address size".into())
+                })?;
+            vec![
+                ep::TensorRT::default()
+                    .with_device_id(args.device_id)
+                    .with_max_workspace_size(workspace)
+                    .with_engine_cache(true)
+                    .with_engine_cache_path(args.output.join("tensorrt-cache").display())
+                    .build()
+                    .error_on_failure(),
+                cuda(),
+            ]
+        }
+        Provider::CoremlAne | Provider::CoremlGpu => {
+            let units = if matches!(args.provider, Provider::CoremlAne) {
+                ComputeUnits::CPUAndNeuralEngine
+            } else {
+                ComputeUnits::CPUAndGPU
+            };
+            vec![
+                ep::CoreML::default()
+                    .with_compute_units(units)
+                    .with_static_input_shapes(true)
+                    .with_model_format(ModelFormat::MLProgram)
+                    .with_profile_compute_plan(true)
+                    .with_model_cache_dir(args.output.join("coreml-cache").display())
+                    .build()
+                    .error_on_failure(),
+            ]
+        }
+    })
 }
 fn measure(
     session: &mut Session,

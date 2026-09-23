@@ -28,10 +28,12 @@ enum Provider {
     Cpu,
     CoremlGpu,
     CoremlAne,
+    Cuda,
+    TensorRt,
 }
 #[derive(Parser)]
 #[command(
-    about = "Measure native Rust ONNX inference. Core ML placement can include CPU operations."
+    about = "Measure native Rust ONNX inference. Accelerator placement can include CPU operations."
 )]
 struct Args {
     #[arg(long)]
@@ -42,6 +44,12 @@ struct Args {
     inputs: PathBuf,
     #[arg(long)]
     output: PathBuf,
+    /// NVIDIA device index for CUDA or TensorRT.
+    #[arg(long, default_value_t=0, value_parser=clap::value_parser!(i32).range(0..))]
+    device_id: i32,
+    /// TensorRT builder workspace limit. This is not total GPU memory.
+    #[arg(long, default_value_t=256, value_parser=clap::value_parser!(u32).range(1..=65536))]
+    workspace_mib: u32,
     /// Save float32 output tensors for numerical comparison.
     #[arg(long)]
     save_outputs: bool,
