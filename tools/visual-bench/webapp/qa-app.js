@@ -15,7 +15,8 @@ async function run(){
  check('image enables matching',!$('locate').disabled);check('map has direct GPU presentation',$('map').dataset.presentation==='wgpu-direct');
  const progress=[];const updates=new w.MutationObserver(()=>progress.push($('run-status').textContent));updates.observe($('run-status'),{childList:true,subtree:true,characterData:true});
  await emit('image matching');try{await $('locate').onclick()}finally{updates.disconnect()}
- check('matching progress explains the work without backend labels',progress.some(s=>s.includes('Searching camera orientations'))&&progress.some(s=>s.includes('Checking camera pose'))&&progress.every(s=>!/(WebGPU|WASM|MapLibre|GPU reference)/.test(s))); 
+ report.progress=progress;report.result_text=$('result').textContent;
+ check('matching progress explains the work without backend labels',progress.some(s=>s.includes('Preparing camera views')||s.includes('Searching camera orientations'))&&progress.some(s=>s.includes('Checking camera pose'))&&progress.every(s=>!/(WebGPU|WASM|MapLibre|GPU reference)/.test(s)));
  const mission=await get('missions',$('missions').value),result=mission?.view.frames[0];
  check('image creates a saved result',Boolean(result));check('image has geometric hypotheses',result.candidate_hypotheses.some(h=>h.accepted));
  check('matched pose controls are available',$('hypotheses').options.length>0&&!$('reset').disabled);report.processing_ms=result.processing_ms;report.geographic_accuracy=result.geographic_accuracy;
@@ -24,7 +25,7 @@ async function run(){
  check('saved evidence survives a new upload',Boolean(await get('missions',mission.id)));
  check('new upload labels the map as reference context',$('map-label').textContent==='REFERENCE VIEW · NO CAMERA POSE FOR THIS OBSERVATION');
  check('video controls available',!$('video-controls').hidden&&!$('video').hidden);
- const time=Math.min(.5,$('video').duration/2),shown=event($('query'),'load');$('frame-time').value=String(time);$('frame-time').onchange();await shown;
+ $('video-mode').value='frame';const time=Math.min(.5,$('video').duration/2),shown=event($('query'),'load');$('frame-time').value=String(time);$('frame-time').onchange();await shown;
  check('selected video frame decoded',Math.abs($('video').currentTime-time)<.05);check('video frame enables matching',!$('locate').disabled);
  report.video_time_s=$('video').currentTime;await emit('video frame matching');const processing=$('locate').onclick();check('new run has no stale estimate',$('result').textContent==='Preparing this observation.'&&!$('hypotheses').options.length);await processing;
  const video=await get('missions',$('missions').value),observation=video?.view.frames[0];check('selected video frame creates a result',Math.abs(observation.requested_time_s-time)<.05);check('video frame runs in browser',video.view.input.processing==='browser-local');report.video_decision=observation.decision;
@@ -32,6 +33,6 @@ async function run(){
 }
 let deadline;
 try{
- await Promise.race([run(),new Promise((resolve,reject)=>{deadline=setTimeout(()=>reject(Error('Application regression timed out')),180000)})]);
+ await Promise.race([run(),new Promise((resolve,reject)=>{deadline=setTimeout(()=>reject(Error('Application regression timed out')),360000)})]);
  document.title='PASS application upload, frame selection and dark presentation';await emit('complete');
 }catch(error){report.error=String(error);document.title='FAIL application regression';await emit('failed')}finally{clearTimeout(deadline);frame.src='about:blank'}

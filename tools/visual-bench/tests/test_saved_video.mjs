@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {checkSavedVideo} from '../webapp/saved-video.js';
+const frames=Array.from({length:5},(_,i)=>({capture_time_ns:i*1e9,requested_time_s:i+.01,timing_scope:'browser decoded frame presentation timestamp'}));
+const mission={view:{frames}},snapshot=structuredClone(mission),seen=[];
+const savedPixels=async frame=>new Uint8Array([frame.capture_time_ns/1e9,42]);
+const decode=async time=>{seen.push(time);return {time:time-.01,gray:new Uint8Array([Math.round(time),42])}};
+assert.equal(await checkSavedVideo(mission,{decode,savedPixels}),3);assert.deepEqual(seen,[.01,2.01,4.01]);assert.deepEqual(mission,snapshot);
+for(const result of [{time:NaN,gray:new Uint8Array([0,42])},{time:Infinity,gray:new Uint8Array([0,42])},{time:0,gray:new Uint8Array([0,41])},{time:0,gray:new Uint8Array([0])},{time:.02,gray:new Uint8Array([0,42])}])await assert.rejects(checkSavedVideo(mission,{decode:async()=>result,savedPixels}),/does not match/);
+assert.equal(await checkSavedVideo({view:{frames:[frames[0]]}},{decode,savedPixels}),1);
+await assert.rejects(checkSavedVideo({view:{frames:[]}},{decode,savedPixels}),/not a video/);
+await assert.rejects(checkSavedVideo({view:{frames:[{timing_scope:'still image'}]}},{decode,savedPixels}),/not a video/);
+assert.deepEqual(mission,snapshot);console.info('saved video sample association passes');

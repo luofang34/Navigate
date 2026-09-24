@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import {trackBranches,branchKey,projectPoint} from '../webapp/track-preview.js';
+const h=(id,x,anchor)=>({candidate_id:id,tracking_supported:true,tracking_anchor:anchor,position_enu_m:[x,0,100],eye_to_enu_xyzw:[0,0,0,1]});
+const a={observation_sha256:'a',candidate_id:1,map_manifest_sha256:'map'},b={...a,candidate_id:2};
+const frames=[{capture_time_ns:0,candidate_hypotheses:[h(0,0,a),h(1,20,b)]},{capture_time_ns:200e6,candidate_hypotheses:[h(0,1,a),h(1,21,b)]},{capture_time_ns:400e6,candidate_hypotheses:[]},{capture_time_ns:600e6,candidate_hypotheses:[h(0,3,a)]}];
+const branches=trackBranches(frames);assert.equal(branches.size,2);
+assert.deepEqual(branches.get(branchKey(frames[0],frames[0].candidate_hypotheses[0])).map(s=>s.h?.position_enu_m[0]??null),[0,1,null,3]);
+assert.deepEqual(branches.get(branchKey(frames[0],frames[0].candidate_hypotheses[1])).map(s=>s.h?.position_enu_m[0]??null),[20,21,null,null]);
+assert.deepEqual(projectPoint([0,0,0],h(0,0,a),{fx:100,fy:100,cx:50,cy:50}),[50,50]);
+
+const restarted=structuredClone(frames.slice(0,2));
+for(const frame of restarted)for(const item of frame.candidate_hypotheses)item.track_id='path-'+item.candidate_id;
+restarted[1].candidate_hypotheses[0].tracking_anchor={...a,observation_sha256:'new-map'};
+restarted[1].candidate_hypotheses[0].continuity_break=true;
+assert.equal(trackBranches(restarted).size,2,'an explicit map restart keeps the path lineage without averaging alternatives');
+
+const {TrackPreview}=await import('../webapp/track-preview.js');
+let width=640,height=360,resets=0;const cleared=[];
+const context={clearRect:(...bounds)=>cleared.push(bounds)};
+const overlay={get width(){return width},set width(value){width=value;resets++},get height(){return height},set height(value){height=value;resets++},getContext:()=>context};
+const review={overlay,map:{canvas:{width:640,height:360}},presented:null};
+TrackPreview.prototype.paint.call(review);TrackPreview.prototype.paint.call(review);
+assert.equal(resets,0,'redrawing a frame must not recreate an unchanged canvas backing store');
+assert.deepEqual(cleared,[[0,0,640,360],[0,0,640,360]],'unsupported views clear stale track pixels');
+review.map.canvas.width=1280;review.map.canvas.height=720;TrackPreview.prototype.paint.call(review);
+assert.equal(resets,2);assert.deepEqual(cleared.at(-1),[0,0,1280,720],'a viewport resize updates the backing dimensions');
+TrackPreview.prototype.paint.call(review);assert.equal(resets,2);
+console.info('Track overlay redraws clear old pixels and resize only when the viewport changes');
+
+const segments=structuredClone(frames.slice(0,2));
+segments.push({capture_time_ns:400e6,candidate_hypotheses:[h(0,40,{...a,observation_sha256:'restart'}),h(1,80,{...b,observation_sha256:'restart'})]});
+segments.push({capture_time_ns:600e6,candidate_hypotheses:[h(0,42,{...a,observation_sha256:'restart'}),h(1,82,{...b,observation_sha256:'restart'})]});
+const saved=JSON.stringify(segments),moves=[],selections=[];
+const playback={branches:trackBranches(segments),key:branchKey(segments[0],segments[0].candidate_hypotheses[0]),maxGap:.22,video:{hidden:false},camera:{},status:{},follow:{checked:true},map:{preview:true,setPose:async (pose,options)=>{assert.equal(options.immediate,true);moves.push(pose)}},selection:value=>selections.push(value),paint(){},fail(error){throw error}};
+TrackPreview.prototype.update.call(playback,.1);assert.equal(moves.length,1);assert.ok(Math.abs(moves[0].position_enu_m[0]-.5)<1e-9);
+TrackPreview.prototype.update.call(playback,.3);assert.equal(playback.current,null);assert.equal(moves.length,1,'the gap between map anchors is not filled by display interpolation');
+TrackPreview.prototype.update.call(playback,.5);assert.equal(moves.length,2,'follow resumes on an available new segment');assert.ok(Math.abs(moves[1].position_enu_m[0]-41)<1e-9);assert.equal(selections.at(-1).alternatives,2);assert.match(playback.status.textContent,/2 alternatives/);
+playback.key=branchKey(segments[2],segments[2].candidate_hypotheses[1]);TrackPreview.prototype.update.call(playback,.5);
+assert.equal(moves.length,3,'changing the selected alternative at a paused time updates the view');assert.ok(Math.abs(moves[2].position_enu_m[0]-81)<1e-9);
+assert.equal(JSON.stringify(segments),saved,'display selection does not alter or join the estimated evidence');
+TrackPreview.prototype.update.call(playback,.7);assert.equal(playback.current,null);assert.equal(playback.camera.disabled,true);
+console.info('Follow selects an available segment, preserves alternatives, and never bridges unsupported gaps');
+
+const parentFrame={observation_sha256:'parent',capture_time_ns:1e9,candidate_hypotheses:[{...h(4,10),accepted:true,tracking_supported:false,map_manifest_sha256:'map',track_id:'forward',continuity_break:true}]};
+const parentAnchor={observation_sha256:'parent',candidate_id:4,map_manifest_sha256:'map'};
+const childFrame={observation_sha256:'child',capture_time_ns:0,candidate_hypotheses:[{...h(9,0,parentAnchor),map_manifest_sha256:'map',track_id:'reverse'}]};
+const unchanged=JSON.stringify([childFrame,parentFrame]),anchored=trackBranches([childFrame,parentFrame]);
+const {playbackPose}=await import('../webapp/pose-playback.js');
+assert.equal(playbackPose(anchored.get('reverse'),.5,{maxGap:1.1}).pose.position_enu_m[0],5,'a reverse track reaches its known map parent smoothly');
+assert.strictEqual(anchored.get('reverse').at(-1).source_h,parentFrame.candidate_hypotheses[0]);
+assert.equal(JSON.stringify([childFrame,parentFrame]),unchanged,'parent attachment is only display metadata');
+const aliases={...playback,branches:anchored,maxGap:1.1,key:'reverse'};TrackPreview.prototype.update.call(aliases,1);assert.doesNotMatch(aliases.status.textContent,/alternatives/,'one anchor shown on two branches is one hypothesis');
+const missing=structuredClone(parentFrame);missing.candidate_hypotheses[0].map_manifest_sha256='other';assert.equal(playbackPose(trackBranches([childFrame,missing]).get('reverse'),.5,{maxGap:1.1}),null,'another map version cannot fill a parent gap');
+console.info('Known map parents close display-only anchor gaps without duplicate alternatives or map-version assumptions');
+
+const start={observation_sha256:'start',capture_time_ns:0,candidate_hypotheses:[{...h(4,10),accepted:true,tracking_supported:false,map_manifest_sha256:'map'}]};
+const next={observation_sha256:'next',capture_time_ns:200e6,candidate_hypotheses:[{...h(0,20,{observation_sha256:'start',candidate_id:4,map_manifest_sha256:'map'}),track_id:'continuation',map_manifest_sha256:'map'}]};
+const sequence=JSON.stringify([start,next]),startBranches=trackBranches([start,next]);
+const startPlayback={...playback,branches:startBranches,maxGap:.22,key:branchKey(start,start.candidate_hypotheses[0])};
+TrackPreview.prototype.update.call(startPlayback,0);
+assert.equal(startPlayback.key,'continuation','the anchor selects its connected display copy instead of a single-point branch');
+assert.equal(startPlayback.current.sample.source_h,start.candidate_hypotheses[0]);
+assert.equal(startPlayback.current.pose.position_enu_m[0],10);
+TrackPreview.prototype.update.call(startPlayback,.1);assert.equal(startPlayback.current.pose.position_enu_m[0],15);
+assert.equal(startPlayback.key,'continuation');
+assert.equal(JSON.stringify([start,next]),sequence,'display lineage selection cannot change poses or evidence');
+console.info('Selecting a map anchor highlights its connected path without selecting a different geographic hypothesis');
+
+const strokes=[],paintContext={clearRect(){},beginPath(){},moveTo(){},lineTo(){},stroke(){strokes.push(this.strokeStyle)}};
+const painted={overlay:{width:640,height:360,getContext:()=>paintContext},map:{canvas:{width:640,height:360,clientWidth:640},pack:{anchor_lat_lon:[0,0]}},presented:{pose:{position_enu_m:[0,0,1000],eye_to_enu_xyzw:[0,0,0,1]},camera:{fx:450,fy:450,cx:320,cy:180}},branches:new Map([['selected',branches.values().next().value],['alternative',[...branches.values()][1]]]),key:'selected',maxGap:.22,current:null};
+const unchangedPaths=JSON.stringify([...painted.branches]);TrackPreview.prototype.paint.call(painted);
+assert.deepEqual(strokes,['#08111e','#f6b16b','#08111e','#65bdff'],'overlapping alternatives cannot paint over the selected path');
+assert.equal(JSON.stringify([...painted.branches]),unchangedPaths);
+console.info('The selected track is drawn above geographic alternatives without changing either path');

@@ -1,17 +1,18 @@
+import {DecodedVideoTime} from './video-timing.js';
 export const makeCanvas=()=>typeof document==='undefined'?new OffscreenCanvas(1,1):document.createElement('canvas');
 const canvas=makeCanvas;
 export function gray(source,width,height){const c=canvas();c.width=width;c.height=height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(source,0,0,width,height);const rgba=ctx.getImageData(0,0,width,height).data,pixels=new Uint8Array(width*height),valid=new Uint8Array(width*height);for(let i=0;i<pixels.length;i++){pixels[i]=(77*rgba[4*i]+150*rgba[4*i+1]+29*rgba[4*i+2])>>>8;valid[i]=rgba[4*i+3]}return {gray:pixels,valid,width,height,canvas:c}}
 function mediaEvent(video,event){return new Promise((resolve,reject)=>{const done=()=>{cleanup();resolve()},error=()=>{cleanup();reject(Error('This browser cannot decode the video. Use MP4/H.264 or a PNG frame.'))},cleanup=()=>{video.removeEventListener(event,done);video.removeEventListener('error',error)};video.addEventListener(event,done,{once:true});video.addEventListener('error',error,{once:true})})}
 export async function openInput(file,video){const url=URL.createObjectURL(file);if(file.type.startsWith('image/')){const bitmap=await createImageBitmap(file);return {type:'image',source:bitmap,close(){bitmap.close();URL.revokeObjectURL(url)}}}
-  const ready=mediaEvent(video,'loadedmetadata');video.preload='auto';video.src=url;video.load();await ready;
-  if(!Number.isFinite(video.duration)||video.duration<=0)throw Error('Video duration is unavailable');
-  return {type:'video',source:video,duration:video.duration,close(){video.removeAttribute('src');video.load();URL.revokeObjectURL(url)}};
+  const decodedTime=new DecodedVideoTime(video),ready=mediaEvent(video,'loadedmetadata');video.preload='auto';video.src=url;video.load();try{await ready}catch(error){decodedTime.close();URL.revokeObjectURL(url);throw error}
+  if(!Number.isFinite(video.duration)||video.duration<=0){decodedTime.close();URL.revokeObjectURL(url);throw Error('Video duration is unavailable')}
+  return {type:'video',source:video,duration:video.duration,decodedTime,close(){decodedTime.close();video.removeAttribute('src');video.load();URL.revokeObjectURL(url)}};
 }
 export async function frameAt(input,time,camera){let actual=time,timing='still image';if(input.type==='video'){
     const video=input.source;video.pause();const changed=Math.abs(video.currentTime-time)>1e-6;
-    if(changed){const seek=mediaEvent(video,'seeked');video.currentTime=time;await seek}
+    if(changed){const seek=mediaEvent(video,'seeked');input.decodedTime?.beforeSeek();video.currentTime=time;await seek}
     if(video.readyState<2)await mediaEvent(video,'loadeddata');
-    actual=video.currentTime;timing='browser media seek time; decoded frame PTS is not independently verified';
+    const decoded=await input.decodedTime?.read();actual=decoded??video.currentTime;timing=decoded==null?'browser media seek time; decoded frame PTS is unavailable':'browser decoded frame presentation timestamp';
   }
   const image=gray(input.source,camera.width,camera.height);const blob=await new Promise(resolve=>image.canvas.toBlob(resolve,'image/png'));if(!blob)throw Error('Could not encode the observation frame');return {...image,blob,time:actual,requested_time_s:time,timing};
 }
