@@ -26,6 +26,13 @@ try{
  await writeFile(join(source,'models/lighterglue.onnx'),model);await writeFile(join(source,'models/manifest.json'),JSON.stringify(matcherManifest));
  await exportSite(state,join(root,'learned'),['demo'],source);
  assert.deepEqual((await readdir(join(root,'learned/models'))).sort(),['lighterglue.onnx','manifest.json','xfeat.onnx']);
+ await writeFile(join(source,'models/loftr.onnx'),model);
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify({...matcherManifest,loftr:{url:'/models/loftr.onnx',size:model.length,sha256:digest(model)}}));
+ await exportSite(state,join(root,'dense'),['demo'],source);
+ assert.ok((await readdir(join(root,'dense/models'))).includes('loftr.onnx'));
+ await writeFile(join(source,'models/loftr.onnx'),'tampered');
+ await assert.rejects(exportSite(state,join(root,'tampered-dense'),['demo'],source),/Model checksum mismatch: loftr/);
+ await writeFile(join(source,'models/manifest.json'),JSON.stringify(matcherManifest));
  await writeFile(join(source,'models/lighterglue.onnx'),'tampered');
  await assert.rejects(exportSite(state,join(root,'tampered-matcher'),['demo'],source),/Model checksum mismatch: lighterglue/);
  await writeFile(join(source,'models/lighterglue.onnx'),model);

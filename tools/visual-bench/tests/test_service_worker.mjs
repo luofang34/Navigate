@@ -10,9 +10,9 @@ for(const base of ['http://localhost/','https://example.github.io/Navigate/']){
   vm.runInNewContext(await fs.readFile(new URL('../webapp/sw.js',import.meta.url),'utf8'),context);
   let install;handlers.install({waitUntil:p=>install=p});await install;
   assert.ok(resources.every(url=>url.startsWith(base)),'app shell remains under the deployment prefix');
-  for(const path of ['inference/lighterglue.js','inference/lighterglue-decode.js','inference/retrieval-batch.js','inference/feature-cache.js'])assert.ok(resources.includes(base+path),'learned matcher remains available offline');
+  for(const path of ['inference/loftr.js','inference/loftr-input.js','temporal-search.js','shortlist.js','inference/lighterglue.js','inference/lighterglue-decode.js','inference/retrieval-batch.js','inference/feature-cache.js'])assert.ok(resources.includes(base+path),'learned matcher remains available offline');
   let response;handlers.fetch({request:{method:'GET',url:base},respondWith:p=>response=p});
-  assert.equal(await(await response).text(),'current shell');assert.equal(selected,'navigate-vnav-shell-v20');
+  assert.equal(await(await response).text(),'current shell');assert.match(selected,/^navigate-vnav-shell-v[0-9]+$/);
   for(const path of ['api/catalog','chunks/hash.bin','jobs/id','models/model.onnx']){
     let intercepted=false;handlers.fetch({request:{method:'GET',url:base+path},respondWith:()=>intercepted=true});assert.equal(intercepted,false,path+' bypasses the app-shell cache');
   }

@@ -26,5 +26,10 @@ writeFileSync(path,bytes);
 const gluePath=resolve(root,'../model-assets/lighterglue.onnx'),glue=readFileSync(gluePath),glueProvenance=JSON.parse(readFileSync(resolve(root,'../model-assets/lighterglue.json'),'utf8'));
 if(glue.length!==glueProvenance.size||createHash('sha256').update(glue).digest('hex')!==glueProvenance.sha256)throw Error('LighterGlue asset checksum mismatch');
 writeFileSync(resolve(models,'lighterglue.onnx'),glue);
-writeFileSync(resolve(models,'manifest.json'),JSON.stringify({xfeat:{url:'/models/xfeat.onnx',size:bytes.length,sha256},lighterglue:{url:'/models/lighterglue.onnx',size:glue.length,sha256:glueProvenance.sha256}},null,2));
-writeFileSync(resolve(models,'provenance.json'),JSON.stringify({xfeat:{algorithm:'XFeat sparse features',license:'Apache-2.0',source,source_commit:'bc1acfa02489efc491d6f5891d07bea87f29ec19',sha256,modified:false},lighterglue:glueProvenance},null,2));
+const denseProvenance=JSON.parse(readFileSync(resolve(root,'../model-assets/loftr.json'),'utf8')),densePath=resolve(models,'loftr.onnx');
+let dense=existsSync(densePath)?readFileSync(densePath):null;
+if(!dense||createHash('sha256').update(dense).digest('hex')!==denseProvenance.sha256){const response=await fetch(denseProvenance.url);if(!response.ok)throw Error(`LoFTR asset download failed: ${response.status}`);dense=Buffer.from(await response.arrayBuffer())}
+if(dense.length!==denseProvenance.size||createHash('sha256').update(dense).digest('hex')!==denseProvenance.sha256)throw Error('LoFTR asset checksum mismatch');
+writeFileSync(densePath,dense);
+writeFileSync(resolve(models,'manifest.json'),JSON.stringify({xfeat:{url:'/models/xfeat.onnx',size:bytes.length,sha256},lighterglue:{url:'/models/lighterglue.onnx',size:glue.length,sha256:glueProvenance.sha256},loftr:{url:'/models/loftr.onnx',size:dense.length,sha256:denseProvenance.sha256}},null,2));
+writeFileSync(resolve(models,'provenance.json'),JSON.stringify({xfeat:{algorithm:'XFeat sparse features',license:'Apache-2.0',source,source_commit:'bc1acfa02489efc491d6f5891d07bea87f29ec19',sha256,modified:false},lighterglue:glueProvenance,loftr:denseProvenance},null,2));

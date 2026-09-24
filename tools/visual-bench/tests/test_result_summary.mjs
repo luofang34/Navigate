@@ -30,3 +30,8 @@ assert.deepEqual(unavailable.metrics,[['Reference crops','0'],['Pose candidates'
 const evaluated=resultSummary({accepted:false,retrieval:{map_crops:803,pose_candidates:0,evaluated_candidates:0},candidate_hypotheses:[{accepted:false,reason:'Missing rendered depth'}]});
 assert.match(evaluated.explanation,/Missing rendered depth/);
 assert.equal(evaluated.title,'Visual observation rejected','candidate evidence takes precedence over inconsistent retrieval counts');
+const relative={accepted:false,tracking_supported:true,inliers:150,latitude_deg:40.54,longitude_deg:-74.45};
+const tracking={accepted:false,decision:'relative_tracking',candidate_hypotheses:[relative]};
+assert.equal(missionSummary([tracking]),'1 relative tracking frames · 0 geometric hypotheses · 0 unique among evaluated · 1 frames saved locally');
+assert.equal(resultSummary(tracking,relative).title,'Relative tracking');
+assert.match(resultSummary(tracking,relative).explanation,/drift are unknown/);

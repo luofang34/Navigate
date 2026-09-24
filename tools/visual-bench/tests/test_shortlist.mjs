@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {diverseShortlist} from '../webapp/shortlist.js';
+const references=[0,10,100].map(x=>({image:{width:640,height:640},world:p=>{assert.deepEqual(p,[319.5,319.5]);return [x,0,10]}}));
+const queries=[0,5,90,355].map(angle=>({angle}));
+const ranked=[{reference_index:0,query_index:0},{reference_index:1,query_index:1},{reference_index:0,query_index:3},{reference_index:2,query_index:0},{reference_index:0,query_index:2}];
+assert.deepEqual(diverseShortlist(ranked,references,queries,3),[ranked[0],ranked[3],ranked[4]]);
+assert.deepEqual(diverseShortlist(ranked,references,queries,0),[]);
+assert.equal(diverseShortlist(ranked,references,queries,2).length,2);
+assert.deepEqual(diverseShortlist(ranked,[{...references[0],world:()=>null}],queries,5),[]);
+console.info('Retrieval shortlist preserves geographic and heading diversity within its budget');

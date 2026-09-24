@@ -66,11 +66,11 @@ jobs:
           node tools/visual-bench/prepare_browser_models.mjs
       - name: Read the fixed public reference package
         run: |
-          curl --fail --location --retry 3 https://github.com/luofang34/Navigate/releases/download/vnav-demo-data-20260922/naip-demo-data.tar.gz --output reference-data.tar.gz
-          echo '7a89acaea6a84b92a2b59e54882b82446cc71d4c75fc1ae9d623c7748d0272d8  reference-data.tar.gz' | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/luofang34/Navigate/releases/download/vnav-demo-data-20260922/naip-demo-data-z18-20260924.tar.gz --output reference-data.tar.gz
+          echo 'c9f4de61cddec2b5b666f69565fb54371f694f33d2b7bd44504d4308a0f20e97  reference-data.tar.gz' | sha256sum --check
           mkdir reference-data
           tar -xzf reference-data.tar.gz -C reference-data
-          node Navigate/tools/visual-bench/export_web.mjs reference-data site naip-2864a5ec8e4abb24
+          node Navigate/tools/visual-bench/export_web.mjs reference-data site naip-3754222efffa06cf naip-2864a5ec8e4abb24
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@98ef48e41587a300b82de4cf298aa98b57b2faae # Node.js 24 upload dependency
         with:
