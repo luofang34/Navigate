@@ -4,6 +4,7 @@ mod coverage_loading;
 mod display;
 mod display_tiles;
 mod error;
+mod local_scene;
 mod model;
 mod preview;
 mod storage;
