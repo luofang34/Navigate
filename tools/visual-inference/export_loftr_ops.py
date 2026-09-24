@@ -24,8 +24,12 @@ def coarse(self,a,b,data,mask_c0=None,mask_c1=None):
  valid=(i.gather(1,j)==rows)&(v0>self.thr)
  width,height=80,60
  for ids in [rows,j]:valid=valid&(ids%width>=2)&(ids%width<width-2)&(ids//width>=2)&(ids//width<height-2)
- idx=torch.where(valid[0])[0];jd=j[0,idx]
- data.update({'b_ids':torch.zeros_like(idx),'i_ids':idx,'j_ids':jd,'mconf':v0[0,idx],
+ idx=torch.where(valid[0])[0];jd=j[0,idx];confidence=v0[0,idx]
+ # A zero-confidence row keeps GPU fine-attention kernels nonempty. Adapters discard it.
+ idx=torch.cat((idx,torch.zeros(1,dtype=idx.dtype,device=idx.device)))
+ jd=torch.cat((jd,torch.zeros(1,dtype=jd.dtype,device=jd.device)))
+ confidence=torch.cat((confidence,torch.zeros(1,dtype=confidence.dtype,device=confidence.device)))
+ data.update({'b_ids':torch.zeros_like(idx),'i_ids':idx,'j_ids':jd,'mconf':confidence,
   'mkpts0_c':torch.stack((idx%width,idx//width),dim=1).float()*8,
   'mkpts1_c':torch.stack((jd%width,jd//width),dim=1).float()*8})
 
@@ -43,3 +47,16 @@ def fine_preprocess(self,f0,f1,c0,c1,data):
  b=self.merge_feat(torch.cat((b,self.down_proj(c1[0,j]).unsqueeze(1).expand(-1,25,-1)),dim=2))
  return a,b
 
+
+
+def encoder(self,x,source,x_mask=None,source_mask=None):
+ # An explicit sequence length keeps an empty match batch representable in ONNX.
+ batch,length,channels=x.shape
+ source_length=source.shape[1]
+ query=self.q_proj(x).reshape(batch,length,self.nhead,self.dim)
+ key=self.k_proj(source).reshape(batch,source_length,self.nhead,self.dim)
+ value=self.v_proj(source).reshape(batch,source_length,self.nhead,self.dim)
+ message=self.attention(query,key,value,q_mask=x_mask,kv_mask=source_mask)
+ message=self.norm1(self.merge(message.reshape(batch,length,channels)))
+ message=self.norm2(self.mlp(torch.cat([x,message],dim=2)))
+ return x+message

@@ -28,3 +28,18 @@ fn padding_and_backend_scores_do_not_become_geometry_evidence() {
         .is_err()
     );
 }
+
+#[test]
+fn zero_confidence_row_cannot_become_a_correspondence() {
+    let image = GrayImage::new(960, 540);
+    let input = preprocessing::prepare(&image, 640, 480, 1).expect("input");
+    let pairs = decode(
+        &[320.0, 240.0],
+        &[320.0, 240.0],
+        &[0.0],
+        [&input, &input],
+        [&image, &image],
+    )
+    .expect("empty matches");
+    assert!(pairs.is_empty());
+}

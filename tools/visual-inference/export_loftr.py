@@ -1,7 +1,8 @@
 """Build the fixed-shape LoFTR-DS asset. Deployment does not require Python.
 
 LoFTR: Copyright SenseTime. Kornia: Copyright 2018 Kornia Team.
-Both sources use Apache-2.0. This export uses dual softmax, not optimal transport.
+Both sources use Apache-2.0. This export uses dual softmax.
+Adapters must discard the zero-confidence row that protects empty GPU batches.
 """
 import argparse
 import hashlib
@@ -16,7 +17,7 @@ import onnxruntime as ort
 import torch
 from kornia.feature import LoFTR
 from PIL import Image
-from export_loftr_ops import attention, coarse, fine, fine_preprocess
+from export_loftr_ops import attention, coarse, fine, fine_preprocess, encoder
 
 
 class Export(torch.nn.Module):
@@ -47,14 +48,20 @@ def main():
     for module in model.modules():
         if type(module).__name__ == "LinearAttention":
             module.forward = types.MethodType(attention, module)
+        if type(module).__name__ == "LoFTREncoderLayer":
+            module.forward = types.MethodType(encoder, module)
     images = [torch.from_numpy(np.asarray(Image.open(path).convert("L").resize((640, 480))).copy())[None, None].float() / 255 for path in [args.reference, args.query]]
     with torch.inference_mode():
         torch.onnx.export(model, tuple(images), str(args.output), input_names=["image0", "image1"], output_names=["keypoints0", "keypoints1", "confidence"], opset_version=17, dynamo=False)
         onnx.checker.check_model(onnx.load(args.output))
         session = ort.InferenceSession(str(args.output), providers=["CPUExecutionProvider"])
-        for label, pair in [("image pair", images), ("blank", [torch.zeros_like(i) for i in images])]:
+        for label, pair in [("image pair", images), ("blank", [torch.zeros_like(i) for i in images]), ("empty matches", [torch.zeros_like(images[0]), torch.ones_like(images[1])])]:
             expected = original(*pair)
+            if label == "empty matches" and expected[0].shape[0] != 0:
+                raise ValueError("The empty-match export regression must exercise zero correspondences")
             actual = session.run(None, {"image0": pair[0].numpy(), "image1": pair[1].numpy()})
+            valid = actual[2] > 0
+            actual = [value[valid] for value in actual]
             for a, b in zip(actual, expected):
                 np.testing.assert_allclose(a, b.numpy(), atol=.005, rtol=.001)
             logging.info("Original model parity passed: %s", label)

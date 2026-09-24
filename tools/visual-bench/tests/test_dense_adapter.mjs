@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {DenseMatcher} from '../webapp/inference/loftr.js';
+let disposed=0;const matcher=new DenseMatcher();
+matcher.Tensor=class {dispose(){disposed++}};
+matcher.tracker={phase(){}};matcher.metrics={match_runs:0};
+const tensor=data=>({data:Float32Array.from(data),dispose(){disposed++}});
+matcher.session={async run(){return {keypoints0:tensor([]),keypoints1:tensor([]),confidence:tensor([])}}};
+const image={width:64,height:64,gray:Uint8Array.from({length:4096},(_,i)=>i%251)};
+assert.deepEqual(await matcher.match(image,image),[]);assert.equal(disposed,5,'empty outputs still release all tensors');
+matcher.session.run=async()=>({keypoints0:tensor([300,240]),keypoints1:tensor([310,240]),confidence:tensor([0])});
+assert.deepEqual(await matcher.match(image,image),[],'the padded row cannot become geometry evidence');assert.equal(disposed,10);
+matcher.session.run=async()=>({keypoints0:tensor([300,240]),keypoints1:tensor([310,240]),confidence:tensor([.9])});
+assert.equal((await matcher.match(image,image)).length,1,'a positive observation can follow an empty output');assert.equal(disposed,15);
+matcher.session.run=async()=>{throw Error('GPU device lost')};
+await assert.rejects(matcher.match(image,image),/GPU device lost/);assert.equal(disposed,17);
+console.info('Empty output does not prevent the next match; tensors are released and backend errors remain visible');
