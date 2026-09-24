@@ -69,6 +69,10 @@ console.info('Selecting a map anchor highlights its connected path without selec
 const strokes=[],paintContext={clearRect(){},beginPath(){},moveTo(){},lineTo(){},stroke(){strokes.push(this.strokeStyle)}};
 const painted={overlay:{width:640,height:360,getContext:()=>paintContext},map:{canvas:{width:640,height:360,clientWidth:640},pack:{anchor_lat_lon:[0,0]}},presented:{pose:{position_enu_m:[0,0,1000],eye_to_enu_xyzw:[0,0,0,1]},camera:{fx:450,fy:450,cx:320,cy:180}},branches:new Map([['selected',branches.values().next().value],['alternative',[...branches.values()][1]]]),key:'selected',maxGap:.22,current:null};
 const unchangedPaths=JSON.stringify([...painted.branches]);TrackPreview.prototype.paint.call(painted);
-assert.deepEqual(strokes,['#08111e','#f6b16b','#08111e','#65bdff'],'overlapping alternatives cannot paint over the selected path');
+assert.deepEqual(strokes,['#08111e','#65bdff'],'the default view shows one selected review path');
+strokes.length=0;painted.alternatives={checked:true};TrackPreview.prototype.paint.call(painted);
+assert.deepEqual(strokes,['#08111e','#f6b16b','#08111e','#f6b16b','#08111e','#65bdff'],'other estimates appear below the selected path only when requested');
+strokes.length=0;painted.alternatives.checked=false;TrackPreview.prototype.paint.call(painted);
+assert.deepEqual(strokes,['#08111e','#65bdff'],'hiding other estimates removes their drawing commands');
 assert.equal(JSON.stringify([...painted.branches]),unchangedPaths);
 console.info('The selected track is drawn above geographic alternatives without changing either path');

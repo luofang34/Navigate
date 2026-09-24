@@ -14,7 +14,7 @@ import {openInput,frameAt,gray} from './observation.js';
 import {cameraForImage} from './calibration.js';
 import {matchingOptions} from './matching-options.js';
 const $=id=>document.getElementById(id);const map=new MapView($('map'));let regions=[],region,pack,mission,input,queryURL,loadedCamera,busy=false,media,baseMapLabel,activePipeline,mediaLoading=false,mediaMissionId=null;let inputFiles=[];
-const trackPreview=new TrackPreview(map,$('video'),{overlay:$('track-overlay'),follow:$('track-follow'),camera:$('track-camera'),overview:$('track-overview'),status:$('track-status'),selection:playbackSelection});
+const trackPreview=new TrackPreview(map,$('video'),{overlay:$('track-overlay'),follow:$('track-follow'),camera:$('track-camera'),overview:$('track-overview'),status:$('track-status'),alternatives:$('track-alternatives'),selection:playbackSelection});
 const pipelineSession=new PipelineSession();
 window.addEventListener('pagehide',()=>{pipelineSession.close();trackPreview.close()});
 const formatBytes=n=>(n/1024/1024).toFixed(1)+' MB';
