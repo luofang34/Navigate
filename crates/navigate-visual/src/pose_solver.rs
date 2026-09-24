@@ -80,19 +80,31 @@ pub(crate) fn normal_equations(
 ) -> (Matrix6, Vector6) {
     let mut h = Matrix6::zeros();
     let mut b = Vector6::zeros();
+    let world_to_eye = pose.orientation.inverse().to_rotation_matrix();
     for point in points {
         let Some(projected) = camera.project(pose, point.world) else {
             continue;
         };
         let error = point.pixel - projected;
-        let mut jacobian = SMatrix::<f64, 2, 6>::zeros();
-        for axis in 0..6 {
-            let mut delta = Vector6::zeros();
-            delta[axis] = 0.01;
-            if let Some(shifted) = camera.project(&pose.increment(&delta), point.world) {
-                jacobian.set_column(axis, &((shifted - projected) / 0.01));
-            }
-        }
+        let eye = world_to_eye * (point.world - pose.position);
+        let depth = -eye.z;
+        let projection = SMatrix::<f64, 2, 3>::new(
+            camera.fx / depth,
+            0.0,
+            camera.fx * eye.x / depth.powi(2),
+            0.0,
+            -camera.fy / depth,
+            -camera.fy * eye.y / depth.powi(2),
+        );
+        let mut motion = SMatrix::<f64, 3, 6>::zeros();
+        motion
+            .fixed_view_mut::<3, 3>(0, 0)
+            .copy_from(&(-world_to_eye.matrix()));
+        // Rotation increments use milliradians in the eye frame.
+        motion
+            .fixed_view_mut::<3, 3>(0, 3)
+            .copy_from(&(eye.cross_matrix() * 0.001));
+        let jacobian = projection * motion;
         let weight = 3.0 / error.norm().max(3.0);
         h += jacobian.transpose() * jacobian * weight;
         b += jacobian.transpose() * error * weight;
