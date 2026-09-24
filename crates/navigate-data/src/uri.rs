@@ -1,5 +1,5 @@
 //! Logical resource names have no platform filesystem syntax.
-use crate::DataError;
+use crate::{DataError, StorageClass};
 /// A resource name that a host storage adapter resolves.
 ///
 /// The form is `scheme://path`. The host names the scheme and decides what
@@ -42,6 +42,17 @@ impl DataUri {
         };
         let path_start = scheme.len() + "://".len();
         Ok(Self { value, path_start })
+    }
+    /// Name a resource by storage class and logical path.
+    ///
+    /// # Errors
+    /// Rejects the same unsafe paths as [`Self::parse`].
+    pub fn in_class(class: StorageClass, path: &str) -> Result<Self, DataError> {
+        Self::parse(format!("{}://{path}", class.scheme()))
+    }
+    /// The storage class that the scheme names, or `None` for a host scheme.
+    pub fn storage_class(&self) -> Option<StorageClass> {
+        StorageClass::from_scheme(self.scheme())
     }
     /// The complete logical resource name.
     pub fn as_str(&self) -> &str {
