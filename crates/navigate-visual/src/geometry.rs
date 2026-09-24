@@ -5,6 +5,18 @@ use crate::{
     pose_solver::{self, Correspondence},
 };
 use nalgebra::{SMatrix, Vector2};
+mod tracking;
+pub use tracking::{TrackingProposal, TrackingReference};
+
+/// Full acceptance result and a possible seed for further reference rendering.
+pub struct CandidateEvaluation {
+    /// The unchanged geometric and navigation-prior acceptance decision.
+    pub acceptance: Result<Estimate, VisualError>,
+    /// A fitted pose inside the prior, with enough unique inliers to refine.
+    /// Spatial support can still fail acceptance. This is not a measurement.
+    pub refinement: Option<CameraPose>,
+}
+
 /// Stateless geometric validation for a candidate reference.
 ///
 /// Repeated calls evaluate alternatives from the same evidence. They do not
@@ -46,6 +58,59 @@ impl PoseVerifier {
         matches: &[PixelMatch],
         matcher_identity: &str,
     ) -> Result<Estimate, VisualError> {
+        self.evaluate(frame, reference, prior, matches, matcher_identity)
+            .acceptance
+    }
+
+    /// Evaluate a candidate and retain a bounded pose for another reference render.
+    ///
+    /// A refinement pose is not an accepted measurement. It can have weak spatial
+    /// support. A new render and new correspondences must pass the full policy.
+    /// Repeated calls retain the same observation identity and add no confidence.
+    pub fn evaluate(
+        &self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+        matches: &[PixelMatch],
+        matcher_identity: &str,
+    ) -> CandidateEvaluation {
+        let (pose, inliers, depth_matches) =
+            match self.fit_candidate(frame, reference, prior, matches, matcher_identity) {
+                Ok(fitted) => fitted,
+                Err(error) => {
+                    return CandidateEvaluation {
+                        acceptance: Err(error),
+                        refinement: None,
+                    };
+                }
+            };
+        let acceptance =
+            self.assess(frame, &pose, &inliers, depth_matches)
+                .map(|(quality, covariance)| Estimate {
+                    stamp: frame.stamp,
+                    observation_sha256: frame.evidence_sha256(),
+                    map: reference.map.clone(),
+                    frame: reference.frame,
+                    pose,
+                    quality,
+                    geometry_covariance: covariance,
+                    backend: matcher_identity.to_owned(),
+                });
+        CandidateEvaluation {
+            acceptance,
+            refinement: Some(pose),
+        }
+    }
+
+    fn fit_candidate(
+        &self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+        matches: &[PixelMatch],
+        matcher_identity: &str,
+    ) -> Result<(CameraPose, Vec<Correspondence>, usize), VisualError> {
         reference.validate(frame)?;
         prior.validate()?;
         if matcher_identity.is_empty() {
@@ -80,17 +145,7 @@ impl PoseVerifier {
             .collect();
         self.require_inliers(inliers.len())?;
         check_bounds(&pose, prior)?;
-        let (quality, covariance) = self.assess(frame, &pose, &inliers, depth_matches)?;
-        Ok(Estimate {
-            stamp: frame.stamp,
-            observation_sha256: frame.evidence_sha256(),
-            map: reference.map.clone(),
-            frame: reference.frame,
-            pose,
-            quality,
-            geometry_covariance: covariance,
-            backend: matcher_identity.to_owned(),
-        })
+        Ok((pose, inliers, depth_matches))
     }
 
     fn require_inliers(&self, found: usize) -> Result<(), VisualError> {

@@ -334,3 +334,33 @@ fn random_correspondences_do_not_pass_consensus_acceptance() {
             .is_err()
     );
 }
+
+#[test]
+fn weak_support_can_seed_a_new_render_but_cannot_become_a_measurement() {
+    let (frame, reference, mut prior, matches, truth) = scene();
+    let matches: Vec<_> = matches
+        .into_iter()
+        .filter(|p| p.query.y < 80.0 && p.query.x < 240.0)
+        .collect();
+    assert!(matches.len() >= 20);
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("config");
+    let result = verifier.evaluate(&frame, &reference, &prior, &matches, "test");
+    assert!(matches!(
+        result.acceptance,
+        Err(VisualError::DegenerateGeometry)
+    ));
+    let proposal = result.refinement.expect("bounded seed for another render");
+    assert!((proposal.position - truth.position).norm() < 0.01);
+    prior.position_radius_m = 1.0;
+    let outside = verifier.evaluate(&frame, &reference, &prior, &matches, "test");
+    assert!(matches!(
+        outside.acceptance,
+        Err(VisualError::OutsidePrior { .. })
+    ));
+    assert!(outside.refinement.is_none());
+    let mut missing = reference;
+    missing.depth_m.fill(0.0);
+    let unsupported = verifier.evaluate(&frame, &missing, &prior, &matches, "test");
+    assert!(unsupported.acceptance.is_err());
+    assert!(unsupported.refinement.is_none());
+}
