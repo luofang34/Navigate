@@ -6,6 +6,7 @@ export class BrowserPipeline {
   }
   call(method,args,progress=()=>{}){return new Promise((resolve,reject)=>{const id=this.next=(this.next+1)>>>0;this.pending.set(id,{resolve,reject,progress});this.worker.postMessage({id,method,args})})}
   initialize(pack,camera,progress,options={}){return this.call('initialize',[pack,camera,options],progress)}
+  beginSequence(){return this.call('beginSequence',[])}
   estimate(image,prior,sequence,progress){const {gray,width,height,time,requested_time_s,timing}=image;return this.call('estimate',[{gray,width,height,time,requested_time_s,timing},prior,sequence],progress)}
   fail(error){for(const p of this.pending.values())p.reject(error);this.pending.clear()}
   close(){this.worker.terminate();this.fail(new DOMException('Processing cancelled','AbortError'))}
