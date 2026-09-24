@@ -1,17 +1,18 @@
-//! Validate observation identity and the fixed support of each scene component.
-use super::{LocalScene, LocalSceneError};
+//! Validate observation identity and coordinate constraints for each component.
+use super::{LocalScene, LocalSceneError, SceneCoordinateGauge};
 use crate::CameraModel;
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) fn validate(
     camera: &CameraModel,
     scene: &LocalScene,
     iterations: usize,
+    coordinate_gauge: Option<SceneCoordinateGauge>,
 ) -> Result<(), LocalSceneError> {
     camera
         .validate()
         .map_err(|source| LocalSceneError::Camera { source })?;
     let free = scene.cameras.iter().filter(|c| !c.fixed).count();
-    if free > 96
+    if free > if coordinate_gauge.is_some() { 128 } else { 96 }
         || scene.points.is_empty()
         || scene.points.len() > 16384
         || !(1..=100).contains(&iterations)
@@ -24,7 +25,10 @@ pub(super) fn validate(
     }
     cameras(scene)?;
     points(camera, scene)?;
-    gauge(scene)
+    if let Some(value) = coordinate_gauge {
+        super::scale::validate(scene, value)?;
+    }
+    gauge(scene, coordinate_gauge)
 }
 fn cameras(scene: &LocalScene) -> Result<(), LocalSceneError> {
     let mut identities = BTreeSet::new();
@@ -91,7 +95,10 @@ fn root(parents: &[usize], mut index: usize) -> usize {
     }
     index
 }
-fn gauge(scene: &LocalScene) -> Result<(), LocalSceneError> {
+fn gauge(
+    scene: &LocalScene,
+    coordinate_gauge: Option<SceneCoordinateGauge>,
+) -> Result<(), LocalSceneError> {
     let mut parents: Vec<_> = (0..scene.cameras.len()).collect();
     let mut used = BTreeSet::new();
     for point in &scene.points {
@@ -124,7 +131,9 @@ fn gauge(scene: &LocalScene) -> Result<(), LocalSceneError> {
     for component in components.values() {
         let anchors: Vec<_> = component
             .iter()
-            .filter(|&&i| scene.cameras[i].fixed)
+            .filter(|&&i| {
+                scene.cameras[i].fixed || coordinate_gauge.is_some_and(|g| g.scale_camera == i)
+            })
             .collect();
         let baseline = anchors.iter().any(|&&a| {
             anchors.iter().any(|&&b| {

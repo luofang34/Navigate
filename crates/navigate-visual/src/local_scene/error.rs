@@ -39,11 +39,21 @@ pub enum LocalSceneError {
         /// Failed invariant.
         reason: &'static str,
     },
-    /// Fixed poses do not constrain a connected scene component.
-    #[error("local scene has no observed fixed baseline for cameras {cameras:?}")]
+    /// The declared coordinate constraints do not support a scene component.
+    #[error("local scene has no observed coordinate constraints for cameras {cameras:?}")]
     Unconstrained {
         /// Camera indices in the unconstrained component.
         cameras: Vec<usize>,
+    },
+    /// The declared coordinate gauge is invalid.
+    #[error("invalid scene coordinate gauge ({origin_camera}, {scale_camera}): {reason}")]
+    Gauge {
+        /// Camera that defines the coordinate origin.
+        origin_camera: usize,
+        /// Camera that defines the arbitrary baseline length.
+        scale_camera: usize,
+        /// Failed gauge invariant.
+        reason: &'static str,
     },
     /// The numerical step could not be computed from the supplied geometry.
     #[error("local refinement failed for {cameras} cameras and {points} points")]
