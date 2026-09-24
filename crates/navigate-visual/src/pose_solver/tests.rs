@@ -38,3 +38,44 @@ fn six_axis_pose_converges_from_offset_prior() {
         assert!(estimated.orientation.angle_to(&truth.orientation) < 1e-6);
     }
 }
+
+#[test]
+fn analytic_normal_equations_match_central_differences() {
+    let camera = CameraModel {
+        width: 960,
+        height: 540,
+        fx: 812.0,
+        fy: 798.0,
+        cx: 479.5,
+        cy: 269.5,
+    };
+    for pitch in [0.0, 0.7, 1.5, 2.8] {
+        let pose = CameraPose {
+            position: Vector3::new(21.0, -30.0, 115.0),
+            orientation: UnitQuaternion::from_euler_angles(pitch, -0.3, 1.2),
+        };
+        for depth in [3.0, 90.0, 1500.0] {
+            let pixel = Vector2::new(721.0, 102.0);
+            let point = Correspondence {
+                world: camera.unproject(&pose, pixel, depth),
+                pixel: pixel + Vector2::new(1.5, -0.75),
+            };
+            let (h, b) = normal_equations(&camera, std::slice::from_ref(&point), &pose);
+            let mut numerical = SMatrix::<f64, 2, 6>::zeros();
+            for axis in 0..6 {
+                let mut delta = Vector6::zeros();
+                delta[axis] = 1e-4;
+                let plus = camera
+                    .project(&pose.increment(&delta), point.world)
+                    .expect("visible");
+                let minus = camera
+                    .project(&pose.increment(&(-delta)), point.world)
+                    .expect("visible");
+                numerical.set_column(axis, &((plus - minus) / 2e-4));
+            }
+            let expected = numerical.transpose() * numerical;
+            assert!((h - expected).norm() / expected.norm() < 1e-7);
+            assert!((b - numerical.transpose() * Vector2::new(1.5, -0.75)).norm() < 1e-5);
+        }
+    }
+}
