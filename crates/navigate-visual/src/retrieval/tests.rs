@@ -54,3 +54,52 @@ fn blank_and_degenerate_retrieval_do_not_propose_a_location() {
     ];
     assert!(proposals(camera, &pairs).is_none());
 }
+
+#[test]
+fn planar_retrieval_recovers_with_eighty_percent_outliers() {
+    let camera = CameraModel {
+        width: 640,
+        height: 360,
+        fx: 450.0,
+        fy: 450.0,
+        cx: 319.5,
+        cy: 179.5,
+    };
+    let truth = CameraPose {
+        position: Vector3::new(27.0, -16.0, 180.0),
+        orientation: UnitQuaternion::from_euler_angles(0.18, -0.08, 0.7),
+    };
+    for offset in 0..4 {
+        let mut pairs = Vec::new();
+        for i in 0..150 {
+            let world = Vector3::new(
+                f64::from(i % 15) * 12.0 - 80.0,
+                f64::from(i / 15) * 12.0 - 55.0,
+                30.0,
+            );
+            let query = if i % 5 == offset {
+                camera
+                    .project(&truth, world)
+                    .unwrap_or_else(|| panic!("visible point"))
+            } else {
+                Vector2::new(
+                    f64::from((i * 137 + 31) % 640),
+                    f64::from((i * i * 19 + 17) % 360),
+                )
+            };
+            pairs.push(GroundCorrespondence { world, query });
+        }
+        let estimated = planar_proposal(&camera, &pairs)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no proposal"));
+        assert!(
+            (estimated.pose.position - truth.position).norm() < 1.0,
+            "offset {offset}"
+        );
+        assert!(
+            estimated.pose.orientation.angle_to(&truth.orientation) < 0.01,
+            "offset {offset}"
+        );
+        assert!(estimated.inliers >= 30);
+    }
+}
