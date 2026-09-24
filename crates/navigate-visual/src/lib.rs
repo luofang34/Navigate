@@ -58,6 +58,7 @@ mod error;
 mod frame;
 mod geometry;
 mod local_frame;
+mod local_scene;
 mod localizer;
 mod matching;
 mod pose_solver;
@@ -72,6 +73,10 @@ pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
 pub use geometry::{CandidateEvaluation, PoseVerifier, TrackingProposal, TrackingReference};
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
+pub use local_scene::{
+    LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,
+    ScenePointObservation, SceneRefinement, refine_local_scene,
+};
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};

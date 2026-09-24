@@ -1,6 +1,14 @@
 use thiserror::Error;
 #[derive(Debug, Error)]
 pub(crate) enum PreviewError {
+    #[error("local scene: {0}")]
+    LocalScene(#[from] navigate_visual::LocalSceneError),
+    #[error("invalid scene point ID {id}: {source}")]
+    ScenePointId {
+        id: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
     #[error("visual estimate: {0}")]
     Visual(#[from] navigate_visual::VisualError),
     #[error("invalid preview input: {reason}")]
