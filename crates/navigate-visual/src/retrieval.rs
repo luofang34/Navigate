@@ -63,18 +63,39 @@ fn proposals(camera: CameraModel, pairs: &[GroundCorrespondence]) -> Option<Retr
             )
         })
         .collect();
+    let best = planar_consensus(camera, &normalized);
+    if best.len() < 8 {
+        return None;
+    }
+    let h = fit(&normalized, &best)?;
+    let pose = decompose(h, origin)?;
+    Some(RetrievalProposal {
+        pose: CameraPose {
+            position: pose.0,
+            orientation: pose.1,
+        },
+        inliers: best.len(),
+    })
+}
+fn planar_consensus(
+    camera: CameraModel,
+    normalized: &[(Vector2<f64>, Vector2<f64>)],
+) -> Vec<usize> {
     let mut seed = 0x915a_31d7_u64;
     let mut best = Vec::new();
-    for _ in 0..512 {
+    let mut budget = 4096_usize;
+    let mut trial = 0_usize;
+    while trial < budget {
+        trial = trial.wrapping_add(1);
         let mut sample = Vec::new();
         while sample.len() < 4 {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let i = (seed >> 32) as usize % pairs.len();
+            let i = (seed >> 32) as usize % normalized.len();
             if !sample.contains(&i) {
                 sample.push(i);
             }
         }
-        if let Some(h) = fit(&normalized, &sample) {
+        if let Some(h) = fit(normalized, &sample) {
             let inliers: Vec<_> = normalized
                 .iter()
                 .enumerate()
@@ -90,21 +111,14 @@ fn proposals(camera: CameraModel, pairs: &[GroundCorrespondence]) -> Option<Retr
                 .collect();
             if inliers.len() > best.len() {
                 best = inliers;
+                // This bound controls compute. It is not geographic confidence.
+                let fraction = best.len() as f64 / normalized.len() as f64;
+                let needed = (0.001_f64.ln() / (1.0 - fraction.powi(4)).ln()).ceil() as usize;
+                budget = budget.min(needed.max(64));
             }
         }
     }
-    if best.len() < 8 {
-        return None;
-    }
-    let h = fit(&normalized, &best)?;
-    let pose = decompose(h, origin)?;
-    Some(RetrievalProposal {
-        pose: CameraPose {
-            position: pose.0,
-            orientation: pose.1,
-        },
-        inliers: best.len(),
-    })
+    best
 }
 fn fit(points: &[(Vector2<f64>, Vector2<f64>)], indices: &[usize]) -> Option<Matrix3<f64>> {
     let mut normal = SMatrix::<f64, 8, 8>::zeros();
