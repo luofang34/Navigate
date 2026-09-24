@@ -1,3 +1,4 @@
+import {requireOfflinePack} from './offline-pack.js';
 import {replaySeekTime} from './video-timing.js';
 import {checkSavedVideo} from './saved-video.js';
 import {TrackPreview} from './track-preview.js';
@@ -51,7 +52,7 @@ $('matching-quality').onchange=()=>previewInput().catch(error);
 $('frame-time').onchange=()=>{if(mission&&media?.type==='video'){$('video').currentTime=+$('frame-time').value;return} $('frame-time-label').textContent=`${(+$('frame-time').value).toFixed(2)} / ${media.duration.toFixed(2)} s`;previewInput().catch(error)};
 function priorValues(){return {region_id:region.id,pack_id:pack.pack_id,latitude:+$('latitude').value,longitude:+$('longitude').value,radius_m:+$('radius').value,agl_m:+$('agl').value,fov_deg:+$('fov').value,sample_period:+$('period').value,max_frames:+$('max-frames').value}}
 $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(),cam=camera();let pipeline;busy=true;clearObservation('Preparing this observation.');enable();try{
-  if(!media)throw Error('Select a decoded image or video first');if(!await storage.verifyPack(pack))throw Error('Offline package check failed. Download it again.');
+  if(!media)throw Error('Select a decoded image or video first');await requireOfflinePack(pack,()=>{pack=null;pipelineSession.close();$('pack-status').textContent='Offline data is missing or corrupt. Store this area offline to repair it.';enable()});
   await loadMap(cam);const loading=pipelineSession.acquire(selectedPack,cam,matchingOptions($('matching-quality').value),status);activePipeline=pipelineSession.current;enable();pipeline=await loading;await pipeline.beginSequence();
   const start=media.type==='video'?+$('frame-time').value:0,times=media.type==='image'?inputFiles.map(()=>0):videoTimes(media.duration,start,{mode:$('video-mode').value,period:selectedPrior.sample_period,maxFrames:selectedPrior.max_frames});const sourceAspect=media.type==='image'?media.source.width/media.source.height:null;
   const frames=[],blobs=[];
