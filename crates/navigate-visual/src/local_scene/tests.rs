@@ -188,3 +188,169 @@ fn invalid_calibration_and_pixels_are_rejected() {
         Err(LocalSceneError::Point { feature_id: 0, .. })
     ));
 }
+
+#[test]
+fn arbitrary_gauge_refines_the_starting_camera_rotation() {
+    let mut expected = fixture();
+    for (i, c) in expected.cameras.iter_mut().enumerate() {
+        c.fixed = i == 0;
+    }
+    let mut scene = expected.clone();
+    perturb(&mut scene);
+    scene.cameras[1].pose.position = expected.cameras[1].pose.position;
+    let initial = scene.cameras[1].pose.orientation;
+    let gauge = SceneCoordinateGauge {
+        origin_camera: 0,
+        scale_camera: 1,
+    };
+    let result = refine_local_scene_with_gauge(&camera(), &mut scene, gauge, 60)
+        .expect("arbitrary gauge refinement");
+    assert!(result.final_cost < 1e-5);
+    assert!(scene.cameras[1].pose.orientation.angle_to(&initial) > 0.001);
+    assert_eq!(
+        scene.cameras[0].pose.position,
+        expected.cameras[0].pose.position
+    );
+    assert_eq!(
+        scene.cameras[0].pose.orientation.coords,
+        expected.cameras[0].pose.orientation.coords
+    );
+    for (a, b) in scene.cameras.iter().zip(&expected.cameras) {
+        assert_eq!(a.observation_sha256, b.observation_sha256);
+        assert_eq!(a.fixed, b.fixed);
+        assert!(a.pose.orientation.angle_to(&b.pose.orientation) < 1e-5);
+        assert!((a.pose.position - b.pose.position).norm() < 1e-4);
+    }
+    for (a, b) in scene.points.iter().zip(&expected.points) {
+        assert_eq!(a.feature_id, b.feature_id);
+        for (x, y) in a.observations.iter().zip(&b.observations) {
+            assert_eq!(x.camera_index, y.camera_index);
+            assert_eq!(x.pixel, y.pixel);
+        }
+    }
+}
+
+#[test]
+fn arbitrary_gauge_rejects_invalid_and_unobserved_constraints_without_mutation() {
+    let gauge = SceneCoordinateGauge {
+        origin_camera: 0,
+        scale_camera: 1,
+    };
+    let mut scene = fixture();
+    let unchanged = format!("{scene:?}");
+    assert!(matches!(
+        refine_local_scene_with_gauge(&camera(), &mut scene, gauge, 10),
+        Err(LocalSceneError::Gauge { .. })
+    ));
+    assert_eq!(format!("{scene:?}"), unchanged);
+    scene.cameras[1].fixed = false;
+    let valid = scene.clone();
+    for invalid in [
+        SceneCoordinateGauge {
+            origin_camera: 0,
+            scale_camera: 0,
+        },
+        SceneCoordinateGauge {
+            origin_camera: 99,
+            scale_camera: 1,
+        },
+    ] {
+        assert!(matches!(
+            refine_local_scene_with_gauge(&camera(), &mut scene, invalid, 10),
+            Err(LocalSceneError::Gauge { .. })
+        ));
+        assert_eq!(format!("{scene:?}"), format!("{valid:?}"));
+    }
+    for point in &mut scene.points {
+        point.observations.retain(|o| o.camera_index != 1);
+    }
+    let unchanged = format!("{scene:?}");
+    assert!(matches!(
+        refine_local_scene_with_gauge(&camera(), &mut scene, gauge, 10),
+        Err(LocalSceneError::Unconstrained { .. })
+    ));
+    assert_eq!(format!("{scene:?}"), unchanged);
+    let mut scene = valid;
+    scene.cameras[1].pose.position = scene.cameras[0].pose.position;
+    assert!(matches!(
+        refine_local_scene_with_gauge(&camera(), &mut scene, gauge, 10),
+        Err(LocalSceneError::Gauge { .. })
+    ));
+}
+
+#[test]
+fn arbitrary_gauge_cannot_support_another_disconnected_component() {
+    let mut scene = fixture();
+    scene.cameras[1].fixed = false;
+    for (i, point) in scene.points.iter_mut().enumerate() {
+        point
+            .observations
+            .retain(|o| (o.camera_index < 3) == (i % 2 == 0));
+    }
+    let unchanged = format!("{scene:?}");
+    let gauge = SceneCoordinateGauge {
+        origin_camera: 0,
+        scale_camera: 1,
+    };
+    assert!(matches!(
+        refine_local_scene_with_gauge(&camera(), &mut scene, gauge, 10),
+        Err(LocalSceneError::Unconstrained { .. })
+    ));
+    assert_eq!(format!("{scene:?}"), unchanged);
+}
+
+#[test]
+fn scale_normalization_keeps_projections_and_origin_pose() {
+    let scene = fixture();
+    let before: Vec<_> = scene
+        .cameras
+        .iter()
+        .map(|c| pose::Pose::from_scene(c.pose))
+        .collect();
+    let origin = before[0].center();
+    let mut after = before.clone();
+    for p in &mut after[1..] {
+        p.t = -p.r * (origin + (p.center() - origin) * 3.0);
+    }
+    let mut points: Vec<_> = scene
+        .points
+        .iter()
+        .map(|p| bundle::Landmark {
+            world: origin + (p.position - origin) * 3.0,
+            observations: Vec::new(),
+        })
+        .collect();
+    let pixels: Vec<_> = after
+        .iter()
+        .flat_map(|p| {
+            points
+                .iter()
+                .map(move |x| p.project(&camera(), x.world).expect("projection"))
+        })
+        .collect();
+    scale::normalize(
+        &before,
+        &mut after,
+        &mut points,
+        SceneCoordinateGauge {
+            origin_camera: 0,
+            scale_camera: 1,
+        },
+    )
+    .expect("scale normalization");
+    let normalized: Vec<_> = after
+        .iter()
+        .flat_map(|p| {
+            points
+                .iter()
+                .map(move |x| p.project(&camera(), x.world).expect("projection"))
+        })
+        .collect();
+    for (a, b) in pixels.iter().zip(normalized) {
+        assert!((a - b).norm() < 1e-9);
+    }
+    assert_eq!(before[0].t, after[0].t);
+    assert_eq!(before[0].r, after[0].r);
+    let original_length = (before[1].center() - origin).norm();
+    assert!(((after[1].center() - origin).norm() - original_length).abs() < 1e-12);
+}

@@ -75,7 +75,8 @@ pub use geometry::{CandidateEvaluation, PoseVerifier, TrackingProposal, Tracking
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use local_scene::{
     LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,
-    ScenePointObservation, SceneRefinement, refine_local_scene,
+    SceneCoordinateGauge, ScenePointObservation, SceneRefinement, refine_local_scene,
+    refine_local_scene_with_gauge,
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};

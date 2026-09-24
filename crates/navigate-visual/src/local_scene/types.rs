@@ -66,3 +66,16 @@ pub struct SceneRefinement {
     /// More steps do not add evidence or increase confidence.
     pub steps: usize,
 }
+
+/// An arbitrary coordinate choice for one connected local reconstruction.
+///
+/// Fixing an origin and a baseline length removes the global similarity freedom.
+/// It does not supply a physical position, attitude, scale, or uncertainty.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneCoordinateGauge {
+    /// The only camera whose `fixed` flag is true. Its pose defines the origin.
+    pub origin_camera: usize,
+    /// A free camera whose distance from the origin defines the scene units.
+    /// Its rotation and the baseline direction remain free.
+    pub scale_camera: usize,
+}

@@ -9,12 +9,13 @@ use std::collections::BTreeSet;
 mod bundle;
 mod error;
 mod pose;
+mod scale;
 mod types;
 mod validation;
 pub use error::LocalSceneError;
 pub use types::{
-    LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose, ScenePointObservation,
-    SceneRefinement,
+    LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose, SceneCoordinateGauge,
+    ScenePointObservation, SceneRefinement,
 };
 
 /// Refine one initialized scene candidate with a common estimated calibration.
@@ -37,7 +38,37 @@ pub fn refine_local_scene(
     scene: &mut LocalScene,
     max_iterations: usize,
 ) -> Result<SceneRefinement, LocalSceneError> {
-    validation::validate(camera, scene, max_iterations)?;
+    refine(camera, scene, max_iterations, None)
+}
+
+/// Refine one local scene under an arbitrary coordinate origin and scale.
+///
+/// The gauge camera pair must have a nonzero observed baseline. Only the origin
+/// camera is fixed. The scale camera can rotate and change the baseline direction.
+/// The baseline length defines scene units; it is not a measured distance.
+/// Retain each alternative in a separate scene. The output has no geographic
+/// acceptance, covariance, or independent-evidence claim.
+///
+/// # Errors
+/// Rejects invalid observations, a disconnected or invalid gauge, more than 128
+/// free cameras or 16,384 points, invalid iteration limits, or numerical failure.
+/// Errors leave the scene unchanged.
+pub fn refine_local_scene_with_gauge(
+    camera: &CameraModel,
+    scene: &mut LocalScene,
+    gauge: SceneCoordinateGauge,
+    max_iterations: usize,
+) -> Result<SceneRefinement, LocalSceneError> {
+    refine(camera, scene, max_iterations, Some(gauge))
+}
+
+fn refine(
+    camera: &CameraModel,
+    scene: &mut LocalScene,
+    max_iterations: usize,
+    gauge: Option<SceneCoordinateGauge>,
+) -> Result<SceneRefinement, LocalSceneError> {
+    validation::validate(camera, scene, max_iterations, gauge)?;
     let mut poses = scene
         .cameras
         .iter()
@@ -64,12 +95,18 @@ pub fn refine_local_scene(
                 .collect(),
         })
         .collect::<Vec<_>>();
-    let result = bundle::refine(camera, &mut poses, &mut points, &fixed, max_iterations).ok_or(
-        LocalSceneError::Numerical {
-            cameras: poses.len(),
-            points: points.len(),
-        },
-    )?;
+    let result = bundle::refine(
+        camera,
+        &mut poses,
+        &mut points,
+        &fixed,
+        max_iterations,
+        gauge,
+    )
+    .ok_or(LocalSceneError::Numerical {
+        cameras: poses.len(),
+        points: points.len(),
+    })?;
     for (camera, pose) in scene.cameras.iter_mut().zip(poses) {
         if !camera.fixed {
             camera.pose = pose.to_scene()

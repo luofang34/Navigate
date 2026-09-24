@@ -1,5 +1,5 @@
-//! Refine local poses and scene points conditional on fixed gauge poses.
-use super::pose::Pose;
+//! Refine conditional camera poses and scene points.
+use super::{SceneCoordinateGauge, pose::Pose};
 use crate::CameraModel as Camera;
 use nalgebra::{DMatrix, DVector, Vector2};
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
@@ -173,7 +173,12 @@ fn gauge_indices(
     poses: &[Pose],
     points: &[Landmark],
     fixed: &BTreeSet<usize>,
+    coordinate_gauge: Option<SceneCoordinateGauge>,
 ) -> Option<(Vec<Option<usize>>, usize)> {
+    let mut support_fixed = fixed.clone();
+    if let Some(gauge) = coordinate_gauge {
+        support_fixed.insert(gauge.scale_camera);
+    }
     if points.is_empty()
         || points.len() > 16384
         || poses
@@ -194,16 +199,16 @@ fn gauge_indices(
             return None;
         }
     }
-    if fixed.len() < 2
-        || fixed.iter().any(|&i| i >= poses.len())
+    if support_fixed.len() < 2
+        || support_fixed.iter().any(|&i| i >= poses.len())
         || points
             .iter()
             .any(|p| p.observations.iter().any(|o| o.frame >= poses.len()))
     {
         return None;
     }
-    let baseline = fixed.iter().any(|&a| {
-        fixed
+    let baseline = support_fixed.iter().any(|&a| {
+        support_fixed
             .iter()
             .any(|&b| (poses[a].center() - poses[b].center()).norm() > 1e-6)
     });
@@ -222,7 +227,7 @@ fn gauge_indices(
             }
         })
         .collect();
-    (count <= 96).then_some((indices, count))
+    (count <= if coordinate_gauge.is_some() { 128 } else { 96 }).then_some((indices, count))
 }
 pub(super) fn refine(
     camera: &Camera,
@@ -230,6 +235,7 @@ pub(super) fn refine(
     points: &mut [Landmark],
     fixed: &BTreeSet<usize>,
     iterations: usize,
+    coordinate_gauge: Option<SceneCoordinateGauge>,
 ) -> Option<Statistics> {
     if !(1..=100).contains(&iterations) {
         return None;
@@ -242,7 +248,7 @@ pub(super) fn refine(
     {
         return None;
     }
-    let (indices, count) = gauge_indices(poses, points, fixed)?;
+    let (indices, count) = gauge_indices(poses, points, fixed, coordinate_gauge)?;
     let initial_cost = cost(camera, poses, points);
     let mut current = initial_cost;
     let mut damping = 0.001;
@@ -256,7 +262,7 @@ pub(super) fn refine(
             }
             continue;
         };
-        let next_poses = poses
+        let mut next_poses = poses
             .iter()
             .zip(&indices)
             .map(|(&p, index)| index.map_or(p, |i| p.increment(camera_delta[i])))
@@ -264,6 +270,9 @@ pub(super) fn refine(
         let mut next_points = points.to_vec();
         for (point, delta) in next_points.iter_mut().zip(point_delta) {
             point.world += delta
+        }
+        if let Some(gauge) = coordinate_gauge {
+            super::scale::normalize(poses, &mut next_poses, &mut next_points, gauge)?;
         }
         let next = cost(camera, &next_poses, &next_points);
         if next < current {

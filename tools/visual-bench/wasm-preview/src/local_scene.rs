@@ -2,16 +2,23 @@
 use crate::{error::PreviewError, model::Camera};
 use nalgebra::{Quaternion, UnitQuaternion};
 use navigate_visual::{
-    LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose, ScenePointObservation,
-    refine_local_scene,
+    LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose, SceneCoordinateGauge,
+    ScenePointObservation, refine_local_scene, refine_local_scene_with_gauge,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 #[derive(Deserialize, Serialize)]
 struct Scene {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    coordinate_gauge: Option<CoordinateGauge>,
     cameras: Vec<SceneCamera>,
     points: Vec<ScenePoint>,
+}
+#[derive(Deserialize, Serialize)]
+struct CoordinateGauge {
+    origin_camera: usize,
+    scale_camera: usize,
 }
 #[derive(Deserialize, Serialize)]
 struct SceneCamera {
@@ -110,10 +117,27 @@ fn run(camera_json: &str, scene_json: &str, max_iterations: u32) -> Result<Strin
     camera.validate()?;
     let mut source: Scene = serde_json::from_str(scene_json)?;
     let mut scene = source.model()?;
-    let result = refine_local_scene(&camera.model(), &mut scene, max_iterations as usize)?;
+    let result = if let Some(gauge) = &source.coordinate_gauge {
+        refine_local_scene_with_gauge(
+            &camera.model(),
+            &mut scene,
+            SceneCoordinateGauge {
+                origin_camera: gauge.origin_camera,
+                scale_camera: gauge.scale_camera,
+            },
+            max_iterations as usize,
+        )?
+    } else {
+        refine_local_scene(&camera.model(), &mut scene, max_iterations as usize)?
+    };
+    let uncertainty = if source.coordinate_gauge.is_some() {
+        "unknown; arbitrary coordinate gauge and estimated calibration; no measured scale"
+    } else {
+        "unknown; conditional on fixed estimated poses and calibration"
+    };
     source.update(&scene);
     Ok(json!({"stage":"local_scene_refinement","geographic_acceptance":false,
-        "uncertainty":"unknown; conditional on fixed estimated poses and calibration",
+        "uncertainty":uncertainty,
         "evidence_correlation":"unknown; retained observations can share evidence",
         "initial_cost":result.initial_cost,"final_cost":result.final_cost,"optimizer_steps":result.steps,
         "scene":source}).to_string())
