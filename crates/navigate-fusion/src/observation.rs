@@ -34,8 +34,8 @@ pub enum ObservationValue {
         /// Measurement covariance in NED (m/s)².
         covariance: SymmetricCov3,
     },
-    /// Slant range to a transmitter at a known position, such as a DME.
-    /// Reserved: refused until the range model lands (ADR-0008).
+    /// Slant range to a transmitter at a known position, such as a DME
+    /// (ADR-0008). Requires an initialized filter.
     Range {
         /// Transmitter position, WGS84.
         station: GeodeticPosition,
@@ -100,7 +100,10 @@ impl ObservationValue {
     /// Whether this build has the measurement model for this value.
     #[must_use]
     pub const fn is_supported(&self) -> bool {
-        matches!(self, Self::PositionFix { .. } | Self::VelocityFix { .. })
+        matches!(
+            self,
+            Self::PositionFix { .. } | Self::VelocityFix { .. } | Self::Range { .. }
+        )
     }
 }
 

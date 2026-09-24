@@ -107,9 +107,10 @@ vocabulary; process topology is a deployment decision, not a contract one.
 
 ## What the skeleton deliberately defers
 
-- Measurement models for the reserved `Range`, `Pseudorange`, and
-  `VisualPose` variants. The filter refuses them by name until they land
-  (ADR-0008). Celestial and terrain-matching variants are not reserved yet.
+- Measurement models for the reserved `Pseudorange` and `VisualPose`
+  variants. The filter refuses them by name until they land (ADR-0008). The
+  `Range` model is supported. Celestial and terrain-matching variants are not
+  reserved yet.
 - Inertial and dead-reckoning propagators, attitude and bias states, and
   bounded delayed-measurement history (ADR-0008).
 - Global visual retrieval for a search prior that is too uncertain to

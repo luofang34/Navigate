@@ -26,6 +26,8 @@ pub enum SensorClass {
     FcState,
     /// A published Navigate solution (feeding one back is circular).
     NavigationSolution,
+    /// Ground-based radio navigation aids, such as DME and VOR.
+    RadioNavigation,
 }
 
 impl SensorClass {
@@ -39,6 +41,7 @@ impl SensorClass {
             Self::Inertial => 1 << 5,
             Self::FcState => 1 << 6,
             Self::NavigationSolution => 1 << 7,
+            Self::RadioNavigation => 1 << 8,
         }
     }
 }

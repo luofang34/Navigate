@@ -7,42 +7,40 @@
 //! form because it preserves symmetry and positive semidefiniteness under
 //! floating-point rounding.
 
-use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
+use nalgebra::{Matrix3, SMatrix, SVector};
 use navigate_contract::SymmetricCov3;
 
 pub(crate) type Vec6 = SVector<f64, 6>;
 pub(crate) type Mat6 = SMatrix<f64, 6, 6>;
-type Mat3x6 = SMatrix<f64, 3, 6>;
 
-/// Which 3-vector block of the state a measurement observes.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum MeasurementBlock {
-    /// Position rows: `H = [I₃ 0₃]`.
-    Position,
-    /// Velocity rows: `H = [0₃ I₃]`.
-    Velocity,
+mod models;
+
+pub(crate) use models::{LinearBlock, RangeModel};
+
+/// A measurement of dimension `M` of the six-dimensional state (ADR-0008).
+///
+/// The filter core applies every model through one update path. A new
+/// navigation means is a new model; the core does not change.
+pub(crate) trait MeasurementModel<const M: usize> {
+    /// The innovation `z − h(x)` at the state mean.
+    fn innovation(&self, x: &Vec6) -> SVector<f64, M>;
+    /// The linearization `∂h/∂x` at the state mean. `None` where the model
+    /// has no defined derivative, which the core reports as an
+    /// implausible-covariance rejection.
+    fn jacobian(&self, x: &Vec6) -> Option<SMatrix<f64, M, 6>>;
+    /// The measurement noise covariance.
+    fn noise(&self) -> SMatrix<f64, M, M>;
 }
 
-impl MeasurementBlock {
-    fn observation_matrix(self) -> Mat3x6 {
-        let offset = match self {
-            Self::Position => 0,
-            Self::Velocity => 3,
-        };
-        let mut h = Mat3x6::zeros();
-        for i in 0..3 {
-            h[(i, i + offset)] = 1.0;
-        }
-        h
-    }
-}
-
-/// A gated measurement ready to apply: the innovation, the inverted
-/// innovation covariance, and the chi-square statistic the gate judges.
+/// A gated measurement ready to apply: the innovation, its linearization,
+/// the inverted innovation covariance, and the chi-square statistic the
+/// gate judges.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PreparedUpdate {
-    innovation: Vector3<f64>,
-    s_inverse: Matrix3<f64>,
+pub(crate) struct PreparedUpdate<const M: usize> {
+    innovation: SVector<f64, M>,
+    h: SMatrix<f64, M, 6>,
+    r: SMatrix<f64, M, M>,
+    s_inverse: SMatrix<f64, M, M>,
     pub(crate) chi2: f64,
 }
 
@@ -98,23 +96,26 @@ impl KalmanState {
         }
     }
 
-    /// Computes the innovation and its gate statistic against a 3-vector
-    /// measurement. `None` when the innovation covariance `S = HPHᵀ + R`
-    /// has no Cholesky factorization — surfaced to the caller as an
-    /// implausible-covariance rejection, never a panic.
-    pub(crate) fn prepare_update(
+    /// Linearizes a model at the mean and computes the innovation and its
+    /// gate statistic. `None` when the model has no derivative at the mean,
+    /// or when the innovation covariance `S = HPHᵀ + R` has no Cholesky
+    /// factorization — surfaced to the caller as an implausible-covariance
+    /// rejection, never a panic. The fixed dimension `M` keeps the update
+    /// free of heap allocation.
+    pub(crate) fn prepare_update<const M: usize>(
         &self,
-        block: MeasurementBlock,
-        z: &Vector3<f64>,
-        r: &Matrix3<f64>,
-    ) -> Option<PreparedUpdate> {
-        let h = block.observation_matrix();
+        model: &impl MeasurementModel<M>,
+    ) -> Option<PreparedUpdate<M>> {
+        let h = model.jacobian(&self.x)?;
+        let r = model.noise();
         let s = h * self.p * h.transpose() + r;
         let s_inverse = s.cholesky()?.inverse();
-        let innovation = z - h * self.x;
+        let innovation = model.innovation(&self.x);
         let chi2 = innovation.dot(&(s_inverse * innovation));
         Some(PreparedUpdate {
             innovation,
+            h,
+            r,
             s_inverse,
             chi2,
         })
@@ -122,23 +123,17 @@ impl KalmanState {
 
     /// Applies a prepared measurement with the Joseph-form covariance
     /// update `P' = (I − KH) P (I − KH)ᵀ + K R Kᵀ`.
-    pub(crate) fn apply_update(
-        &self,
-        block: MeasurementBlock,
-        r: &Matrix3<f64>,
-        prepared: &PreparedUpdate,
-    ) -> Self {
-        let h = block.observation_matrix();
+    pub(crate) fn apply_update<const M: usize>(&self, prepared: &PreparedUpdate<M>) -> Self {
+        let h = prepared.h;
         let gain = self.p * h.transpose() * prepared.s_inverse;
         let x = self.x + gain * prepared.innovation;
         let identity_minus_kh = Mat6::identity() - gain * h;
         let p = identity_minus_kh * self.p * identity_minus_kh.transpose()
-            + gain * r * gain.transpose();
+            + gain * prepared.r * gain.transpose();
         Self { x, p }
     }
 }
 
-/// Expands a symmetric upper triangle into a full 3×3 matrix.
 pub(crate) fn cov3_to_matrix(cov: &SymmetricCov3) -> Matrix3<f64> {
     let [xx, xy, xz, yy, yz, zz] = cov.upper_triangle();
     Matrix3::new(xx, xy, xz, xy, yy, yz, xz, yz, zz)
@@ -194,7 +189,7 @@ mod tests {
     use nalgebra::{Matrix3, Vector3};
 
     use super::{
-        KalmanState, Mat6, MeasurementBlock, Vec6, horizontal_1sigma_m, is_positive_definite,
+        KalmanState, LinearBlock, Mat6, Vec6, horizontal_1sigma_m, is_positive_definite,
         vertical_1sigma_m,
     };
 
@@ -213,9 +208,9 @@ mod tests {
         let z = Vector3::new(10.0, 0.0, 0.0);
         let r = Matrix3::identity();
         let prepared = state
-            .prepare_update(MeasurementBlock::Position, &z, &r)
+            .prepare_update(&LinearBlock::position(z, r))
             .expect("invertible innovation covariance");
-        let updated = state.apply_update(MeasurementBlock::Position, &r, &prepared);
+        let updated = state.apply_update(&prepared);
         assert!((updated.x[0] - 10.0 * 100.0 / 101.0).abs() < 1e-9);
         assert!(updated.p[(0, 0)] < state.p[(0, 0)]);
         // Joseph form keeps the covariance symmetric.
@@ -242,11 +237,8 @@ mod tests {
             x: Vec6::zeros(),
             p: Mat6::zeros(),
         };
-        let prepared = degenerate.prepare_update(
-            MeasurementBlock::Position,
-            &Vector3::zeros(),
-            &Matrix3::zeros(),
-        );
+        let prepared =
+            degenerate.prepare_update(&LinearBlock::position(Vector3::zeros(), Matrix3::zeros()));
         assert!(prepared.is_none());
     }
 

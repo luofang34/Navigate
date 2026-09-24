@@ -3,14 +3,9 @@ use navigate_contract::AttitudeQuaternion;
 use super::*;
 use crate::observation::MeasurementKind;
 
-fn reserved_values() -> [ObservationValue; 3] {
+fn reserved_values() -> [ObservationValue; 2] {
     let covariance = SymmetricCov3::from_diagonal(25.0, 25.0, 25.0);
     [
-        ObservationValue::Range {
-            station: position_north_m(10_000.0),
-            range_m: 10_000.0,
-            variance_m2: 25.0,
-        },
         ObservationValue::Pseudorange {
             satellite_ecef_m: [15_600_000.0, 7_540_000.0, 20_140_000.0],
             pseudorange_m: 21_000_000.0,
@@ -45,7 +40,7 @@ fn reserved_measurements_are_refused_by_name_and_counted() {
             IngestOutcome::Rejected(RejectionReason::UnsupportedMeasurement { kind: value.kind() })
         );
     }
-    assert_eq!(f.rejections().unsupported_measurement, 3);
+    assert_eq!(f.rejections().unsupported_measurement, 2);
     let before = before.expect("solution before");
     let after = f.tick(t(1000)).expect("solution after");
     assert_eq!(
@@ -56,10 +51,6 @@ fn reserved_measurements_are_refused_by_name_and_counted() {
     let kinds = reserved_values().map(|v| v.kind());
     assert_eq!(
         kinds,
-        [
-            MeasurementKind::Range,
-            MeasurementKind::Pseudorange,
-            MeasurementKind::VisualPose
-        ]
+        [MeasurementKind::Pseudorange, MeasurementKind::VisualPose]
     );
 }

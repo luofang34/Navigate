@@ -24,6 +24,10 @@ pub struct FusionConfig {
     /// degrees of freedom. Default: 16.27, the 99.9% point of the
     /// chi-square distribution with 3 degrees of freedom.
     pub innovation_gate_chi2: f64,
+    /// Innovation gate threshold on the chi-square statistic with 1 degree
+    /// of freedom, for scalar measurements such as a range. Default: 10.83,
+    /// the 99.9% point, the same confidence as `innovation_gate_chi2`.
+    pub range_gate_chi2: f64,
     /// Power spectral density of the white-acceleration process noise in
     /// m²/s³. Default: 1.0.
     pub process_noise_accel_psd: f64,
@@ -52,6 +56,7 @@ impl Default for FusionConfig {
             staleness_bound: DurationNanos::from_millis(500),
             assessment_window: DurationNanos::from_millis(5_000),
             innovation_gate_chi2: 16.27,
+            range_gate_chi2: 10.83,
             process_noise_accel_psd: 1.0,
             initial_velocity_variance_m2_per_s2: 100.0,
             good_horizontal_1sigma_m: 10.0,
