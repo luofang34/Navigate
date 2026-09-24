@@ -1,0 +1,19 @@
+{
+  "algorithm": "LoFTR outdoor dual softmax",
+  "license": "Apache-2.0",
+  "source": "https://github.com/zju3dv/LoFTR",
+  "implementation": "https://github.com/kornia/kornia/tree/v0.8.1/kornia/feature/loftr",
+  "weights_source": "https://cmp.felk.cvut.cz/~mishkdmy/models/loftr_outdoor.ckpt",
+  "weights_sha256": "21f5bec5968178e8bc8b7633441836fe5de4f47d861dd2cd7dc38e271b0479ec",
+  "sha256": "314ae34198e2b81b160ec205c0d98ea49402410571aeca507d0ec88c9116de2a",
+  "size": 56435531,
+  "modified": true,
+  "modifications": "Fixed 640 by 480 portable ONNX operators. Dual softmax. No weight training or optimal transport code.",
+  "exporter": "tools/visual-inference/export_loftr.py",
+  "export_versions": {
+    "torch": "2.8.0",
+    "kornia": "0.8.1",
+    "onnx": "1.18.0"
+  },
+  "url": "https://github.com/luofang34/Navigate/releases/download/vnav-demo-data-20260922/loftr-ds-640x480-314ae34198e2.onnx"
+}

@@ -8,3 +8,6 @@ assert.equal(frameLabel(unresolved),'Unresolved alternatives');
 assert.equal(hypotheses(unresolved)[1].position_enu_m[0],500);
 assert.deepEqual(hypotheses({accepted:false}),[]);
 assert.deepEqual(hypotheses(first),[first]);
+const relative={accepted:false,tracking_supported:true,position_enu_m:[3,4,110]};
+assert.deepEqual(hypotheses({decision:'relative_tracking',candidate_hypotheses:[relative,{accepted:false}]}),[relative]);
+assert.equal(frameLabel({decision:'relative_tracking'}),'Relative tracking');

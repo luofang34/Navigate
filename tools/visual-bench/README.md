@@ -34,7 +34,7 @@ cargo build --release --manifest-path tools/visual-service/Cargo.toml
 
 The model preparation command downloads the Apache-2.0 XFeat ONNX release.
 It checks the pinned SHA-256 digest. It copies the checked LighterGlue asset from
-`model-assets/`. It installs the pinned ONNX browser runtime.
+`model-assets/`. It downloads the checked LoFTR-DS asset. It installs the pinned ONNX browser runtime.
 The public export includes their licences and model provenance.
 Model loading starts when the user requests matching.
 
@@ -43,14 +43,17 @@ The native provider requires GDAL development files and PROJ data. GDAL 3.6 to
 On a machine with several installations, select one consistent set of headers,
 libraries, and `pkg-config` metadata. Do not substitute a different ABI version.
 
-The public matcher uses XFeat features and LighterGlue assignments.
-Descriptor retrieval selects a shortlist before the learned matcher runs.
-A cached XFeat-only package can still use mutual nearest descriptor matches.
-Its adapter owns preprocessing, feature limits, descriptor filters, and GPU setup.
-The release uses an 800 by 600 coordinate system. The adapter preserves image
-aspect ratio and maps model coordinates back to input pixels.
-Higher matching detail increases the feature budget and geometry resolution.
-It does not increase this model's internal image resolution.
+The balanced and detailed profiles use XFeat retrieval and LoFTR-DS matches.
+The fast profile uses XFeat and LighterGlue. The adapter owns preprocessing,
+model scores, feature limits, and GPU setup. LoFTR uses a 640 by 480 model input.
+The XFeat export uses an 800 by 600 input. Both adapters preserve aspect ratio
+and return coordinates in the input image. More detail increases the search
+budget and geometry resolution. It does not enlarge the model input.
+
+The worker and models stay loaded across observations. Camera-to-camera tracking
+can update the pose between map checks. These updates remain conditional on the
+initial map hypothesis and rendered terrain. They are not new independent map
+fixes. See [camera sequence processing](FLIGHT-TRACKING.md).
 The optional [model probe](../visual-inference/README.md) is separate from the
 public demo. Do not put research-only SuperGlue weights in the public site.
 
@@ -112,7 +115,7 @@ See [Pages deployment](PAGES.md) for the public build.
 1. Select a region, or download an area or route corridor.
 2. Set the precise prior, position radius, height above ground, and sensor FOV.
 3. Download the package and wait for its checksum checks.
-4. Select an image or video. For video, choose a frame or a sampled sequence.
+4. Select images or one video. Images use filename order. For video, choose a frame or a sampled sequence.
 5. Choose matching detail. Higher detail costs more time and memory.
 6. Select **Estimate camera pose**. Results appear after each frame.
 7. Select a frame and a geometric hypothesis. Use **Cancel processing** to stop.

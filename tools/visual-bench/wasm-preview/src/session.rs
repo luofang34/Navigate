@@ -97,13 +97,14 @@ impl Session {
             });
         }
         self.invalidate(id)?;
-        let result = PoseVerifier::new(LocalizerConfig::default())?.verify(
+        let evaluation = PoseVerifier::new(LocalizerConfig::default())?.evaluate(
             &self.frame,
             reference,
             &self.prior,
             pairs,
             backend,
         );
+        let result = evaluation.acceptance;
         let mut report = match &result {
             Ok(e) => {
                 let p = e.pose.position;
@@ -115,19 +116,14 @@ impl Session {
                 json!({"candidate_id":id,"accepted":false,"acceptance_stage":"geometry_and_prior","reason":e.to_string()})
             }
         };
-        use sha2::{Digest, Sha256};
-        report["reference_image_sha256"] =
-            format!("{:x}", Sha256::digest(reference.image.as_raw())).into();
-        let mut digest = Sha256::new();
-        for depth in &reference.depth_m {
-            digest.update(depth.to_le_bytes());
+        if result.is_err()
+            && let Some(pose) = evaluation.refinement
+        {
+            let p = pose.position;
+            let q = pose.orientation.quaternion();
+            report["refinement_proposal"] = json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"stage":"render_initialization_only","accepted":false});
         }
-        report["reference_depth_sha256"] = format!("{:x}", digest.finalize()).into();
-        let p = reference.pose.position;
-        let q = reference.pose.orientation.quaternion();
-        report["reference_pose"] =
-            json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w]});
-        report["surface_geometry"] = "rendered terrain; not independently verified".into();
+        reference_provenance(&mut report, reference);
         self.results.record(CandidateId(u64::from(id)), result)?;
         self.reports.insert(id, report.clone());
         Ok(report)
@@ -154,6 +150,22 @@ impl Session {
         value
     }
 }
+fn reference_provenance(report: &mut Value, reference: &ReferenceView) {
+    use sha2::{Digest, Sha256};
+    report["reference_image_sha256"] =
+        format!("{:x}", Sha256::digest(reference.image.as_raw())).into();
+    let mut digest = Sha256::new();
+    for depth in &reference.depth_m {
+        digest.update(depth.to_le_bytes());
+    }
+    report["reference_depth_sha256"] = format!("{:x}", digest.finalize()).into();
+    let p = reference.pose.position;
+    let q = reference.pose.orientation.quaternion();
+    report["reference_pose"] =
+        json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w]});
+    report["surface_geometry"] = "rendered terrain; not independently verified".into();
+}
+mod tracking;
 #[wasm_bindgen]
 impl Preview {
     /// Bind one calibrated observation and its navigation prior to candidate results.

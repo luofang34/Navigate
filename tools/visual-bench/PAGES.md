@@ -1,7 +1,7 @@
 # VNAV on GitHub Pages
 
 The public site uses the `VNAV Pages` workflow. It builds Rust WASM from source.
-It uses a fixed MapLibre revision and checks the XFeat model checksum.
+It uses a fixed MapLibre revision and checks the XFeat, LighterGlue, and LoFTR model checksums.
 It reads one fixed public data archive and checks its checksum.
 The export checks each data chunk before it includes the chunk in the site.
 
@@ -13,7 +13,7 @@ Set the custom domain in the repository's Pages settings when DNS is ready.
 ## Site contents
 
 - The Sokoly VNAV app, its licences, and a MapLibre Rust globe preview.
-- The Apache-2.0 XFeat model and the MIT-licensed ONNX browser runtime.
+- Apache-2.0 matcher models and the MIT-licensed ONNX browser runtime.
 - NAIP imagery and Mapzen terrain for the approved New Jersey demo area.
 - A map-derived example image with its package identity and camera assumptions.
 
@@ -55,3 +55,7 @@ Use the real image and video input in the published UI for the final check.
 Retrieval candidates, geometric acceptance, and measured geographic accuracy
 are separate results. This demo does not establish absolute accuracy or night
 performance. Its map-derived example does not establish real-flight performance.
+
+The detailed New Jersey package has finer imagery than the regional package.
+Both use the approved public demo area. Enter the local navigation prior before
+matching. Package coverage is not a camera-location measurement.

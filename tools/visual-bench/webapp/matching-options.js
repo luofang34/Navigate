@@ -1,8 +1,8 @@
 export function matchingOptions(mode='balanced') {
   const profiles={
     fast:{longEdge:640,scales:[1],headings:8,shortlist:24,candidates:3,refinements:2,keypoints:512},
-    balanced:{longEdge:960,scales:[.5,.75,1,1.5,2],headings:72,shortlist:64,candidates:8,refinements:3,keypoints:1024},
-    detailed:{longEdge:1280,scales:[.5,.75,1,1.5,2],headings:72,shortlist:96,candidates:8,refinements:3,keypoints:1536},
+    balanced:{matcher:'dense',diverse:true,longEdge:960,scales:[.5,.75,1,1.5,2],headings:72,shortlist:160,candidates:8,refinements:3,keypoints:1024},
+    detailed:{matcher:'dense',diverse:true,longEdge:1280,scales:[.5,.75,1,1.5,2],headings:72,shortlist:240,candidates:8,refinements:3,keypoints:1536},
   };
   if(!Object.hasOwn(profiles,mode))throw Error('Unknown matching profile');
   return structuredClone(profiles[mode]);

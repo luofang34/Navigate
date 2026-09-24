@@ -93,3 +93,64 @@ fn missing_depth_and_interrupted_replacements_cannot_reuse_an_accepted_pose() {
     );
     assert_eq!(session.select()["decision"], "rejected");
 }
+
+#[test]
+fn a_refinement_seed_remains_rejected_until_new_geometry_passes() {
+    let (mut session, reference, full_pairs) = scene();
+    let restricted = (5..115)
+        .step_by(10)
+        .flat_map(|x| {
+            (5..35).step_by(10).map(move |y| {
+                let p = Vector2::new(f64::from(x), f64::from(y));
+                PixelMatch {
+                    reference: p,
+                    query: p,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    session.invalidate(0).expect("candidate");
+    let weak = session
+        .refine(0, &reference, &restricted, "matcher")
+        .expect("report");
+    assert_eq!(weak["accepted"], false);
+    assert_eq!(weak["refinement_proposal"]["accepted"], false);
+    assert_eq!(session.select()["decision"], "rejected");
+    assert!(session.select().get("position_enu_m").is_none());
+    assert!(weak.get("geometry_covariance").is_none());
+    let complete = session
+        .refine(0, &reference, &full_pairs, "matcher")
+        .expect("report");
+    assert_eq!(complete["accepted"], true);
+    assert!(complete.get("refinement_proposal").is_none());
+}
+
+#[test]
+fn relative_tracking_never_becomes_an_accepted_map_candidate() {
+    let (mut session, reference, pairs) = scene();
+    let previous = Frame {
+        camera: session.frame.camera,
+        stamp: FrameStamp {
+            sequence: 0,
+            capture_time_ns: 0,
+        },
+        image: GrayImage::from_pixel(160, 120, image::Luma([99])),
+    };
+    session.invalidate(0).expect("candidate");
+    let tracked = session
+        .track(0, &previous, &reference, &pairs, "test")
+        .expect("tracking");
+    assert_eq!(tracked["accepted"], false);
+    assert_eq!(tracked["tracking_supported"], true);
+    assert!(tracked.get("geometry_covariance").is_none());
+    assert_eq!(session.select()["decision"], "rejected");
+    assert_eq!(
+        tracked["reference_observation_sha256"],
+        previous.evidence_sha256()
+    );
+    assert!(
+        session
+            .track(1, &previous, &reference, &pairs, "test")
+            .is_err()
+    );
+}

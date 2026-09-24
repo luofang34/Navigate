@@ -1,9 +1,10 @@
 import {hypotheses, frameLabel} from './hypotheses.js';
 
 export function missionSummary(frames) {
-  const geometric = frames.reduce((sum, frame) => sum + hypotheses(frame).length, 0);
+  const geometric = frames.reduce((sum, frame) => sum + hypotheses(frame).filter(h=>h.accepted).length, 0);
   const unique = frames.filter(frame => frame.accepted && frame.decision !== 'unresolved').length;
-  return `${geometric} geometric hypotheses · ${unique} unique among evaluated · ${frames.length} frames saved locally`;
+  const tracked=frames.filter(f=>f.decision==='relative_tracking').length;
+  return (tracked?`${tracked} relative tracking frames · `:'')+`${geometric} geometric hypotheses · ${unique} unique among evaluated · ${frames.length} frames saved locally`;
 }
 
 export function resultSummary(frame, hypothesis) {
@@ -19,7 +20,7 @@ export function resultSummary(frame, hypothesis) {
     title: hypothesis ? frameLabel(frame) : noCandidate ? 'No location candidate found' : 'Visual observation rejected',
     location: hypothesis ? `${fixed(hypothesis.latitude_deg, 7)}, ${fixed(hypothesis.longitude_deg, 7)}` : '',
     explanation: hypothesis
-      ? 'Geometric support is not a calibrated probability of the correct location.'
+      ? hypothesis.tracking_supported?'Relative tracking from the initial map hypothesis. Absolute position error and drift are unknown.':'Geometric support is not a calibrated probability of the correct location.'
       : rejection,
     metrics: hypothesis ? [
       ['Geometric inliers', Number.isFinite(hypothesis.inliers) ? String(hypothesis.inliers) : 'Unknown'],

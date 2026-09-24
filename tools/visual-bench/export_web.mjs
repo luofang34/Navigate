@@ -12,7 +12,7 @@ export async function exportSite(state,output,regions,source=webapp){
   if(destination===source||destination.startsWith(source+'/')||destination===state||destination.startsWith(state+'/'))throw Error('Export outside source directories');
   await mkdir(destination,{recursive:true});if((await readdir(destination)).length)throw Error('Export requires an empty output directory');
   const models=JSON.parse(await readFile(resolve(source,'models/manifest.json'),'utf8'));
-  if(!models.xfeat||Object.keys(models).some(name=>!['xfeat','lighterglue'].includes(name)))throw Error('Public export requires redistributable matcher models');
+  if(!models.xfeat||Object.keys(models).some(name=>!['xfeat','lighterglue','loftr'].includes(name)))throw Error('Public export requires redistributable matcher models');
   const modelNames=new Set(['manifest.json','provenance.json']);
   for(const [name,entry] of Object.entries(models)){
     if(entry.url!==`/models/${name}.onnx`)throw Error('Invalid public model URL');

@@ -40,10 +40,10 @@
     </section>
     <section class="setup-section">
       <div class="section-heading"><span class="step">02</span><h2>Camera observation</h2></div>
-      <label class="upload"><span class="upload-title">Add an image or video <span aria-hidden="true">↗</span></span><input id="input" type="file" accept="image/png,image/jpeg,video/mp4,video/quicktime,video/webm,.mkv" aria-label="Choose an image or video"></label><p id="input-name" class="note">JPEG, PNG, MP4, MOV, MKV or WebM · up to 256 MB</p>
+      <label class="upload"><span class="upload-title">Add images or one video <span aria-hidden="true">↗</span></span><input id="input" type="file" multiple accept="image/png,image/jpeg,video/mp4,video/quicktime,video/webm,.mkv" aria-label="Choose images or one video"></label><p id="input-name" class="note">JPEG, PNG, MP4, MOV, MKV or WebM · images up to 256 MB</p>
       <p class="note"><a href="./assets/demo-frame.jpg" download="vnav-map-derived-example.jpg">Download an example image</a> · Made from the reference map.</p>
       <video id="video" controls muted playsinline hidden></video>
-      <div id="video-controls" hidden><label>Selected frame<input id="frame-time" type="range" min="0" max="1" step=".04" value="0"></label><p id="frame-time-label" class="note"></p><label>Video processing<select id="video-mode"><option value="frame">Selected frame</option><option value="sequence">Sample from selected frame</option></select></label><div class="pair"><label>Interval <span>s</span><input id="period" type="number" value="1" min=".1" step=".1"></label><label>Maximum frames<input id="max-frames" type="number" value="10" min="1" max="120"></label></div></div>
+      <div id="video-controls" hidden><label>Selected frame<input id="frame-time" type="range" min="0" max="1" step=".04" value="0"></label><p id="frame-time-label" class="note"></p><label>Video processing<select id="video-mode"><option value="frame">Selected frame</option><option value="sequence">Sample from selected frame</option></select></label><div class="pair"><label>Interval <span>s</span><input id="period" type="number" value=".5" min=".1" step=".1"></label><label>Maximum frames<input id="max-frames" type="number" value="10" min="1" max="120"></label></div></div>
       <label>Matching detail<select id="matching-quality"><option value="fast">Fast · 640 px</option><option value="balanced" selected>Balanced · 960 px</option><option value="detailed">Detailed · 1280 px</option></select></label>
       <p class="note">More detail needs more time. It does not establish geographic accuracy.</p>
       <div class="action-stack"><button id="locate" class="primary full" disabled>Estimate camera pose <span aria-hidden="true">→</span></button><button id="cancel" class="text-button full" disabled>Cancel processing</button></div>
@@ -63,7 +63,8 @@
       <div class="section-heading"><span class="step">03</span><h2>Geometric evidence</h2><span class="unvalidated">Accuracy unverified</span></div>
       <div id="result" class="result" aria-live="polite"><strong>No observation yet</strong><p>Choose coverage and add a camera frame to find possible locations.</p></div>
       <div class="timeline"><label>Saved observation<select id="missions"><option value="">No saved observations</option></select></label><label>Frame<select id="frames" disabled></select></label></div>
-      <label>Geometrically accepted hypothesis<select id="hypotheses" disabled></select></label>
+      <label>Camera hypothesis<select id="hypotheses" disabled></select></label>
+      <button id="export-track" class="secondary" disabled>Export sequence and alternatives</button><p class="note">Sequence export retains rejected-frame gaps and all pose alternatives. A line shows one possible path, not a unique navigation track.</p>
       <p id="run-status" class="status" role="status"></p>
       <details class="measurement-details"><summary>Data and measurement details</summary><p id="compute-status" class="note">Location probabilities are not calibrated. Multiple valid hypotheses stay separate.</p><pre id="details">No observation yet.</pre></details>
     </section>
