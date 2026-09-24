@@ -17,7 +17,7 @@ export class TemporalSearch {
   async track(renderer,matcher,camera,seeds,image,observation,progress){
     if(!this.previous?.image||typeof renderer.track!=='function')return null;
     progress('Tracking between camera frames…');
-    const keys={reference:`${this.previous.observation}/query`,query:`${observation}/query`,stage:'refinement'};
+    const keys={reference:`${this.previous.observation}/query`,query:`${observation}/query`,stage:'refinement',progress};
     const verify=async({pairs,backend_identity})=>{
       const proposals=[];
       for(const [id,seed] of seeds.entries()){
@@ -60,7 +60,7 @@ export async function refineCandidates(renderer,matcher,camera,candidates,image,
     for(let pass=0;pass<passes;pass++){
       progress(`Checking camera pose · candidate ${id+1}/${candidates.length} · refinement ${pass+1}`);
       const pixels=await renderer.render_reference(id,JSON.stringify(candidate));
-      const {pairs,backend_identity}=await matcher.matchImages({gray:pixels,width:camera.width,height:camera.height},image,{query:`${observation}/query`,stage:'refinement'});
+      const {pairs,backend_identity}=await matcher.matchImages({gray:pixels,width:camera.width,height:camera.height},image,{query:`${observation}/query`,stage:'refinement',progress});
       const report=JSON.parse(renderer.refine(id,JSON.stringify(pairs),backend_identity));
       const next=report.accepted?report:report.refinement_proposal;
       if(!next||poseConverged(candidate,next))break;

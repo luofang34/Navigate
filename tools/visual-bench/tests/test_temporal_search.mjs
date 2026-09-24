@@ -60,3 +60,7 @@ assert.equal(variants,1);assert.equal(turned.decision,'relative_tracking');asser
 assert.ok(turned.candidate_hypotheses.every(h=>h.tracking_supported));
 assert.equal(turned.candidate_hypotheses[0].tracking_anchor.observation_sha256,'first');
 console.info('Adapter alternatives require a fresh geometric check and retain the same anchor');
+const progressEvents=[];
+const loadingMatcher={matchImages:async(_reference,_query,keys)=>{keys.progress('Loading model for this observation');return {pairs:[],backend_identity:'replacement-matcher'}}};
+await refineCandidates(renderer,loadingMatcher,{width:1,height:1},[pose(0)],query,'new-request',1,text=>progressEvents.push(text));
+assert.ok(progressEvents.includes('Loading model for this observation'),'lazy model progress belongs to the active observation, not the completed initialization request');

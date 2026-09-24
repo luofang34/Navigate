@@ -39,7 +39,7 @@ export class LocalizationPipeline {
     searched=crops.length*queries.length;
     const indices=this.matcher.retrievePairs?await this.matcher.retrievePairs(crops,queries,(this.options.diverse?crops.length*queries.length:this.options.shortlist),progress):queries.flatMap((_,q)=>crops.map((_,r)=>({reference_index:r,query_index:q})));
     const selected=this.options.diverse?diverseShortlist(indices,crops,queries,this.options.shortlist):indices;
-    const shortlist=selected.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key}}));
+    const shortlist=selected.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key,progress}}));
     const retrievalEnd=performance.now();
     for(const [index,{crop,rotated,angle,keys}] of shortlist.entries()){
       progress(`Comparing images ${index+1}/${shortlist.length} · ${candidates.length} proposals`);const {pairs}=await this.matcher.matchImages(crop.image,rotated,keys);if(pairs.length<12)continue;
