@@ -37,19 +37,18 @@ these items:
 - the composition rule (ADR-0003) and the independence rule (ADR-0007).
 
 The filter core applies a model through one update path. It does not know
-the physics of a means. The position and velocity blocks move behind a
-crate-private `MeasurementModel` trait when the first reserved model lands.
-A new means is then a new module. The filter core does not change.
+the physics of a means. The crate-private `MeasurementModel` trait has a fixed
+measurement dimension, so an update does not allocate. The position and
+velocity blocks and the range model implement it. A new means is a new
+module. The filter core does not change.
 
-### Reserved models are refused by name
+### Supported and reserved models
 
-This build reserves three variants:
-
-| Variant | Means | Needs |
+| Variant | Means | State in this build |
 |---|---|---|
-| `Range` | DME, other ranging transmitters | The range model |
-| `Pseudorange` | Raw GNSS | The pseudorange model and receiver clock states |
-| `VisualPose` | Visual positioning with attitude | Attitude in the state |
+| `Range` | DME and other ranging transmitters | Supported. Gate with 1 degree of freedom (`range_gate_chi2`). Source class `RadioNavigation`. |
+| `Pseudorange` | Raw GNSS | Reserved. Needs the pseudorange model and receiver clock states. |
+| `VisualPose` | Visual positioning with attitude | Reserved. Needs attitude in the state. |
 
 The filter refuses a reserved variant with
 `RejectionReason::UnsupportedMeasurement { kind }` and counts it in

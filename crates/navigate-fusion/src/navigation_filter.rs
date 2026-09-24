@@ -2,7 +2,9 @@
 //! state anchored at the first admitted position fix (ADR-0003), with an
 //! integrity assessment on every published solution (ADR-0004).
 
+mod admission;
 mod integrity;
+
 #[cfg(test)]
 mod tests;
 
@@ -10,16 +12,17 @@ use std::collections::HashMap;
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
-    ClockDomainId, DurationNanos, GeodeticPosition, MonotonicNanos, NavigationSolution,
-    NedVelocity, ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId,
-    SymmetricCov3, WrappingSequence,
+    ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, NedVelocity,
+    ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId, SymmetricCov3,
+    WrappingSequence,
 };
 use navigate_geodesy::{LocalTangentPlane, NedOffset};
 
 use crate::config::FusionConfig;
-use crate::filter::{self, KalmanState, MeasurementBlock};
+use crate::filter::{self, KalmanState, LinearBlock, MeasurementModel, RangeModel};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
+use admission::{check_composition, check_value, seconds};
 
 /// Per-source admission tracking, valid within one source epoch.
 #[derive(Debug, Clone, Copy)]
@@ -253,11 +256,16 @@ impl NavigationFilter {
                 velocity,
                 covariance,
             } => self.apply_velocity(velocity, covariance, obs.stamp.acquired_at),
-            ObservationValue::Range { .. }
-            | ObservationValue::Pseudorange { .. }
-            | ObservationValue::VisualPose { .. } => Err(RejectionReason::UnsupportedMeasurement {
-                kind: obs.value.kind(),
-            }),
+            ObservationValue::Range {
+                station,
+                range_m,
+                variance_m2,
+            } => self.apply_range(station, *range_m, *variance_m2, obs.stamp.acquired_at),
+            ObservationValue::Pseudorange { .. } | ObservationValue::VisualPose { .. } => {
+                Err(RejectionReason::UnsupportedMeasurement {
+                    kind: obs.value.kind(),
+                })
+            }
         }
     }
 
@@ -276,9 +284,8 @@ impl NavigationFilter {
                 update_core(
                     core,
                     &self.config,
-                    MeasurementBlock::Position,
-                    &z,
-                    &r,
+                    &LinearBlock::position(z, r),
+                    self.config.innovation_gate_chi2,
                     acquired_at,
                 )
             }
@@ -299,9 +306,29 @@ impl NavigationFilter {
         update_core(
             core,
             &self.config,
-            MeasurementBlock::Velocity,
-            &z,
-            &r,
+            &LinearBlock::velocity(z, r),
+            self.config.innovation_gate_chi2,
+            acquired_at,
+        )
+    }
+
+    fn apply_range(
+        &mut self,
+        station: &GeodeticPosition,
+        range_m: f64,
+        variance_m2: f64,
+        acquired_at: MonotonicNanos,
+    ) -> Result<(), RejectionReason> {
+        let Some(core) = self.core.as_mut() else {
+            return Err(RejectionReason::NotInitialized);
+        };
+        let offset = core.plane.to_ned(station);
+        let station_ned = Vector3::new(offset.north_m, offset.east_m, offset.down_m);
+        update_core(
+            core,
+            &self.config,
+            &RangeModel::new(station_ned, range_m, variance_m2),
+            self.config.range_gate_chi2,
             acquired_at,
         )
     }
@@ -397,12 +424,11 @@ impl NavigationFilter {
 /// (ADR-0003). A measurement acquired at or before the state's time is
 /// applied at the state's present time; bounded-history re-propagation is
 /// the documented extension for delayed measurements.
-fn update_core(
+fn update_core<const M: usize>(
     core: &mut Core,
     config: &FusionConfig,
-    block: MeasurementBlock,
-    z: &Vector3<f64>,
-    r: &Matrix3<f64>,
+    model: &impl MeasurementModel<M>,
+    gate_chi2: f64,
     acquired_at: MonotonicNanos,
 ) -> Result<(), RejectionReason> {
     let dt_s = acquired_at
@@ -410,68 +436,17 @@ fn update_core(
         .map_or(0.0, seconds);
     let candidate = core.state.propagated(dt_s, config.process_noise_accel_psd);
     let prepared = candidate
-        .prepare_update(block, z, r)
+        .prepare_update(model)
         .ok_or(RejectionReason::ImplausibleCovariance)?;
-    if prepared.chi2 > config.innovation_gate_chi2 {
+    if prepared.chi2 > gate_chi2 {
         return Err(RejectionReason::InnovationGate {
             chi2: prepared.chi2,
-            threshold: config.innovation_gate_chi2,
+            threshold: gate_chi2,
         });
     }
-    core.state = candidate.apply_update(block, r, &prepared);
+    core.state = candidate.apply_update(&prepared);
     if acquired_at > core.state_at {
         core.state_at = acquired_at;
     }
     Ok(())
-}
-
-fn check_composition(composition: SourceComposition) -> Result<(), RejectionReason> {
-    if composition.is_empty() {
-        return Err(RejectionReason::EmptyComposition);
-    }
-    if composition.is_estimator_derived() {
-        return Err(RejectionReason::EstimatorDerived);
-    }
-    Ok(())
-}
-
-fn check_value(value: &ObservationValue) -> Result<(), RejectionReason> {
-    if !value.is_supported() {
-        return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
-    }
-    let covariance = match value {
-        ObservationValue::PositionFix {
-            position,
-            covariance,
-        } => {
-            if !position.is_plausible() {
-                return Err(RejectionReason::NonFiniteValue);
-            }
-            covariance
-        }
-        ObservationValue::VelocityFix {
-            velocity,
-            covariance,
-        } => {
-            if !velocity.is_finite() {
-                return Err(RejectionReason::NonFiniteValue);
-            }
-            covariance
-        }
-        ObservationValue::Range { .. }
-        | ObservationValue::Pseudorange { .. }
-        | ObservationValue::VisualPose { .. } => {
-            return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
-        }
-    };
-    if !covariance.is_plausible()
-        || !filter::is_positive_definite(&filter::cov3_to_matrix(covariance))
-    {
-        return Err(RejectionReason::ImplausibleCovariance);
-    }
-    Ok(())
-}
-
-fn seconds(duration: DurationNanos) -> f64 {
-    duration.as_nanos() as f64 * 1e-9
 }
