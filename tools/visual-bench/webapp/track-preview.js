@@ -3,6 +3,7 @@ import {playbackPose,supportedPose,connectedSamples,VideoPoseClock} from './pose
 
 import {branchKey} from './hypotheses.js';
 import {TrackProjection,projectPoint} from './track-projection.js';
+import {TrackSelection} from './track-selection.js';
 export {projectPoint} from './track-projection.js';
 export {branchKey} from './hypotheses.js';
 export function trackBranches(frames){
@@ -33,17 +34,18 @@ function attachMapAnchors(branches,frames){
 }
 
 export class TrackPreview {
- constructor(map,video,{overlay,follow,camera,overview,status,selection=()=>{}}){
-  Object.assign(this,{map,video,overlay,follow,camera,overviewButton:overview,status,selection});this.branches=new Map();this.key=null;this.maxGap=.55;this.presented=null;
+ constructor(map,video,{overlay,follow,camera,overview,status,alternatives,selection=()=>{}}){
+  Object.assign(this,{map,video,overlay,follow,camera,overviewButton:overview,status,alternatives,selection});this.branches=new Map();this.key=null;this.maxGap=.55;this.presented=null;
   map.canvas.addEventListener('render',e=>{this.presented=e.detail;this.paint()});
   map.canvas.addEventListener('viewchange',e=>{if(e.detail==='free')follow.checked=false});
   follow.addEventListener('change',()=>{this.lastTime=null;this.update(this.clock.time)});
+  alternatives?.addEventListener('change',()=>this.paint());
   camera.onclick=()=>{if(this.current)this.map.setPose(this.current.pose).catch(e=>this.fail(e))};
   overview.onclick=()=>this.overview().catch(e=>this.fail(e));
   this.clock=new VideoPoseClock(video,time=>this.update(time));
  }
  fail(error){this.status.textContent=String(error)}
- clear(){this.projection=null;this.branches.clear();this.key=null;this.selectedTime=null;this.current=null;this.follow.checked=false;this.camera.disabled=true;this.status.textContent='';this.paint()}
+ clear(){this.projection=null;this.selectionProjection=null;this.trackSelection=null;this.branches.clear();this.key=null;this.selectedTime=null;this.current=null;this.follow.checked=false;this.camera.disabled=true;this.status.textContent='';this.paint()}
  setFrames(frames,{period=.5}={}){this.branches=trackBranches(frames);this.maxGap=Math.max(.05,period*1.1);if(!this.branches.has(this.key))this.key=this.branches.keys().next().value??null;this.update(this.clock.time)}
  select(frame,h){this.selectedTime=frame.capture_time_ns/1e9;this.key=h?branchKey(frame,h):null;this.update(this.clock.time)}
  update(time){
@@ -75,12 +77,14 @@ export class TrackPreview {
   const canvas=this.overlay;if(canvas.width!==this.map.canvas.width)canvas.width=this.map.canvas.width;if(canvas.height!==this.map.canvas.height)canvas.height=this.map.canvas.height;const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!this.presented||!this.map.pack)return;
   const point=h=>projectPoint(toGlobePose(this.map.pack,h).position_enu_m,this.presented.pose,this.presented.camera),scale=canvas.width/this.map.canvas.clientWidth;
-  this.projection??=new TrackProjection();
-  const paths=this.projection.project(this.branches,this.map.pack,this.presented,this.maxGap);
-  for(const [key,commands] of [...paths].sort(([a],[b])=>Number(a===this.key)-Number(b===this.key))){
+  this.projection??=new TrackProjection();this.selectionProjection??=new TrackProjection();this.trackSelection??=new TrackSelection();
+  const selected=this.trackSelection.choose(this.branches,this.key,this.maxGap),paths=[];
+  if(this.alternatives?.checked)for(const commands of this.projection.project(this.branches,this.map.pack,this.presented,this.maxGap).values())paths.push({commands,color:'#f6b16b'});
+  for(const commands of this.selectionProjection.project(selected,this.map.pack,this.presented,this.maxGap).values())paths.push({commands,color:'#65bdff'});
+  for(const {commands,color} of paths){
    ctx.beginPath();
    for(const {point,connect} of commands){if(connect)ctx.lineTo(...point);else ctx.moveTo(...point)}
-   ctx.strokeStyle='#08111e';ctx.lineWidth=5*scale;ctx.stroke();ctx.strokeStyle=key===this.key?'#65bdff':'#f6b16b';ctx.lineWidth=2.5*scale;ctx.stroke();
+   ctx.strokeStyle='#08111e';ctx.lineWidth=5*scale;ctx.stroke();ctx.strokeStyle=color;ctx.lineWidth=2.5*scale;ctx.stroke();
   }
   if(this.current){const p=point(this.current.pose);if(p){ctx.beginPath();ctx.arc(...p,6*scale,0,Math.PI*2);ctx.fillStyle='white';ctx.fill();ctx.strokeStyle='#65bdff';ctx.lineWidth=3*scale;ctx.stroke()}}
  }
