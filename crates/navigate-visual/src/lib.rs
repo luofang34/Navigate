@@ -70,7 +70,7 @@ pub use camera::{CameraModel, CameraPose, PosePrior};
 pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
-pub use geometry::PoseVerifier;
+pub use geometry::{CandidateEvaluation, PoseVerifier, TrackingProposal, TrackingReference};
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PyramidalMatcher};
