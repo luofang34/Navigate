@@ -8,8 +8,8 @@ const b=[sample(0,20),sample(1,21),sample(2,22),sample(3,23),sample(4,24)];
 const branches=new Map([['a',a],['b',b]]),saved=JSON.stringify([...branches]),selection=new TrackSelection();
 const selected=selection.choose(branches,'a',1.1);
 assert.deepEqual(selected.get('a').map(s=>s.h?.position_enu_m[0]??null),[0,1,null,null,4]);
-assert.deepEqual(selected.get('b').map(s=>s.h?.position_enu_m[0]??null),[null,null,22,23,null]);
-for(let i=0;i<5;i++)assert.equal([...selected.values()].filter(samples=>samples[i].h).length,1,'each observation contributes one displayed estimate');
+assert.equal(selected.has('b'),false,'an unrelated path cannot fill gaps in the selected path');
+assert.strictEqual(selected.get('a'),a,'the complete selected branch retains its unsupported gaps');
 assert.ok(connectedSamples(selected.get('a')[0],selected.get('a')[1],{maxGap:1.1}));
 assert.equal(connectedSamples(selected.get('a')[1],selected.get('a')[4],{maxGap:1.1}),false,'selection cannot join a gap');
 assert.strictEqual(selection.choose(branches,'a',1.1),selected,'unchanged selection reuses the display cache');
@@ -19,4 +19,4 @@ const parent=sample(0,1),alias={...parent,source_h:parent.h,h:{...parent.h}},chi
 const aliases=new Map([['anchor',[parent]],['continuation',[alias,child]]]);
 assert.deepEqual([...selection.choose(aliases,'anchor',1.1).keys()],['continuation'],'the selected anchor uses its exact connected display copy');
 const empty=new Map([['missing',[sample(0,null)]]]);assert.equal(selection.choose(empty,'missing',1.1).size,0,'unsupported observations do not acquire a path');
-console.info('Review selection displays one estimate per observation, preserves alternatives, reuses caches, and does not bridge gaps');
+console.info('Review selection displays one path, preserves alternatives, reuses caches, and does not bridge gaps');

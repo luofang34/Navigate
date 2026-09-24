@@ -67,10 +67,15 @@ export class TrackPreview {
  }
  async overview(){
   this.follow.checked=false;
-  const poses=[...this.branches.values()].flatMap(samples=>samples.filter(s=>supportedPose(s.h)).map(s=>s.h));
-  if(!poses.length)return;
-  const axis=i=>poses.map(p=>p.position_enu_m[i]),xs=axis(0),ys=axis(1),zs=axis(2),x=(Math.min(...xs)+Math.max(...xs))/2,y=(Math.min(...ys)+Math.max(...ys))/2;
-  const angle=.55,height=Math.max(350,Math.max(...zs)+150,(Math.max(...xs)-Math.min(...xs))*2,(Math.max(...ys)-Math.min(...ys))*2);
+  this.trackSelection??=new TrackSelection();
+  const shown=this.alternatives?.checked?this.branches:this.trackSelection.choose(this.branches,this.key,this.maxGap);
+  const low=[Infinity,Infinity,Infinity],high=[-Infinity,-Infinity,-Infinity];let count=0;
+  for(const samples of shown.values())for(const {h} of samples)if(supportedPose(h)&&h.position_enu_m.every(Number.isFinite)){
+   for(let i=0;i<3;i++){low[i]=Math.min(low[i],h.position_enu_m[i]);high[i]=Math.max(high[i],h.position_enu_m[i])}count=(count+1)>>>0;
+  }
+  if(!count)return;
+  const x=(low[0]+high[0])/2,y=(low[1]+high[1])/2;
+  const angle=.55,height=Math.max(350,high[2]+150,(high[0]-low[0])*2,(high[1]-low[1])*2);
   await this.map.setPose({position_enu_m:[x,y-height*Math.tan(angle),height],eye_to_enu_xyzw:[Math.sin(angle/2),0,0,Math.cos(angle/2)]},{constrain:true});
  }
  paint(){
