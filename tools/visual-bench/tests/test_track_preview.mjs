@@ -76,3 +76,25 @@ strokes.length=0;painted.alternatives.checked=false;TrackPreview.prototype.paint
 assert.deepEqual(strokes,['#08111e','#65bdff'],'hiding other estimates removes their drawing commands');
 assert.equal(JSON.stringify([...painted.branches]),unchangedPaths);
 console.info('The selected track is drawn above geographic alternatives without changing either path');
+
+const overviewPoses=[];
+const overviewBranches=new Map([['visible',[{time:0,h:{...h(0,10),track_id:'visible'}},{time:1,h:{...h(0,20),track_id:'visible'}}]],['hidden',[{time:0,h:{...h(1,1e6),track_id:'hidden'}},{time:1,h:{...h(1,2e6),track_id:'hidden'}}]]]);
+const overviewReview={branches:overviewBranches,key:'visible',maxGap:1.1,follow:{checked:true},alternatives:{checked:false},map:{setPose:async pose=>overviewPoses.push(pose)}};
+await TrackPreview.prototype.overview.call(overviewReview);
+assert.equal(overviewPoses.at(-1).position_enu_m[0],15,'hidden geographic alternatives cannot pull the selected path out of its overview');
+assert.equal(overviewReview.follow.checked,false);
+overviewReview.alternatives.checked=true;
+await TrackPreview.prototype.overview.call(overviewReview);
+assert.equal(overviewPoses.at(-1).position_enu_m[0],1000005,'showing alternatives includes their bounds');
+overviewReview.branches=new Map([['long',Array.from({length:180000},(_,time)=>({time,h:{...h(0,time),track_id:'long'}}))]]);
+await TrackPreview.prototype.overview.call(overviewReview);
+assert.equal(overviewPoses.at(-1).position_enu_m[0],89999.5,'long uploads do not exceed the function argument limit');
+console.info('Overview frames the displayed paths and supports large saved sequences.');
+
+const disconnected=new Map([['first',branches.values().next().value],['restart',[{time:50,h:{...h(8,250),track_id:'restart'}},{time:50.2,h:{...h(8,251),track_id:'restart'}}]]]);
+painted.branches=disconnected;painted.key='first';strokes.length=0;
+TrackPreview.prototype.paint.call(painted);
+assert.deepEqual(strokes,['#08111e','#65bdff'],'a later independent restart is not another blue trace in the selected path');
+painted.key='restart';strokes.length=0;TrackPreview.prototype.paint.call(painted);
+assert.deepEqual(strokes,['#08111e','#65bdff'],'selecting a new restart replaces the displayed path');
+console.info('Independent restarts are shown only when selected or when other estimates are enabled.');
