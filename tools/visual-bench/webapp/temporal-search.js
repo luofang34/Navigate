@@ -82,7 +82,7 @@ export function poseConverged(first,second){
   return distance<.1&&2*Math.acos(Math.min(1,dot))<.001;
 }
 
-export async function refineCandidates(renderer,matcher,camera,candidates,image,observation,passes,progress){
+export async function refineCandidates(renderer,matcher,camera,candidates,image,observation,passes,progress,{acceptedPasses=passes}={}){
   for(let id=0;id<candidates.length;id++){
     let candidate=candidates[id];
     for(let pass=0;pass<passes;pass++){
@@ -91,7 +91,7 @@ export async function refineCandidates(renderer,matcher,camera,candidates,image,
       const {pairs,backend_identity}=await matcher.matchImages({gray:pixels,width:camera.width,height:camera.height},image,{query:`${observation}/query`,stage:'refinement',progress});
       const report=JSON.parse(renderer.refine(id,JSON.stringify(pairs),backend_identity));
       const next=report.accepted?report:report.refinement_proposal;
-      if(!next||poseConverged(candidate,next))break;
+      if(!next||poseConverged(candidate,next)||(report.accepted&&pass+1>=acceptedPasses))break;
       candidate=next;
     }
   }

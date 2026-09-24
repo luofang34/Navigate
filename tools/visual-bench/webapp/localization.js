@@ -23,7 +23,7 @@ export class LocalizationPipeline {
       if(!relative||this.temporal.mapDue(captureTimeNs,this.options.mapIntervalSeconds??5)){
         progress('Checking camera hypotheses against map imagery…');
         const initials=relative?relative.candidate_hypotheses.filter(h=>h.tracking_supported):seeds;
-        localCheck=await refineCandidates(this.renderer,this.matcher,this.camera,initials,image,observation,Math.min(2,this.options.refinements),progress);
+        localCheck=await refineCandidates(this.renderer,this.matcher,this.camera,initials,image,observation,this.options.refinements,progress,{acceptedPasses:2});
         if(localCheck.candidate_hypotheses.some(h=>h.accepted))report=localFallback=this.temporal.label(localCheck,initials,relative);
       }
       if(report&&!regionalDue){
