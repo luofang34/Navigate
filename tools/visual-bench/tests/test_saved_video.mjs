@@ -10,3 +10,16 @@ assert.equal(await checkSavedVideo({view:{frames:[frames[0]]}},{decode,savedPixe
 await assert.rejects(checkSavedVideo({view:{frames:[]}},{decode,savedPixels}),/not a video/);
 await assert.rejects(checkSavedVideo({view:{frames:[{timing_scope:'still image'}]}},{decode,savedPixels}),/not a video/);
 assert.deepEqual(mission,snapshot);console.info('saved video sample association passes');
+
+const fallback='browser media seek time; decoded frame PTS is unavailable';
+const fallbackMission={view:{frames:[{capture_time_ns:19.8e9,requested_time_s:19.8,timing_scope:fallback}]}};
+const fallbackSnapshot=structuredClone(fallbackMission),pixels=async()=>new Uint8Array([17,42]);
+const decoded=()=>({time:19.786433,timing:'browser decoded frame presentation timestamp',gray:new Uint8Array([17,42])});
+assert.equal(await checkSavedVideo(fallbackMission,{decode:async()=>decoded(),savedPixels:pixels}),1,'a measured PTS does not have to equal a recorded seek timestamp');
+assert.deepEqual(fallbackMission,fallbackSnapshot,'replay must not replace the stored timing evidence');
+const measured={view:{frames:[{capture_time_ns:19.786433e9,requested_time_s:19.8,timing_scope:'browser decoded frame presentation timestamp'}]}};
+assert.equal(await checkSavedVideo(measured,{decode:async()=>({...decoded(),time:19.8,timing:fallback}),savedPixels:pixels}),1,'a replay without PTS still requires identical pixels at the recorded request');
+for(const image of [{...decoded(),gray:new Uint8Array([18,42])},{...decoded(),time:NaN},{...decoded(),time:19.9,timing:fallback}])await assert.rejects(checkSavedVideo(fallbackMission,{decode:async()=>image,savedPixels:pixels}),/does not match/);
+await assert.rejects(checkSavedVideo({view:{frames:[{...fallbackMission.view.frames[0],capture_time_ns:19.9e9}]}},{decode:async()=>decoded(),savedPixels:pixels}),/does not match/);
+await assert.rejects(checkSavedVideo(measured,{decode:async()=>({...decoded(),time:19.753}),savedPixels:pixels}),/does not match/);
+console.info('Saved-video checks preserve seek/decoded timestamp distinctions and reject changed pixels or conflicting measured times.');
