@@ -85,12 +85,17 @@ fn missing_depth_and_interrupted_replacements_cannot_reuse_an_accepted_pose() {
     session.invalidate(7).expect("replace");
     assert_eq!(session.select()["decision"], "rejected");
     reference.depth_m.fill(0.0);
+    let rejected = session
+        .refine(7, &reference, &pairs, "matcher")
+        .expect("rejected report");
+    assert_eq!(rejected["accepted"], false);
     assert_eq!(
-        session
-            .refine(7, &reference, &pairs, "matcher")
-            .expect("rejected report")["accepted"],
-        false
+        rejected["map_manifest_sha256"],
+        reference.map.manifest_sha256
     );
+    assert_eq!(rejected["map_release_id"], reference.map.release_id);
+    assert!(rejected["reference_depth_sha256"].is_string());
+    assert!(session.active_observation(8).is_err());
     assert_eq!(session.select()["decision"], "rejected");
 }
 

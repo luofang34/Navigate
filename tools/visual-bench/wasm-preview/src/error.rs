@@ -1,6 +1,16 @@
 use thiserror::Error;
 #[derive(Debug, Error)]
 pub(crate) enum PreviewError {
+    #[error("image track merge: {0}")]
+    TrackMerge(#[from] navigate_visual::reconstruction::TrackMergeError),
+    #[error("scene camera fit: {0}")]
+    SceneResection(#[from] navigate_visual::reconstruction::SceneResectionError),
+    #[error("scene registration: {0}")]
+    SceneRegistration(#[from] navigate_visual::reconstruction::SceneRegistrationError),
+    #[error("scene alignment: {0}")]
+    SceneAlignment(#[from] navigate_visual::reconstruction::SceneAlignmentError),
+    #[error("scene reconstruction: {0}")]
+    Reconstruction(#[from] navigate_visual::reconstruction::ReconstructionError),
     #[error("local scene: {0}")]
     LocalScene(#[from] navigate_visual::LocalSceneError),
     #[error("invalid scene point ID {id}: {source}")]

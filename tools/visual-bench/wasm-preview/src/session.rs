@@ -128,6 +128,14 @@ impl Session {
         self.reports.insert(id, report.clone());
         Ok(report)
     }
+    pub(crate) fn active_observation(&self, id: u32) -> Result<String, PreviewError> {
+        if self.active != Some(id) {
+            return Err(PreviewError::Input {
+                reason: "reference candidate identity does not match".into(),
+            });
+        }
+        Ok(self.frame.evidence_sha256())
+    }
     fn select(&self) -> Value {
         let mut value = match self.results.decision() {
             CandidateDecision::Unique(id) => self.reports[&(id.0 as u32)].clone(),
@@ -150,7 +158,9 @@ impl Session {
         value
     }
 }
-fn reference_provenance(report: &mut Value, reference: &ReferenceView) {
+pub(crate) fn reference_provenance(report: &mut Value, reference: &ReferenceView) {
+    report["map_release_id"] = reference.map.release_id.clone().into();
+    report["map_manifest_sha256"] = reference.map.manifest_sha256.clone().into();
     use sha2::{Digest, Sha256};
     report["reference_image_sha256"] =
         format!("{:x}", Sha256::digest(reference.image.as_raw())).into();

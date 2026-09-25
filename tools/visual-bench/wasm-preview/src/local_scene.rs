@@ -9,18 +9,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 #[derive(Deserialize, Serialize)]
-struct Scene {
+pub(crate) struct Scene {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     coordinate_gauge: Option<CoordinateGauge>,
     cameras: Vec<SceneCamera>,
     points: Vec<ScenePoint>,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct CoordinateGauge {
     origin_camera: usize,
     scale_camera: usize,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct SceneCamera {
     observation_sha256: String,
     position_scene_units: [f64; 3],
@@ -39,7 +39,55 @@ struct Observation {
     pixel: [f64; 2],
 }
 impl Scene {
-    fn model(&self) -> Result<LocalScene, PreviewError> {
+    pub(crate) fn cameras_only(&self) -> Self {
+        Self {
+            coordinate_gauge: self.coordinate_gauge.clone(),
+            cameras: self.cameras.clone(),
+            points: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_model(scene: &LocalScene, gauge: Option<SceneCoordinateGauge>) -> Self {
+        Self {
+            coordinate_gauge: gauge.map(|gauge| CoordinateGauge {
+                origin_camera: gauge.origin_camera,
+                scale_camera: gauge.scale_camera,
+            }),
+            cameras: scene
+                .cameras
+                .iter()
+                .map(|c| SceneCamera {
+                    observation_sha256: c.observation_sha256.clone(),
+                    position_scene_units: c.pose.position.into(),
+                    eye_to_scene_xyzw: c.pose.orientation.coords.into(),
+                    fixed: c.fixed,
+                })
+                .collect(),
+            points: scene
+                .points
+                .iter()
+                .map(|p| ScenePoint {
+                    feature_id: p.feature_id.to_string(),
+                    position_scene_units: p.position.into(),
+                    observations: p
+                        .observations
+                        .iter()
+                        .map(|o| Observation {
+                            camera_index: o.camera_index,
+                            pixel: o.pixel.into(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+    pub(crate) fn with_points_from(&self, scene: &LocalScene) -> Self {
+        let mut result = Self::from_model(scene, None);
+        result.coordinate_gauge = self.coordinate_gauge.clone();
+        result.cameras = self.cameras.clone();
+        result
+    }
+    pub(crate) fn model(&self) -> Result<LocalScene, PreviewError> {
         let cameras = self
             .cameras
             .iter()
@@ -89,6 +137,21 @@ impl Scene {
             })
             .collect::<Result<Vec<_>, PreviewError>>()?;
         Ok(LocalScene { cameras, points })
+    }
+    pub(crate) fn transform(
+        &mut self,
+        transform: navigate_visual::reconstruction::SceneTransform,
+    ) -> Result<(), PreviewError> {
+        let source = self.model()?;
+        for (target, camera) in self.cameras.iter_mut().zip(source.cameras) {
+            let pose = transform.pose(camera.pose);
+            target.position_scene_units = pose.position.into();
+            target.eye_to_scene_xyzw = pose.orientation.coords.into();
+        }
+        for (target, point) in self.points.iter_mut().zip(source.points) {
+            target.position_scene_units = transform.point(point.position).into();
+        }
+        Ok(())
     }
     fn update(&mut self, scene: &LocalScene) {
         for (target, source) in self.cameras.iter_mut().zip(&scene.cameras) {
