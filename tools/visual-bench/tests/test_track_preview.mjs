@@ -66,7 +66,7 @@ assert.equal(startPlayback.key,'continuation');
 assert.equal(JSON.stringify([start,next]),sequence,'display lineage selection cannot change poses or evidence');
 console.info('Selecting a map anchor highlights its connected path without selecting a different geographic hypothesis');
 
-const strokes=[],paintContext={clearRect(){},beginPath(){},moveTo(){},lineTo(){},stroke(){strokes.push(this.strokeStyle)}};
+const strokes=[],paintContext={clearRect(){},beginPath(){},moveTo(){},lineTo(){},stroke(){assert.equal(this.lineJoin,'round','sharp path turns must not form miter spikes');assert.equal(this.lineCap,'round','separate path segments use bounded round ends');strokes.push(this.strokeStyle)}};
 const painted={overlay:{width:640,height:360,getContext:()=>paintContext},map:{canvas:{width:640,height:360,clientWidth:640},pack:{anchor_lat_lon:[0,0]}},presented:{pose:{position_enu_m:[0,0,1000],eye_to_enu_xyzw:[0,0,0,1]},camera:{fx:450,fy:450,cx:320,cy:180}},branches:new Map([['selected',branches.values().next().value],['alternative',[...branches.values()][1]]]),key:'selected',maxGap:.22,current:null};
 const unchangedPaths=JSON.stringify([...painted.branches]);TrackPreview.prototype.paint.call(painted);
 assert.deepEqual(strokes,['#08111e','#65bdff'],'the default view shows one selected review path');
