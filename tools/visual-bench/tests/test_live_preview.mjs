@@ -31,7 +31,7 @@ const context={setTimeout:()=>1,clearTimeout(){},console:{error:e=>errors.push(e
  document:{getElementById:node,querySelector:node,createElement:()=>new Element(),documentElement:{dataset:{}}},window:{addEventListener(){},dispatchEvent(event){if(event.type==='visual-ready')ready.resolve()}},
  navigator:{storage:{estimate:async()=>({usage:1,quota:1e9}),persisted:async()=>true}},location:{search:''},URLSearchParams,
  TrackPreview:class extends TrackPreview{constructor(...args){super(...args);activePreview=this}},
- MapView:class{constructor(canvas){this.canvas=canvas}async load(p,c){this.pack=p;this.pack_id=p.pack_id;this.preview={}}setMinimumClearance(){}async setCalibration(){}async setPose(pose){moves.push(pose)}height(){return 100}},
+ MapView:class{constructor(canvas){this.canvas=canvas}async load(p,c){this.pack=p;this.pack_id=p.pack_id;this.preview={}}setMinimumClearance(){}async setCalibration(){}async setPose(pose){moves.push(pose)}displayCamera(){return {width:960,height:544,fx:689,fy:694,cx:479.5,cy:271.5}}height(){return 100}},
  PipelineSession:class{acquire(){this.current=pipeline;return Promise.resolve(pipeline)}close(){}},
  DataService:class{static=true;request(){return Promise.resolve([region])}},CoverageLoader:class{},
  hypotheses,frameLabel,missionSummary,resultSummary,executionSummary,replaySeekTime,

@@ -80,7 +80,7 @@ console.info('The selected track is drawn above geographic alternatives without 
 const overviewPoses=[],overviewEvents=[],overviewCanvas=new EventTarget();
 overviewCanvas.addEventListener('viewchange',e=>overviewEvents.push(e.detail));
 const overviewBranches=new Map([['visible',[{time:0,h:{...h(0,10),track_id:'visible'}},{time:1,h:{...h(0,20),track_id:'visible'}}]],['hidden',[{time:0,h:{...h(1,1e6),track_id:'hidden'}},{time:1,h:{...h(1,2e6),track_id:'hidden'}}]]]);
-const overviewReview={branches:overviewBranches,key:'visible',maxGap:1.1,follow:{checked:true},alternatives:{checked:false},map:{canvas:overviewCanvas,setPose:async pose=>overviewPoses.push(pose)}};
+const overviewReview={branches:overviewBranches,key:'visible',maxGap:1.1,follow:{checked:true},alternatives:{checked:false},map:{canvas:overviewCanvas,displayCamera:()=>({width:960,height:544,fx:689,fy:694,cx:479.5,cy:271.5}),setPose:async pose=>overviewPoses.push(pose)}};
 await TrackPreview.prototype.overview.call(overviewReview);
 assert.equal(overviewPoses.at(-1).position_enu_m[0],15,'hidden geographic alternatives cannot pull the selected path out of its overview');
 assert.equal(overviewReview.follow.checked,false);
@@ -100,3 +100,23 @@ assert.deepEqual(strokes,['#08111e','#65bdff'],'a later independent restart is n
 painted.key='restart';strokes.length=0;TrackPreview.prototype.paint.call(painted);
 assert.deepEqual(strokes,['#08111e','#65bdff'],'selecting a new restart replaces the displayed path');
 console.info('Independent restarts are shown only when selected or when other estimates are enabled.');
+
+const {toGlobePose}=await import('../webapp/geography.js');
+for(const calibration of [
+ {width:960,height:544,fx:689,fy:694,cx:479.5,cy:271.5},
+ {width:600,height:900,fx:1400,fy:1200,cx:270,cy:420},
+]){
+ const positions=[[-170,-250,95],[170,250,180],[-90,220,360],[10,-50,900]],pack={anchor_lat_lon:[40.54,-74.45]};
+ const samples=positions.map((position_enu_m,time)=>({time,h:{...h(0,0),position_enu_m,track_id:'elevated'}}));
+ const before=JSON.stringify(samples);overviewReview.branches=new Map([['elevated',samples]]);overviewReview.key='elevated';overviewReview.maxGap=1.1;
+ overviewReview.map.displayCamera=()=>calibration;
+ await TrackPreview.prototype.overview.call(overviewReview);
+ const pose=toGlobePose(pack,overviewPoses.at(-1));
+ for(const sample of samples){
+  const pixel=projectPoint(toGlobePose(pack,sample.h).position_enu_m,pose,calibration);
+  assert.ok(pixel&&pixel[0]>=calibration.width*.16&&pixel[0]<=calibration.width*.84&&pixel[1]>=calibration.height*.16&&pixel[1]<=calibration.height*.84,
+   `elevated camera must fit inside the overview, including narrow or asymmetric calibration: ${pixel}`);
+ }
+ assert.equal(JSON.stringify(samples),before,'overview framing cannot change estimated poses');
+}
+console.info('Overview fits elevated camera paths with the displayed calibration and keeps their estimates unchanged.');
