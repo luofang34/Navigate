@@ -77,12 +77,14 @@ assert.deepEqual(strokes,['#08111e','#65bdff'],'hiding other estimates removes t
 assert.equal(JSON.stringify([...painted.branches]),unchangedPaths);
 console.info('The selected track is drawn above geographic alternatives without changing either path');
 
-const overviewPoses=[];
+const overviewPoses=[],overviewEvents=[],overviewCanvas=new EventTarget();
+overviewCanvas.addEventListener('viewchange',e=>overviewEvents.push(e.detail));
 const overviewBranches=new Map([['visible',[{time:0,h:{...h(0,10),track_id:'visible'}},{time:1,h:{...h(0,20),track_id:'visible'}}]],['hidden',[{time:0,h:{...h(1,1e6),track_id:'hidden'}},{time:1,h:{...h(1,2e6),track_id:'hidden'}}]]]);
-const overviewReview={branches:overviewBranches,key:'visible',maxGap:1.1,follow:{checked:true},alternatives:{checked:false},map:{setPose:async pose=>overviewPoses.push(pose)}};
+const overviewReview={branches:overviewBranches,key:'visible',maxGap:1.1,follow:{checked:true},alternatives:{checked:false},map:{canvas:overviewCanvas,setPose:async pose=>overviewPoses.push(pose)}};
 await TrackPreview.prototype.overview.call(overviewReview);
 assert.equal(overviewPoses.at(-1).position_enu_m[0],15,'hidden geographic alternatives cannot pull the selected path out of its overview');
 assert.equal(overviewReview.follow.checked,false);
+assert.deepEqual(overviewEvents,['overview'],'overview is labeled as a display view, not an estimated camera');
 overviewReview.alternatives.checked=true;
 await TrackPreview.prototype.overview.call(overviewReview);
 assert.equal(overviewPoses.at(-1).position_enu_m[0],1000005,'showing alternatives includes their bounds');
