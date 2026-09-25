@@ -73,22 +73,24 @@ $('source-video').onchange=async()=>{
   media?.close();media=opened;opened=null;input=file;inputFiles=[file];mediaMissionId=selected.id;
   $('input-name').textContent=file.name+' · source video for saved track';$('video').src=media.source.src;$('video').load();$('video').hidden=false;$('query').hidden=true;$('video-controls').hidden=false;
   $('frame-time').max=Math.max(0,media.duration-.04);$('frame-time').value=replaySeekTime(selected.view.frames[index]);
-  await showFrame(index);status('Source video attached. Saved poses are unchanged.');
+  await showFrame(index,{moveCamera:false});status('Source video attached. Saved poses are unchanged.');
  }catch(e){error(e)}finally{opened?.close();mediaLoading=false;$('source-video').value='';enable()}
 };
 async function refreshMissions(selected){const items=await storage.all('missions');$('missions').replaceChildren(new Option('Select a saved observation',''),...items.sort((a,b)=>b.saved_at-a.saved_at).map(m=>new Option(`${m.view.input?.name||'Observation'} · ${new Date(m.saved_at).toLocaleString()} · ${m.view.frames.length} frame(s)`,m.id)));if(selected)$('missions').value=selected}
 async function showMission(value){mission=value;reviewContext={frames:value.view.frames,camera:value.view.camera,pack_id:value.pack_id,mission:value};$('video').hidden=media?.type!=='video'||mediaMissionId!==value.id;$('query').hidden=!$('video').hidden;const saved=await storage.get('packs',value.pack_id);if(!saved||!await storage.verifyPack(saved))throw Error('Saved observation requires a missing package. Download its region.');pack=saved;region=regions.find(r=>r.pack_id===pack.pack_id);if(!region)throw Error('Saved region catalog is missing');$('region').value=region.id;$('overview').src=assetUrl(region.thumbnail);
+  for(const [id,key] of [['latitude','latitude'],['longitude','longitude'],['radius','radius_m'],['agl','agl_m'],['fov','fov_deg'],['period','sample_period'],['max-frames','max_frames']])if(Number.isFinite(value.view.prior?.[key]))$(id).value=String(value.view.prior[key]);
+  drawPrior();$('pack-status').textContent=`Verified offline package · ${formatBytes(region.bytes)}`;
   if(!loadedCamera||JSON.stringify(loadedCamera)!==JSON.stringify(mission.view.camera)||map.pack_id!==pack.pack_id){await loadMap(mission.view.camera);map.pack_id=pack.pack_id}
   $('frames').replaceChildren(...mission.view.frames.map(frameOption));$('frames').disabled=false;status(missionSummary(mission.view.frames));$('export-track').disabled=false;trackPreview.setFrames(mission.view.frames,{period:mission.view.prior.sample_period});await showFrame(0);await trackPreview.overview()}
 function frameOption(frame,index){return new Option(`${frame.timing_scope==='still image'?(frame.input_name||'Image '+(index+1)):(frame.capture_time_ns/1e9).toFixed(2)+' s'} · ${frameLabel(frame)}`,index)}
 function showDetails(frame){$('details').textContent=JSON.stringify({pack_id:reviewContext.pack_id,elevation_datum:pack.elevation_datum,camera:reviewContext.camera,observation:frame},null,2)}
-async function showFrame(index){
+async function showFrame(index,{moveCamera=true}={}){
   const context=reviewContext,f=context?.frames[index];if(!f)return;const request={video:media?.type==='video'&&!$('video').hidden};frameReview=request;
   if(request.video){$('video').currentTime=replaySeekTime(f);request.time=$('video').currentTime}
   const blob=context.blobs?.[index]??await storage.queryBlob(context.mission,f);
   if(!currentReview(context,request))return;
   if(queryURL)URL.revokeObjectURL(queryURL);queryURL=URL.createObjectURL(blob);$('query').src=queryURL;$('query-empty').hidden=true;
-  $('frames').value=String(index);const options=fillHypotheses(f);await showHypothesis(f,options[0]);if(!currentReview(context,request))return;showDetails(f);$('attribution').textContent=pack.attribution;enable();
+  $('frames').value=String(index);const options=fillHypotheses(f);await showHypothesis(f,options[0],{moveCamera});if(!currentReview(context,request))return;showDetails(f);$('attribution').textContent=pack.attribution;enable();
 }
 function currentReview(context,request){return context===reviewContext&&frameReview===request&&(!request.video||Math.abs($('video').currentTime-request.time)<1e-6)}
 function fillHypotheses(frame,selected){
@@ -97,12 +99,12 @@ function fillHypotheses(frame,selected){
   $('hypotheses').onchange=()=>showHypothesis(frame,options[+$('hypotheses').value]).catch(error);return options;
 }
 function playbackSelection({time,current,cameraView=false}){
+  if(cameraView)baseMapLabel=$('map-label').textContent=current?(current.sample.frame.accepted?'ESTIMATED CAMERA POSE':'SELECTED HYPOTHESIS · NO UNIQUE VISUAL FIX'):'NO SUPPORTED CAMERA POSE AT THIS TIME';
   if(!reviewContext||media?.type!=='video'||$('video').hidden)return;
   $('frame-time').value=String(time);$('frame-time-label').textContent=`${time.toFixed(2)} / ${media.duration.toFixed(2)} s`;
-  if(!current){$('result').textContent=`No supported camera pose at ${time.toFixed(2)} s.`;$('result').classList.remove('rejected');$('hypotheses').replaceChildren();$('hypotheses').disabled=true;$('details').textContent='';$('compute-status').textContent='';if(cameraView)$('map-label').textContent='NO SUPPORTED CAMERA POSE AT THIS TIME';return}
+  if(!current){$('result').textContent=`No supported camera pose at ${time.toFixed(2)} s.`;$('result').classList.remove('rejected');$('hypotheses').replaceChildren();$('hypotheses').disabled=true;$('details').textContent='';$('compute-status').textContent='';return}
   const {frame}=current.sample,h=current.sample.source_h??current.sample.h,index=reviewContext.frames.indexOf(frame);if(index<0)return;
   $('frames').value=String(index);fillHypotheses(frame,h);showEvidence(frame,h);showDetails(frame);
-  if(cameraView)baseMapLabel=$('map-label').textContent=frame.accepted?'ESTIMATED CAMERA POSE':'SELECTED HYPOTHESIS · NO UNIQUE VISUAL FIX';
 }
 function showEvidence(frame,h){
   $('compute-status').textContent=executionSummary(frame);
@@ -123,7 +125,17 @@ $('missions').onchange=()=>storage.get('missions',$('missions').value).then(m=>m
 $('reset').onclick=()=>map.reset().catch(error);$('zoom-in').onclick=()=>map.move(2,-map.height()*.25).catch(error);$('zoom-out').onclick=()=>map.move(2,map.height()/3).catch(error);
 async function start(){if('serviceWorker' in navigator)await navigator.serviceWorker.register(assetUrl('sw.js'));try{regions=await request('/api/catalog');await storage.put('state','catalog',regions)}catch(e){regions=await storage.get('state','catalog');if(!regions)throw e;status('Offline. Using saved coverage.')}
   if(dataService.static){$('dynamic-coverage').disabled=true;$('coverage-status').textContent='New area and route downloads are unavailable on this site. Choose a prepared area.';$('fetch-coverage').disabled=true;}
-  $('region').replaceChildren(...regions.map(r=>new Option(r.label,r.id)));const active=await storage.get('state','active-pack'),preferred=regions.find(r=>r.pack_id===active);if(preferred)$('region').value=preferred.id;await storageStatus();await refreshMissions();await chooseRegion();const id=new URLSearchParams(location.search).get('job');if(id){if(!/^[a-f0-9]{32}$/.test(id))throw Error('Invalid job ID');const job=await request('/api/jobs/'+id);if(job.status!=='complete')throw Error('The selected job is not complete');const manifest=await storage.get('packs',job.pack_id||regions.find(r=>JSON.stringify(r.anchor_lat_lon)===JSON.stringify(job.view.frames.find(f=>f.anchor_lat_lon)?.anchor_lat_lon))?.pack_id||region.pack_id);const saved=await storage.saveMission(job,manifest);await refreshMissions(saved.id);await showMission(saved)}}
+  $('region').replaceChildren(...regions.map(r=>new Option(r.label,r.id)));const active=await storage.get('state','active-pack'),preferred=regions.find(r=>r.pack_id===active);if(preferred)$('region').value=preferred.id;await storageStatus();await refreshMissions();await chooseRegion();await openSavedReview(new URLSearchParams(location.search));const id=new URLSearchParams(location.search).get('job');if(id){if(!/^[a-f0-9]{32}$/.test(id))throw Error('Invalid job ID');const job=await request('/api/jobs/'+id);if(job.status!=='complete')throw Error('The selected job is not complete');const manifest=await storage.get('packs',job.pack_id||regions.find(r=>JSON.stringify(r.anchor_lat_lon)===JSON.stringify(job.view.frames.find(f=>f.anchor_lat_lon)?.anchor_lat_lon))?.pack_id||region.pack_id);const saved=await storage.saveMission(job,manifest);await refreshMissions(saved.id);await showMission(saved)}}
+async function openSavedReview(params){
+ const id=params.get('mission');if(!id)return;
+ if(!/^[a-f0-9]{32}$/.test(id)||params.has('job'))throw Error('Invalid saved observation link');
+ const saved=await storage.get('missions',id);if(!saved)throw Error('This observation is not stored in this browser');
+ await refreshMissions(id);await showMission(saved);
+ const requested=params.get('time');if(requested===null)return;
+ const time=Number(requested);if(!Number.isFinite(time)||time<0)throw Error('Invalid observation time');
+ let index=0;for(let i=1;i<saved.view.frames.length;i++)if(Math.abs(saved.view.frames[i].capture_time_ns/1e9-time)<Math.abs(saved.view.frames[index].capture_time_ns/1e9-time))index=i;
+ await showFrame(index);await trackPreview.overview();
+}
 start().then(()=>{document.documentElement.dataset.visualReady='true';window.dispatchEvent(new Event('visual-ready'))}).catch(error);
 
 $('fetch-coverage').onclick=async()=>{busy=true;enable();$('fetch-coverage').disabled=true;try{

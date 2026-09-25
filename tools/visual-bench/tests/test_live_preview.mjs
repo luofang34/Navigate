@@ -73,8 +73,13 @@ assert.equal(saved.get('saved-mission').view.frames.length,3);assert.equal(error
 assert.equal(node('cancel').disabled,true);assert.equal(node('frames').disabled,false);
 assert.equal(node('map-label').textContent,'TRACK OVERVIEW');
 const reads=[],readStarted=deferred();storage.queryBlob=(mission,frame)=>{const request={...deferred(),frame};reads.push(request);readStarted.resolve();return request.promise};
+node('latitude').value='0';node('longitude').value='0';node('radius').value='1';
 node('missions').value='saved-mission';const loaded=node('missions').onchange();
 await readStarted.promise;reads.shift().resolve(new Blob(['frame 0']));await loaded;
+assert.equal(node('latitude').value,'40.543');assert.equal(node('longitude').value,'-74.456');assert.equal(node('radius').value,'500');
+assert.match(node('pack-status').textContent,/Verified offline package/);
+node('video').hidden=true;node('track-camera').onclick();
+assert.match(node('map-label').textContent,/SELECTED HYPOTHESIS/,'a saved still camera labels the displayed pose without an attached video');
 node('frames').value='1';const older=node('frames').onchange();
 node('frames').value='2';const newer=node('frames').onchange();
 reads[1].resolve(new Blob(['frame 2']));await newer;
@@ -95,3 +100,18 @@ assert.equal(node('frames').disabled,true);assert.equal(node('hypotheses').disab
 assert.equal(node('details').textContent,'');assert.equal(node('export-track').disabled,true);
 activePreview.close();
 console.info('Live upload preserves the reviewed frame and alternative, supports seeking, and clears unsupported-time evidence.');
+
+const linkedId='b'.repeat(32),linkedMission={...saved.get('saved-mission'),id:linkedId};saved.set(linkedId,linkedMission);storage.queryBlob=async()=>new Blob(['saved']);
+const linkedReady=deferred(),linkedContext={...context,location:{search:'?mission='+linkedId+'&time=0.4'},window:{addEventListener(){},dispatchEvent(event){if(event.type==='visual-ready')linkedReady.resolve()}}};
+vm.runInNewContext(source,linkedContext);await linkedReady.promise;
+assert.equal(node('missions').value,linkedId);assert.equal(node('frames').value,'2');assert.equal(JSON.parse(node('details').textContent).observation.observation_sha256,'frame-2');
+linkedContext.checkSavedVideo=async()=>{};
+node('frames').value='0';await node('frames').onchange();await activePreview.overview();
+const beforeAttachment=moves.length,storedBeforeAttachment=JSON.stringify(saved.get(linkedId).view.frames);
+node('source-video').files=[{name:'flight.mp4',type:'video/mp4'}];await node('source-video').onchange();
+assert.equal(node('run-status').textContent,'Source video attached. Saved poses are unchanged.');
+assert.equal(moves.length,beforeAttachment,'attaching source media preserves the current overview when Follow is off');
+assert.equal(node('map-label').textContent,'TRACK OVERVIEW');
+assert.equal(JSON.stringify(saved.get(linkedId).view.frames),storedBeforeAttachment,'media attachment cannot rewrite stored pose evidence');
+activePreview.close();
+console.info('Saved-observation links open the requested source frame in the main overview without changing estimates.');
