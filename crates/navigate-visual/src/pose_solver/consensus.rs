@@ -1,5 +1,5 @@
 //! Bounded consensus initialization for surface pose fitting.
-use super::{Correspondence, optimize, residual};
+use super::{Correspondence, Motion, optimize_motion, residual};
 use crate::{CameraModel, CameraPose};
 
 pub(super) fn initialize(
@@ -7,6 +7,7 @@ pub(super) fn initialize(
     points: &[Correspondence],
     initial: CameraPose,
     threshold: f64,
+    motion: Motion,
 ) -> CameraPose {
     if points.len() < 6 {
         return initial;
@@ -30,7 +31,7 @@ pub(super) fn initialize(
             }
         }
         let sample: Vec<_> = indices.iter().map(|&i| points[i].clone()).collect();
-        let Ok(pose) = optimize(camera, &sample, initial) else {
+        let Ok(pose) = optimize_motion(camera, &sample, initial, motion) else {
             continue;
         };
         let found = inliers(camera, points, &pose, threshold);
@@ -46,7 +47,7 @@ pub(super) fn initialize(
     }
     if support.len() >= 6 {
         let selected: Vec<_> = support.iter().map(|&i| points[i].clone()).collect();
-        if let Ok(refined) = optimize(camera, &selected, best)
+        if let Ok(refined) = optimize_motion(camera, &selected, best, motion)
             && inliers(camera, points, &refined, threshold).len() >= support.len()
         {
             best = refined;

@@ -139,7 +139,9 @@ impl Compute {
         receive.recv()??;
         let mapped = buffer.slice(..).get_mapped_range();
         let points = mapped
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|bytes| {
                 let value =
                     |i| f32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);

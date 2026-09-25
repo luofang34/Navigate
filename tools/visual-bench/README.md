@@ -262,6 +262,56 @@ when the worker processes more than one frame. A completed evaluation can contai
 rejected frames. It is not a successful localization check.
 The public export excludes these test pages and private input files.
 
+## Video track preview
+
+Whole-video mode checks the sampled frames in time order. A second pass starts
+from a later map hypothesis and tracks backward. It checks the current image
+against the map at intervals. It retains the forward hypotheses and failed
+attempts. It does not combine their confidence. Repeated passes replace their own results. Observation and map identities stay attached to each hypothesis.
+A pose from relative tracking remains conditional on its anchor and rendered
+depth. It is not an independent map fix.
+
+To replay a saved track, select it and use **Attach source video**. The browser
+compares decoded pixels and times at up to three saved samples. A mismatch
+leaves the saved track unchanged. These checks associate video playback with
+saved samples. They do not validate the full video or the estimated poses.
+
+The optional `checkMotion` callback tests supplied poses against the same camera
+pairs and reference depth. Its restart experiment requires half the relative
+inlier support. The main app does not enable this policy. A drifted reference pose can reject
+a valid map correction. The check is conditional on the estimated reference
+pose and unverified depth. It cannot independently decide whether the map pose
+or relative pose is correct.
+
+Each new input sequence clears temporal state and keeps the loaded model.
+Unsupported video frames retry geographic search at the recovery interval.
+Frames between these searches retain an explicit deferred result. They do not
+receive a pose from the previous frame. Independent still images each run a
+new search, even when their capture times are unknown.
+
+A host can set `mapIntervalSeconds` for local map checks and
+`regionalIntervalSeconds` for area searches. Both default to five seconds.
+`recoveryIntervalSeconds` bounds area retries when tracking has no supported
+pose. It also defaults to five seconds. Local checks retain relative
+alternatives and do not postpone the area-search clock. Both checks run when
+their clocks expire on the same observation. A failed area search does not
+discard a supported local map pose. A successful area search restarts the active
+candidate set. The report retains the local map and relative alternatives.
+These alternatives prevent a unique-fix claim. Local geometry does not establish
+a unique geographic fix.
+
+The map opens in a 3D globe overview. Follow uses the decoded video time.
+It interpolates position and camera orientation within a supported segment.
+It does not interpolate across gaps or map restarts. When a segment ends,
+Follow can select an available hypothesis at the current video time.
+The view shows the number of alternatives. This selection does not join tracks
+or change the geometric decisions. The frame and hypothesis controls follow
+the displayed video time. Manual map movement releases Follow.
+
+Use `/qa-track.html` with the local `models/test-track.mp4` fixture to check
+video playback, map controls, and backward tracking in the browser worker.
+The fixture is made from the map. It does not measure DJI pose accuracy.
+
 ## Optional asset maintenance
 
 `prepare_globe_context.py` generates the display context from Natural Earth GeoJSON.
@@ -305,3 +355,5 @@ Frame processing cannot evict the reference feature arrays. A package change
 uses different keys. A cache entry reuses model output only. The pipeline still
 runs geometric verification and evidence checks for each observation.
 The reported cache hit, miss, and byte counts describe the worker lifetime.
+
+See [image-only local reconstruction](RECONSTRUCTION.md) for the optional Rust API and the upload-worker boundary.

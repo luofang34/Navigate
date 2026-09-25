@@ -6,7 +6,7 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 [dependencies]
-navigate-visual = { path = "../../../crates/navigate-visual" }
+navigate-visual = { path = "../../../crates/navigate-visual", features = ["reconstruction"] }
 navigate-data = { path = "../../../crates/navigate-data" }
 navigate-imagery = { path = "../../../crates/navigate-imagery" }
 maplibre = { path = "../../../../maplibre-rs-experimental/maplibre", features = ["headless"] }

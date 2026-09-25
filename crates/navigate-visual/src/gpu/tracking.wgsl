@@ -90,21 +90,24 @@ fn align(reverse: bool, level: u32, p: vec2<f32>, initial: vec2<f32>) -> vec3<f3
 
 fn track(reverse: bool, point: vec2<f32>, initial: vec2<f32>) -> vec3<f32> {
     var found = initial;
+    var seeded = false;
     for (var index=i32(params.control.y)-1; index>=0; index--) {
         let level = u32(index);
         let scale = f32(1u<<level);
         let p = (point+vec2<f32>(0.5))/scale-vec2<f32>(0.5);
         var guess = (found+vec2<f32>(0.5))/scale-vec2<f32>(0.5);
-        if level == params.control.y-1u {
+        if !seeded {
+            if !inside(level,p) { continue; }
             let seed = coarse_seed(reverse,level,p,guess);
             if seed.z == 0.0 { return vec3<f32>(0.0); }
             guess = seed.xy;
+            seeded = true;
         }
         let aligned = align(reverse,level,p,guess);
         if aligned.z == 0.0 { return vec3<f32>(0.0); }
         found = (aligned.xy+vec2<f32>(0.5))*scale-vec2<f32>(0.5);
     }
-    return vec3<f32>(found,1.0);
+    return vec3<f32>(found,select(0.0,1.0,seeded));
 }
 
 @compute @workgroup_size(64)

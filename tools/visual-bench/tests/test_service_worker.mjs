@@ -10,7 +10,9 @@ for(const base of ['http://localhost/','https://example.github.io/Navigate/']){
   vm.runInNewContext(await fs.readFile(new URL('../webapp/sw.js',import.meta.url),'utf8'),context);
   let install;handlers.install({waitUntil:p=>install=p});await install;
   assert.ok(resources.every(url=>url.startsWith(base)),'app shell remains under the deployment prefix');
-  for(const path of ['video-timing.js','saved-video.js','pose-playback.js','track-preview.js','track-projection.js','inference/loftr.js','inference/loftr-input.js','temporal-search.js','shortlist.js','inference/lighterglue.js','inference/lighterglue-decode.js','inference/retrieval-batch.js','inference/feature-cache.js'])assert.ok(resources.includes(base+path),'learned matcher remains available offline');
+  for(const path of ['inference/refinement-patches.js','video-timing.js','pose-playback.js','track-preview.js','track-projection.js','inference/loftr.js','inference/loftr-input.js','temporal-search.js','map-check-motion.js','shortlist.js','inference/lighterglue.js','inference/lighterglue-decode.js','inference/retrieval-batch.js','inference/feature-cache.js'])assert.ok(resources.includes(base+path),'learned matcher remains available offline');
+  assert.ok(resources.includes(base+'scene-sequence.js'),'offline installation includes reconstruction orchestration');
+  assert.ok(resources.includes(base+'sequence-images.js'),'offline installation includes image association collection');
   assert.ok(resources.includes(base+'offline-pack.js'),'offline installation includes package integrity handling');
   assert.ok(resources.includes(base+'track-selection.js'),'offline installation includes review-path selection');
   let response;handlers.fetch({request:{method:'GET',url:base},respondWith:p=>response=p});

@@ -15,7 +15,7 @@ export function sequenceTrack(frames){
   segments.delete(key);
  };
  for(const [index,frame] of frames.entries()){
-  const candidates=(frame.candidate_hypotheses??[]).filter(h=>(h.accepted||h.tracking_supported)&&Number.isFinite(h.longitude_deg)&&Number.isFinite(h.latitude_deg));
+  const candidates=(frame.candidate_hypotheses??[]).filter(h=>(h.accepted||h.tracking_supported||h.scene_supported)&&Number.isFinite(h.longitude_deg)&&Number.isFinite(h.latitude_deg));
   if(!candidates.length)gaps.push({index,observation_sha256:frame.observation_sha256,reason:frame.reason});
   const present=new Set(candidates.map(h=>branchKey(frame,h)));
   for(const key of segments.keys())if(!present.has(key))end(key);

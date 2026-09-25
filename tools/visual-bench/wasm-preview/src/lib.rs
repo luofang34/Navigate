@@ -10,6 +10,8 @@ mod preview;
 mod storage;
 pub use preview::Preview;
 
+mod reconstruction;
 mod reference;
 mod retrieval;
+mod scene_registration;
 mod session;

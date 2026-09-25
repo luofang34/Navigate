@@ -37,5 +37,15 @@ assert.equal(resident.temporal.lastRegionalSearchNs,null);assert.equal(resident.
 assert.equal(loads,1);assert.strictEqual(resident.matcher,matcher);assert.strictEqual(resident.renderer,renderer);assert.strictEqual(resident.references,references);
 assert.equal(report.candidate_hypotheses.length,2,'reset does not mutate stored geographic alternatives');
 await assert.rejects(second.call('unsupported-request',[]),/Unknown localization request/);
-sessions.close();
 console.info('Main-app worker reset clears capture history and keeps initialized resources');
+
+const sceneClient=second;await sceneClient.beginSequence({maxFrames:129});assert.equal(resident.imageSequence.maxFrames,129);
+const observations=[];resident.navigationPrior=()=>({});resident.renderer={begin(_pixels,_prior,sequence,time){this.frame={sequence,capture_time_ns:time,observation_sha256:'verified',accepted:true,candidate_hypotheses:[{accepted:true}]}},select(){return JSON.stringify(this.frame)}};
+resident.imageSequence.observe=async(...args)=>observations.push(args);resident.matcher.diagnostics=()=>({matching_gpu_dispatches:12});
+const sampled=await sceneClient.observeScene({width:960,height:544,gray:new Uint8Array(4),time:1,requested_time_s:1,timing:'decoded'}, {},7,'verified',()=>{});
+assert.equal(sampled.accepted,false);assert.deepEqual(sampled.candidate_hypotheses,[]);assert.equal(sampled.decision,'search_deferred');assert.equal(sampled.capture_time_ns,1e9);assert.equal(observations.length,1);
+await assert.rejects(sceneClient.observeScene({width:960,height:544,gray:new Uint8Array(4),time:2},{},8,'changed',()=>{}),/pixels do not match/);assert.equal(observations.length,1,'changed pixels cannot enter the scene graph');
+let refinedArgs;resident.refineScenePaths=async(...args)=>{refinedArgs=args;args.at(-1)('refining');return {geographic_acceptance:false,groups:[{id:'refined'}]}};
+const refineProgress=[],refined=await sceneClient.refineScenePaths([{sha256:'source'}],{groups:[]},[{observation_sha256:'verified'}],value=>refineProgress.push(value));
+assert.equal(refined.groups[0].id,'refined');assert.equal(refined.geographic_acceptance,false);assert.deepEqual(refineProgress,['refining']);assert.equal(refinedArgs[0][0].sha256,'source');assert.equal(refinedArgs[2][0].observation_sha256,'verified');sessions.close();
+console.info('Scene-only samples use the production worker boundary, reject changed pixels, and cannot promote map acceptance.');

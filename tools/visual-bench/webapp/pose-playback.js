@@ -1,4 +1,4 @@
-export function supportedPose(h){return Boolean(h&&(h.accepted||h.tracking_supported)&&h.position_enu_m?.length===3&&h.eye_to_enu_xyzw?.length===4)}
+export function supportedPose(h){return Boolean(h&&(h.accepted||h.tracking_supported||h.scene_supported)&&h.position_enu_m?.length===3&&h.eye_to_enu_xyzw?.length===4)}
 
 export function interpolatePose(a,b,t){
  const first=a.eye_to_enu_xyzw,raw=b.eye_to_enu_xyzw;
