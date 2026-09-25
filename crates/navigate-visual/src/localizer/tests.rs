@@ -364,3 +364,34 @@ fn weak_support_can_seed_a_new_render_but_cannot_become_a_measurement() {
     assert!(unsupported.acceptance.is_err());
     assert!(unsupported.refinement.is_none());
 }
+
+#[test]
+fn sparse_fit_can_seed_a_new_render_but_cannot_become_a_measurement() {
+    let (frame, reference, prior, matches, truth) = scene();
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("policy");
+    let sparse: Vec<_> = matches.iter().step_by(10).copied().collect();
+    assert!((6..20).contains(&sparse.len()));
+    let result = verifier.evaluate(&frame, &reference, &prior, &sparse, "sparse-adapter");
+    assert!(matches!(
+        result.acceptance,
+        Err(VisualError::InsufficientMatches { required: 20, .. })
+    ));
+    let proposal = result.refinement.expect("bounded search proposal");
+    assert!((proposal.position - truth.position).norm() < 0.01);
+    assert!(proposal.orientation.angle_to(&truth.orientation) < 1e-5);
+    assert!(
+        verifier
+            .verify(&frame, &reference, &prior, &sparse, "sparse-adapter")
+            .is_err()
+    );
+    let empty = verifier.evaluate(&frame, &reference, &prior, &sparse[..5], "sparse-adapter");
+    assert!(empty.refinement.is_none());
+    let mut changed = reference;
+    changed.depth_m.fill(0.0);
+    assert!(
+        verifier
+            .evaluate(&frame, &changed, &prior, &sparse, "sparse-adapter")
+            .refinement
+            .is_none()
+    );
+}

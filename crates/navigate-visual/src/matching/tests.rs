@@ -51,3 +51,31 @@ fn blank_images_do_not_produce_matches() {
             .is_empty()
     );
 }
+
+#[test]
+fn border_points_use_the_finest_available_pyramid_support() {
+    let reference = texture();
+    let query = GrayImage::from_fn(320, 240, |x, y| {
+        if x >= 2 && y >= 3 {
+            *reference.get_pixel(x - 2, y - 3)
+        } else {
+            image::Luma([0])
+        }
+    });
+    let points: Vec<_> = [20.0, 58.0, 134.0, 210.0, 286.0]
+        .into_iter()
+        .flat_map(|x| [20.0, 216.0].map(|y| Vector2::new(x, y)))
+        .chain([Vector2::new(2.0, 2.0)])
+        .collect();
+    let tracked = PyramidalMatcher
+        .track_points_blocking(&reference, &query, &points)
+        .expect("border point tracks");
+    let correct = points
+        .iter()
+        .zip(&tracked)
+        .filter(|(p, q)| q.is_some_and(|q| (q - *p - Vector2::new(2.0, 3.0)).norm() < 0.5))
+        .count();
+    assert!(correct >= 6, "only {correct} border points retained");
+    assert_eq!(correct, tracked.iter().filter(|p| p.is_some()).count());
+    assert_eq!(tracked.last(), Some(&None));
+}

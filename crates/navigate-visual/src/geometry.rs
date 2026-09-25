@@ -5,15 +5,17 @@ use crate::{
     pose_solver::{self, Correspondence},
 };
 use nalgebra::{SMatrix, Vector2};
+mod surface_tracks;
 mod tracking;
-pub use tracking::{TrackingProposal, TrackingReference};
+pub use surface_tracks::{SurfaceTrackUpdate, SurfaceTracks};
+pub use tracking::{TrackingMotion, TrackingProposal, TrackingReference};
 
 /// Full acceptance result and a possible seed for further reference rendering.
 pub struct CandidateEvaluation {
     /// The unchanged geometric and navigation-prior acceptance decision.
     pub acceptance: Result<Estimate, VisualError>,
     /// A fitted pose inside the prior, with enough unique inliers to refine.
-    /// Spatial support can still fail acceptance. This is not a measurement.
+    /// The inlier count or spatial support can still fail acceptance. This is not a measurement.
     pub refinement: Option<CameraPose>,
 }
 
@@ -75,8 +77,16 @@ impl PoseVerifier {
         matches: &[PixelMatch],
         matcher_identity: &str,
     ) -> CandidateEvaluation {
+        if matcher_identity.is_empty() {
+            return CandidateEvaluation {
+                acceptance: Err(VisualError::Invalid {
+                    field: "matcher identity",
+                }),
+                refinement: None,
+            };
+        }
         let (pose, inliers, depth_matches) =
-            match self.fit_candidate(frame, reference, prior, matches, matcher_identity) {
+            match self.fit_candidate(frame, reference, prior, matches, pose_solver::Motion::Free) {
                 Ok(fitted) => fitted,
                 Err(error) => {
                     return CandidateEvaluation {
@@ -109,23 +119,32 @@ impl PoseVerifier {
         reference: &ReferenceView,
         prior: &PosePrior,
         matches: &[PixelMatch],
-        matcher_identity: &str,
+        motion: pose_solver::Motion,
     ) -> Result<(CameraPose, Vec<Correspondence>, usize), VisualError> {
         reference.validate(frame)?;
         prior.validate()?;
-        if matcher_identity.is_empty() {
-            return Err(VisualError::Invalid {
-                field: "matcher identity",
-            });
-        }
         let points = depth_correspondences(frame, reference, matches);
+        self.fit_points(frame, reference.pose, prior, points, motion)
+    }
+
+    fn fit_points(
+        &self,
+        frame: &Frame,
+        initial: CameraPose,
+        prior: &PosePrior,
+        points: Vec<Correspondence>,
+        motion: pose_solver::Motion,
+    ) -> Result<(CameraPose, Vec<Correspondence>, usize), VisualError> {
+        prior.validate()?;
+        initial.validate()?;
         let depth_matches = points.len();
-        self.require_inliers(depth_matches)?;
+        Self::require_fit_points(depth_matches)?;
         let first = pose_solver::initialize(
             &frame.camera,
             &points,
-            reference.pose,
+            initial,
             self.config.inlier_threshold_px,
+            motion,
         );
         let inliers: Vec<_> = points
             .into_iter()
@@ -134,8 +153,8 @@ impl PoseVerifier {
                     <= self.config.inlier_threshold_px
             })
             .collect();
-        self.require_inliers(inliers.len())?;
-        let pose = pose_solver::optimize(&frame.camera, &inliers, first)?;
+        Self::require_fit_points(inliers.len())?;
+        let pose = pose_solver::optimize_motion(&frame.camera, &inliers, first, motion)?;
         let inliers: Vec<_> = inliers
             .into_iter()
             .filter(|point| {
@@ -143,9 +162,16 @@ impl PoseVerifier {
                     <= self.config.inlier_threshold_px
             })
             .collect();
-        self.require_inliers(inliers.len())?;
+        Self::require_fit_points(inliers.len())?;
         check_bounds(&pose, prior)?;
         Ok((pose, inliers, depth_matches))
+    }
+
+    fn require_fit_points(found: usize) -> Result<(), VisualError> {
+        if found < 6 {
+            return Err(VisualError::InsufficientMatches { found, required: 6 });
+        }
+        Ok(())
     }
 
     fn require_inliers(&self, found: usize) -> Result<(), VisualError> {
@@ -165,6 +191,7 @@ impl PoseVerifier {
         points: &[Correspondence],
         depth_matches: usize,
     ) -> Result<(EstimateQuality, SMatrix<f64, 6, 6>), VisualError> {
+        self.require_inliers(points.len())?;
         let mut cells = [false; 12];
         let mut squared_error = 0.0;
         for point in points {

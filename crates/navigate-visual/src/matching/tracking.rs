@@ -13,17 +13,22 @@ pub(super) fn track(
     initial: Vector2<f64>,
 ) -> Option<Vector2<f64>> {
     let mut found = initial;
+    let mut seeded = false;
     for level in (0..source.len()).rev() {
         let scale = 2_f64.powi(level as i32);
         let p = (point + Vector2::repeat(0.5)) / scale - Vector2::repeat(0.5);
         let mut guess = (found + Vector2::repeat(0.5)) / scale - Vector2::repeat(0.5);
-        if level == source.len() - 1 {
+        if !seeded {
+            if !inside(&source[level], p) {
+                continue;
+            }
             guess = coarse_seed(&source[level], &target[level], p, guess)?;
+            seeded = true;
         }
         let aligned = align(&source[level], &target[level], p, guess)?;
         found = (aligned + Vector2::repeat(0.5)) * scale - Vector2::repeat(0.5);
     }
-    Some(found)
+    seeded.then_some(found)
 }
 
 fn coarse_seed(

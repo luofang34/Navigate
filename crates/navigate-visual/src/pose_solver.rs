@@ -13,29 +13,63 @@ pub(crate) struct Correspondence {
 }
 
 mod consensus;
+#[derive(Clone, Copy, Default)]
+pub(crate) enum Motion {
+    #[default]
+    Free,
+    FixedTilt,
+}
+
 pub(crate) fn initialize(
     camera: &CameraModel,
     points: &[Correspondence],
     initial: CameraPose,
     threshold: f64,
+    motion: Motion,
 ) -> CameraPose {
-    consensus::initialize(camera, points, initial, threshold)
+    consensus::initialize(camera, points, initial, threshold, motion)
 }
 
+#[cfg(test)]
 pub(crate) fn optimize(
     camera: &CameraModel,
     points: &[Correspondence],
     initial: CameraPose,
+) -> Result<CameraPose, VisualError> {
+    optimize_motion(camera, points, initial, Motion::Free)
+}
+
+pub(crate) fn optimize_motion(
+    camera: &CameraModel,
+    points: &[Correspondence],
+    initial: CameraPose,
+    motion: Motion,
 ) -> Result<CameraPose, VisualError> {
     let mut pose = initial;
     let mut damping = 0.001;
     for _ in 0..40 {
         let (h, b) = normal_equations(camera, points, &pose);
         let regularized = h + Matrix6::from_diagonal(&h.diagonal().map(|v| damping * v.max(1e-9)));
-        let delta = regularized
-            .cholesky()
-            .ok_or(VisualError::DegenerateGeometry)?
-            .solve(&b);
+        let delta = match motion {
+            Motion::Free => regularized
+                .cholesky()
+                .ok_or(VisualError::DegenerateGeometry)?
+                .solve(&b),
+            Motion::FixedTilt => {
+                let mut basis = SMatrix::<f64, 6, 4>::zeros();
+                basis
+                    .fixed_view_mut::<3, 3>(0, 0)
+                    .copy_from(&nalgebra::Matrix3::identity());
+                basis
+                    .fixed_view_mut::<3, 1>(3, 3)
+                    .copy_from(&pose.orientation.inverse_transform_vector(&Vector3::z()));
+                basis
+                    * (basis.transpose() * regularized * basis)
+                        .cholesky()
+                        .ok_or(VisualError::DegenerateGeometry)?
+                        .solve(&(basis.transpose() * b))
+            }
+        };
         if !delta.iter().all(|v| v.is_finite()) {
             return Err(VisualError::DegenerateGeometry);
         }
