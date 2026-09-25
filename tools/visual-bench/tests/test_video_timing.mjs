@@ -17,3 +17,10 @@ assert.equal(frame.capture_time_ns,10176833000,'replay does not rewrite the pose
 assert.equal(replaySeekTime({capture_time_ns:2500000000}),2.5,'legacy frames retain their only available seek time');
 for(const requested_time_s of [-1,NaN,Infinity])assert.throws(()=>replaySeekTime({requested_time_s,capture_time_ns:0}),/invalid/);
 assert.throws(()=>replaySeekTime({}),/invalid/);
+
+const visibility=new EventTarget();visibility.hidden=true;
+const hidden=new DecodedVideoTime(video,{visibility});let completed=false;const hiddenRead=hidden.read().then(v=>{completed=true;return v});
+decoded(.7);await Promise.resolve();assert.equal(completed,false,'a hidden page does not time out into a seek-time observation');
+visibility.hidden=false;visibility.dispatchEvent(new Event('visibilitychange'));assert.equal(await hiddenRead,.7);
+hidden.beforeSeek();visibility.hidden=true;const cancelledHidden=hidden.read();hidden.close();assert.equal(await cancelledHidden,null);assert.equal(hidden.visibilityWaiters.size,0,'close releases visibility listeners');
+console.info('Background sampling waits for visibility and retains decoded timestamps without blocking cancellation.');
