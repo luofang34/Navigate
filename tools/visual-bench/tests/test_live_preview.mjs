@@ -22,10 +22,10 @@ function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve
 const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id)};
 for(const [id,value] of Object.entries({latitude:40.543,longitude:-74.456,radius:500,agl:110,fov:82.1,period:.2,'max-frames':10,'frame-time':0,'video-mode':'whole'}))node(id).value=String(value);
 const camera={width:960,height:544},pack={pack_id:'test-pack',anchor_lat_lon:[40.543,-74.456],files:[],attribution:'Test source',elevation_datum:'unknown absolute datum'},region={id:'region',pack_id:pack.pack_id,anchor_lat_lon:pack.anchor_lat_lon,bounds:[-75,40,-74,41]};
-const requests=[],waiters=[],saved=new Map(),ready=deferred(),errors=[];let activePreview;
+const requests=[],waiters=[],saved=new Map(),ready=deferred(),errors=[];let activePreview,persistenceRequests=0;
 const pipeline={beginSequence:async()=>{},finishSequence:async()=>[],estimate(image,prior,sequence,progress){const item={...deferred(),image,sequence,progress};if(waiters.length)waiters.shift()(item);else requests.push(item);return item.promise}};
 const nextEstimate=()=>requests.length?Promise.resolve(requests.shift()):new Promise(resolve=>waiters.push(resolve));
-const storage={get:async(store,key)=>store==='packs'?pack:saved.get(key),all:async()=>[...saved.values()],put:async(store,key,value)=>{if(store==='missions')saved.set(key,structuredClone(value))},verifyPack:async()=>true,queryBlob:async()=>new Blob(['saved']),saveLocalMission:async(view)=>{const value={id:saved.size?'saved-failure':'saved-mission',view,pack_id:pack.pack_id};saved.set(value.id,structuredClone(value));return value}};
+const storage={requestPersistence:async()=>{persistenceRequests++;return true},get:async(store,key)=>store==='packs'?pack:saved.get(key),all:async()=>[...saved.values()],put:async(store,key,value)=>{if(store==='missions')saved.set(key,structuredClone(value))},verifyPack:async()=>true,queryBlob:async()=>new Blob(['saved']),saveLocalMission:async(view)=>{const value={id:saved.size?'saved-failure':'saved-mission',view,pack_id:pack.pack_id};saved.set(value.id,structuredClone(value));return value}};
 const moves=[];
 const context={setTimeout:()=>1,clearTimeout(){},console:{error:e=>errors.push(e)},URL,Blob,Option:class{constructor(text,value){this.text=text;this.value=String(value)}},Event,JSON,Math,Number,Error,Set,Map,
  document:{getElementById:node,querySelector:node,createElement:()=>new Element(),documentElement:{dataset:{}}},window:{addEventListener(){},dispatchEvent(event){if(event.type==='visual-ready')ready.resolve()}},
@@ -41,8 +41,10 @@ const context={setTimeout:()=>1,clearTimeout(){},console:{error:e=>errors.push(e
 };
 const source=(await fs.readFile(new URL('../webapp/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 vm.runInNewContext(source,context);await ready.promise;
+assert.equal(persistenceRequests,0,'startup does not request persistent storage');
 node('input').files=[{name:'flight.mp4',type:'video/mp4',size:10}];await node('input').onchange();
-const run=node('locate').onclick(),first=await nextEstimate();
+const run=node('locate').onclick(),first=await Promise.race([nextEstimate(),run.then(()=>{throw Error('Processing ended before the first estimate: '+errors.map(String).join('; '))})]);
+assert.equal(persistenceRequests,1,'explicit estimation requests persistent storage before matching');
 const pose=(id,x)=>({accepted:true,candidate_id:id,track_id:'path-'+id,map_manifest_sha256:'map',position_enu_m:[x,0,100],eye_to_enu_xyzw:[0,0,0,1],inliers:30});
 const frame=(sequence,items)=>({capture_time_ns:sequence*200e6,requested_time_s:sequence*.2,observation_sha256:'frame-'+sequence,accepted:false,decision:items.length?'unresolved':'rejected',candidate_hypotheses:items});
 first.resolve(frame(0,[pose(0,0),pose(1,20)]));const second=await nextEstimate();

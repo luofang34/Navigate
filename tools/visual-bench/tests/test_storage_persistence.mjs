@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {requestPersistence} from '../webapp/storage.js';
+let requests=0;
+assert.equal(await requestPersistence({persisted:async()=>true,persist:async()=>{requests++;return true}}),true);
+assert.equal(requests,0,'existing permission must not cause another request');
+assert.equal(await requestPersistence({persisted:async()=>false,persist:async()=>{requests++;return true}}),true);
+assert.equal(requests,1,'new offline work requests persistence when it is absent');
+assert.equal(await requestPersistence({persisted:async()=>false,persist:async()=>false}),false,'a denied request must remain best effort');
+assert.equal(await requestPersistence({persisted:async()=>false}),false,'an unavailable request API cannot imply persistence');
+const failure=new Error('storage permission failure');
+await assert.rejects(requestPersistence({persisted:async()=>false,persist:async()=>{throw failure}}),error=>error===failure,'permission errors retain their context');
+console.info('Offline persistence reuses permission, requests it when absent, and preserves denial and error states.');
