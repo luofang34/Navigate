@@ -1,5 +1,6 @@
 import {assetUrl} from './asset-url.js';
 const DB='navigate-visual-offline-v1';
+export async function requestPersistence(manager=navigator.storage){if(await manager.persisted())return true;return typeof manager.persist==='function'?manager.persist():false}
 function database(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{for(const name of ['packs','state','missions'])r.result.createObjectStore(name)};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 export async function get(store,key){const db=await database();try{return await new Promise((resolve,reject)=>{const r=db.transaction(store).objectStore(store).get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}finally{db.close()}}
 export async function put(store,key,value){const db=await database();try{await new Promise((resolve,reject)=>{const tx=db.transaction(store,'readwrite');tx.objectStore(store).put(value,key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)})}finally{db.close()}}
