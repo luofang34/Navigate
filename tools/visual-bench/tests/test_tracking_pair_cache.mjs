@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {TrackingPairCache} from '../webapp/inference/tracking-pair-cache.js';
+import {LocalMatcher} from '../webapp/inference/local.js';
+const key=i=>({stage:'tracking',reference:String(i).padStart(64,'0')+'/query',query:String(i+1).padStart(64,'0')+'/query'}),pairs=[{reference:[1/3,2],query:[3,4]}];
+const cache=new TrackingPairCache({maxBytes:64,maxEntries:2});cache.put(key(0),pairs);pairs[0].reference[0]=100;
+assert.equal(cache.get(key(0))[0].reference[0],1/3,'cache preserves exact values without aliases');const copy=cache.get(key(0));copy[0].query[0]=999;assert.equal(cache.get(key(0))[0].query[0],3);
+cache.put(key(1),pairs);cache.get(key(0));cache.put(key(2),pairs);assert.equal(cache.get(key(1)),undefined,'least recently used pairs leave the bounded cache');assert.equal(cache.bytes,64);
+assert.equal(cache.get({...key(0),stage:'refinement'}),undefined);assert.equal(cache.get({stage:'tracking',reference:'unverified',query:'image'}),undefined);
+cache.put(key(4),[]);assert.deepEqual(cache.get(key(4)),[],'a failed match does not become positive evidence');cache.clear();assert.equal(cache.bytes,0);
+let runs=0;const adapter=new LocalMatcher({matcher:'dense'});adapter.denseAsset={sha256:'model'};adapter.dense={async match(){runs++;return pairs}};
+const first=await adapter.matchImages({}, {},key(0)),second=await adapter.matchImages({}, {},key(0));assert.equal(runs,1);assert.deepEqual(second,first);assert.equal(adapter.trackingPairs.hits,1);
+await adapter.matchImages({}, {},{...key(0),query:key(1).query});assert.equal(runs,2,'new source pixels require inference');
+await adapter.matchImages({}, {},{...key(0),stage:'refinement'});assert.equal(runs,3,'map refinement has its own evidence and rendering');
+console.info('Exact tracking pairs reuse adapter inference with bounded memory; new observations and reference renders still run inference.');
