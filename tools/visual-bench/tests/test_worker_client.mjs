@@ -15,5 +15,6 @@ assert.equal(await initialize,true);assert.deepEqual(progress,['model ready']);
 const request=pipeline.estimate({gray:new Uint8Array([7]),width:1,height:1,canvas:{notCloneable:()=>{}},time:0},{radius_m:500},0,()=>{});
 assert.equal('canvas' in worker.requests[1].args[0],false);
 pipeline.close();await assert.rejects(request,{name:'AbortError'});assert.equal(worker.terminated,true);
+await assert.rejects(pipeline.beginSequence(),{name:'AbortError'});assert.equal(pipeline.pending.size,0,'a cancelled pipeline cannot wait forever on its terminated worker');
 worker.reply({id:worker.requests[1].id,value:{accepted:true}});assert.equal(pipeline.pending.size,0);
 const next=new BrowserPipeline();const failed=next.initialize({},{});Worker.last.onerror({message:'Worker failed'});await assert.rejects(failed,/Worker failed/);next.close();
