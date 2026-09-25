@@ -1,18 +1,21 @@
+import {mapViewChanged} from './map-check-motion.js';
 export class TemporalSearch {
-  constructor(){this.previous=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null}
+  constructor(){this.previous=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null;this.lastMapCandidates=[]}
   regionalDue(captureTimeNs,intervalSeconds=5){
     if(!Number.isFinite(intervalSeconds)||intervalSeconds<=0)throw Error('Invalid geographic search interval');
     return this.lastRegionalSearchNs===null||captureTimeNs<this.lastRegionalSearchNs||captureTimeNs-this.lastRegionalSearchNs>=intervalSeconds*1e9;
   }
-  mapDue(captureTimeNs,intervalSeconds=5){
+  mapDue(captureTimeNs,intervalSeconds=5,motion){
     if(!Number.isFinite(intervalSeconds)||intervalSeconds<=0)throw Error('Invalid map check interval');
-    return this.lastMapSearchNs===null||captureTimeNs<this.lastMapSearchNs||captureTimeNs-this.lastMapSearchNs>=intervalSeconds*1e9;
+    const elapsed=captureTimeNs-this.lastMapSearchNs;
+    if(this.lastMapSearchNs===null||elapsed<0||elapsed>=intervalSeconds*1e9)return true;
+    return Boolean(motion&&elapsed>=Math.min(1,intervalSeconds)*1e9&&mapViewChanged(this.lastMapCandidates,motion.candidates,motion));
   }
   reacquired(report,relative,local){
     const accepted=report.candidate_hypotheses.filter(h=>h.accepted),tracked=relative?.candidate_hypotheses.filter(h=>h.tracking_supported)??[];
     const context={previous_observation_sha256:this.previous?.observation,relative_alternatives:tracked,...(local?{local_map_alternatives:local.candidate_hypotheses}:{}),association:'map restart; no fusion or independence claim'};
     const fallback=local??relative;
-    if(!accepted.length&&fallback)return {...fallback,regional_search:{...context,candidate_hypotheses:report.candidate_hypotheses,decision:report.decision},reason:local?'Current-image map hypotheses retained. The fresh geographic search did not produce an accepted map pose.':'Relative camera tracking. The fresh geographic search did not produce an accepted map pose.'};
+    if(!accepted.length&&fallback)return {...fallback,regional_search:{...context,candidate_hypotheses:report.candidate_hypotheses,decision:report.decision},reason:local?'Local camera hypotheses retained. The fresh geographic search did not produce an accepted map pose.':'Relative camera tracking. The fresh geographic search did not produce an accepted map pose.'};
     const result={...report,regional_search:context};
     if(accepted.length===1&&tracked.length===1)result.candidate_hypotheses=report.candidate_hypotheses.map(h=>h===accepted[0]?{...h,track_id:tracked[0].track_id,parent_candidate_id:tracked[0].candidate_id,continuity_break:true,relative_alternative:tracked[0],anchor_policy:context.association}:h);
     return local?{...result,accepted:false,decision:'unresolved',reason:'Regional map hypotheses restart the active search. Local map alternatives remain in the same observation.',evidence_correlation:'unknown; current-image map checks share observation and map evidence; no fusion or independent confidence'}:result;
@@ -29,15 +32,16 @@ export class TemporalSearch {
       tracking_anchor:h.tracking_anchor??{observation_sha256:report.observation_sha256,candidate_id:h.candidate_id,map_manifest_sha256:h.map_manifest_sha256},
       track_id:h.track_id??JSON.stringify(h.tracking_anchor??{observation_sha256:report.observation_sha256,candidate_id:h.candidate_id,map_manifest_sha256:h.map_manifest_sha256}),
     }));
+    if(regional||map)this.lastMapCandidates=structuredClone(candidates);
     const steps=report.decision==='relative_tracking'?((this.previous?.steps??0)+1)>>>0:0;
-    this.previous=candidates.length?{observation:report.observation_sha256,candidates,steps,
+    this.previous=candidates.length?{observation:report.observation_sha256,candidates,steps,report:structuredClone(report),
       image:image?{gray:image.gray.slice(),width:image.width,height:image.height}:null,
       sequence:report.sequence,capture_time_ns:report.capture_time_ns}:null;
   }
-  async track(renderer,matcher,camera,seeds,image,observation,progress){
+  async track(renderer,matcher,camera,seeds,image,observation,progress,prepared){
     if(!this.previous?.image||typeof renderer.track!=='function')return null;
     progress('Tracking between camera frames…');
-    const keys={reference:`${this.previous.observation}/query`,query:`${observation}/query`,stage:'refinement',progress};
+    const keys={reference:`${this.previous.observation}/query`,query:`${observation}/query`,stage:'tracking',progress};
     const verify=async({pairs,backend_identity})=>{
       const proposals=[];
       for(const [id,seed] of seeds.entries()){
@@ -48,7 +52,7 @@ export class TemporalSearch {
       }
       this.lastAttempt=proposals;return proposals;
     };
-    let proposals=await verify(await matcher.matchImages(this.previous.image,image,keys));
+    let proposals=await verify(prepared??await matcher.matchImages(this.previous.image,image,keys));
     if(!proposals.some(h=>h.tracking_supported)&&matcher.matchAlternatives){
       for await(const matches of matcher.matchAlternatives(this.previous.image,image,keys)){
         proposals=await verify(matches);if(proposals.some(h=>h.tracking_supported))break;
@@ -59,12 +63,12 @@ export class TemporalSearch {
       reason:'Relative camera tracking. This pose depends on the initial map hypothesis and rendered terrain depth.',
       evidence_correlation:'unknown; tracking inherits the anchor pose and shared map evidence'};
   }
-  label(report,seeds,relative){
+  label(report,seeds,relative,permittedMapIds){
     report={...report,candidate_hypotheses:report.candidate_hypotheses.map(h=>{
       const seed=seeds[h.candidate_id];if(!seed)return h;
       const alternative=relative?.candidate_hypotheses.find(p=>p.candidate_id===seed.candidate_id&&p.tracking_supported);
       // Failed map matching does not disprove supported motion on another hypothesis.
-      if(!h.accepted&&alternative)return {...alternative,candidate_id:h.candidate_id,parent_candidate_id:seed.candidate_id,local_map_attempt:h};
+      if(alternative&&(!h.accepted||(permittedMapIds&&!permittedMapIds.has(h.candidate_id))))return {...alternative,candidate_id:h.candidate_id,parent_candidate_id:seed.candidate_id,local_map_attempt:h};
       return {...h,track_id:seed.track_id,parent_candidate_id:seed.candidate_id,continuity_break:true,
         ...(alternative?{relative_alternative:alternative}:{}),anchor_policy:'restart at current map hypothesis; no fusion or independence claim'};
     })};
@@ -96,4 +100,17 @@ export async function refineCandidates(renderer,matcher,camera,candidates,image,
     }
   }
   return JSON.parse(renderer.select());
+}
+
+export function localMapContinuations(checks,relative,mapped,seeds){
+ const permitted=new Set();
+ for(const [mapIndex,h] of mapped.entries()){
+  const source=seeds[h.candidate_id],relativeIndex=relative.findIndex(r=>r.candidate_id===source?.candidate_id);
+  if(relativeIndex<0)continue;
+  const referenceId=relative[relativeIndex].parent_candidate_id;
+  const baseline=checks.find(c=>c.reference_candidate_id===referenceId&&c.candidate_id===relativeIndex&&c.consistent);
+  const candidate=checks.find(c=>c.reference_candidate_id===referenceId&&c.candidate_id===relative.length+mapIndex&&c.consistent);
+  if(baseline?.inliers>0&&candidate?.inliers>=baseline.inliers*.5)permitted.add(h.candidate_id);
+ }
+ return permitted;
 }

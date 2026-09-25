@@ -1,6 +1,9 @@
+import {refineSceneSampling} from './scene-sampling.js';
+import {sceneMapPlans,appendScenePaths} from './scene-map.js';
 import {requireOfflinePack} from './offline-pack.js';
 import {replaySeekTime} from './video-timing.js';
 import {checkSavedVideo} from './saved-video.js';
+import {refineSequenceBackward} from './sequence-refinement.js';
 import {TrackPreview} from './track-preview.js';
 import {selectedInputs,sequenceTrack,videoTimes} from './input-sequence.js';
 import {assetUrl} from './asset-url.js';
@@ -58,9 +61,37 @@ $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(
   const start=media.type==='video'?+$('frame-time').value:0,times=media.type==='image'?inputFiles.map(()=>0):videoTimes(media.duration,start,{mode:$('video-mode').value,period:selectedPrior.sample_period,maxFrames:selectedPrior.max_frames});const sourceAspect=media.type==='image'?media.source.width/media.source.height:null;
   const frames=[],blobs=[];reviewContext={frames,blobs,camera:cam,pack_id:selectedPack.pack_id};
   for(let i=0;i<times.length;i++){if(sourceAspect!==null){media.close();media=await openInput(inputFiles[i],$('video'));if(Math.abs(media.source.width/media.source.height-sourceAspect)>1e-6)throw Error('Sequence images must have the same aspect ratio. Process this image separately.')}status(`Processing frame ${i+1}/${times.length}…`);const observation=await frameAt(media,times[i],cam);if(queryURL)URL.revokeObjectURL(queryURL);queryURL=URL.createObjectURL(observation.blob);$('query').src=queryURL;$('query-empty').hidden=true;const result=await pipeline.estimate(observation,selectedPrior,i,s=>status(`Frame ${i+1}/${times.length} · ${s}`));result.input_name=sourceAspect!==null?inputFiles[i].name:input.name;frames.push(result);blobs.push(observation.blob);$('frames').append(frameOption(result,i));trackPreview.setFrames(frames,{period:selectedPrior.sample_period});if(media.type!=='video'){const options=fillHypotheses(result);await showHypothesis(result,options[0]);showDetails(result)}enable()}
-  mission=await storage.saveLocalMission({camera:cam,prior:selectedPrior,frames,input:{name:input.name,names:inputFiles.map(f=>f.name),size:inputFiles.reduce((n,f)=>n+f.size,0),processing:'browser-local',calibration:'assumed full-width 4:3 sensor crop; not independently calibrated'}},selectedPack,blobs);mediaMissionId=mission.id;await refreshMissions(mission.id);await showMission(mission);
+  mission=await storage.saveLocalMission({camera:cam,prior:selectedPrior,frames,input:{name:input.name,names:inputFiles.map(f=>f.name),size:inputFiles.reduce((n,f)=>n+f.size,0),processing:'browser-local',calibration:'assumed full-width 4:3 sensor crop; not independently calibrated'},processing:{stage:'scene reconstruction',complete:false}},selectedPack,blobs);
+  mediaMissionId=mission.id;await refreshMissions(mission.id);
+  const imageTrackGroups=await pipeline.finishSequence();mission.view.image_track_groups=imageTrackGroups;await storage.put('missions',mission.id,mission);
+  let localReconstruction=imageTrackGroups.length?await pipeline.reconstructSequence(imageTrackGroups,status):null;
+  if(localReconstruction&&media.type==='video'){
+    const sourceBlobs=new Map(frames.map((f,i)=>[f.observation_sha256,blobs[i]]));
+    localReconstruction=await refineSceneSampling(localReconstruction,{pipeline,frames,prior:selectedPrior,progress:status,
+      image:async f=>{const bitmap=await createImageBitmap(sourceBlobs.get(f.observation_sha256));try{return {...gray(bitmap,cam.width,cam.height),time:f.capture_time_ns/1e9,requested_time_s:f.requested_time_s,timing:f.timing_scope}}finally{bitmap.close()}},
+      decode:time=>frameAt(media,time,cam),commit:async()=>{frameReview=null;blobs.splice(0,blobs.length,...frames.map(f=>sourceBlobs.get(f.observation_sha256)));$('frames').replaceChildren(...frames.map(frameOption));trackPreview.setFrames(frames,{period:selectedPrior.sample_period});await storage.put('missions',mission.id,mission)},save:async samples=>{await storage.saveMissionSamples(mission,samples);for(const {frame,blob} of samples)sourceBlobs.set(frame.observation_sha256,blob)}});
+    blobs.splice(0,blobs.length,...frames.map(f=>sourceBlobs.get(f.observation_sha256)));$('frames').replaceChildren(...frames.map(frameOption));trackPreview.setFrames(frames,{period:selectedPrior.sample_period});
+  }
+  mission.view.local_reconstruction=localReconstruction;mission.view.processing.stage='sequence refinement';await storage.put('missions',mission.id,mission);
+  if(media.type==='video')await refineSequenceBackward(frames,{image:async index=>{const bitmap=await createImageBitmap(blobs[index]);try{const pixels=gray(bitmap,cam.width,cam.height),f=frames[index];return {...pixels,time:f.capture_time_ns/1e9,requested_time_s:f.requested_time_s,timing:f.timing_scope}}finally{bitmap.close()}},track:(reference,image,sequence,progress)=>pipeline.trackFrom(reference,image,selectedPrior,sequence,progress),verify:(observation,image,candidates,progress)=>pipeline.refineAt(observation,image,selectedPrior,candidates,progress),progress:status});
+  if(localReconstruction){mission.view.processing.stage='camera path refinement';await storage.put('missions',mission.id,mission);localReconstruction=await pipeline.refineScenePaths(imageTrackGroups,localReconstruction,frames,status);mission.view.local_reconstruction=localReconstruction}
+  mission.view.processing.stage='scene registration';await storage.put('missions',mission.id,mission);
+  let sceneRegistration=null;
+  if(localReconstruction){
+    const schedule=sceneMapPlans(localReconstruction,frames),results=[];let previewBudget=32;
+    for(const [index,plan] of schedule.plans.entries()){
+      const bitmap=await createImageBitmap(blobs[plan.anchor.index]);let image;
+      try{image=gray(bitmap,cam.width,cam.height)}finally{bitmap.close()}
+      const allowance=Math.ceil(previewBudget/(schedule.plans.length-index));
+      const result=await pipeline.registerScene({...plan,preview_path_budget:allowance},image,selectedPrior,status);
+      previewBudget-=result.preview_paths;results.push(result);
+    }
+    appendScenePaths(frames,results.flatMap(r=>r.registrations));
+    sceneRegistration={stage:schedule.stage,geographic_acceptance:false,deferred_leaf_sha256:schedule.deferred_leaf_sha256,unregistered_root_sha256:schedule.unregistered_root_sha256,unregistered_leaf_sha256:schedule.unregistered_leaf_sha256,results};
+  }
+  mission.view.scene_registration=sceneRegistration;mission.view.processing={stage:'complete',complete:true};await storage.put('missions',mission.id,mission);await refreshMissions(mission.id);await showMission(mission);
   status(missionSummary(frames));await storageStatus();
-}catch(e){pipelineSession.close();error(e)}finally{activePipeline=null;busy=false;enable()}};
+}catch(e){pipelineSession.close();if(mission?.view.processing&&!mission.view.processing.complete){mission.view.processing.error=String(e);try{await storage.put('missions',mission.id,mission)}catch(saveError){error(new AggregateError([e,saveError],`Processing failed: ${e}. Its error state could not be saved: ${saveError}`));return}error(Error(`${mission.view.frames.length} observation frames are saved. ${mission.view.processing.stage} failed: ${e}`))}else error(e)}finally{activePipeline=null;busy=false;enable()}};
 $('cancel').onclick=()=>{pipelineSession.close();status('Processing cancelled. No partial result was accepted.')};
 $('attach-video').onclick=()=>$('source-video').click();
 $('source-video').onchange=async()=>{
@@ -77,7 +108,7 @@ $('source-video').onchange=async()=>{
   await showFrame(index,{moveCamera:false});status('Source video attached. Saved poses are unchanged.');
  }catch(e){error(e)}finally{opened?.close();mediaLoading=false;$('source-video').value='';enable()}
 };
-async function refreshMissions(selected){const items=await storage.all('missions');$('missions').replaceChildren(new Option('Select a saved observation',''),...items.sort((a,b)=>b.saved_at-a.saved_at).map(m=>new Option(`${m.view.input?.name||'Observation'} · ${new Date(m.saved_at).toLocaleString()} · ${m.view.frames.length} frame(s)`,m.id)));if(selected)$('missions').value=selected}
+async function refreshMissions(selected){const items=await storage.all('missions');$('missions').replaceChildren(new Option('Select a saved observation',''),...items.sort((a,b)=>b.saved_at-a.saved_at).map(m=>new Option(`${m.view.input?.name||'Observation'}${m.view.processing&&!m.view.processing.complete?' · incomplete analysis':''} · ${new Date(m.saved_at).toLocaleString()} · ${m.view.frames.length} frame(s)`,m.id)));if(selected)$('missions').value=selected}
 async function showMission(value){mission=value;reviewContext={frames:value.view.frames,camera:value.view.camera,pack_id:value.pack_id,mission:value};$('video').hidden=media?.type!=='video'||mediaMissionId!==value.id;$('query').hidden=!$('video').hidden;const saved=await storage.get('packs',value.pack_id);if(!saved||!await storage.verifyPack(saved))throw Error('Saved observation requires a missing package. Download its region.');pack=saved;region=regions.find(r=>r.pack_id===pack.pack_id);if(!region)throw Error('Saved region catalog is missing');$('region').value=region.id;$('overview').src=assetUrl(region.thumbnail);
   for(const [id,key] of [['latitude','latitude'],['longitude','longitude'],['radius','radius_m'],['agl','agl_m'],['fov','fov_deg'],['period','sample_period'],['max-frames','max_frames']])if(Number.isFinite(value.view.prior?.[key]))$(id).value=String(value.view.prior[key]);
   drawPrior();$('pack-status').textContent=`Verified offline package · ${formatBytes(region.bytes)}`;
@@ -95,7 +126,7 @@ async function showFrame(index,{moveCamera=true}={}){
 }
 function currentReview(context,request){return context===reviewContext&&frameReview===request&&(!request.video||Math.abs($('video').currentTime-request.time)<1e-6)}
 function fillHypotheses(frame,selected){
-  const options=hypotheses(frame);$('hypotheses').replaceChildren(...options.map((h,i)=>new Option(`Candidate ${h.candidate_id??i} · ${h.inliers} geometric inliers`,i)));$('hypotheses').disabled=!options.length;
+  const options=hypotheses(frame);$('hypotheses').replaceChildren(...options.map((h,i)=>new Option(h.scene_supported?`Scene path ${h.candidate_id??i}`:`Candidate ${h.candidate_id??i} · ${h.inliers} geometric inliers`,i)));$('hypotheses').disabled=!options.length;
   if(selected)$('hypotheses').value=String(options.indexOf(selected));
   $('hypotheses').onchange=()=>showHypothesis(frame,options[+$('hypotheses').value]).catch(error);return options;
 }

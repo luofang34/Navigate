@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
+import {refineSceneSampling} from '../webapp/scene-sampling.js';
 import {TrackPreview} from '../webapp/track-preview.js';
 import {hypotheses,frameLabel} from '../webapp/hypotheses.js';
 import {missionSummary,resultSummary,executionSummary} from '../webapp/result-summary.js';
@@ -34,7 +35,7 @@ const context={setTimeout:()=>1,clearTimeout(){},console:{error:e=>errors.push(e
  MapView:class{constructor(canvas){this.canvas=canvas}async load(p,c){this.pack=p;this.pack_id=p.pack_id;this.preview={}}setMinimumClearance(){}async setCalibration(){}async setPose(pose){moves.push(pose)}displayCamera(){return {width:960,height:544,fx:689,fy:694,cx:479.5,cy:271.5}}height(){return 100}},
  PipelineSession:class{acquire(){this.current=pipeline;return Promise.resolve(pipeline)}close(){}},
  DataService:class{static=true;request(){return Promise.resolve([region])}},CoverageLoader:class{},
- hypotheses,frameLabel,missionSummary,resultSummary,executionSummary,replaySeekTime,
+ refineSceneSampling,hypotheses,frameLabel,missionSummary,resultSummary,executionSummary,replaySeekTime,
  assetUrl:p=>p,localPosition:()=>[0,0,100],selectedInputs:files=>files,cameraForImage:()=>camera,matchingOptions:()=>({longEdge:960}),
  videoTimes:()=>[0,.2,.4],openInput:async()=>({type:'video',source:{videoWidth:1920,videoHeight:1080,src:'test-video'},duration:.6,close(){}}),
  frameAt:async(_,time)=>({blob:new Blob([String(time)]),time}),requireOfflinePack:async()=>{},refineSequenceBackward:async()=>{},storage,
@@ -73,7 +74,35 @@ assert.equal(JSON.parse(node('details').textContent).observation.observation_sha
 third.resolve(frame(2,[]));await run;
 assert.equal(saved.get('saved-mission').view.frames.length,3);assert.equal(errors.length,0);
 assert.equal(node('cancel').disabled,true);assert.equal(node('frames').disabled,false);
+assert.equal(saved.get('saved-mission').view.processing.complete,true);
 assert.equal(node('map-label').textContent,'TRACK OVERVIEW');
+pipeline.finishSequence=async()=>[{sha256:'missing-group'}];
+pipeline.reconstructSequence=async()=>{assert.equal(saved.get('saved-failure').view.frames.length,3,'frame evidence is committed before reconstruction starts');throw new DOMException('Saved image group is missing','NotFoundError')};
+const interrupted=node('locate').onclick();
+for(let i=0;i<3;i++){const request=await nextEstimate();request.resolve(frame(i,i===0?[pose(0,0)]:[]))}
+await interrupted;
+const partial=saved.get('saved-failure');
+assert.equal(partial.view.frames.length,3);assert.equal(partial.view.processing.complete,false);assert.equal(partial.view.processing.stage,'scene reconstruction');
+assert.match(partial.view.processing.error,/Saved image group is missing/);
+assert.match(node('run-status').textContent,/3 observation frames are saved/);
+assert.equal(node('export-track').disabled,false,'a failed reconstruction does not discard the completed observation results');
+assert.equal(partial.view.frames.filter(f=>f.accepted).length,0,'persisting a partial analysis cannot promote geometric acceptance');
+assert.equal(errors.length,1);assert.match(String(errors[0]),/Saved image group is missing/);
+const displayBudgets=[],plans=[0,1,2].map(index=>({anchor:{index},source:{record:{sha256:'scene-'+index}}}));
+context.sceneMapPlans=reconstruction=>{assert.equal(reconstruction.refinement_checked,true,'registration consumes the completed path refinement');return {plans,stage:'bounded_scene_registration',deferred_leaf_sha256:[],unregistered_root_sha256:[],unregistered_leaf_sha256:[]}};
+context.createImageBitmap=async()=>({close(){}});context.gray=()=>({gray:new Uint8Array(4)});
+context.appendScenePaths=()=>0;
+pipeline.finishSequence=async()=>[{sha256:'available-group'}];pipeline.reconstructSequence=async()=>({groups:[]});
+pipeline.refineScenePaths=async(groups,reconstruction,frames)=>{assert.equal(saved.get('saved-failure').view.processing.stage,'camera path refinement');assert.equal(groups[0].sha256,'available-group');assert.equal(frames.length,3);assert.equal(node('frames').disabled,false);return {...reconstruction,refinement_checked:true}};
+pipeline.registerScene=async plan=>{displayBudgets.push(plan.preview_path_budget);return {registrations:[],preview_paths:plan.anchor.index===0?0:plan.preview_path_budget,source_scene_sha256:plan.source.record.sha256,geographic_acceptance:false}};
+const registered=node('locate').onclick();
+for(let i=0;i<3;i++){const request=await nextEstimate();request.resolve(frame(i,[pose(0,i)]))}
+await registered;
+assert.deepEqual(displayBudgets,[11,16,16],'later scene registrations receive display slots and reuse unused earlier slots');
+assert.equal(saved.get('saved-failure').view.scene_registration.results.length,3,'every registration result remains stored');
+assert.equal(saved.get('saved-failure').view.scene_registration.geographic_acceptance,false);
+assert.equal(errors.length,1);
+console.info('Scene registration shares a bounded preview budget and retains every registration result.');
 const reads=[],readStarted=deferred();storage.queryBlob=(mission,frame)=>{const request={...deferred(),frame};reads.push(request);readStarted.resolve();return request.promise};
 node('latitude').value='0';node('longitude').value='0';node('radius').value='1';
 node('missions').value='saved-mission';const loaded=node('missions').onchange();
@@ -101,6 +130,7 @@ node('region').value='';await node('region').onchange();
 assert.equal(node('frames').disabled,true);assert.equal(node('hypotheses').disabled,true);
 assert.equal(node('details').textContent,'');assert.equal(node('export-track').disabled,true);
 activePreview.close();
+console.info('A missing scene group preserves saved observations and marks reconstruction incomplete.');
 console.info('Live upload preserves the reviewed frame and alternative, supports seeking, and clears unsupported-time evidence.');
 
 const linkedId='b'.repeat(32),linkedMission={...saved.get('saved-mission'),id:linkedId};saved.set(linkedId,linkedMission);storage.queryBlob=async()=>new Blob(['saved']);

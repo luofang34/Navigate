@@ -6,10 +6,12 @@ globalThis.OffscreenCanvas=class {
  constructor(width,height){Object.assign(this,{width,height})}
  getContext(){return {drawImage(){},translate(){},rotate(){},getImageData:()=>({data:new Uint8Array(this.width*this.height*4)})}}
 };
+class ImageTracks {constructor(){this.sources=[]}push(id){this.sources.push(id)}free(){this.freed=true}}
 const pose=x=>({position_enu_m:[x,0,100],eye_to_enu_xyzw:[0,0,0,1]});
 let searches=0,stamp,refinement;
 const matcher={matchImages:async()=>({pairs:[],backend_identity:'test-adapter'}),retrievePairs:async()=>{searches++;return []}};
 const pipeline=new LocalizationPipeline(matcher,{headings:4,refinements:1,regionalIntervalSeconds:5});
+pipeline.SceneTracks=ImageTracks;
 pipeline.pack={anchor_lat_lon:[0,0]};pipeline.camera={width:2,height:2};pipeline.references={elevation:()=>0,crops:()=>[]};
 pipeline.renderer={
  begin(_pixels,_prior,sequence,capture_time_ns){stamp={observation_sha256:`observation-${sequence}`,sequence,capture_time_ns};refinement=null},
@@ -33,6 +35,7 @@ assert.equal(refreshed.retrieval.algorithm,'descriptor_shortlist_then_regional_p
 console.info('The localization workflow performs timed area searches and preserves a separate relative alternative');
 
 const waiting=new LocalizationPipeline(matcher,{headings:4,regionalIntervalSeconds:5});
+waiting.SceneTracks=ImageTracks;
 Object.assign(waiting,{pack:pipeline.pack,camera:pipeline.camera,references:pipeline.references});let waitingStamp;
 waiting.renderer={begin(_pixels,_prior,sequence,capture_time_ns){waitingStamp={sequence,capture_time_ns,observation_sha256:'waiting-'+sequence}},select:()=>JSON.stringify({...waitingStamp,accepted:false,decision:'rejected',candidate_hypotheses:[]})};
 const check=(time,sequence,timing='browser decoded frame presentation timestamp')=>waiting.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time,timing},prior,sequence,()=>{});
@@ -86,3 +89,5 @@ assert.equal(pipeline.temporal.lastMapSearchNs,5e9);assert.equal(pipeline.tempor
 await estimate(5.2,2);assert.equal(localAttempts,1,'a failed local check does not repeat on every adjacent sample');
 Object.assign(pipeline.renderer,{refine:originalRefine,select:originalSelect});
 console.info('Rejected local checks retain conditional tracking and preserve both retry clocks');
+
+assert.ok(pipeline.imageSequence.current.sources.includes('observation-2'),'map rejection does not discard uploaded image observations');

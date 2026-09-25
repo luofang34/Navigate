@@ -20,7 +20,7 @@ export class ReferencePack {
     for(const {x,y,size} of cropPlan({width,height,baseSize,center,metresPerPixel:mpp,radius:prior.radius_m,scales})){
       const crop=makeCanvas();crop.width=crop.height=640;const cc=crop.getContext('2d',{willReadFrequently:true});for(const t of tiles){const tx=(t.xyz[1]-x0)*512,ty=(t.xyz[2]-y0)*512;if(tx+512<=x||ty+512<=y||tx>=x+size||ty>=y+size)continue;cc.drawImage(t.imagery.canvas,(tx-x)*640/size,(ty-y)*640/size,512*640/size,512*640/size);}const data=cc.getImageData(0,0,640,640).data;let valid=0;for(let i=3;i<data.length;i+=4)if(data[i]===255)valid++;if(valid<640*640*.35)continue;
       const alpha=new Uint8Array(640*640),pixels=new Uint8Array(640*640);for(let i=0;i<alpha.length;i++){alpha[i]=data[i*4+3];pixels[i]=(77*data[i*4]+150*data[i*4+1]+29*data[i*4+2])>>>8}
-      result.push({key:`${this.pack.pack_id}/${x}/${y}/${size}`,image:{gray:pixels,valid:alpha,width:640,height:640},world:p=>{const mx=(x+(p[0]+.5)*size/640-.5)/512+x0,my=(y+(p[1]+.5)*size/640-.5)/512+y0;const ix=Math.max(0,Math.min(639,Math.round(p[0]))),iy=Math.max(0,Math.min(639,Math.round(p[1])));if(alpha[iy*640+ix]!==255)return null;try{return this.world(z,mx,my)}catch{return null}}});
+      result.push({key:`${this.pack.pack_id}/${x}/${y}/${size}`,span_m:size*mpp,image:{gray:pixels,valid:alpha,width:640,height:640},world:p=>{const mx=(x+(p[0]+.5)*size/640-.5)/512+x0,my=(y+(p[1]+.5)*size/640-.5)/512+y0;const ix=Math.max(0,Math.min(639,Math.round(p[0]))),iy=Math.max(0,Math.min(639,Math.round(p[1])));if(alpha[iy*640+ix]!==255)return null;try{return this.world(z,mx,my)}catch{return null}}});
     }
     if(!result.length)throw Error('No valid reference imagery overlaps this prior');return result;
   }

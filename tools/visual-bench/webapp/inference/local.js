@@ -13,9 +13,9 @@ export class LocalMatcher {
     if(this.denseAsset){
       const progress=keys.progress??this.progress;
       if(!this.dense){const f=this.denseAsset;await downloadFiles([f],(n,t)=>progress(`Image matching model ${(n/1048576).toFixed(1)} / ${(t/1048576).toFixed(1)} MB`));const {DenseMatcher}=await import('./loftr.js');this.dense=await DenseMatcher.create(new Uint8Array(await read(`pilotage://chunks/${f.sha256}.bin`,0,f.size)),this.matcher.gpu,this.matcher.metrics)}
-      let pairs=this.trackingPairs.get(keys);if(pairs===undefined){pairs=await this.dense.match(reference,query);this.trackingPairs.put(keys,pairs)}return {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/webgpu-wasm`};
+      const patches=this.options.refinementPatches&&keys.stage==='refinement';let pairs=this.trackingPairs.get(keys);if(pairs===undefined){pairs=await (patches?this.dense.refine(reference,query):this.dense.match(reference,query));this.trackingPairs.put(keys,pairs)}return {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/webgpu-wasm${patches?'/overlapping-refinement':''}`};
     }
-const base=this.options.keypoints??1024,limit=this.matcher.glue?(keys.stage==='refinement'?Math.min(2048,Math.max(1024,base*2)):Math.min(2048,Math.max(512,base))):(keys.stage==='refinement'?Math.min(4096,Math.max(2048,base*3)):2048);const q=await this.matcher.features(query,keys.query,limit);return {pairs:q.count<6?[]:await this.matcher.pairs(await this.matcher.features(reference,keys.reference,limit),q),backend_identity:this.identity}}
+const base=this.options.keypoints??1024,limit=this.matcher.glue?(['refinement','tracking'].includes(keys.stage)?Math.min(2048,Math.max(1024,base*2)):Math.min(2048,Math.max(512,base))):(['refinement','tracking'].includes(keys.stage)?Math.min(4096,Math.max(2048,base*3)):2048);const q=await this.matcher.features(query,keys.query,limit);return {pairs:q.count<6?[]:await this.matcher.pairs(await this.matcher.features(reference,keys.reference,limit),q),backend_identity:this.identity}}
   async *matchAlternatives(reference,query){
     if(this.dense)for await(const pairs of this.dense.alternatives(reference,query))yield {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/rotation-search-webgpu-wasm`};
   }

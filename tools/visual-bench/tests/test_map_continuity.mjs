@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import {LocalizationPipeline} from '../webapp/localization.js';
+const pose=x=>({position_enu_m:[x,0,100],eye_to_enu_xyzw:[0,0,0,1],map_manifest_sha256:'map'});
+const frame={sequence:2,capture_time_ns:2e9,observation_sha256:'current',candidate_hypotheses:[{candidate_id:0,accepted:true,...pose(30)}]};
+const relative={...frame,accepted:false,decision:'relative_tracking',candidate_hypotheses:[{candidate_id:9,parent_candidate_id:4,accepted:false,tracking_supported:true,track_id:'branch',...pose(2)}]};
+const previous={sequence:1,capture_time_ns:1e9,observation_sha256:'previous',candidate_hypotheses:[{candidate_id:4,accepted:true,...pose(1)}]},image={gray:new Uint8Array([1]),width:1,height:1};
+const pipeline=new LocalizationPipeline({}, {localMotionCheck:true});pipeline.temporal.remember(previous,image);
+const sources=relative.candidate_hypotheses;let mapSupport=10,checks=0;
+pipeline.checkMotion=async(reference,observation,pixels,prior,candidates)=>{
+ checks++;assert.equal(reference.report.observation_sha256,'previous');assert.equal(reference.image.gray[0],1);assert.strictEqual(observation,frame);assert.strictEqual(pixels,image);
+ assert.deepEqual(candidates.map(h=>h.candidate_id),[0,1]);assert.deepEqual(candidates.map(h=>h.position_enu_m[0]),[2,30]);
+ return {checks:[{reference_candidate_id:4,candidate_id:0,consistent:true,inliers:100},{reference_candidate_id:4,candidate_id:1,consistent:true,inliers:mapSupport}],observation_sha256:'current',reference_observation_sha256:'previous',evidence_correlation:'unknown'};
+};
+const original=JSON.stringify([frame,relative]);
+let result=await pipeline.localUpdate(frame,sources,relative,image,{},()=>{});
+assert.equal(result.candidate_hypotheses[0].tracking_supported,true);assert.equal(result.candidate_hypotheses[0].accepted,false);assert.deepEqual(result.candidate_hypotheses[0].position_enu_m,[2,0,100]);
+assert.equal(result.candidate_hypotheses[0].local_map_attempt.accepted,true);assert.equal(result.local_motion_check.checks[1].inliers,10);
+assert.deepEqual(result.local_motion_check.candidate_sources,[{check_candidate_id:0,source:'relative',source_candidate_id:9},{check_candidate_id:1,source:'map',source_candidate_id:0}]);
+mapSupport=70;result=await pipeline.localUpdate(frame,sources,relative,image,{},()=>{});assert.equal(result.candidate_hypotheses[0].accepted,true);assert.deepEqual(result.candidate_hypotheses[0].position_enu_m,[30,0,100]);assert.equal(result.accepted,false,'motion association cannot establish a unique location');
+assert.equal(JSON.stringify([frame,relative]),original,'motion policy cannot overwrite raw geometric evidence');
+pipeline.options.localMotionCheck=false;await pipeline.localUpdate(frame,sources,relative,image,{},()=>{});assert.equal(checks,2,'the experiment does not change the default matcher path');
+console.info('Local map updates use conditional motion evidence without discarding incompatible geographic alternatives');

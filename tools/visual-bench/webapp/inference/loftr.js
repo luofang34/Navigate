@@ -1,3 +1,4 @@
+import {refinementPairs} from './refinement-patches.js';
 import {denseInput,supported,quarterTurn} from './loftr-input.js';
 export class DenseMatcher {
  static async create(bytes,tracker,metrics){const ort=await import('../runtime/ort.webgpu.min.mjs');const self=new DenseMatcher();self.Tensor=ort.Tensor;self.tracker=tracker;self.metrics=metrics;self.session=await ort.InferenceSession.create(bytes,{executionProviders:['webgpu','wasm'],graphOptimizationLevel:'all'});return self}
@@ -17,6 +18,7 @@ export class DenseMatcher {
    this.metrics.correspondences_max=Math.max(this.metrics.correspondences_max||0,pairs.length);return pairs;
   }finally{for(const t of Object.values(feeds))t.dispose();if(result)for(const t of Object.values(result))t.dispose()}
  }
+ refine(reference,query){return refinementPairs(reference,query,(a,b)=>this.match(a,b))}
  async *alternatives(reference,query){
   for(const turn of [1,2,3]){const rotated=quarterTurn(query,turn),pairs=await this.match(reference,rotated);yield pairs.map(p=>({reference:p.reference,query:rotated.unrotate(p.query)}))}
  }

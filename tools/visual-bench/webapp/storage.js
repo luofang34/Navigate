@@ -46,3 +46,41 @@ export async function saveLocalMission(view,pack,frames){
   for(let i=0;i<view.frames.length;i++){const name=`frame-${i}.png`;view.frames[i].query=name;const file=await dir.getFileHandle(name,{create:true});await frames[i].stream().pipeTo(await file.createWritable())}
   const mission={id,pack_id:pack.pack_id,view,saved_at:Date.now()};await put('missions',id,mission);return mission;
 }
+
+export async function saveImageTracks(json){return saveDerivedScene(json,'image_associations')}
+export async function saveSceneReconstruction(json){return saveDerivedScene(json,'local_scene_reconstruction')}
+export async function saveSceneRegistration(json){return saveDerivedScene(json,'conditional_scene_registration')}
+async function saveDerivedScene(json,stage){
+  const bytes=new TextEncoder().encode(json),digest=await sha256(bytes),dir=await directory('pilotage/chunks',true);
+  const file=await dir.getFileHandle(digest+'.bin',{create:true}),writer=await file.createWritable();
+  try{await writer.write(bytes);await writer.close()}catch(error){await writer.abort().catch(()=>{});throw error}
+  const chunk={sha256:digest,size:bytes.byteLength};if(!await verifyChunk(chunk))throw Error('Saved image associations failed their checksum');
+  return {...chunk,uri:`pilotage://chunks/${digest}.bin`,stage,geographic_acceptance:false};
+}
+
+export async function loadImageTracks(record){
+  const bytes=await read(record.uri,0,record.size);
+  if(await sha256(bytes)!==record.sha256)throw Error('Saved image group failed its checksum');
+  const group=JSON.parse(new TextDecoder().decode(bytes));
+  if(group.stage!=='image_associations'||group.geographic_acceptance!==false||!Array.isArray(group.observations)||!Array.isArray(group.graph?.observation_sha256)||group.observations.length!==group.graph.observation_sha256.length||group.observations.some((o,i)=>o.observation_sha256!==group.graph.observation_sha256[i]))throw Error('Saved image group source identities are inconsistent');
+  return group;
+}
+
+export async function loadSceneReconstruction(record){
+ const bytes=await read(record.uri,0,record.size);
+ if(await sha256(bytes)!==record.sha256)throw Error('Saved scene failed its checksum');
+ const scene=JSON.parse(new TextDecoder().decode(bytes));
+ if(!['local_scene_reconstruction','conditional_scene_alignment'].includes(scene.stage)||scene.geographic_acceptance!==false||!Array.isArray(scene.scene?.cameras)||!Array.isArray(scene.scene?.points))throw Error('Invalid saved scene');
+ return scene;
+}
+
+export async function saveMissionSamples(mission,samples){
+ const dir=await directory(`pilotage/missions/${mission.id}`,true);
+ for(const {frame,blob} of samples){
+  if(!/^[a-f0-9]{64}$/.test(frame.observation_sha256))throw Error('Invalid scene sample identity');
+  const name=`sample-${frame.observation_sha256}.png`,file=await dir.getFileHandle(name,{create:true});
+  await blob.stream().pipeTo(await file.createWritable());
+  if(await sha256(await(await file.getFile()).arrayBuffer())!==await sha256(await blob.arrayBuffer()))throw Error('Scene sample checksum failed');
+  frame.query=name;
+ }
+}

@@ -127,3 +127,22 @@ tracking.remember(branchUpdate,pixels,{map:true});
 assert.deepEqual(tracking.seeds('later',[0,0,110],100).map(h=>h.position_enu_m[0]),[3,80],'both geographic alternatives remain available for the next observation');
 assert.deepEqual(branchRelative.candidate_hypotheses.map(h=>h.position_enu_m[0]),[0,80],'the update does not move or combine the original relative proposals');
 console.info('Failed local map checks preserve other supported relative branches, lineage, and rejection evidence');
+
+const {localMapContinuations}=await import('../webapp/temporal-search.js');
+const moves=[{candidate_id:2,parent_candidate_id:20},{candidate_id:9,parent_candidate_id:90}],maps=[{candidate_id:0},{candidate_id:1}],initials=[{candidate_id:2},{candidate_id:9}];
+const checks=[{reference_candidate_id:20,candidate_id:0,consistent:true,inliers:100},{reference_candidate_id:90,candidate_id:1,consistent:true,inliers:100},{reference_candidate_id:20,candidate_id:2,consistent:true,inliers:60},{reference_candidate_id:90,candidate_id:3,consistent:true,inliers:30},{reference_candidate_id:20,candidate_id:3,consistent:true,inliers:80}];
+assert.deepEqual([...localMapContinuations(checks,moves,maps,initials)],[0],'a map continuation needs comparable support on its own parent, not another branch');
+const preserved=tracking.label(mixedMap,branchSeeds,branchRelative,new Set());
+assert.equal(preserved.candidate_hypotheses[0].tracking_supported,true);assert.equal(preserved.candidate_hypotheses[0].accepted,false);
+assert.deepEqual(preserved.candidate_hypotheses[0].position_enu_m,[0,0,110]);
+assert.equal(preserved.candidate_hypotheses[0].local_map_attempt.accepted,true,'an unassociated map hypothesis keeps its geometric acceptance');
+assert.deepEqual(preserved.candidate_hypotheses[0].local_map_attempt.position_enu_m,[3,0,110]);
+assert.equal(mixedMap.candidate_hypotheses[0].accepted,true);
+console.info('Conditional motion policy preserves accepted map alternatives without forcing a jump in an existing branch');
+
+const preparedHistory=new TemporalSearch();preparedHistory.remember({...first,sequence:4,capture_time_ns:100},pixels);
+let duplicateInference=0;
+const noRepeat={async matchImages(){duplicateInference++;throw Error('prepared pair should be reused')}};
+const preparedRenderer={...tracker,track:(_previous,metadata,_pairs,backend)=>JSON.stringify({candidate_id:JSON.parse(metadata).candidate_id,accepted:false,tracking_supported:backend==='shared-pair',...pose(3)})};
+const shared=await preparedHistory.track(preparedRenderer,noRepeat,{width:2,height:2},allSeeds,query,'shared',()=>{},{pairs:[],backend_identity:'shared-pair'});
+assert.equal(duplicateInference,0);assert.equal(shared.decision,'relative_tracking');assert.equal(shared.accepted,false);

@@ -4,7 +4,8 @@ export function missionSummary(frames) {
   const geometric = frames.reduce((sum, frame) => sum + hypotheses(frame).filter(h=>h.accepted).length, 0);
   const unique = frames.filter(frame => frame.accepted && frame.decision !== 'unresolved').length;
   const tracked=frames.filter(f=>f.decision==='relative_tracking').length;
-  return (tracked?`${tracked} relative tracking frames · `:'')+`${geometric} geometric hypotheses · ${unique} unique among evaluated · ${frames.length} frames saved locally`;
+  const reconstructed=frames.filter(f=>f.candidate_hypotheses?.some(h=>h.scene_supported)).length;
+  return (reconstructed?`${reconstructed} conditional scene frames · `:'')+(tracked?`${tracked} relative tracking frames · `:'')+`${geometric} geometric hypotheses · ${unique} unique among evaluated · ${frames.length} frames saved locally`;
 }
 
 export function resultSummary(frame, hypothesis) {
@@ -20,9 +21,13 @@ export function resultSummary(frame, hypothesis) {
     title: hypothesis ? frameLabel(frame) : deferred ? 'No pose for this frame' : noCandidate ? 'No location candidate found' : 'Visual observation rejected',
     location: hypothesis ? `${fixed(hypothesis.latitude_deg, 7)}, ${fixed(hypothesis.longitude_deg, 7)}` : '',
     explanation: hypothesis
-      ? hypothesis.tracking_supported?'Relative tracking from the initial map hypothesis. Absolute position error and drift are unknown.':'Geometric support is not a calibrated probability of the correct location.'
+      ? hypothesis.scene_supported?'Reconstructed camera path with an estimated map alignment. Scene, calibration, and absolute position errors are unknown.':hypothesis.tracking_supported?'Relative tracking from the initial map hypothesis. Absolute position error and drift are unknown.':'Geometric support is not a calibrated probability of the correct location.'
       : rejection,
-    metrics: hypothesis ? [
+    metrics: hypothesis?.scene_supported ? [
+      ['Registration links',count(hypothesis.scene_registration?.inliers)],
+      ['Point fit RMS',`${fixed(hypothesis.scene_registration?.point_fit_rms_m,2)} m`],
+      ['Absolute accuracy','Not measured'],
+    ] : hypothesis ? [
       ['Geometric inliers', Number.isFinite(hypothesis.inliers) ? String(hypothesis.inliers) : 'Unknown'],
       ['Reprojection RMS', `${fixed(hypothesis.reprojection_rms_px, 2)} px`],
       ['Absolute accuracy', 'Not measured'],
