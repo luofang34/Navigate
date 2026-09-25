@@ -74,9 +74,7 @@ export class TrackPreview {
    for(let i=0;i<3;i++){low[i]=Math.min(low[i],h.position_enu_m[i]);high[i]=Math.max(high[i],h.position_enu_m[i])}count=(count+1)>>>0;
   }
   if(!count)return;
-  const x=(low[0]+high[0])/2,y=(low[1]+high[1])/2;
-  const angle=.55,height=Math.max(350,high[2]+150,(high[0]-low[0])*2,(high[1]-low[1])*2);
-  await this.map.setPose({position_enu_m:[x,y-height*Math.tan(angle),height],eye_to_enu_xyzw:[Math.sin(angle/2),0,0,Math.cos(angle/2)]},{constrain:true});
+  await this.map.setPose(overviewPose(low,high,this.map.displayCamera()),{constrain:true});
   this.map.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'overview'}));
  }
  paint(){
@@ -100,4 +98,18 @@ export class TrackPreview {
 function sampleConnections(samples,sample,maxGap){
  const index=samples.indexOf(sample);
  return (connectedSamples(sample,samples[index+1],{maxGap})?2:0)+(connectedSamples(samples[index-1],sample,{maxGap})?1:0);
+}
+
+function overviewPose(low,high,camera){
+ const angle=.55,sin=Math.sin(angle),cos=Math.cos(angle),center=low.map((v,i)=>(v+high[i])/2);
+ const {width,height,fx,fy,cx,cy}=camera;
+ const tanX=Math.min(cx-width*.2,width*.8-cx)/fx,tanY=Math.min(cy-height*.2,height*.8-cy)/fy;
+ if(!(tanX>0&&tanY>0&&Number.isFinite(tanX)&&Number.isFinite(tanY)))throw Error('Camera calibration cannot frame the overview');
+ let distance=(Math.max(350,high[2]+150)-center[2])/cos;
+ // Fit the elevated path in camera axes. Ground bounds alone can clip aircraft positions.
+ for(const x of [low[0],high[0]])for(const y of [low[1],high[1]])for(const z of [low[2],high[2]]){
+  const dy=y-center[1],dz=z-center[2],up=cos*dy+sin*dz,toward=-sin*dy+cos*dz;
+  distance=Math.max(distance,toward+Math.max(Math.abs(x-center[0])/tanX,Math.abs(up)/tanY,.1));
+ }
+ return {position_enu_m:[center[0],center[1]-distance*sin,center[2]+distance*cos],eye_to_enu_xyzw:[Math.sin(angle/2),0,0,Math.cos(angle/2)]};
 }
