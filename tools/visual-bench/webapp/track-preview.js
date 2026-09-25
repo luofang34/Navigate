@@ -85,6 +85,7 @@ export class TrackPreview {
   const selected=this.trackSelection.choose(this.branches,this.key,this.maxGap),paths=[];
   if(this.alternatives?.checked)for(const commands of this.projection.project(this.branches,this.map.pack,this.presented,this.maxGap).values())paths.push({commands,color:'#f6b16b'});
   for(const commands of this.selectionProjection.project(selected,this.map.pack,this.presented,this.maxGap).values())paths.push({commands,color:'#65bdff'});
+  ctx.lineJoin='round';ctx.lineCap='round';
   for(const {commands,color} of paths){
    ctx.beginPath();
    for(const {point,connect} of commands){if(connect)ctx.lineTo(...point);else ctx.moveTo(...point)}
