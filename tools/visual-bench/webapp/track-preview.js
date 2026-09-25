@@ -38,9 +38,9 @@ export class TrackPreview {
   Object.assign(this,{map,video,overlay,follow,camera,overviewButton:overview,status,alternatives,selection});this.branches=new Map();this.key=null;this.maxGap=.55;this.presented=null;
   map.canvas.addEventListener('render',e=>{this.presented=e.detail;this.paint()});
   map.canvas.addEventListener('viewchange',e=>{if(e.detail==='free')follow.checked=false});
-  follow.addEventListener('change',()=>{this.lastTime=null;this.update(this.clock.time)});
+  follow.addEventListener('change',()=>{this.lastTime=null;this.update(this.clock.time,{notify:true})});
   alternatives?.addEventListener('change',()=>this.paint());
-  camera.onclick=()=>{if(this.current)this.map.setPose(this.current.pose).catch(e=>this.fail(e))};
+  camera.onclick=()=>{if(this.current){this.selection({time:this.clock.time,current:this.current,cameraView:true});this.map.setPose(this.current.pose).catch(e=>this.fail(e))}};
   overview.onclick=()=>this.overview().catch(e=>this.fail(e));
   this.clock=new VideoPoseClock(video,time=>this.update(time));
  }
@@ -48,7 +48,7 @@ export class TrackPreview {
  clear(){this.projection=null;this.selectionProjection=null;this.trackSelection=null;this.branches.clear();this.key=null;this.selectedTime=null;this.current=null;this.follow.checked=false;this.camera.disabled=true;this.status.textContent='';this.paint()}
  setFrames(frames,{period=.5}={}){this.branches=trackBranches(frames);this.maxGap=Math.max(.05,period*1.1);if(!this.branches.has(this.key))this.key=this.branches.keys().next().value??null;this.update(this.clock.time)}
  select(frame,h){this.selectedTime=frame.capture_time_ns/1e9;this.key=h?branchKey(frame,h):null;this.update(this.clock.time)}
- update(time){
+ update(time,{notify=false}={}){
   if(this.video.hidden)time=this.selectedTime??0;
   const available=[...this.branches].map(([key,samples])=>({key,current:playbackPose(samples,time,{maxGap:this.maxGap})})).filter(item=>item.current);
   // Choosing a view does not join the evidence or interpolate across a map restart.
@@ -61,7 +61,7 @@ export class TrackPreview {
   if(selected)this.key=selected.key;this.current=selected?.current??null;this.camera.disabled=!this.current;
   const alternatives=new Set(available.map(({current:{sample}})=>sample.source_h??sample.h)).size;
   if(this.branches.size)this.status.textContent=this.current?`${time.toFixed(2)} s · estimated camera${alternatives>1?` · ${alternatives} alternatives`:''}`:`${time.toFixed(2)} s · no supported pose`;
-  if(this.reportedSample!==this.current?.sample||this.reportedKey!==this.key){this.reportedSample=this.current?.sample;this.reportedKey=this.key;this.selection({time,current:this.current,alternatives})}
+  if(notify||this.reportedSample!==this.current?.sample||this.reportedKey!==this.key){this.reportedSample=this.current?.sample;this.reportedKey=this.key;this.selection({time,current:this.current,alternatives,cameraView:this.follow.checked})}
   if(this.follow.checked&&this.current&&this.map.preview&&(time!==this.lastTime||this.key!==this.lastFollowKey)){this.lastTime=time;this.lastFollowKey=this.key;this.map.setPose(this.current.pose,{immediate:true}).catch(e=>this.fail(e))}
   this.paint();
  }
@@ -77,6 +77,7 @@ export class TrackPreview {
   const x=(low[0]+high[0])/2,y=(low[1]+high[1])/2;
   const angle=.55,height=Math.max(350,high[2]+150,(high[0]-low[0])*2,(high[1]-low[1])*2);
   await this.map.setPose({position_enu_m:[x,y-height*Math.tan(angle),height],eye_to_enu_xyzw:[Math.sin(angle/2),0,0,Math.cos(angle/2)]},{constrain:true});
+  this.map.canvas.dispatchEvent(new CustomEvent('viewchange',{detail:'overview'}));
  }
  paint(){
   const canvas=this.overlay;if(canvas.width!==this.map.canvas.width)canvas.width=this.map.canvas.width;if(canvas.height!==this.map.canvas.height)canvas.height=this.map.canvas.height;const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);
