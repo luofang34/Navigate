@@ -83,13 +83,14 @@ async function showMission(value){mission=value;reviewContext={frames:value.view
 function frameOption(frame,index){return new Option(`${frame.timing_scope==='still image'?(frame.input_name||'Image '+(index+1)):(frame.capture_time_ns/1e9).toFixed(2)+' s'} · ${frameLabel(frame)}`,index)}
 function showDetails(frame){$('details').textContent=JSON.stringify({pack_id:reviewContext.pack_id,elevation_datum:pack.elevation_datum,camera:reviewContext.camera,observation:frame},null,2)}
 async function showFrame(index){
-  const context=reviewContext,f=context?.frames[index];if(!f)return;const request={};frameReview=request;
-  if(media?.type==='video'&&!$('video').hidden)$('video').currentTime=replaySeekTime(f);
+  const context=reviewContext,f=context?.frames[index];if(!f)return;const request={video:media?.type==='video'&&!$('video').hidden};frameReview=request;
+  if(request.video){$('video').currentTime=replaySeekTime(f);request.time=$('video').currentTime}
   const blob=context.blobs?.[index]??await storage.queryBlob(context.mission,f);
-  if(context!==reviewContext||frameReview!==request)return;
+  if(!currentReview(context,request))return;
   if(queryURL)URL.revokeObjectURL(queryURL);queryURL=URL.createObjectURL(blob);$('query').src=queryURL;$('query-empty').hidden=true;
-  $('frames').value=String(index);const options=fillHypotheses(f);await showHypothesis(f,options[0]);if(context!==reviewContext||frameReview!==request)return;showDetails(f);$('attribution').textContent=pack.attribution;enable();
+  $('frames').value=String(index);const options=fillHypotheses(f);await showHypothesis(f,options[0]);if(!currentReview(context,request))return;showDetails(f);$('attribution').textContent=pack.attribution;enable();
 }
+function currentReview(context,request){return context===reviewContext&&frameReview===request&&(!request.video||Math.abs($('video').currentTime-request.time)<1e-6)}
 function fillHypotheses(frame,selected){
   const options=hypotheses(frame);$('hypotheses').replaceChildren(...options.map((h,i)=>new Option(`Candidate ${h.candidate_id??i} · ${h.inliers} geometric inliers`,i)));$('hypotheses').disabled=!options.length;
   if(selected)$('hypotheses').value=String(options.indexOf(selected));
