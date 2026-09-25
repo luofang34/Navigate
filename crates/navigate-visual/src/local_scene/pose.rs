@@ -3,7 +3,7 @@ use super::LocalScenePose;
 use crate::CameraModel;
 use nalgebra::{Matrix3, SVector, UnitQuaternion, Vector2, Vector3};
 #[derive(Clone, Copy)]
-pub(super) struct Pose {
+pub(crate) struct Pose {
     pub r: Matrix3<f64>,
     pub t: Vector3<f64>,
 }

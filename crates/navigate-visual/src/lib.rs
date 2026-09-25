@@ -62,6 +62,8 @@ mod local_scene;
 mod localizer;
 mod matching;
 mod pose_solver;
+#[cfg(feature = "reconstruction")]
+pub mod reconstruction;
 mod retrieval;
 
 #[cfg(feature = "gpu")]

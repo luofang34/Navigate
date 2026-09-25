@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 default = []
+reconstruction = ["dep:kornia-3d", "dep:kornia-algebra", "dep:lambda-twist", "dep:cv-core", "dep:getrandom"]
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
@@ -17,6 +18,14 @@ image.workspace = true
 wgpu = { version = "22.1", optional = true }
 bytemuck = { version = "1", optional = true }
 pollster = { version = "0.3", optional = true }
+
+kornia-3d = { version = "0.1.14", optional = true }
+kornia-algebra = { version = "0.1.14", optional = true }
+lambda-twist = { version = "0.7", optional = true }
+cv-core = { version = "0.15", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
 [lints]
 workspace = true

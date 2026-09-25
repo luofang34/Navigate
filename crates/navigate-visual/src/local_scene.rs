@@ -8,7 +8,7 @@ use crate::CameraModel;
 use std::collections::BTreeSet;
 mod bundle;
 mod error;
-mod pose;
+pub(crate) mod pose;
 mod scale;
 mod types;
 mod validation;

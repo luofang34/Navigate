@@ -88,16 +88,21 @@ pub struct ReferenceView {
 
 impl ReferenceView {
     pub(crate) fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
-        frame.camera.validate()?;
-        self.frame.validate()?;
-        self.pose.validate()?;
+        self.validate_camera(&frame.camera)?;
         if frame.image.dimensions() != self.image.dimensions() {
             return Err(VisualError::Dimensions {
                 query: frame.image.dimensions(),
                 reference: self.image.dimensions(),
             });
         }
-        if frame.image.dimensions() != (frame.camera.width, frame.camera.height)
+        Ok(())
+    }
+
+    pub(crate) fn validate_camera(&self, camera: &CameraModel) -> Result<(), VisualError> {
+        camera.validate()?;
+        self.frame.validate()?;
+        self.pose.validate()?;
+        if self.image.dimensions() != (camera.width, camera.height)
             || self.depth_m.len() != self.image.as_raw().len()
         {
             return Err(VisualError::Invalid {
