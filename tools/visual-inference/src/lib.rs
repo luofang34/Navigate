@@ -6,8 +6,10 @@
 //! Provider selection can include CPU operators. It is not device telemetry.
 
 mod adapter;
+mod feature_cache;
 mod features;
 mod lighterglue;
+mod lightglue;
 mod loftr;
 mod native_runtime;
 mod preprocessing;
@@ -17,6 +19,7 @@ mod xfeat;
 mod xfeat_dense;
 
 pub use adapter::{MatcherFiles, OnnxMatcher};
+pub use lightglue::LightGlueMatcher;
 pub use loftr::LoFtrMatcher;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
 

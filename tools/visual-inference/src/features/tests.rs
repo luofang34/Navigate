@@ -21,3 +21,24 @@ fn mutual_matches_retain_pixel_coordinates_and_reject_ambiguity() -> Result<(), 
     );
     Ok(())
 }
+
+#[test]
+fn invalid_device_descriptors_do_not_partially_append_a_feature() -> Result<(), InferenceError> {
+    let mut features = Features::empty(2);
+    features.push([12.0, 20.0], [12.0, 20.0], 1.0, &[3.0, 4.0])?;
+    for descriptor in [[0.0, 0.0], [f32::NAN, 0.0], [f32::INFINITY, 0.0]] {
+        assert!(
+            features
+                .push([30.0, 40.0], [30.0, 40.0], 0.5, &descriptor)
+                .is_err()
+        );
+        assert_eq!(features.pixels, [[12.0, 20.0]]);
+        assert_eq!(features.model_pixels, [12.0, 20.0]);
+        assert_eq!(features.scores, [1.0]);
+        assert_eq!(features.descriptors, [0.6, 0.8]);
+    }
+    features.push([30.0, 40.0], [30.0, 40.0], 0.5, &[0.0, 2.0])?;
+    assert_eq!(features.descriptors, [0.6, 0.8, 0.0, 1.0]);
+    assert_eq!(features.pixels.len(), 2);
+    Ok(())
+}
