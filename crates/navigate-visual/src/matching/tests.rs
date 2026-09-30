@@ -77,3 +77,52 @@ fn border_points_use_the_finest_available_pyramid_support() {
     assert_eq!(correct, tracked.iter().filter(|p| p.is_some()).count());
     assert_eq!(tracked.last(), Some(&None));
 }
+
+#[test]
+fn boxed_matcher_forwards_optional_alternatives() -> Result<(), VisualError> {
+    struct Alternative;
+    impl ImageMatcher for Alternative {
+        fn identity(&self) -> &str {
+            "alternative-test"
+        }
+        fn match_images_blocking(
+            &mut self,
+            _: &GrayImage,
+            _: &GrayImage,
+        ) -> Result<Vec<PixelMatch>, VisualError> {
+            Ok(Vec::new())
+        }
+        fn match_alternative_blocking(
+            &mut self,
+            _: &GrayImage,
+            _: &GrayImage,
+            attempt: u32,
+        ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
+            Ok((attempt == 0).then(|| {
+                vec![PixelMatch {
+                    reference: [2.0, 3.0].into(),
+                    query: [4.0, 5.0].into(),
+                }]
+            }))
+        }
+    }
+    let image = GrayImage::new(8, 8);
+    let mut matcher: Box<dyn ImageMatcher> = Box::new(Alternative);
+    let pairs = matcher.match_alternative_blocking(&image, &image, 0)?;
+    assert_eq!(pairs.as_ref().map(Vec::len), Some(1));
+    assert_eq!(
+        pairs.as_ref().map(|pairs| pairs[0].query),
+        Some([4.0, 5.0].into())
+    );
+    assert!(
+        matcher
+            .match_alternative_blocking(&image, &image, 1)?
+            .is_none()
+    );
+    assert!(
+        PyramidalMatcher
+            .match_alternative_blocking(&image, &image, 0)?
+            .is_none()
+    );
+    Ok(())
+}
