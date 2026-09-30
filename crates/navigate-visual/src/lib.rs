@@ -54,6 +54,7 @@
 
 mod camera;
 mod candidates;
+pub mod controller;
 mod error;
 mod frame;
 mod geometry;
