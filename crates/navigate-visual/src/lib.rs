@@ -64,7 +64,9 @@ mod matching;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
 pub mod reconstruction;
+mod reference;
 mod retrieval;
+mod search;
 
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -85,7 +87,9 @@ pub use local_scene::{
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
+pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
+pub use search::{SearchConfig, SearchPrior, SearchTier};
 
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;

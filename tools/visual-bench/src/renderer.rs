@@ -35,6 +35,7 @@ pub(crate) struct ReferenceRenderer {
     revision: MapRevision,
     frame: LocalFrame,
     coverage: geometry::Coverage,
+    style_sha256: String,
 }
 
 fn render_error<E: std::error::Error + Send + Sync + 'static>(source: E) -> BenchError {
@@ -74,7 +75,7 @@ impl ReferenceRenderer {
             ),
             altitude_meters: 0.0,
         };
-        let style = style(&package)?;
+        let (style, style_sha256) = style(&package)?;
         let coverage = geometry::Coverage::new(&package.manifest, package.frame);
         let plugins: Vec<Box<dyn Plugin<_>>> = vec![
             Box::new(RenderPlugin),
@@ -97,6 +98,7 @@ impl ReferenceRenderer {
             revision: package.revision,
             frame: package.frame,
             coverage,
+            style_sha256,
         })
     }
 
@@ -166,7 +168,8 @@ fn load_sources_blocking(
         .map_err(render_error)
 }
 
-fn style(package: &MapPackage) -> Result<Style, BenchError> {
+/// The reference style and the SHA-256 of its canonical JSON.
+fn style(package: &MapPackage) -> Result<(Style, String), BenchError> {
     let imagery_maxzoom = package
         .manifest
         .tiles
@@ -183,7 +186,7 @@ fn style(package: &MapPackage) -> Result<Style, BenchError> {
         .map(|tile| tile.xyz.0)
         .max()
         .unwrap_or(0);
-    serde_json::from_value(serde_json::json!({
+    let value = serde_json::json!({
         "version":8, "center":[package.manifest.anchor_lat_lon[1],package.manifest.anchor_lat_lon[0]],
         "zoom":12, "projection":{"type":"mercator"}, "terrain":{"source":"dem","exaggeration":1},
         "sources":{
@@ -192,5 +195,26 @@ fn style(package: &MapPackage) -> Result<Style, BenchError> {
         },
         "layers":[{"id":"background","type":"background","paint":{"background-color":"rgba(0,0,0,0)"}},
             {"id":"imagery","type":"raster","source":"imagery","paint":{"raster-fade-duration":0}}]
-    })).map_err(|source| BenchError::Json { path: "generated-reference-style".into(), source })
+    });
+    let json_error = |source| BenchError::Json {
+        path: "generated-reference-style".into(),
+        source,
+    };
+    let digest = crate::package::digest(&serde_json::to_vec(&value).map_err(json_error)?);
+    Ok((serde_json::from_value(value).map_err(json_error)?, digest))
+}
+
+impl navigate_visual::ReferenceRenderer for ReferenceRenderer {
+    type Error = BenchError;
+
+    fn identity(&self) -> navigate_visual::RendererIdentity {
+        navigate_visual::RendererIdentity {
+            revision: crate::RENDERER_REVISION.trim().to_owned(),
+            style_sha256: self.style_sha256.clone(),
+        }
+    }
+
+    fn render_blocking(&mut self, pose: CameraPose) -> Result<ReferenceView, BenchError> {
+        ReferenceRenderer::render_blocking(self, pose)
+    }
 }

@@ -107,10 +107,15 @@ vocabulary; process topology is a deployment decision, not a contract one.
 
 ## What the skeleton deliberately defers
 
-- A celestial measurement model. Visual positions enter fusion as
-  position fixes through `navigate-visual-fusion` (ADR-0007). A
-  correlated visual measurement model and visual attitude are future work.
-- IMU mechanization propagation and filter-state growth.
+- Measurement models for the reserved `Range`, `Pseudorange`, and
+  `VisualPose` variants. The filter refuses them by name until they land
+  (ADR-0008). Celestial and terrain-matching variants are not reserved yet.
+- Inertial and dead-reckoning propagators, attitude and bias states, and
+  bounded delayed-measurement history (ADR-0008).
+- Global visual retrieval for a search prior that is too uncertain to
+  narrow the search (ADR-0009).
+- Batched multi-view rendering, source-driven tile detail, and a completion
+  signal in the MapLibre implementation of the reference port (ADR-0010).
 - Coupling admission-gate storm rates into the quality derivation
   (quality currently degrades on covariance bounds and source silence).
 - Position setpoint generation (the contract vocabulary mirrors the FC
