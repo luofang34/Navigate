@@ -1,4 +1,7 @@
-//! Local planar retrieval proposals. Surface verification controls acceptance.
+//! Image-to-map retrieval proposals. Surface verification controls acceptance.
+mod nadir;
+pub use nadir::nadir_similarity_proposal;
+
 use crate::{CameraModel, CameraPose, VisualError};
 use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector2, Vector3};
 
@@ -16,8 +19,10 @@ pub struct GroundCorrespondence {
 pub struct RetrievalProposal {
     /// Arbitrarily oriented candidate camera pose.
     pub pose: CameraPose,
-    /// Number of local planar inliers. This is not geographic confidence.
+    /// Number of local retrieval inliers. This is not geographic confidence.
     pub inliers: usize,
+    /// Observed inlier pixels separated by at least 12 pixels. Retrieval ranking only.
+    pub separated_inliers: usize,
 }
 
 /// Propose a camera from approximately planar terrain correspondences.
@@ -75,6 +80,7 @@ fn proposals(camera: CameraModel, pairs: &[GroundCorrespondence]) -> Option<Retr
             orientation: pose.1,
         },
         inliers: best.len(),
+        separated_inliers: separated_support(pairs, &best),
     })
 }
 fn planar_consensus(
@@ -174,3 +180,14 @@ fn decompose(h: Matrix3<f64>, origin: Vector3<f64>) -> Option<(Vector3<f64>, Uni
 }
 #[cfg(test)]
 mod tests;
+
+fn separated_support(pairs: &[GroundCorrespondence], indices: &[usize]) -> usize {
+    let mut selected: Vec<Vector2<f64>> = Vec::new();
+    for &i in indices {
+        let point = pairs[i].query;
+        if selected.iter().all(|p| (point - p).norm() >= 12.0) {
+            selected.push(point);
+        }
+    }
+    selected.len()
+}
