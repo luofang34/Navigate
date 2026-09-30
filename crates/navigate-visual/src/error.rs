@@ -27,6 +27,14 @@ pub enum VisualError {
         /// Minimum required number.
         required: usize,
     },
+    /// Too few spatially separated inliers support the pose.
+    #[error("only {found} separated visual support points; need {required}")]
+    InsufficientSpatialSupport {
+        /// Number of spatially separated inliers.
+        found: usize,
+        /// Minimum required number.
+        required: usize,
+    },
     /// The image does not constrain a full pose.
     #[error("visual geometry does not constrain the camera pose")]
     DegenerateGeometry,

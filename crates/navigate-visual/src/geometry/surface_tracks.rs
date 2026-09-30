@@ -201,7 +201,7 @@ impl SurfaceTracks {
         let (points, indices) = self.correspondences(frame, locations);
         let (pose, inliers, count) =
             verifier.fit_points(frame, self.pose, prior, points, pose_solver::Motion::Free)?;
-        let (quality, _) = verifier.assess(frame, &pose, &inliers, count)?;
+        let (quality, _) = verifier.assess(frame, &self.pose, &pose, &inliers, count)?;
         let supported: BTreeSet<_> = inliers.iter().map(|p| pixel_key(p.pixel)).collect();
         let retained: BTreeSet<_> = indices
             .into_iter()

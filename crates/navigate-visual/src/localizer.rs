@@ -9,8 +9,11 @@ use nalgebra::SMatrix;
 /// Acceptance thresholds for one visual observation.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalizerConfig {
-    /// Minimum count of geometric inliers.
+    /// Minimum count of spatially separated geometric inliers.
     pub min_inliers: usize,
+    /// Minimum separation of counted support in both images, in pixels.
+    /// This limits dense repetitions. It does not establish statistical independence.
+    pub support_separation_px: f64,
     /// Maximum reprojection error for an inlier, in pixels.
     pub inlier_threshold_px: f64,
     /// Minimum occupied cells in a four-column, three-row image grid.
@@ -23,6 +26,7 @@ impl Default for LocalizerConfig {
     fn default() -> Self {
         Self {
             min_inliers: 20,
+            support_separation_px: 12.0,
             inlier_threshold_px: 2.5,
             min_occupied_cells: 4,
             pixel_noise_floor: 1.0,
@@ -37,6 +41,9 @@ pub struct EstimateQuality {
     pub depth_matches: usize,
     /// Number of final geometric inliers.
     pub inliers: usize,
+    /// Spatially separated inliers used for support checks and local covariance.
+    /// Remaining feature, map, and calibration correlations are not quantified.
+    pub spatial_support: usize,
     /// Root mean square reprojection error, in pixels.
     pub reprojection_rms_px: f64,
     /// Number of occupied cells in the query image.

@@ -105,7 +105,13 @@ impl PoseVerifier {
         };
         let (pose, inliers, depth_matches) =
             self.fit_candidate(frame, reference.surface, prior, matches, solver_motion)?;
-        let (quality, _) = self.assess(frame, &pose, &inliers, depth_matches)?;
+        let (quality, _) = self.assess(
+            frame,
+            &reference.surface.pose,
+            &pose,
+            &inliers,
+            depth_matches,
+        )?;
         Ok(TrackingProposal {
             pose,
             quality,
@@ -148,7 +154,7 @@ impl PoseVerifier {
                     <= self.config.inlier_threshold_px
             })
             .collect();
-        self.assess(frame, pose, &inliers, count)
+        self.assess(frame, &reference.surface.pose, pose, &inliers, count)
             .map(|(quality, _)| quality)
     }
 }

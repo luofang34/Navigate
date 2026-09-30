@@ -348,7 +348,7 @@ fn weak_support_can_seed_a_new_render_but_cannot_become_a_measurement() {
         Err(VisualError::DegenerateGeometry)
     ));
     let proposal = result.refinement.expect("bounded seed for another render");
-    assert!((proposal.position - truth.position).norm() < 0.01);
+    assert!((proposal.pose.position - truth.position).norm() < 0.01);
     prior.position_radius_m = 1.0;
     let outside = verifier.evaluate(&frame, &reference, &prior, &matches, "test");
     assert!(matches!(
@@ -375,8 +375,10 @@ fn sparse_fit_can_seed_a_new_render_but_cannot_become_a_measurement() {
         Err(VisualError::InsufficientMatches { required: 20, .. })
     ));
     let proposal = result.refinement.expect("bounded search proposal");
-    assert!((proposal.position - truth.position).norm() < 0.01);
-    assert!(proposal.orientation.angle_to(&truth.orientation) < 1e-5);
+    assert!((proposal.pose.position - truth.position).norm() < 0.01);
+    assert!(proposal.pose.orientation.angle_to(&truth.orientation) < 1e-5);
+    assert_eq!(proposal.inliers, sparse.len());
+    assert_eq!(proposal.spatial_support, sparse.len());
     assert!(
         verifier
             .verify(&frame, &reference, &prior, &sparse, "sparse-adapter")
@@ -392,4 +394,77 @@ fn sparse_fit_can_seed_a_new_render_but_cannot_become_a_measurement() {
             .refinement
             .is_none()
     );
+}
+
+#[test]
+fn dense_clusters_do_not_create_spatial_support() {
+    let (frame, reference, prior, _, truth) = scene();
+    let mut matches = Vec::new();
+    for (x, y) in [(50, 50), (250, 50), (50, 180), (250, 180)] {
+        for dy in 0..5 {
+            for dx in 0..5 {
+                let pixel = Vector2::new(f64::from(x + dx), f64::from(y + dy));
+                let depth = reference.depth_m[((y + dy) * 320 + x + dx) as usize];
+                let world = frame
+                    .camera
+                    .unproject(&reference.pose, pixel, f64::from(depth));
+                matches.push(PixelMatch {
+                    reference: pixel,
+                    query: frame.camera.project(&truth, world).expect("visible"),
+                });
+            }
+        }
+    }
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("config");
+    let result = verifier.evaluate(&frame, &reference, &prior, &matches, "dense");
+    assert!(matches!(
+        result.acceptance,
+        Err(VisualError::InsufficientSpatialSupport { found: 4, .. })
+    ));
+    let seed = result
+        .refinement
+        .expect("weak support can seed another render");
+    assert_eq!(seed.inliers, 100);
+    assert_eq!(seed.spatial_support, 4);
+    assert_eq!(seed.query_cells, 4);
+    assert_eq!(seed.reference_cells, 4);
+}
+
+#[test]
+fn dense_repetitions_do_not_shrink_local_covariance() {
+    let (frame, reference, prior, matches, truth) = scene();
+    let verifier = crate::PoseVerifier::new(LocalizerConfig::default()).expect("config");
+    let baseline = verifier
+        .verify(&frame, &reference, &prior, &matches, "sparse")
+        .expect("support");
+    let mut dense = matches.clone();
+    for pair in &matches {
+        for shift in 1..5 {
+            let p = pair.reference + Vector2::new(f64::from(shift), 0.0);
+            let depth = reference.depth_m[p.y as usize * 320 + p.x as usize];
+            let world = frame.camera.unproject(&reference.pose, p, f64::from(depth));
+            dense.push(PixelMatch {
+                reference: p,
+                query: frame.camera.project(&truth, world).expect("visible"),
+            });
+        }
+    }
+    let more = verifier
+        .verify(&frame, &reference, &prior, &dense, "dense")
+        .expect("support");
+    assert!(more.quality.inliers > baseline.quality.inliers * 4);
+    assert_eq!(
+        more.quality.spatial_support,
+        baseline.quality.spatial_support
+    );
+    assert!(more.geometry_covariance.trace() >= baseline.geometry_covariance.trace() * 0.99);
+    dense.reverse();
+    let reordered = verifier
+        .verify(&frame, &reference, &prior, &dense, "dense")
+        .expect("support");
+    assert_eq!(
+        reordered.quality.spatial_support,
+        more.quality.spatial_support
+    );
+    assert!((reordered.geometry_covariance - more.geometry_covariance).norm() < 1e-6);
 }

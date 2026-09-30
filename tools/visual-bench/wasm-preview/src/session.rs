@@ -110,18 +110,18 @@ impl Session {
                 let p = e.pose.position;
                 let q = e.pose.orientation.quaternion();
                 let [latitude, longitude, _] = e.frame.geodetic(p);
-                json!({"candidate_id":id,"accepted":true,"acceptance_stage":"geometry_and_prior","position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"latitude_deg":latitude,"longitude_deg":longitude,"altitude_m":p.z,"inliers":e.quality.inliers,"depth_matches":e.quality.depth_matches,"reprojection_rms_px":e.quality.reprojection_rms_px,"occupied_cells":e.quality.occupied_cells,"condition_number":e.quality.condition_number,"geometry_covariance":(0..6).map(|row|(0..6).map(|col|e.geometry_covariance[(row,col)]).collect::<Vec<_>>()).collect::<Vec<_>>(),"geometry_covariance_axes":["east_m","north_m","up_m","camera_rx_rad","camera_ry_rad","camera_rz_rad"],"covariance_scope":"local image geometry only; excludes map, calibration and association errors","backend":e.backend,"observation_sha256":e.observation_sha256,"map_release_id":e.map.release_id,"map_manifest_sha256":e.map.manifest_sha256})
+                json!({"candidate_id":id,"accepted":true,"acceptance_stage":"geometry_and_prior","position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"latitude_deg":latitude,"longitude_deg":longitude,"altitude_m":p.z,"inliers":e.quality.inliers,"spatial_support":e.quality.spatial_support,"depth_matches":e.quality.depth_matches,"reprojection_rms_px":e.quality.reprojection_rms_px,"occupied_cells":e.quality.occupied_cells,"condition_number":e.quality.condition_number,"geometry_covariance":(0..6).map(|row|(0..6).map(|col|e.geometry_covariance[(row,col)]).collect::<Vec<_>>()).collect::<Vec<_>>(),"geometry_covariance_axes":["east_m","north_m","up_m","camera_rx_rad","camera_ry_rad","camera_rz_rad"],"covariance_scope":"local image geometry only; excludes map, calibration and association errors","backend":e.backend,"observation_sha256":e.observation_sha256,"map_release_id":e.map.release_id,"map_manifest_sha256":e.map.manifest_sha256})
             }
             Err(e) => {
                 json!({"candidate_id":id,"accepted":false,"acceptance_stage":"geometry_and_prior","reason":e.to_string()})
             }
         };
         if result.is_err()
-            && let Some(pose) = evaluation.refinement
+            && let Some(seed) = evaluation.refinement
         {
-            let p = pose.position;
-            let q = pose.orientation.quaternion();
-            report["refinement_proposal"] = json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"stage":"render_initialization_only","accepted":false});
+            let p = seed.pose.position;
+            let q = seed.pose.orientation.quaternion();
+            report["refinement_proposal"] = json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"stage":"render_initialization_only","accepted":false,"inliers":seed.inliers,"spatial_support":seed.spatial_support,"query_cells":seed.query_cells,"reference_cells":seed.reference_cells});
         }
         reference_provenance(&mut report, reference);
         self.results.record(CandidateId(u64::from(id)), result)?;

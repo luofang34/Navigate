@@ -112,6 +112,7 @@ fn evaluate_blocking(case: &Case, root: &Path, matcher: &mut OnnxMatcher) -> Res
     match outcome {
         Ok(e) => {
             report["inliers"] = json!(e.quality.inliers);
+            report["spatial_support"] = json!(e.quality.spatial_support);
             report["rms_px"] = json!(e.quality.reprojection_rms_px);
             report["occupied_cells"] = json!(e.quality.occupied_cells);
             report["position_enu_m"] =

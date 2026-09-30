@@ -1,5 +1,5 @@
 //! Resident rendering and candidate refinement for one observation at a time.
-mod observation;
+pub(crate) mod observation;
 mod record;
 use crate::{
     BenchError,
@@ -147,7 +147,6 @@ impl Worker {
                     matches: &matches,
                     output: &output,
                     map_context: &self.map_context,
-                    map_frame: self.frame,
                 })?;
                 Ok(serde_json::json!({"ok":true,"estimate":estimate}))
             }
