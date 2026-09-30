@@ -1,10 +1,12 @@
 //! Explicit native runtime setup and contextual adapter errors.
+mod coreml_cache;
+
 use ort::{ep, session::Session};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// A native adapter could not produce correspondences.
+/// A native inference adapter could not complete a request.
 #[derive(Debug, Error)]
 pub enum InferenceError {
     /// The host runtime library could not load.
@@ -80,11 +82,18 @@ pub struct ExecutionConfig {
     pub provider: Provider,
     /// ONNX Runtime CPU thread count.
     pub threads: usize,
+    /// Let idle ORT CPU threads spin before they block. False leaves CPU time to other tasks.
+    pub cpu_spinning: bool,
     /// NVIDIA device index. Used only with CUDA or TensorRT.
     pub nvidia_device_id: i32,
     /// Optional TensorRT engine cache. Keep this separate for each runtime and GPU.
     /// Model content determines the cache prefix. Runtime upgrades require a new directory.
     pub engine_cache_directory: Option<PathBuf>,
+    /// Optional Core ML cache for models with embedded weights.
+    /// Keep this directory local to one host and clear it after an OS upgrade.
+    /// Content, runtime, compute units, and dimensions determine each cache key.
+    /// External weight files are not supported on this path.
+    pub coreml_cache_directory: Option<PathBuf>,
     /// Maximum TensorRT builder workspace. This does not cap total GPU memory.
     pub tensor_rt_workspace_bytes: usize,
 }
@@ -93,14 +102,21 @@ impl Default for ExecutionConfig {
         Self {
             provider: Provider::Cpu,
             threads: 4,
+            cpu_spinning: false,
             nvidia_device_id: 0,
             engine_cache_directory: None,
+            coreml_cache_directory: None,
             tensor_rt_workspace_bytes: 256 * 1024 * 1024,
         }
     }
 }
 
 /// Load the host-selected ONNX Runtime once before constructing adapters.
+///
+/// Set `ORT_DISABLE_TELEMETRY=1` in the host process environment before startup
+/// when the runtime supports that switch. The API opt-out occurs after environment
+/// creation and cannot prevent runtime startup telemetry. This function does not
+/// change the host process environment.
 ///
 /// # Errors
 /// Returns an error if the library cannot load or the environment already exists.
@@ -124,21 +140,43 @@ pub(crate) fn session_blocking(
     path: &Path,
     config: &ExecutionConfig,
 ) -> Result<Session, InferenceError> {
+    session_with_dimensions_blocking(path, config, &[])
+}
+
+pub(crate) fn session_with_dimensions_blocking(
+    path: &Path,
+    config: &ExecutionConfig,
+    dimensions: &[(String, i64)],
+) -> Result<Session, InferenceError> {
     validate_config(config)?;
-    let providers = providers_blocking(path, config)?;
-    Session::builder()
+    let cached = coreml_cache::prepare_blocking(path, config, dimensions)?;
+    let providers =
+        providers_blocking(path, config, cached.as_ref().map(|c| c.directory.as_path()))?;
+    let mut builder = Session::builder()
         .map_err(|e| runtime("create session", e))?
         .with_intra_threads(config.threads)
         .map_err(|e| runtime("set CPU threads", e))?
+        .with_intra_op_spinning(config.cpu_spinning)
+        .map_err(|e| runtime("set intra-op CPU wait policy", e))?
+        .with_inter_op_spinning(config.cpu_spinning)
+        .map_err(|e| runtime("set inter-op CPU wait policy", e))?
         .with_execution_providers(providers)
         .map_err(|e| {
             runtime(
                 format!("configure requested {:?} provider", config.provider),
                 e,
             )
-        })?
-        .commit_from_file(path)
-        .map_err(|e| runtime(format!("load model {}", path.display()), e))
+        })?;
+    for (name, size) in dimensions {
+        builder = builder
+            .with_dimension_override(name, *size)
+            .map_err(|e| runtime(format!("set dimension {name} to {size}"), e))?;
+    }
+    let result = match cached {
+        Some(cached) => builder.commit_from_memory(&cached.bytes),
+        None => builder.commit_from_file(path),
+    };
+    result.map_err(|e| runtime(format!("load model {}", path.display()), e))
 }
 
 fn validate_config(config: &ExecutionConfig) -> Result<(), InferenceError> {
@@ -164,6 +202,7 @@ fn validate_config(config: &ExecutionConfig) -> Result<(), InferenceError> {
 fn providers_blocking(
     path: &Path,
     config: &ExecutionConfig,
+    coreml_cache: Option<&Path>,
 ) -> Result<Vec<ep::ExecutionProviderDispatch>, InferenceError> {
     let cuda = || {
         ep::CUDA::default()
@@ -199,14 +238,14 @@ fn providers_blocking(
                 Provider::CoreMlAne => ep::coreml::ComputeUnits::CPUAndNeuralEngine,
                 _ => ep::coreml::ComputeUnits::CPUAndGPU,
             };
-            vec![
-                ep::CoreML::default()
-                    .with_compute_units(units)
-                    .with_static_input_shapes(true)
-                    .with_model_format(ep::coreml::ModelFormat::MLProgram)
-                    .build()
-                    .error_on_failure(),
-            ]
+            let mut provider = ep::CoreML::default()
+                .with_compute_units(units)
+                .with_static_input_shapes(true)
+                .with_model_format(ep::coreml::ModelFormat::MLProgram);
+            if let Some(directory) = coreml_cache {
+                provider = provider.with_model_cache_dir(directory.to_string_lossy());
+            }
+            vec![provider.build().error_on_failure()]
         }
     })
 }
