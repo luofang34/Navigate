@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 #[test]
 fn padding_and_backend_scores_do_not_become_geometry_evidence() {

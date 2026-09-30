@@ -1,5 +1,4 @@
 //! Check image associations without requiring map support.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 fn pairs(step: usize) -> Vec<PixelMatch> {
     (0..12)

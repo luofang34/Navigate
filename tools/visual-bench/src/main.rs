@@ -32,7 +32,7 @@ mod worker;
 const RENDERER_REVISION: &str = include_str!("../MAPLIBRE_REVISION");
 
 use error::BenchError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn read_blocking(path: &Path) -> Result<Vec<u8>, BenchError> {
     std::fs::read(path).map_err(|source| BenchError::Io {
@@ -55,13 +55,19 @@ fn directory_blocking(path: &Path) -> Result<(), BenchError> {
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<(), BenchError> {
+fn main() -> Result<(), BenchError> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter("warn,visual_bench=info")
         .init();
-    cli::run_blocking().await
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| BenchError::Io {
+            path: PathBuf::from("<tokio runtime>"),
+            source,
+        })?
+        .block_on(cli::run_blocking())
 }
 
 #[cfg(test)]

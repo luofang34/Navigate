@@ -166,8 +166,6 @@ fn normalize_bearing_rad(bearing: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
 
     fn deg(latitude_deg: f64, longitude_deg: f64) -> GeodeticPosition {

@@ -1,6 +1,4 @@
 //! Robust camera-fitting controls.
-#![allow(clippy::expect_used, clippy::panic)]
-
 use super::*;
 use nalgebra::{UnitQuaternion, Vector2};
 #[test]

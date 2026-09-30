@@ -1,5 +1,4 @@
 //! Saved group reconstruction and overlap alignment through the worker boundary.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_visual::ScenePointObservation;

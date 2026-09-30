@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 fn camera() -> String {
     json!({"width":960,"height":544,"fx":700,"fy":690,"cx":479.5,"cy":271.5}).to_string()

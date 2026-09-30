@@ -1,5 +1,4 @@
 //! JSON boundary evidence and failure controls.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 
 fn camera() -> String {

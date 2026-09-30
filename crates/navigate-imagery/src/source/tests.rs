@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 use crate::digest;
 use std::collections::BTreeMap;

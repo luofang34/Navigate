@@ -28,8 +28,6 @@ pub const MEAN_RADIUS_M: f64 = (2.0 * SEMI_MAJOR_AXIS_M + SEMI_MINOR_AXIS_M) / 3
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
 
     #[test]

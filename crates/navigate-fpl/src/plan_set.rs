@@ -163,8 +163,6 @@ pub enum PlanActivationError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use navigate_contract::{GeodeticPosition, Waypoint};
 
     use super::*;

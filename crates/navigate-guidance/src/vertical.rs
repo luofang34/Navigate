@@ -53,8 +53,6 @@ pub(crate) fn deviation_m(ownship_altitude_m: f64, constraint: Option<&AltitudeC
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use navigate_contract::AltitudeConstraint;
 
     use super::deviation_m;

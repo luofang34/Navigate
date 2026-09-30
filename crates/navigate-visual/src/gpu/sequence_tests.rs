@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::{
     CameraModel, CameraPose, Frame, FrameStamp, LocalFrame, LocalizerConfig, MapRevision,

@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
-
 use nalgebra::{SMatrix, UnitQuaternion, Vector3};
 use navigate_contract::{ClockDomainId, SourceEpoch, SourceId};
 use navigate_fusion::{FusionConfig, NavigationFilter};

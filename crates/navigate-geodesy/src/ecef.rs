@@ -109,8 +109,6 @@ fn bowring_latitude_rad(p: f64, z: f64, beta: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
     use core::f64::consts::FRAC_PI_2;
 

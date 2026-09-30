@@ -1,5 +1,4 @@
 //! Worker serialization retains point evidence without geographic acceptance.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 #[test]
 fn worker_returns_conditional_camera_alternatives_and_point_ids() {

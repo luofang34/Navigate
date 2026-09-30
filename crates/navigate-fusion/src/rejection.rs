@@ -192,8 +192,6 @@ impl RejectionCounters {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use navigate_contract::DurationNanos;
 
     use super::{RejectionCounters, RejectionReason};

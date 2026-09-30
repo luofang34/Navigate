@@ -1,9 +1,6 @@
 //! End-to-end assertions over the deterministic scripted scenario:
 //! plan completion, admission health, lateral containment, and
 //! single-source integrity honesty visible at the far end of the chain.
-
-#![allow(clippy::expect_used, clippy::panic)]
-
 use navigate_contract::{FaultDetection, Redundancy};
 use navigate_fpl::SequenceReason;
 use navrun::run_scenario;

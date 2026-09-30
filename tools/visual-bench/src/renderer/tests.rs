@@ -1,9 +1,15 @@
-#![allow(clippy::expect_used)]
-
 use super::*;
 use crate::package::{DecodedTile, MapPackage};
 use image::{Rgba, RgbaImage};
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
+
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(future)
+}
 
 fn nonzero_terrain() -> MapPackage {
     let n = 65536.0;
@@ -46,62 +52,66 @@ fn nonzero_terrain() -> MapPackage {
     }
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires a GPU adapter"]
-async fn terrain_height_and_missing_imagery_control_depth() {
-    let camera = CameraModel {
-        width: 64,
-        height: 64,
-        fx: 200.0,
-        fy: 200.0,
-        cx: 31.5,
-        cy: 31.5,
-    };
-    let pose = CameraPose {
-        position: Vector3::new(0.0, 0.0, 100.0),
-        orientation: UnitQuaternion::identity(),
-    };
-    let mut renderer = ReferenceRenderer::new(nonzero_terrain(), camera)
-        .await
-        .expect("renderer");
-    let reference = renderer.render_blocking(pose).expect("render real depth");
-    let right = reference.depth_m[32 * 64 + 48];
-    assert!(right > 0.0, "opaque imagery has usable depth");
-    let world = camera.unproject(&pose, Vector2::new(48.0, 32.0), f64::from(right));
-    assert!(
-        (world.z - 17.0).abs() < 0.02,
-        "DEM height must reach the mesh: {world:?}"
-    );
-    assert_eq!(
-        reference.depth_m[32 * 64 + 16],
-        0.0,
-        "missing imagery cannot supply a correspondence"
-    );
+fn terrain_height_and_missing_imagery_control_depth() {
+    block_on(async {
+        let camera = CameraModel {
+            width: 64,
+            height: 64,
+            fx: 200.0,
+            fy: 200.0,
+            cx: 31.5,
+            cy: 31.5,
+        };
+        let pose = CameraPose {
+            position: Vector3::new(0.0, 0.0, 100.0),
+            orientation: UnitQuaternion::identity(),
+        };
+        let mut renderer = ReferenceRenderer::new(nonzero_terrain(), camera)
+            .await
+            .expect("renderer");
+        let reference = renderer.render_blocking(pose).expect("render real depth");
+        let right = reference.depth_m[32 * 64 + 48];
+        assert!(right > 0.0, "opaque imagery has usable depth");
+        let world = camera.unproject(&pose, Vector2::new(48.0, 32.0), f64::from(right));
+        assert!(
+            (world.z - 17.0).abs() < 0.02,
+            "DEM height must reach the mesh: {world:?}"
+        );
+        assert_eq!(
+            reference.depth_m[32 * 64 + 16],
+            0.0,
+            "missing imagery cannot supply a correspondence"
+        );
+    });
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires a GPU adapter"]
-async fn loaded_dem_cannot_validate_a_coarser_fallback_surface() {
-    let mut package = nonzero_terrain();
-    package.manifest.tiles[1].xyz = navigate_imagery::Tile(22, 2097184, 2097184);
-    package.tiles[1].xyz = [22, 2097184, 2097184];
-    let camera = CameraModel {
-        width: 64,
-        height: 64,
-        fx: 200.0,
-        fy: 200.0,
-        cx: 31.5,
-        cy: 31.5,
-    };
-    let pose = CameraPose {
-        position: Vector3::new(0.0, 0.0, 100.0),
-        orientation: UnitQuaternion::identity(),
-    };
-    let mut renderer = ReferenceRenderer::new(package, camera)
-        .await
-        .expect("renderer");
-    let reference = renderer.render_blocking(pose).expect("fallback reference");
-    assert!(reference.depth_m.iter().all(|depth| *depth == 0.0));
+fn loaded_dem_cannot_validate_a_coarser_fallback_surface() {
+    block_on(async {
+        let mut package = nonzero_terrain();
+        package.manifest.tiles[1].xyz = navigate_imagery::Tile(22, 2097184, 2097184);
+        package.tiles[1].xyz = [22, 2097184, 2097184];
+        let camera = CameraModel {
+            width: 64,
+            height: 64,
+            fx: 200.0,
+            fy: 200.0,
+            cx: 31.5,
+            cy: 31.5,
+        };
+        let pose = CameraPose {
+            position: Vector3::new(0.0, 0.0, 100.0),
+            orientation: UnitQuaternion::identity(),
+        };
+        let mut renderer = ReferenceRenderer::new(package, camera)
+            .await
+            .expect("renderer");
+        let reference = renderer.render_blocking(pose).expect("fallback reference");
+        assert!(reference.depth_m.iter().all(|depth| *depth == 0.0));
+    });
 }
 
 #[test]

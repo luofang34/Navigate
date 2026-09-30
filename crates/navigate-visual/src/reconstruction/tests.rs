@@ -1,5 +1,4 @@
 //! Behavioral checks for local reconstruction and observation identity.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use nalgebra::{Matrix3, UnitQuaternion};
 fn fixture() -> (CameraModel, ImageTracks, Vec<Pose>, ReconstructionSeed) {

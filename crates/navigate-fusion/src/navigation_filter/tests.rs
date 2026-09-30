@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
-
 mod publication;
 mod range;
 mod reserved;

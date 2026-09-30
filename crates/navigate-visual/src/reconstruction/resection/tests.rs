@@ -1,5 +1,4 @@
 //! Pose and evidence controls for scene-camera fitting.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use nalgebra::UnitQuaternion;
 

@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
-
 use navigate_contract::PlanRole;
 
 use super::*;

@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 //! Deviation-tracking derivation tests: the lateral reference each
 //! flown leg type defines, the vertical profile, and the fail-closed
 //! admission refusals.

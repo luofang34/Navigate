@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 //! Velocity-derivation tests. Every sign is pinned against the geodesy
 //! convention it derives from, and every cap is asserted as a magnitude
 //! so a per-axis regression cannot pass.

@@ -381,8 +381,6 @@ fn tangent_plane(origin: &GeodeticPosition, step: u32) -> Result<LocalTangentPla
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
 
     #[test]

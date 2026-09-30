@@ -1,5 +1,4 @@
 //! Scheduling checks with changing image coverage.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 fn fixture() -> (CameraModel, ImageTracks) {
     let camera = CameraModel {

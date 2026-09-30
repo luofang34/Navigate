@@ -1,5 +1,4 @@
 //! Verify the worker boundary without a graphics device.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 use navigate_visual::{

@@ -56,8 +56,6 @@ pub(crate) fn fold_to_half_turn(angle_rad: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
 
     #[test]

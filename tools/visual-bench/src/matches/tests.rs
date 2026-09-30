@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use super::*;
 use image::Luma;
 use nalgebra::{UnitQuaternion, Vector3};
