@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from rknn.api import RKNN
 
 OUTPUT_SHAPES = {
     "descriptors": (1, 64, 72, 100),
@@ -77,6 +76,8 @@ def main():
     args = parser.parse_args()
     if not np.isfinite(args.max_absolute_error) or args.max_absolute_error <= 0:
         parser.error("Maximum absolute error must be finite and positive")
+    from rknn.api import RKNN
+
     source_bytes = args.source.read_bytes()
     args.output.mkdir(parents=True, exist_ok=False)
     rknn = RKNN(verbose=True, verbose_file=str(args.output / "compiler.log"))
