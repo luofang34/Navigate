@@ -34,6 +34,9 @@ pub(crate) fn command() -> Command {
                 .value_parser(value_parser!(BackendKind))
                 .help("CPU patch matching or GPU compute shaders. GPU failures do not fall back to CPU."),
         )
+        .subcommand(crate::acquisition::AcquisitionArgs::args(Command::new("acquire").about(
+            "Find reference areas and fit camera hypotheses with resident Rust adapters.",
+        )))
         .subcommand(crate::flight::FlightArgs::args(Command::new("flight").about(
             "Track original video with resident matchers and a bounded processing budget.",
         )))
@@ -190,6 +193,10 @@ pub(crate) async fn run_blocking() -> Result<(), BenchError> {
     };
     let m = &mut m;
     match name.as_str() {
+        "acquire" => {
+            crate::acquisition::run_blocking(&crate::acquisition::AcquisitionArgs::from_matches(m)?)
+                .await
+        }
         "flight" => {
             crate::flight::run_blocking(&crate::flight::FlightArgs::from_matches(m)?, backend).await
         }

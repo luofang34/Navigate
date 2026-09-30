@@ -5,6 +5,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum BenchError {
+    #[error("reference retrieval failed: {0}")]
+    Retrieval(#[from] navigate_visual::place_retrieval::RetrievalError),
     #[error("native image matcher failed: {0}")]
     Inference(#[from] navigate_visual_onnx::InferenceError),
     #[error("offline data access failed: {0}")]
