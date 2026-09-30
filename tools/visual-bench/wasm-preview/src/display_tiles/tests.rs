@@ -4,7 +4,7 @@ use image::Rgba;
 fn tile(z: u8, x: i32, y: i32, color: [u8; 4]) -> AvailableRasterLayerData {
     AvailableRasterLayerData {
         coords: WorldTileCoords::from((x, y, z.into())),
-        source_layer: "imagery".into(),
+        source: "imagery".into(),
         image: RgbaImage::from_pixel(512, 512, Rgba(color)),
     }
 }

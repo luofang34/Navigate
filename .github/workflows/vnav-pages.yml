@@ -61,7 +61,10 @@ jobs:
       - name: Build Rust WASM and public model assets
         working-directory: Navigate
         run: |
-          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+          # The CLI must match the wasm-bindgen crate in the preview lockfile.
+          version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/[^0-9.]/,""); print}' tools/visual-bench/wasm-preview/Cargo.lock)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          cargo install wasm-bindgen-cli --version "$version" --locked
           node tools/visual-bench/build_web.mjs
           node tools/visual-bench/prepare_browser_models.mjs
       - name: Read the fixed public reference package
