@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>Export local registration links</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}</style><h1>Export local registration links</h1><pre>Reading verified local evidence…</pre><script type="module">
+import * as storage from './storage.js';
+const prefix=new URLSearchParams(location.search).get('scene')==='anchored-dense'?'anchored-dense':'dense';
+const sink='http://127.0.0.1:61678/',output=document.querySelector('pre');
+try{
+ const report=await(await fetch(sink+prefix+'-scene-map-registration.json')).json(),documents=[];
+ for(const [index,result] of report.results.entries())for(const registration of result.registrations){const record=registration.record,bytes=await storage.read(record.uri,0,record.size);if(await storage.sha256(bytes)!==record.sha256)throw Error('Changed registration');documents.push({anchor:report.anchors[index],record,document:JSON.parse(new TextDecoder().decode(bytes))})}
+ const result={stage:prefix+'_scene_registration_links',scene:report.record,group:report.group,documents};
+ await fetch(sink+'result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result)});
+ output.textContent=JSON.stringify(documents.map(d=>({time_s:d.anchor.time_s,links:d.document.associations.length,candidates:d.document.candidates.length})),null,2);document.title='Exported verified map links';
+}catch(e){output.textContent=String(e);document.title='FAIL map link export'}
+</script>

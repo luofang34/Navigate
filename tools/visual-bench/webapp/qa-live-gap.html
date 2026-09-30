@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Live-gap matching check</title><style>body{background:#090e15;color:#dce7f7;font:16px system-ui;padding:24px}pre{white-space:pre-wrap}</style><h1>Live-gap matching check</h1><pre>Starting…</pre><script type="module">
+import {BrowserPipeline} from './browser-pipeline.js';
+import {matchingOptions} from './matching-options.js';
+import {download} from './storage.js';
+import {decodeCameraImage} from './camera-image.js';
+import {gray} from './observation.js';
+const output=document.querySelector('pre'),report={test:'conditional-live-gap-recovery',cases:[]};let pipeline;
+async function emit(phase){report.phase=phase;output.textContent=JSON.stringify(report,null,2);const response=await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});if(!response.ok)throw Error('Could not save test report')}
+try{
+ const response=await fetch('./models/test-frames/live-gap-fixture.json');if(!response.ok)throw Error('Missing local fixture');const fixture=await response.json();report.scope=fixture.scope;
+ const plan=await fetch('/api/offline-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({region_id:fixture.region})});if(!plan.ok)throw Error(await plan.text());const pack=await plan.json();await download(pack,()=>{});
+ const load=async name=>{const response=await fetch('./models/test-frames/'+name);if(!response.ok)throw Error('Missing test image');const bitmap=await decodeCameraImage(await response.blob());try{return gray(bitmap,fixture.camera.width,fixture.camera.height,true)}finally{bitmap.close()}};
+ pipeline=new BrowserPipeline();await pipeline.initialize(pack,fixture.camera,text=>{document.title=text},{...matchingOptions('balanced'),longEdge:640});
+ const reference={report:fixture.reference,image:{...await load(fixture.reference_image),time:fixture.reference.capture_time_ns/1e9,timing:'decoded video PTS'}};
+ for(const item of fixture.cases){await emit('matching '+item.name);const image={...await load(item.name),time:item.capture_time_ns/1e9,timing:item.negative?'assigned negative-control timestamp':'decoded video PTS'};const result=await pipeline.trackFrom(reference,image,fixture.prior,item.sequence,text=>{document.title=text});report.cases.push({name:item.name,negative:item.negative,result});await emit('finished '+item.name)}
+ report.supported=report.cases.filter(c=>!c.negative&&c.result?.candidate_hypotheses.some(h=>h.tracking_supported)).length;report.false_acceptances=report.cases.filter(c=>c.negative&&c.result?.candidate_hypotheses.some(h=>h.tracking_supported||h.accepted)).length;document.title=`${report.supported}/2 gaps · ${report.false_acceptances}/3 negative acceptances`;await emit('complete');
+}catch(error){report.error=String(error);document.title='Live-gap check failed';await emit('failed')}finally{pipeline?.close()}
+</script>

@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8"><title>Track overview check</title><style>body{margin:0;background:#09111b;color:#dbe7fa;font:14px system-ui}pre{padding:12px}iframe{border:0;width:100%;height:85vh}</style><pre>Loading main application…</pre><iframe src="./"></iframe><script type="module">
+import {get} from './storage.js';
+import {trackBranches,projectPoint} from './track-preview.js';
+import {TrackSelection} from './track-selection.js';
+import {toGlobePose} from './geography.js';
+import {branchKey} from './hypotheses.js';
+const iframe=document.querySelector('iframe'),output=document.querySelector('pre'),report={test:'main application elevated track overview',geographic_accuracy:'not independently measured'};
+const event=(target,name)=>new Promise(resolve=>target.addEventListener(name,resolve,{once:true}));
+try{
+ if(!iframe.contentDocument||iframe.contentDocument.readyState==='loading'||iframe.contentDocument.URL==='about:blank')await event(iframe,'load');
+ const w=iframe.contentWindow,d=w.document,$=id=>d.getElementById(id);if(d.documentElement.dataset.visualReady!=='true')await event(w,'visual-ready');
+ const id=new URLSearchParams(location.search).get('mission')??'b1333953386146fe958f824bc9a0ad8f',mission=await get('missions',id);if(!mission)throw Error('Saved reconstructed review is missing');
+ $('missions').value=id;await $('missions').onchange();
+ const index=mission.view.frames.findIndex(f=>f.capture_time_ns/1e9>=120);$('frames').value=String(index);await $('frames').onchange();
+ let presented;$('map').addEventListener('render',e=>presented=e.detail);await $('track-overview').onclick();
+ const frame=mission.view.frames[index],h=frame.candidate_hypotheses.find(h=>h.scene_supported),branches=trackBranches(mission.view.frames),selected=new TrackSelection().choose(branches,branchKey(frame,h),mission.view.prior.sample_period*1.1),pack=await get('packs',mission.pack_id),pixels=[];
+ for(const samples of selected.values())for(const sample of samples)if(sample.h){const p=projectPoint(toGlobePose(pack,sample.h).position_enu_m,presented.pose,presented.camera);if(!p)throw Error('Track point is behind overview camera');pixels.push(p)}
+ const {width,height}=presented.camera;report.points=pixels.length;report.minimum_margin_fraction=Math.min(...pixels.flatMap(([x,y])=>[x/width,1-x/width,y/height,1-y/height]));
+ if(report.minimum_margin_fraction<.16)throw Error('Overview clips the elevated track');
+ const prior=JSON.stringify(presented.pose),changed=event($('map'),'render');$('zoom-out').click();await changed;
+ report.zoom_changed_camera=JSON.stringify(presented.pose)!==prior;if(!report.zoom_changed_camera)throw Error('Zoom did not move camera');
+ report.overlay_dimensions_match=$('track-overlay').width===width&&$('track-overlay').height===height;
+ report.projection=$('map').dataset.projection;report.renderer=$('map').dataset.presentation;
+ await $('track-overview').onclick();report.selected_only=!$('track-alternatives').checked;
+ const overlay=$('track-overlay'),context=overlay.getContext('2d'),pixelsNow=()=>context.getImageData(0,0,overlay.width,overlay.height).data.slice();for(let i=0;i<4;i++){pixelsNow();$('track-alternatives').dispatchEvent(new w.Event('change'))}const selectedPixels=pixelsNow();
+ $('track-alternatives').checked=true;$('track-alternatives').dispatchEvent(new w.Event('change'));const alternativePixels=pixelsNow();
+ $('track-alternatives').checked=false;$('track-alternatives').dispatchEvent(new w.Event('change'));const restoredPixels=pixelsNow();
+ report.alternatives_change_overlay=selectedPixels.some((v,i)=>v!==alternativePixels[i]);report.hiding_alternatives_restores_exact_pixels=selectedPixels.every((v,i)=>v===restoredPixels[i]);
+ const difference=(a,b)=>{let changed=0,maxAlpha=0,maxPremultiplied=0,extraAlpha=0;for(let i=0;i<a.length;i+=4){if(a[i]!==b[i]||a[i+1]!==b[i+1]||a[i+2]!==b[i+2]||a[i+3]!==b[i+3])changed++;maxAlpha=Math.max(maxAlpha,Math.abs(a[i+3]-b[i+3]));if(!a[i+3]&&b[i+3])extraAlpha++;for(let c=0;c<3;c++)maxPremultiplied=Math.max(maxPremultiplied,Math.abs(a[i+c]*a[i+3]-b[i+c]*b[i+3])/255)}return {changed,maxAlpha,maxPremultiplied,extraAlpha}};
+ report.pixel_difference=difference(selectedPixels,restoredPixels);
+ $('track-alternatives').dispatchEvent(new w.Event('change'));const selectedAgain=pixelsNow();report.selected_redraw_difference=difference(restoredPixels,selectedAgain);
+ report.selected_redraw_reference_difference=difference(selectedPixels,selectedAgain);
+ $('track-alternatives').checked=true;$('track-alternatives').dispatchEvent(new w.Event('change'));pixelsNow();$('track-alternatives').checked=false;$('track-alternatives').dispatchEvent(new w.Event('change'));report.repeated_toggle_difference=difference(selectedAgain,pixelsNow());
+ if(!report.alternatives_change_overlay||!report.hiding_alternatives_restores_exact_pixels||report.repeated_toggle_difference.changed!==0||report.selected_redraw_difference.changed!==0)throw Error('Repeated alternative toggles leave stale pixels');
+ report.pass=true;document.title='PASS track overview';
+}catch(error){report.error=String(error);document.title='FAIL track overview'}
+output.textContent=JSON.stringify(report,null,2);await fetch('http://127.0.0.1:61678/result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});
+</script>

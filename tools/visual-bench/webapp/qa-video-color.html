@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>Video color check</title><pre>Checking decoded video pixels</pre><video muted playsinline></video><script type="module">
+import {streamFile} from './http-file.js';
+import {openInput,frameAt,gray} from './observation.js';
+import {decodeCameraImage} from './camera-image.js';
+const report={test:'video-color-decode',comparison:'FFmpeg raw RGB of the same encoded frame; decoder rounding may differ',cases:[]};let media;
+async function load(url){const h=await fetch(url,{method:'HEAD'}),parts=[];for await(const part of streamFile(url,Number(h.headers.get('Content-Length'))))parts.push(part);return new Blob(parts)}
+try{
+ const native=new Uint8Array(await(await load('./models/test-camera-color.rgb')).arrayBuffer()),encoded=await load('./models/test-camera-color.mp4');
+ media=await openInput(new File([encoded],'color.mp4',{type:'video/mp4'}),document.querySelector('video'));
+ const frame=await frameAt(media,0,{width:1920,height:1080});report.presentation_time_s=frame.time;report.timing=frame.timing;
+ const inputs=[['direct-video',frame.rgb]],bitmap=await decodeCameraImage(media.source);try{inputs.push(['image-bitmap-none',gray(bitmap,1920,1080,true).rgb])}finally{bitmap.close()}
+ for(const [method,rgb] of inputs){let error=0,max=0,exact=0;for(let i=0;i<rgb.length;i++){const delta=Math.abs(rgb[i]-native[i]);error+=delta;max=Math.max(max,delta);exact+=Number(delta===0)}report.cases.push({method,mean_absolute_rgb_error:error/rgb.length,max_rgb_error:max,exact_channel_fraction:exact/rgb.length,sample:[...rgb.subarray(0,30)]})}
+ report.phase='complete';
+}catch(e){report.phase='failed';report.error=String(e)}finally{media?.close()}
+document.querySelector('pre').textContent=JSON.stringify(report,null,2);document.title='Video color '+report.phase;await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});
+</script>

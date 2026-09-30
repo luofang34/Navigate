@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>Export refined scene evidence</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}</style><h1>Refined scene evidence</h1><pre>Verifying local records…</pre><script type="module">
+import * as storage from './storage.js';
+try{
+ const sink='http://127.0.0.1:61678',expected=await(await fetch(sink+'/refined-group-expectation.json')).json();
+ const digest=expected.source_group_sha256,record={sha256:digest,size:14506850,uri:`pilotage://chunks/${digest}.bin`};
+ const group=await storage.loadImageTracks(record),bytes=await storage.read(record.uri,0,record.size);
+ const response=await fetch(sink+'/group/'+digest,{method:'POST',headers:{'Content-Type':'application/json'},body:bytes});if(!response.ok)throw Error(await response.text());
+ const scenes=[];for(const record of expected.local_solutions)scenes.push({record,value:await storage.loadSceneReconstruction(record)});
+ const report={stage:'refined_group_export',group:record,observations:group.observations.length,scenes,geographic_acceptance:false};
+ const saved=await fetch(sink+'/result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});if(!saved.ok)throw Error(await saved.text());
+ document.querySelector('pre').textContent=JSON.stringify({stage:report.stage,observations:report.observations,solutions:scenes.map(s=>({sha256:s.record.sha256,cameras:s.value.scene.cameras.length,seed:s.value.seed,final_cost:s.value.final_cost}))},null,2);document.title='PASS refined scene export';
+}catch(error){document.querySelector('pre').textContent=String(error);document.title='FAIL refined scene export'}
+</script>
