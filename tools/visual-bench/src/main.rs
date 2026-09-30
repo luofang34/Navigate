@@ -12,6 +12,7 @@
 //! are in [`navigate_visual`]. Benchmarks produce files at run time; measured
 //! results are not source documentation.
 
+mod acquisition;
 mod backend;
 mod cli;
 mod error;
