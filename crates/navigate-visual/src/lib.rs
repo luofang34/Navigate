@@ -69,6 +69,7 @@ mod pose_solver;
 pub mod reconstruction;
 mod reference;
 mod retrieval;
+mod sampling;
 mod search;
 
 pub use camera::{CameraModel, CameraPose, PosePrior};
@@ -91,4 +92,5 @@ pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
+pub use sampling::{AdaptiveSampler, SamplingConfig, SamplingStatus};
 pub use search::{SearchConfig, SearchPrior, SearchTier};
