@@ -1,5 +1,7 @@
 use crate::{error::PreviewError, model::Camera};
-use navigate_visual::{GroundCorrespondence, planar_proposal};
+use navigate_visual::{
+    GroundCorrespondence, RetrievalProposal, nadir_similarity_proposal, planar_proposal,
+};
 use serde::Deserialize;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -25,13 +27,40 @@ pub fn propose(camera_json: String, matches_json: String) -> Result<String, JsVa
         })
         .collect();
     let proposal = planar_proposal(&camera.model(), &pairs).map_err(PreviewError::from)?;
+    Ok(encode(proposal))
+}
+
+/// Propose a near-nadir similarity seed. Full surface verification is separate.
+#[wasm_bindgen]
+pub fn propose_nadir(
+    camera_json: String,
+    matches_json: String,
+    max_error_px: f64,
+) -> Result<String, JsValue> {
+    let camera: Camera = serde_json::from_str(&camera_json).map_err(PreviewError::from)?;
+    camera.validate()?;
+    let pairs: Vec<GroundMatch> =
+        serde_json::from_str(&matches_json).map_err(PreviewError::from)?;
+    let pairs: Vec<_> = pairs
+        .into_iter()
+        .map(|p| GroundCorrespondence {
+            world: p.world.into(),
+            query: p.query.into(),
+        })
+        .collect();
+    let proposal = nadir_similarity_proposal(&camera.model(), &pairs, max_error_px)
+        .map_err(PreviewError::from)?;
+    Ok(encode(proposal))
+}
+
+fn encode(proposal: Option<RetrievalProposal>) -> String {
     let value = match proposal {
-        None => json!({"retrieved":false,"reason":"no consistent planar retrieval"}),
+        None => json!({"retrieved":false,"reason":"no consistent retrieval"}),
         Some(proposal) => {
             let p = proposal.pose.position;
             let q = proposal.pose.orientation.quaternion();
-            json!({"retrieved":true,"retrieval_inliers":proposal.inliers,"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"acceptance_stage":"retrieval_only"})
+            json!({"retrieved":true,"retrieval_inliers":proposal.inliers,"retrieval_support":proposal.separated_inliers,"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"acceptance_stage":"retrieval_only"})
         }
     };
-    Ok(value.to_string())
+    value.to_string()
 }

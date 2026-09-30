@@ -91,6 +91,8 @@ pub use local_scene::{
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
 pub use reference::{ReferenceRenderer, RendererIdentity};
-pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
+pub use retrieval::{
+    GroundCorrespondence, RetrievalProposal, nadir_similarity_proposal, planar_proposal,
+};
 pub use sampling::{AdaptiveSampler, SamplingConfig, SamplingStatus};
 pub use search::{SearchConfig, SearchPrior, SearchTier};
