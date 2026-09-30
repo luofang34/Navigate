@@ -57,7 +57,7 @@ pub(crate) enum BenchError {
     #[error("MapLibre rendering failed")]
     Render {
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: Box<dyn std::error::Error>,
     },
     #[error("map package rule failed")]
     Imagery(#[from] navigate_imagery::ImageryError),

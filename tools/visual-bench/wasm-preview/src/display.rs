@@ -3,7 +3,16 @@ use crate::{
     model::{Camera, Pose},
     preview::Preview,
 };
+use maplibre::render::resource::SurfaceAcquireError;
 use wasm_bindgen::prelude::*;
+
+#[derive(Debug, thiserror::Error)]
+enum AcquireCanvasError {
+    #[error("no canvas surface")]
+    NoSurface,
+    #[error(transparent)]
+    Surface(#[from] SurfaceAcquireError),
+}
 
 #[wasm_bindgen]
 impl Preview {
@@ -71,18 +80,37 @@ impl Preview {
     /// Submit a display frame without a GPU-to-CPU pixel copy.
     pub fn present(&mut self, pose_json: String) -> Result<(), JsValue> {
         let pose: Pose = serde_json::from_str(&pose_json).map_err(PreviewError::from)?;
-        let surface = self.surface.as_ref().ok_or_else(|| PreviewError::Input {
-            reason: "no canvas surface".into(),
-        })?;
-        let output = surface
-            .get_current_texture()
+        let output = self
+            .acquire_canvas()
             .map_err(|e| render_error("canvas acquisition", e))?;
         self.draw_to(pose.transform()?, Some(&output.texture), 1)?;
-        output.present();
+        self.map.queue().present(output);
         Ok(())
     }
 }
 impl Preview {
+    /// Retries once after reconfiguration, as the renderer does for window surfaces.
+    fn acquire_canvas(&mut self) -> Result<wgpu::SurfaceTexture, AcquireCanvasError> {
+        for attempt in 0..2 {
+            let surface = self.surface.as_ref().ok_or(AcquireCanvasError::NoSurface)?;
+            let failure = match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(texture) => return Ok(texture),
+                // Reconfiguration requires every outstanding surface texture to be dropped.
+                wgpu::CurrentSurfaceTexture::Suboptimal(_)
+                | wgpu::CurrentSurfaceTexture::Outdated => SurfaceAcquireError::Outdated,
+                wgpu::CurrentSurfaceTexture::Timeout => SurfaceAcquireError::Timeout,
+                wgpu::CurrentSurfaceTexture::Occluded => SurfaceAcquireError::Occluded,
+                wgpu::CurrentSurfaceTexture::Lost => SurfaceAcquireError::Lost,
+                wgpu::CurrentSurfaceTexture::Validation => SurfaceAcquireError::Validation,
+            };
+            if failure != SurfaceAcquireError::Outdated || attempt > 0 {
+                return Err(failure.into());
+            }
+            self.configure_surface();
+        }
+        Err(SurfaceAcquireError::Outdated.into())
+    }
+
     pub(crate) fn configure_surface(&mut self) {
         if let Some(surface) = &self.surface {
             surface.configure(
@@ -99,6 +127,7 @@ impl Preview {
                     desired_maximum_frame_latency: 2,
                     alpha_mode: wgpu::CompositeAlphaMode::Opaque,
                     view_formats: vec![],
+                    color_space: Default::default(),
                 },
             );
         }

@@ -44,7 +44,7 @@ pub(crate) fn parents(tiles: &[AvailableRasterLayerData]) -> Vec<AvailableRaster
         })
         .map(|((z, x, y), image)| AvailableRasterLayerData {
             coords: WorldTileCoords::from((x, y, z.into())),
-            source_layer: "imagery".into(),
+            source: "imagery".into(),
             image,
         })
         .collect()

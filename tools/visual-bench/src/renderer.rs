@@ -38,7 +38,7 @@ pub(crate) struct ReferenceRenderer {
     style_sha256: String,
 }
 
-fn render_error<E: std::error::Error + Send + Sync + 'static>(source: E) -> BenchError {
+fn render_error<E: std::error::Error + 'static>(source: E) -> BenchError {
     BenchError::Render {
         source: Box::new(source),
     }
@@ -156,7 +156,7 @@ fn load_sources_blocking(
         if let Some(image) = tile.imagery {
             imagery.push(AvailableRasterLayerData {
                 coords,
-                source_layer: "imagery".into(),
+                source: "imagery".into(),
                 image,
             });
         }

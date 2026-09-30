@@ -75,7 +75,7 @@ impl Preview {
                 ProcessedLayers::default(),
                 vec![AvailableRasterLayerData {
                     coords: WorldTileCoords::from((0, 0, 0_u8.into())),
-                    source_layer: "context".into(),
+                    source: "context".into(),
                     image,
                 }],
                 vec![],
@@ -224,7 +224,7 @@ pub(crate) async fn load(
         if let Some(asset) = &tile.imagery {
             imagery.push(AvailableRasterLayerData {
                 coords,
-                source_layer: "imagery".into(),
+                source: "imagery".into(),
                 image: store.image(asset, 512).await?,
             });
         }
