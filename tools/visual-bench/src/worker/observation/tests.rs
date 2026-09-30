@@ -28,12 +28,20 @@ fn refinements_keep_alternatives_and_failed_evidence_invalidates_a_candidate() {
             matches: &matches,
             output: &dir.path().join(name),
             map_context: &context,
-            map_frame: navigate_visual::LocalFrame::anchor_mercator(40.0, -74.0)
-                .expect("valid anchor"),
         })
     };
     let first = fit(&mut observation, &reference, 1, "first.json").expect("first");
     assert_eq!(first["accepted"], true);
+    assert_eq!(first["refinement_pose"]["inliers"], first["inliers"]);
+    assert_eq!(
+        first["refinement_pose"]["spatial_support"],
+        first["spatial_support"]
+    );
+    assert!(
+        first["refinement_pose"]
+            .get("geometry_covariance")
+            .is_none()
+    );
     let repeated = fit(&mut observation, &reference, 1, "repeated.json").expect("repeat");
     assert_eq!(
         first["geometry_covariance"],
@@ -101,4 +109,73 @@ fn fixture(dir: &Path) -> (Observation, ReferenceView) {
         },
     };
     (observation, reference)
+}
+
+struct MemoryMatcher {
+    fail: bool,
+}
+impl ImageMatcher for MemoryMatcher {
+    fn identity(&self) -> &str {
+        "memory-test-adapter"
+    }
+    fn match_images_blocking(
+        &mut self,
+        _: &image::GrayImage,
+        _: &image::GrayImage,
+    ) -> Result<Vec<navigate_visual::PixelMatch>, navigate_visual::VisualError> {
+        if self.fail {
+            return Err(navigate_visual::VisualError::Invalid {
+                field: "test backend failure",
+            });
+        }
+        Ok((10..65)
+            .step_by(10)
+            .flat_map(|y| {
+                (10..90).step_by(10).map(move |x| {
+                    let pixel = nalgebra::Vector2::new(f64::from(x), f64::from(y));
+                    navigate_visual::PixelMatch {
+                        reference: pixel,
+                        query: pixel,
+                    }
+                })
+            })
+            .collect())
+    }
+}
+#[test]
+fn in_memory_backend_preserves_alternatives_and_requires_rendered_depth() {
+    let dir = tempfile::tempdir().expect("directory");
+    let (mut observation, mut reference) = fixture(dir.path());
+    let context = serde_json::json!({"map_release":"fixture"});
+    let mut matcher = MemoryMatcher { fail: false };
+    let (first, _) = observation
+        .match_candidate_blocking(3, &reference, &mut matcher, &context)
+        .expect("fit");
+    assert_eq!(first["accepted"], true);
+    let (repeated, _) = observation
+        .match_candidate_blocking(3, &reference, &mut matcher, &context)
+        .expect("repeat");
+    assert_eq!(
+        first["geometry_covariance"],
+        repeated["geometry_covariance"]
+    );
+    reference.pose.position.x = 500.0;
+    observation
+        .match_candidate_blocking(4, &reference, &mut matcher, &context)
+        .expect("alternative");
+    assert_eq!(observation.select()["decision"], "unresolved");
+    reference.depth_m.fill(0.0);
+    let (unsupported, seed) = observation
+        .match_candidate_blocking(4, &reference, &mut matcher, &context)
+        .expect("missing surface report");
+    assert_eq!(unsupported["accepted"], false);
+    assert!(seed.is_none());
+    assert_eq!(observation.select()["candidate_id"], 3);
+    matcher.fail = true;
+    assert!(
+        observation
+            .match_candidate_blocking(3, &reference, &mut matcher, &context)
+            .is_err()
+    );
+    assert_eq!(observation.select()["decision"], "rejected");
 }

@@ -119,6 +119,12 @@ fn a_refinement_seed_remains_rejected_until_new_geometry_passes() {
         .expect("report");
     assert_eq!(weak["accepted"], false);
     assert_eq!(weak["refinement_proposal"]["accepted"], false);
+    let seed = &weak["refinement_proposal"];
+    assert_eq!(seed["inliers"], restricted.len());
+    let support = seed["spatial_support"].as_u64().expect("support");
+    assert!(support > 0 && support < 20);
+    assert!(seed["query_cells"].as_u64().expect("cells") < 4);
+    assert!(seed["reference_cells"].as_u64().expect("cells") < 4);
     assert_eq!(session.select()["decision"], "rejected");
     assert!(session.select().get("position_enu_m").is_none());
     assert!(weak.get("geometry_covariance").is_none());

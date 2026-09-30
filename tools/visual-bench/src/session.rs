@@ -104,6 +104,7 @@ pub(crate) fn estimate_report(
                 serde_json::json!(estimate.pose.orientation.coords.as_slice());
             report["backend"] = estimate.backend.clone().into();
             report["inliers"] = estimate.quality.inliers.into();
+            report["spatial_support"] = estimate.quality.spatial_support.into();
             report["reprojection_rms_px"] = estimate.quality.reprojection_rms_px.into();
             report["occupied_cells"] = estimate.quality.occupied_cells.into();
             report["condition_number"] = estimate.quality.condition_number.into();

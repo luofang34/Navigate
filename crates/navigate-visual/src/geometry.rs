@@ -5,6 +5,10 @@ use crate::{
     pose_solver::{self, Correspondence},
 };
 use nalgebra::{SMatrix, Vector2};
+mod refinement;
+mod support;
+use refinement::FitSupport;
+pub use refinement::RefinementSeed;
 mod surface_tracks;
 mod tracking;
 pub use surface_tracks::{SurfaceTrackUpdate, SurfaceTracks};
@@ -16,7 +20,7 @@ pub struct CandidateEvaluation {
     pub acceptance: Result<Estimate, VisualError>,
     /// A fitted pose inside the prior, with enough unique inliers to refine.
     /// The inlier count or spatial support can still fail acceptance. This is not a measurement.
-    pub refinement: Option<CameraPose>,
+    pub refinement: Option<RefinementSeed>,
 }
 
 /// Stateless geometric validation for a candidate reference.
@@ -33,6 +37,8 @@ impl PoseVerifier {
     /// Rejects invalid acceptance thresholds.
     pub fn new(config: LocalizerConfig) -> Result<Self, VisualError> {
         if config.min_inliers < 6
+            || !config.support_separation_px.is_finite()
+            || config.support_separation_px <= 0.0
             || !(1..=12).contains(&config.min_occupied_cells)
             || !config.inlier_threshold_px.is_finite()
             || config.inlier_threshold_px <= 0.0
@@ -95,21 +101,27 @@ impl PoseVerifier {
                     };
                 }
             };
-        let acceptance =
-            self.assess(frame, &pose, &inliers, depth_matches)
-                .map(|(quality, covariance)| Estimate {
-                    stamp: frame.stamp,
-                    observation_sha256: frame.evidence_sha256(),
-                    map: reference.map.clone(),
-                    frame: reference.frame,
-                    pose,
-                    quality,
-                    geometry_covariance: covariance,
-                    backend: matcher_identity.to_owned(),
-                });
+        let support = FitSupport::new(
+            &frame.camera,
+            &reference.pose,
+            &inliers,
+            self.config.support_separation_px,
+        );
+        let acceptance = self
+            .assess_support(frame, &pose, &support, depth_matches)
+            .map(|(quality, covariance)| Estimate {
+                stamp: frame.stamp,
+                observation_sha256: frame.evidence_sha256(),
+                map: reference.map.clone(),
+                frame: reference.frame,
+                pose,
+                quality,
+                geometry_covariance: covariance,
+                backend: matcher_identity.to_owned(),
+            });
         CandidateEvaluation {
             acceptance,
-            refinement: Some(pose),
+            refinement: Some(support.seed(pose)),
         }
     }
 
@@ -187,24 +199,46 @@ impl PoseVerifier {
     fn assess(
         &self,
         frame: &Frame,
+        reference_pose: &CameraPose,
         pose: &CameraPose,
         points: &[Correspondence],
         depth_matches: usize,
     ) -> Result<(EstimateQuality, SMatrix<f64, 6, 6>), VisualError> {
-        self.require_inliers(points.len())?;
-        let mut cells = [false; 12];
-        let mut squared_error = 0.0;
-        for point in points {
-            let x = (point.pixel.x * 4.0 / f64::from(frame.camera.width)).clamp(0.0, 3.0) as usize;
-            let y = (point.pixel.y * 3.0 / f64::from(frame.camera.height)).clamp(0.0, 2.0) as usize;
-            cells[y * 4 + x] = true;
-            squared_error += pose_solver::residual(&frame.camera, pose, point).powi(2);
+        let support = FitSupport::new(
+            &frame.camera,
+            reference_pose,
+            points,
+            self.config.support_separation_px,
+        );
+        self.assess_support(frame, pose, &support, depth_matches)
+    }
+
+    fn assess_support(
+        &self,
+        frame: &Frame,
+        pose: &CameraPose,
+        support: &FitSupport,
+        depth_matches: usize,
+    ) -> Result<(EstimateQuality, SMatrix<f64, 6, 6>), VisualError> {
+        self.require_inliers(support.inliers)?;
+        let points = &support.points;
+        if points.len() < self.config.min_inliers {
+            return Err(VisualError::InsufficientSpatialSupport {
+                found: points.len(),
+                required: self.config.min_inliers,
+            });
         }
-        let occupied_cells = cells.into_iter().filter(|occupied| *occupied).count();
+        let squared_error: f64 = points
+            .iter()
+            .map(|point| pose_solver::residual(&frame.camera, pose, point).powi(2))
+            .sum();
+        let occupied_cells = support.query_cells;
+        let reference_cells = support.reference_cells;
         let (h, _) = pose_solver::normal_equations(&frame.camera, points, pose);
         let eigenvalues = h.symmetric_eigen().eigenvalues;
         let condition_number = eigenvalues.max() / eigenvalues.min();
         if occupied_cells < self.config.min_occupied_cells
+            || reference_cells < self.config.min_occupied_cells
             || eigenvalues.min() <= 1e-10
             || !condition_number.is_finite()
             || condition_number > 1e10
@@ -221,7 +255,8 @@ impl PoseVerifier {
         Ok((
             EstimateQuality {
                 depth_matches,
-                inliers: points.len(),
+                inliers: support.inliers,
+                spatial_support: points.len(),
                 occupied_cells,
                 condition_number,
                 reprojection_rms_px: (squared_error / points.len() as f64).sqrt(),

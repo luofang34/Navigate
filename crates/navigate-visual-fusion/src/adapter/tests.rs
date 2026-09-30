@@ -49,6 +49,7 @@ fn estimate(sequence: u64, capture_time_ns: u64, digest: &str, east_m: f64) -> E
             orientation: UnitQuaternion::identity(),
         },
         quality: EstimateQuality {
+            spatial_support: 30,
             depth_matches: 200,
             inliers: 150,
             reprojection_rms_px: 0.8,

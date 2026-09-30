@@ -8,7 +8,7 @@ use navigate_visual::{
     LocalizerConfig, PosePrior, PoseVerifier, ReferenceView,
 };
 use std::{collections::BTreeMap, path::Path, time::Instant};
-pub(super) struct Observation {
+pub(crate) struct Observation {
     pub frame: Frame,
     prior: PosePrior,
     results: CandidateResults,
@@ -27,17 +27,23 @@ impl Observation {
                 source,
             })?
             .to_luma8();
-        camera.validate()?;
-        if image.dimensions() != (camera.width, camera.height) {
+        Self::from_frame(
+            Frame {
+                stamp,
+                camera,
+                image,
+            },
+            prior,
+        )
+    }
+    pub fn from_frame(frame: Frame, prior: PosePrior) -> Result<Self, BenchError> {
+        frame.camera.validate()?;
+        prior.validate()?;
+        if frame.image.dimensions() != (frame.camera.width, frame.camera.height) {
             return Err(BenchError::Record {
                 reason: "query dimensions do not match calibration".into(),
             });
         }
-        let frame = Frame {
-            stamp,
-            camera,
-            image,
-        };
         let results = CandidateResults::new(&frame);
         Ok(Self {
             frame,
@@ -58,42 +64,71 @@ impl Observation {
             "observation_sha256":self.frame.evidence_sha256()}));
         Ok(())
     }
-    pub fn refine_blocking(
+    pub(super) fn refine_blocking(
         &mut self,
         input: Refinement<'_>,
     ) -> Result<serde_json::Value, BenchError> {
         self.invalidate(input.id)?;
-        let started = Instant::now();
         let mut matcher = VerifiedMatches::open_blocking(input.matches)?;
         matcher.validate_depth(input.reference)?;
-        let pairs = matcher.match_images_blocking(&input.reference.image, &self.frame.image)?;
-        let result = PoseVerifier::new(LocalizerConfig::default())?.verify(
-            &self.frame,
+        let (report, _) = self.match_candidate_blocking(
+            input.id,
             input.reference,
+            &mut matcher,
+            input.map_context,
+        )?;
+        let mut writer = writer_blocking(input.output)?;
+        write_record_blocking(&mut writer, input.output, &report)?;
+        Ok(report)
+    }
+    pub fn match_candidate_blocking(
+        &mut self,
+        id: u64,
+        reference: &ReferenceView,
+        matcher: &mut dyn ImageMatcher,
+        map_context: &serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<navigate_visual::RefinementSeed>), BenchError> {
+        self.invalidate(id)?;
+        let started = Instant::now();
+        let pairs = matcher.match_images_blocking(&reference.image, &self.frame.image)?;
+        let matching_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let geometry = Instant::now();
+        let evaluation = PoseVerifier::new(LocalizerConfig::default())?.evaluate(
+            &self.frame,
+            reference,
             &self.prior,
             &pairs,
             matcher.identity(),
         );
+        let geometry_ms = geometry.elapsed().as_secs_f64() * 1000.0;
+        let result = evaluation.acceptance;
         let mut report = estimate_report(
-            input.map_context,
-            input.map_frame,
+            map_context,
+            reference.frame,
             &self.frame,
             &result,
             started.elapsed().as_secs_f64() * 1000.0,
         )?;
-        self.results.record(CandidateId(input.id), result)?;
-        report["candidate_id"] = input.id.into();
-        report["reference_image_sha256"] =
-            crate::package::digest(input.reference.image.as_raw()).into();
-        report["reference_depth_sha256"] =
-            crate::matches::depth_digest(&input.reference.depth_m).into();
-        let pose = input.reference.pose;
-        let q = pose.orientation.quaternion();
-        report["reference_pose"] = serde_json::json!({"position_enu_m":[pose.position.x,pose.position.y,pose.position.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w]});
-        self.reports.insert(input.id, report.clone());
-        let mut writer = writer_blocking(input.output)?;
-        write_record_blocking(&mut writer, input.output, &report)?;
-        Ok(report)
+        if let Some(seed) = &evaluation.refinement {
+            let pose = seed.pose;
+            report["refinement_pose"] = serde_json::json!({
+                "position_enu_m": [pose.position.x, pose.position.y, pose.position.z],
+                "eye_to_enu_xyzw": pose.orientation.coords.as_slice(),
+                "inliers": seed.inliers, "spatial_support": seed.spatial_support,
+                "query_cells": seed.query_cells, "reference_cells": seed.reference_cells,
+                "status": "render seed only; not an accepted measurement"
+            });
+        }
+        self.results.record(CandidateId(id), result)?;
+        report["candidate_id"] = id.into();
+        report["matching_ms"] = matching_ms.into();
+        report["geometry_ms"] = geometry_ms.into();
+        report["reference_image_sha256"] = crate::package::digest(reference.image.as_raw()).into();
+        report["reference_depth_sha256"] = crate::matches::depth_digest(&reference.depth_m).into();
+        let pose = reference.pose;
+        report["reference_pose"] = serde_json::json!({"position_enu_m":pose.position.as_slice(),"eye_to_enu_xyzw":pose.orientation.coords.as_slice()});
+        self.reports.insert(id, report.clone());
+        Ok((report, evaluation.refinement))
     }
     pub fn select(&self) -> serde_json::Value {
         let mut result = match self.results.decision() {
@@ -127,7 +162,6 @@ pub(super) struct Refinement<'a> {
     pub matches: &'a Path,
     pub output: &'a Path,
     pub map_context: &'a serde_json::Value,
-    pub map_frame: navigate_visual::LocalFrame,
 }
 
 #[cfg(test)]
