@@ -1,0 +1,5 @@
+<!doctype html><meta charset="utf-8"><title>Browser CAMP retrieval check</title><pre>Preparing retrieval</pre><script type="module">
+const worker=new Worker('./qa-camp-worker.js',{type:'module'}),output=document.querySelector('pre');
+worker.onmessage=async({data})=>{if(data.progress){document.title=data.progress;return}output.textContent=JSON.stringify(data,null,2);document.title=data.phase==='complete'?'CAMP browser retrieval complete':data.phase;await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(['complete','failed'].includes(data.phase))worker.terminate()};
+worker.onerror=e=>{document.title='CAMP worker failed';output.textContent=e.message};worker.postMessage({});
+</script>

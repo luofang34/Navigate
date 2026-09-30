@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>Recover source image associations</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}button{font:inherit}</style><h1>Recover source image associations</h1><button id="start">Verify and recover prefix</button><button id="response">Check response</button><pre>Ready</pre><script type="module">
+import * as storage from './storage.js';import {BrowserPipeline} from './browser-pipeline.js';import {gray} from './observation.js';import {matchingOptions} from './matching-options.js';
+const sink='http://127.0.0.1:61678/',output=document.querySelector('pre');let clicks=0;document.querySelector('#response').onclick=e=>e.target.textContent='Response '+(++clicks);
+document.querySelector('#start').onclick=async e=>{e.target.disabled=true;const pipeline=new BrowserPipeline(),start=performance.now(),progress=text=>output.textContent=text;try{
+ const mission=await storage.get('missions','aee48b20e6714aefb3436720ec149a93');if(!mission)throw Error('Restored source review absent');if(!await storage.requestPersistence())throw Error('Persistent storage required');
+ const {camera,prior}=mission.view,pack=await storage.get('packs',mission.pack_id),group=mission.view.local_reconstruction.groups[0],sources=new Map(mission.view.frames.map(f=>[f.observation_sha256,f]));
+ await pipeline.initialize(pack,camera,progress,matchingOptions('balanced'));await pipeline.beginSequence({maxFrames:64});
+ for(const [i,o] of group.observations.entries()){
+  const frame=sources.get(o.observation_sha256);if(!frame)throw Error('Missing source observation');const bitmap=await createImageBitmap(await storage.queryBlob(mission,frame));let image;try{image={...gray(bitmap,camera.width,camera.height),time:frame.capture_time_ns/1e9,requested_time_s:frame.requested_time_s,timing:frame.timing_scope}}finally{bitmap.close()}
+  await pipeline.observeScene(image,prior,frame.sequence,frame.observation_sha256,text=>progress(`Frame ${i+1}/${group.observations.length} · ${text}`));
+ }
+ const groups=await pipeline.finishSequence();if(groups.length!==1)throw Error('Unexpected group count');const record=groups[0],raw=await storage.read(record.uri,0,record.size);if(await storage.sha256(raw)!==record.sha256)throw Error('Group checksum changed');
+ const upload=await fetch(sink+'group/'+record.sha256,{method:'POST',body:raw});if(!upload.ok)throw Error('Local export failed');
+ const receipt={stage:'recovered_prefix_associations',source_mission:mission.id,expected_group_sha256:group.source_group_sha256,record,exact_previous_identity:record.sha256===group.source_group_sha256,elapsed_ms:performance.now()-start,clicks,geographic_acceptance:false};
+ await fetch(sink+'result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(receipt)});output.textContent=JSON.stringify(receipt,null,2);document.title='Complete prefix association recovery';
+}catch(error){output.textContent=String(error)+'\n'+error.stack;document.title='FAIL prefix association recovery'}finally{pipeline.close();e.target.disabled=false}};
+</script>

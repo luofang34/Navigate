@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>Video timestamp check</title><pre>Checking decoded timestamps…</pre><script type="module">
+import {openInput,frameAt} from './observation.js';
+const output=document.querySelector('pre');let media;try{const response=await fetch('./models/test-track.mp4');media=await openInput(new File([await response.arrayBuffer()],'timing.mp4',{type:'video/mp4'}),document.createElement('video'));const results=[];for(let i=0;i<8;i++){const f=await frameAt(media,Math.min(i*.19,1.36),{width:320,height:184});results.push({request:f.requested_time_s,time:f.time,timing:f.timing});output.textContent=JSON.stringify(results,null,2)}document.title=results.every(f=>f.timing==='browser decoded frame presentation timestamp')?'PASS video timestamps':'FAIL video timestamps'}catch(e){output.textContent=String(e)}finally{media?.close()}
+</script>

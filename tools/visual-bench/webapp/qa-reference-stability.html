@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>Reference rendering stability</title><pre>Preparing map</pre><script type="module">
+import init,{Preview} from './wasm/navigate_visual_preview.js';
+import {download,read} from './storage.js';
+const report={test:'reference-render-stability',scope:'Image/depth repeatability for synthetic camera poses; not scene or geographic accuracy',renders:[]};let renderer;
+try{
+ const response=await fetch('/api/offline-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({region_id:'naip-3754222efffa06cf'})});if(!response.ok)throw Error('Missing map package');const pack=await response.json();await download(pack,()=>{});await init();
+ const camera={width:960,height:544,fx:689.0057621368651,fy:694.109508523064,cx:479.5,cy:271.5};renderer=await Preview.create(JSON.stringify(pack),JSON.stringify(camera),read,false);
+ const pose=(x,y,z)=>({position_enu_m:[x,y,z],eye_to_enu_xyzw:[0,0,0,1]}),target=pose(680.655489906245,644.6900070035063,159.69122080543949),wide=pose(1200,1000,600),near=pose(350,800,90);
+ renderer.begin(new Uint8Array(camera.width*camera.height),JSON.stringify({pose:target,position_radius_m:2000,attitude_radius_rad:Math.PI}),0,0);
+ for(const [id,[label,p]] of [['target-first',target],['target-repeat',target],['wide',wide],['target-after-wide',target],['target-settled',target],['near',near],['target-after-near',target],['target-last',target]].entries()){
+  document.title='Reference check '+label;await renderer.render_reference(id,JSON.stringify(p));const r=JSON.parse(renderer.refine(id,'[]','no-matcher-render-check'));report.renders.push({label,pose:p,image:r.reference_image_sha256,depth:r.reference_depth_sha256});
+ }
+ const targets=report.renders.filter(r=>r.label.startsWith('target'));report.target_image_variants=new Set(targets.map(r=>r.image)).size;report.target_depth_variants=new Set(targets.map(r=>r.depth)).size;report.repeatable=report.target_image_variants===1&&report.target_depth_variants===1;report.phase='complete';
+}catch(e){report.phase='failed';report.error=String(e)}finally{renderer?.free()}
+document.querySelector('pre').textContent=JSON.stringify(report,null,2);document.title='Reference stability '+(report.repeatable?'PASS':report.phase);await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});
+</script>

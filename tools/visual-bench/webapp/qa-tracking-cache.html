@@ -1,0 +1,3 @@
+<!doctype html><meta charset="utf-8"><title>Tracking cache measurement</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}</style><h1>Tracking cache measurement</h1><pre>Starting…</pre><script type="module">
+const output=document.querySelector('pre'),worker=new Worker('./qa-tracking-cache-worker.js',{type:'module'});worker.onmessage=async({data})=>{if(data.progress){output.textContent=data.progress;return}await fetch('http://127.0.0.1:61678/result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});output.textContent=JSON.stringify(data,null,2);document.title=data.done?'PASS tracking cache':'FAIL tracking cache';worker.terminate()};worker.postMessage({});
+</script>

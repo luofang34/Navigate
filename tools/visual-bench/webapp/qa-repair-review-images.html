@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>Retain reconstructed review images</title><pre>Copying verified source images…</pre><script type="module">
+import * as storage from './storage.js';const status=document.querySelector('pre');try{
+const source=await storage.get('missions','b2482b68a82f4e8db53083da32c56f5e'),target=await storage.get('missions','3cad89e8859e40a78d4a3f23806e59fa');
+if(!source||!target||source.view.frames.length!==target.view.frames.length)throw Error('Saved evidence is missing');let dir=await navigator.storage.getDirectory();for(const name of ['pilotage','missions',target.id])dir=await dir.getDirectoryHandle(name,{create:true});
+for(const [index,frame] of source.view.frames.entries()){
+ const destination=target.view.frames[index];if(destination.observation_sha256!==frame.observation_sha256||destination.query!==frame.query)throw Error('Image association changed');const blob=await storage.queryBlob(source,frame),file=await dir.getFileHandle(destination.query,{create:true});await blob.stream().pipeTo(await file.createWritable());if(await storage.sha256(await blob.arrayBuffer())!==await storage.sha256(await(await file.getFile()).arrayBuffer()))throw Error('Copied image checksum changed');status.textContent=`Verified ${index+1}/${source.view.frames.length} copied images…`;
+}
+status.textContent=`All ${source.view.frames.length} source images retained for the reconstructed review. Source observations and pose alternatives are unchanged.`;
+}catch(error){status.textContent=String(error)}
+</script>

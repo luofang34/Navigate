@@ -1,0 +1,3 @@
+<!doctype html><meta charset="utf-8"><title>NAIP matcher diagnostic</title><pre>Starting diagnostic</pre><script type="module">
+const worker=new Worker('./qa-naip-worker.js',{type:'module'});worker.onmessage=async({data})=>{document.querySelector('pre').textContent=JSON.stringify(data,(key,value)=>['ranking','correspondences','references'].includes(key)?'Saved in local report':value,2);if(data.report){await fetch('/__test__/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data.report)});document.title=data.done?'NAIP diagnostic complete':'NAIP diagnostic running'}if(data.done)worker.terminate()};worker.postMessage(Object.fromEntries(new URLSearchParams(location.search)));
+</script>

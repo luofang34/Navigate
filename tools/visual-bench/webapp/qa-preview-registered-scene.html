@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Review fresh scene registration</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}button,a{font:inherit;color:inherit}</style><h1>Review fresh scene registration</h1><p>This adds one conditional preview path. All fresh registration candidates remain in verified source records.</p><button>Add fresh registration preview</button><pre>Ready</pre><a id="open" hidden>Open camera-path review</a><script type="module">
+import * as storage from './storage.js';
+import init,{registered_scene_cameras} from './wasm/navigate_visual_preview.js';
+const output=document.querySelector('pre'),sink='http://127.0.0.1:61678/';
+document.querySelector('button').onclick=async e=>{e.target.disabled=true;try{
+ const receipt=await(await fetch(sink+'browser-scene-resection.json')).json(),links=await(await fetch(sink+'anchored-dense-scene-registration-links.json')).json();
+ if(receipt.stage!=='browser_scene_resection'||receipt.geographic_acceptance!==false||receipt.supported!==receipt.frames.length)throw Error('Incomplete browser fit receipt');
+ const mission=await storage.get('missions','aee48b20e6714aefb3436720ec149a93');if(!mission)throw Error('Source mission absent');
+ const alternatives=[];
+ for(const item of links.documents){const record=item.record,bytes=await storage.read(record.uri,0,record.size);if(await storage.sha256(bytes)!==record.sha256)throw Error('Registration checksum changed');const document=JSON.parse(new TextDecoder().decode(bytes));if(document.geographic_acceptance!==false||document.map_manifest_sha256!==mission.pack_id||document.source_scene.sha256!==links.scene.sha256)throw Error('Registration source changed');for(const [index,candidate] of document.candidates.entries())alternatives.push({record,index,candidate,anchor:document.observation_sha256})}
+ alternatives.sort((a,b)=>b.candidate.inlier_indices.length-a.candidate.inlier_indices.length||a.candidate.point_fit_rms_m-b.candidate.point_fit_rms_m||a.record.sha256.localeCompare(b.record.sha256)||a.index-b.index);
+ const selected=alternatives[0];if(!selected)throw Error('No supported registration');const {record,index,candidate}=selected;
+ const byId=new Map(mission.view.frames.map(f=>[f.observation_sha256,f]));for(const r of receipt.frames){const f=byId.get(r.observation_sha256);if(!f||f.capture_time_ns!==r.capture_time_ns||f.sequence!==r.sequence||r.scene_sha256!==receipt.scene_sha256||r.geographic_acceptance!==false)throw Error('Source observation changed')}
+ const backupKey='scene-review-before-fresh-'+links.scene.sha256;if(!await storage.get('state',backupKey))await storage.put('state',backupKey,structuredClone(mission));
+ await init();const cameras=receipt.frames.map(f=>({observation_sha256:f.observation_sha256,position_scene_units:f.fit.position_scene_units,eye_to_scene_xyzw:f.fit.eye_to_scene_xyzw,fixed:false})),mapped=[];
+ for(let i=0;i<cameras.length;i+=128)mapped.push(...JSON.parse(registered_scene_cameras(JSON.stringify({cameras:cameras.slice(i,i+128),points:[]}),JSON.stringify(candidate))));
+ const track_id=JSON.stringify(['fresh_joint_scene_review',receipt.scene_sha256,record.sha256,index]);
+ for(const [i,camera] of mapped.entries()){
+  const frame=byId.get(camera.observation_sha256);if(frame.candidate_hypotheses.some(h=>h.track_id===track_id))continue;
+  const used=new Set(frame.candidate_hypotheses.map(h=>h.candidate_id));let id=0;while(used.has(id))id=(id+1)>>>0;
+  frame.candidate_hypotheses.unshift({...camera,candidate_id:id,accepted:false,scene_supported:true,geographic_acceptance:false,track_id,map_manifest_sha256:mission.pack_id,scene_path_sha256:[links.scene.sha256],anchor_observation_sha256:selected.anchor,
+   source_scene_path_sha256:receipt.source_scene_path_sha256,scene_registration:{record,candidate_index:index,point_fit_rms_m:candidate.point_fit_rms_m,inliers:candidate.inlier_indices.length},
+   scene_resection:{input_sha256:receipt.input_sha256,scene_sha256:receipt.scene_sha256,inlier_feature_ids:receipt.frames[i].fit.inlier_feature_ids,reprojection_rms_px:receipt.frames[i].fit.reprojection_rms_px},
+   evidence_correlation:'unknown; scene points, fitted cameras and map registration share evidence',geographic_accuracy:'not_independently_measured'});
+  frame.accepted=false;frame.decision='scene_registration';
+ }
+ mission.view.fresh_scene_review={scene:links.scene,group:links.group,resection_scene_sha256:receipt.scene_sha256,source_scene_path_sha256:receipt.source_scene_path_sha256,geographic_acceptance:false,backup_state_key:backupKey,registration_records:links.documents.map(d=>d.record),candidate_count:alternatives.length,preview_count:1,selected:{record,index}};await storage.put('missions',mission.id,mission);
+ const report={stage:'fresh_conditional_path_preview',mission_id:mission.id,frames:mapped.length,scene_sha256:links.scene.sha256,geographic_acceptance:false,original_alternatives_retained:true,registration_candidates:alternatives.length,preview_candidates:1,inliers:candidate.inlier_indices.length,point_fit_rms_m:candidate.point_fit_rms_m,track_id};
+ await fetch(sink+'result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(report)});output.textContent=JSON.stringify(report,null,2);const link=document.querySelector('#open');link.href='./?mission='+mission.id+'&time=140';link.hidden=false;document.title='Ready fresh registered camera review';
+}catch(error){output.textContent=String(error)+'\n'+error.stack;document.title='FAIL fresh camera review'}finally{e.target.disabled=false}};
+</script>

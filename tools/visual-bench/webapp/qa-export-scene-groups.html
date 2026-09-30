@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>Export saved image groups</title><style>body{color-scheme:dark;background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}button{font:inherit;padding:12px}</style><h1>Saved image group diagnostic</h1><p>This copies verified local image links to the local diagnostic receiver. It does not change the running upload.</p><button id="export">Export saved groups</button><pre id="status">Ready.</pre><script type="module">
+import {loadImageTracks,all} from './storage.js';
+const status=document.querySelector('#status');
+document.querySelector('#export').onclick=async()=>{try{
+ const sink=new URL(new URLSearchParams(location.search).get('sink'));if(sink.protocol!=='http:'||sink.hostname!=='127.0.0.1'||sink.pathname!=='/')throw Error('Use the local diagnostic receiver');
+ const send=async(path,body)=>{const r=await fetch(new URL(path,sink),{method:'POST',headers:{'Content-Type':'application/json'},body});if(!r.ok)throw Error(await r.text())};
+ let dir=await navigator.storage.getDirectory();for(const part of ['pilotage','chunks'])dir=await dir.getDirectoryHandle(part);
+ const groups=[],catalog=[];
+ for await(const [name,handle] of dir.entries()){
+  if(handle.kind!=='file'||!/^([a-f0-9]{64})\.bin$/.test(name))continue;
+  const file=await handle.getFile(),entry={name,size:file.size};catalog.push(entry);if(!(await file.slice(0,64).text()).trimStart().startsWith('{'))continue;
+  const text=await file.text();let candidate;try{candidate=JSON.parse(text)}catch{continue}entry.stage=candidate.stage;entry.keys=Object.keys(candidate);entry.first=candidate.observations?.[0]?.sequence;if(candidate.stage!=='image_associations')continue;
+  const record={sha256:name.slice(0,64),size:file.size,uri:'pilotage://chunks/'+name};
+  const group=await loadImageTracks(record);await send('/group/'+record.sha256,await file.text());
+  groups.push({...record,camera:group.camera,observations:group.observations});status.textContent=`Copied ${groups.length} verified groups…`;
+ }
+ groups.sort((a,b)=>a.observations[0].sequence-b.observations[0].sequence);
+ const report={stage:'partial_upload_snapshot',geographic_acceptance:false,scope:'Replay saved image associations from the active browser upload. No new inference or independent accuracy measurement.',groups,catalog,storage:await navigator.storage.estimate(),persisted:await navigator.storage.persisted(),packs:await all('packs')};
+ await send('/manifest',JSON.stringify(report));status.textContent=JSON.stringify({groups:groups.length,coverage:groups.map(g=>({first:g.observations[0].capture_time_ns/1e9,last:g.observations.at(-1).capture_time_ns/1e9,frames:g.observations.length,sha256:g.sha256}))},null,2);
+ }catch(e){status.textContent=String(e)}};
+</script>

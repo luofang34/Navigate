@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>Scene triangulation check</title><style>body{background:#090e15;color:#dce7f7;font:18px system-ui;margin:32px}pre{white-space:pre-wrap}button{font:inherit}</style><h1>Scene triangulation check</h1><button id="start">Triangulate source tracks</button><button id="response">Check response</button><pre>Ready</pre><script type="module">
+const output=document.querySelector('pre');let clicks=0;document.querySelector('#response').onclick=e=>e.target.textContent='Response '+(++clicks);
+document.querySelector('#start').onclick=e=>{e.target.disabled=true;let active=true,last,maxGap=0,ticks=0;function tick(now){if(!active)return;if(last!==undefined)maxGap=Math.max(maxGap,now-last);last=now;ticks++;requestAnimationFrame(tick)}requestAnimationFrame(tick);
+ const worker=new Worker('./qa-scene-triangulation-worker.js',{type:'module'});worker.onmessage=({data})=>{if(data.progress){output.textContent=data.progress;return}active=false;worker.terminate();e.target.disabled=false;if(data.error){output.textContent=data.error;document.title='FAIL triangulation';return}
+ const result={...data.result,ui:{animation_frames:ticks,max_animation_gap_ms:maxGap,response_clicks:clicks}};output.textContent=JSON.stringify(result,null,2);document.title='Complete browser triangulation'};worker.postMessage({});
+};
+</script>
