@@ -34,6 +34,9 @@ pub(crate) fn command() -> Command {
                 .value_parser(value_parser!(BackendKind))
                 .help("CPU patch matching or GPU compute shaders. GPU failures do not fall back to CPU."),
         )
+        .subcommand(crate::flight::FlightArgs::args(Command::new("flight").about(
+            "Track original video with resident matchers and a bounded processing budget.",
+        )))
         .subcommand(positionals(
             "worker",
             "Keep one offline renderer resident and handle JSON Lines requests.",
@@ -187,6 +190,9 @@ pub(crate) async fn run_blocking() -> Result<(), BenchError> {
     };
     let m = &mut m;
     match name.as_str() {
+        "flight" => {
+            crate::flight::run_blocking(&crate::flight::FlightArgs::from_matches(m)?, backend).await
+        }
         "worker" => {
             crate::worker::run_blocking(
                 &take::<PathBuf>(m, "package")?,

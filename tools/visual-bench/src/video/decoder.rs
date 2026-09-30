@@ -9,7 +9,7 @@ use std::{
     process::{Child, ChildStdout, Command, Stdio},
 };
 
-pub(super) struct Decoder {
+pub(crate) struct Decoder {
     child: Child,
     stdout: ChildStdout,
     stderr: tempfile::NamedTempFile,
@@ -19,6 +19,14 @@ pub(super) struct Decoder {
 
 impl Decoder {
     pub fn new_blocking(path: &Path, camera: CameraModel) -> Result<Self, BenchError> {
+        Self::open_blocking(path, camera, false)
+    }
+
+    pub(crate) fn resized_blocking(path: &Path, camera: CameraModel) -> Result<Self, BenchError> {
+        Self::open_blocking(path, camera, true)
+    }
+
+    fn open_blocking(path: &Path, camera: CameraModel, resize: bool) -> Result<Self, BenchError> {
         let stderr = tempfile::NamedTempFile::new().map_err(|source| BenchError::Io {
             path: "<decoder-log>".into(),
             source,
@@ -27,9 +35,17 @@ impl Decoder {
             path: stderr.path().to_owned(),
             source,
         })?;
-        let mut child = Command::new("ffmpeg")
+        let mut command = Command::new("ffmpeg");
+        command
             .args(["-nostdin", "-v", "error", "-xerror", "-noautorotate", "-i"])
-            .arg(path)
+            .arg(path);
+        if resize {
+            command.args([
+                "-vf",
+                &format!("scale={}:{}:flags=bilinear", camera.width, camera.height),
+            ]);
+        }
+        let mut child = command
             .args([
                 "-map", "0:v:0", "-vsync", "0", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1",
             ])

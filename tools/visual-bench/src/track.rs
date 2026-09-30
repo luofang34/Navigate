@@ -18,7 +18,14 @@ pub(crate) fn export_blocking(input: &Path, output: &Path) -> Result<(), BenchEr
             })?,
         );
     }
-    let track = collection(&records)?;
+    let track = if records
+        .iter()
+        .any(|r| r.get("candidate_hypotheses").is_some())
+    {
+        crate::flight::export::collection(&records)?
+    } else {
+        collection(&records)?
+    };
     let mut writer = writer_blocking(output)?;
     write_record_blocking(&mut writer, output, &track)
 }
