@@ -4,13 +4,12 @@ mod config;
 mod error;
 mod jobs;
 
-use clap::Parser;
 use config::Config;
 use error::ServiceError;
 use std::time::Duration;
 
 fn main() -> Result<(), ServiceError> {
-    let config = Config::parse();
+    let config = Config::parse()?;
     config.validate()?;
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

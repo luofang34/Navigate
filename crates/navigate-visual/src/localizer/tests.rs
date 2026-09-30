@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used)]
-
 use super::*;
 use crate::{CameraModel, PixelMatch, PyramidalMatcher};
 use image::GrayImage;

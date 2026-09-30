@@ -4,8 +4,6 @@
 //! retain their own licences. No weights are embedded or downloaded by this crate.
 //! Matchers return pixels. [`navigate_visual::PoseVerifier`] owns pose acceptance.
 //! Provider selection can include CPU operators. It is not device telemetry.
-#![forbid(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod adapter;
 mod features;

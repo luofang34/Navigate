@@ -168,8 +168,6 @@ impl SolutionStamp {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::{SourceEpoch, WrappingSequence};
 
     #[test]

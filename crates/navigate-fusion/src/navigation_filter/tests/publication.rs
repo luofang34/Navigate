@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 //! Publication-side behavior: initialization, tick semantics, integrity
 //! derivation, provenance, and determinism.
 

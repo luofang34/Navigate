@@ -1,5 +1,4 @@
 //! Cloud restoration preserves source observations and the saved coordinate fit.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 
 #[test]

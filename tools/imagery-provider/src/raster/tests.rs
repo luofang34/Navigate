@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 use gdal::{DriverManager, raster::Buffer};
 

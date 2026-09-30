@@ -1,4 +1,3 @@
-#![allow(clippy::panic)]
 use super::*;
 #[test]
 fn rotated_oblique_planar_retrieval_keeps_pose_and_ignores_outliers() {

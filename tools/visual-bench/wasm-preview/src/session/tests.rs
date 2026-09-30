@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 use navigate_visual::MapRevision;
 fn scene() -> (Session, ReferenceView, Vec<PixelMatch>) {

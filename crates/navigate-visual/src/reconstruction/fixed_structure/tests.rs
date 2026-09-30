@@ -1,5 +1,4 @@
 //! Conditional triangulation controls for general camera orientations.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::reconstruction::ImageTrack;
 use crate::{LocalScenePose, ScenePointObservation};

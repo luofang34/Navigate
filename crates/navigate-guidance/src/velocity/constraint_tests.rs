@@ -1,7 +1,4 @@
 //! Procedure-constraint derivation tests (NAV-VC-001/002/003).
-
-#![allow(clippy::expect_used, clippy::panic)]
-
 use navigate_contract::{AltitudeConstraint, GuidanceSetpoint, LateralReference, SolutionQuality};
 
 use crate::config::{GuidanceConfig, VelocityGuidanceConfig};

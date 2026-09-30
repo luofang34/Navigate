@@ -1,5 +1,4 @@
 //! Behavioral controls for joining overlapping image evidence.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::{ScenePointObservation, reconstruction::ImageTrack};
 fn camera() -> CameraModel {

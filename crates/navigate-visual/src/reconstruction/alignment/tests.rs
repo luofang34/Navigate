@@ -1,5 +1,4 @@
 //! Behavior checks for conditional group coordinate alignment.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::LocalSceneCamera;
 fn source() -> LocalScene {

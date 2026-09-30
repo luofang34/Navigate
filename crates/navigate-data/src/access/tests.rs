@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use crate::{DataUri, check_range};
 #[test]
 fn invalid_ranges_are_rejected_before_io() {

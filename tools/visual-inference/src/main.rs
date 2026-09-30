@@ -1,9 +1,7 @@
 //! Measure native ONNX execution and record provider placement.
-#![forbid(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod cli;
 mod runtime;
-use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
+use cli::{Args, Provider, command};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -23,49 +21,12 @@ fn context<E: std::error::Error + 'static>(operation: impl Into<String>, source:
         source: Box::new(source),
     }
 }
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Provider {
-    Cpu,
-    CoremlGpu,
-    CoremlAne,
-    Cuda,
-    TensorRt,
-}
-#[derive(Parser)]
-#[command(
-    about = "Measure native Rust ONNX inference. Accelerator placement can include CPU operations."
-)]
-struct Args {
-    #[arg(long)]
-    library: PathBuf,
-    #[arg(long)]
-    model: PathBuf,
-    #[arg(long)]
-    inputs: PathBuf,
-    #[arg(long)]
-    output: PathBuf,
-    /// NVIDIA device index for CUDA or TensorRT.
-    #[arg(long, default_value_t=0, value_parser=clap::value_parser!(i32).range(0..))]
-    device_id: i32,
-    /// TensorRT builder workspace limit. This is not total GPU memory.
-    #[arg(long, default_value_t=256, value_parser=clap::value_parser!(u32).range(1..=65536))]
-    workspace_mib: u32,
-    /// Save float32 output tensors for numerical comparison.
-    #[arg(long)]
-    save_outputs: bool,
-    #[arg(long, value_enum, default_value = "cpu")]
-    provider: Provider,
-    #[arg(long,default_value_t=10,value_parser=clap::value_parser!(u32).range(1..=10000))]
-    repetitions: u32,
-    #[arg(long,default_value_t=4,value_parser=clap::value_parser!(u32).range(1..=64))]
-    threads: u32,
-}
 fn main() -> Result<(), ProbeError> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let args = match Args::try_parse() {
-        Ok(args) => args,
+    let matches = match command().try_get_matches() {
+        Ok(matches) => matches,
         Err(error)
             if matches!(
                 error.kind(),
@@ -79,5 +40,5 @@ fn main() -> Result<(), ProbeError> {
         }
         Err(error) => return Err(context("parse command arguments", error)),
     };
-    runtime::run_blocking(&args)
+    runtime::run_blocking(&Args::from_matches(matches)?)
 }

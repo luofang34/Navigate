@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 fn camera() -> CameraModel {

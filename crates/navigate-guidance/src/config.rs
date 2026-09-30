@@ -123,8 +123,6 @@ impl Default for VelocityGuidanceConfig {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use navigate_contract::{DurationNanos, SolutionQuality};
 
     use super::{GuidanceConfig, VelocityGuidanceConfig};

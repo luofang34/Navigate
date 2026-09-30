@@ -1,5 +1,4 @@
 //! Source identity and uncertainty controls at the WASM boundary.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 fn input() -> (String, String, String) {
     let camera = json!({"width":960,"height":544,"fx":700.0,"fy":690.0,"cx":479.5,"cy":271.5});

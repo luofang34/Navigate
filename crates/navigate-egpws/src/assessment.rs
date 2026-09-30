@@ -200,8 +200,6 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use navigate_contract::{
         ClockDomainId, DurationNanos, FaultDetection, GeodeticPosition, IntegrityAssessment,
         MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,

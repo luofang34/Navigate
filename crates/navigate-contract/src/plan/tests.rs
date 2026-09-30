@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic)]
 //! Plan-vocabulary tests. Every constraint form is pinned against the
 //! requirement it implements (`docs/procedure-requirements.md`).
 

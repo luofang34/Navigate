@@ -1,5 +1,4 @@
 //! Tests for traceable scene-to-reference association and geometric alternatives.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::{
     CameraPose, LocalFrame, LocalSceneCamera, LocalScenePoint, LocalScenePose, MapRevision,

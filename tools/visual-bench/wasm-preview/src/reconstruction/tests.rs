@@ -1,5 +1,4 @@
 //! Worker conversion checks retain evidence and reject invalid input.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 const CAMERA: &str = r#"{"width":320,"height":240,"fx":250,"fy":250,"cx":159.5,"cy":119.5}"#;
 #[test]

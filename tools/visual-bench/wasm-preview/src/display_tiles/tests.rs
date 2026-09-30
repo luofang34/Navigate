@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::*;
 use image::Rgba;
 fn tile(z: u8, x: i32, y: i32, color: [u8; 4]) -> AvailableRasterLayerData {

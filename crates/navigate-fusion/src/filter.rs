@@ -184,8 +184,6 @@ pub(crate) fn vertical_1sigma_m(p: &Mat6) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use nalgebra::{Matrix3, Vector3};
 
     use super::{

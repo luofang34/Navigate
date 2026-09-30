@@ -1,5 +1,4 @@
 //! Seed estimates can initialize image links without establishing support.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::reconstruction::fixed_structure::tests::{fixture, graph};
 

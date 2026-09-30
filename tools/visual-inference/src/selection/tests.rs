@@ -1,5 +1,3 @@
-#![allow(clippy::panic)]
-
 use super::*;
 use std::{error::Error, path::PathBuf};
 

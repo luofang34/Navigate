@@ -1,34 +1,74 @@
 //! Run a resident dense matcher on local reference/query PNG pairs.
-use clap::{Parser, ValueEnum};
+use clap::{Arg, ArgMatches, Command, ValueEnum, builder::PossibleValue, value_parser};
 use navigate_visual::ImageMatcher;
 use navigate_visual_onnx::{ExecutionConfig, LoFtrMatcher, Provider, initialize_blocking};
 use serde_json::json;
 use std::{io::Write, path::PathBuf, time::Instant};
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy)]
 enum Device {
     Cpu,
     CoremlAne,
     CoremlGpu,
 }
-#[derive(Parser)]
+impl ValueEnum for Device {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Cpu, Self::CoremlAne, Self::CoremlGpu]
+    }
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(match self {
+            Self::Cpu => "cpu",
+            Self::CoremlAne => "coreml-ane",
+            Self::CoremlGpu => "coreml-gpu",
+        }))
+    }
+}
 struct Args {
-    #[arg(long)]
     library: PathBuf,
-    #[arg(long)]
     model: PathBuf,
-    #[arg(long)]
     pairs: PathBuf,
-    #[arg(long)]
     output: PathBuf,
-    #[arg(long, value_enum, default_value = "cpu")]
     device: Device,
+}
+fn take<T: Clone + Send + Sync + 'static>(
+    matches: &mut ArgMatches,
+    id: &'static str,
+) -> Result<T, Box<dyn std::error::Error>> {
+    matches
+        .remove_one(id)
+        .ok_or_else(|| format!("missing --{id}").into())
+}
+fn command() -> Command {
+    Command::new("dense_pairs")
+        .args(["library", "model", "pairs", "output"].map(|id| {
+            Arg::new(id)
+                .long(id)
+                .required(true)
+                .value_parser(value_parser!(PathBuf))
+        }))
+        .arg(
+            Arg::new("device")
+                .long("device")
+                .default_value("cpu")
+                .value_parser(value_parser!(Device)),
+        )
+}
+impl Args {
+    fn from_matches(mut m: ArgMatches) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            library: take(&mut m, "library")?,
+            model: take(&mut m, "model")?,
+            pairs: take(&mut m, "pairs")?,
+            output: take(&mut m, "output")?,
+            device: take(&mut m, "device")?,
+        })
+    }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let args = Args::try_parse()?;
+    let args = Args::from_matches(command().try_get_matches()?)?;
     initialize_blocking(&args.library)?;
     let provider = match args.device {
         Device::Cpu => Provider::Cpu,

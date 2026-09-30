@@ -116,8 +116,6 @@ impl LocalTangentPlane {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::*;
 
     fn plane_at_47n_8e() -> LocalTangentPlane {

@@ -1,15 +1,27 @@
 //! Explicit matcher selection. Backend failures do not trigger a silent fallback.
 
-use clap::ValueEnum;
+use clap::{ValueEnum, builder::PossibleValue};
 use navigate_visual::{
     GpuPyramidalMatcher, ImageMatcher, PixelMatch, PyramidalMatcher, VisualError,
 };
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum BackendKind {
     #[default]
     Cpu,
     Gpu,
+}
+
+impl ValueEnum for BackendKind {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Cpu, Self::Gpu]
+    }
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(match self {
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        }))
+    }
 }
 
 pub(crate) enum Backend {

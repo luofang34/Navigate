@@ -1,5 +1,4 @@
 //! Checks for shared-point alignment and evidence identity.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::{LocalSceneCamera, LocalScenePoint, LocalScenePose, ScenePointObservation};
 use nalgebra::Vector2;

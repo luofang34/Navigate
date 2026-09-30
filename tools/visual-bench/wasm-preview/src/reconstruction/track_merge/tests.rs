@@ -1,5 +1,4 @@
 //! Worker graph identity, repeated fitting, and cache invalidation controls.
-#![allow(clippy::expect_used, clippy::panic)]
 use super::*;
 fn fixture() -> (String, String, String) {
     let camera = json!({"width":960,"height":544,"fx":700.0,"fy":690.0,"cx":479.5,"cy":271.5});
