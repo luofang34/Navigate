@@ -84,6 +84,33 @@ fn cache_creation_failure_keeps_path_and_source() {
         ..ExecutionConfig::default()
     };
     assert!(
-        matches!(providers_blocking(model, &config), Err(InferenceError::Cache { path, source }) if path == model && source.kind() == std::io::ErrorKind::AlreadyExists)
+        matches!(providers_blocking(model, &config, None), Err(InferenceError::Cache { path, source }) if path == model && source.kind() == std::io::ErrorKind::AlreadyExists)
     );
+}
+
+#[test]
+#[ignore = "requires NAVIGATE_TEST_ORT pointing to an ONNX Runtime library"]
+fn cpu_wait_policies_preserve_model_outputs() -> Result<(), Box<dyn std::error::Error>> {
+    use ort::value::Tensor;
+    let library = std::env::var_os("NAVIGATE_TEST_ORT").ok_or("set NAVIGATE_TEST_ORT")?;
+    initialize_blocking(Path::new(&library))?;
+    let model = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/add.onnx"
+    ));
+    for cpu_spinning in [false, true] {
+        let config = ExecutionConfig {
+            cpu_spinning,
+            ..ExecutionConfig::default()
+        };
+        let mut session = session_blocking(model, &config)?;
+        for values in [[0.25_f32, -2.0], [3.0, 0.0]] {
+            let input = Tensor::from_array(([1_usize, 2], values.to_vec()))?;
+            let output = session.run(ort::inputs!["input" => input])?;
+            let value = output.get("output").ok_or("missing CPU output")?;
+            let (_, actual) = value.try_extract_tensor::<f32>()?;
+            assert_eq!(actual, values.map(|v| 2.0 * v));
+        }
+    }
+    Ok(())
 }
