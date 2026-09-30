@@ -18,10 +18,15 @@
 
 mod adapter;
 mod budget;
+mod capture;
 mod error;
 mod prior;
 
 pub use adapter::{EvidenceIndependence, VisualFix, VisualFixSource, VisualSourceIdentity};
 pub use budget::{VerticalDatum, VisualErrorBudget};
 pub use error::VisualFusionError;
-pub use prior::{FrameCapture, search_prior};
+pub use prior::{FrameCapture, PropagationBudget, search_prior};
+
+pub use capture::{
+    AttitudeSample, CameraAlignment, CaptureError, ClockAlignment, TimedCapture, camera_capture,
+};

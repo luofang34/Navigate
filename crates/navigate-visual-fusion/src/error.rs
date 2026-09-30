@@ -5,6 +5,14 @@ use thiserror::Error;
 /// A visual estimate cannot become a fusion observation.
 #[derive(Debug, Error, PartialEq)]
 pub enum VisualFusionError {
+    /// A search projection exceeds the host's valid time interval.
+    #[error("search projection age {age_ns} ns exceeds {maximum_ns} ns")]
+    ProjectionWindow {
+        /// Time distance including timestamp error bounds.
+        age_ns: u64,
+        /// Host's maximum supported distance.
+        maximum_ns: u64,
+    },
     /// The host has not excluded shared errors with the filter state.
     #[error("visual fix correlation with the filter state is unknown")]
     UnknownCorrelation,
