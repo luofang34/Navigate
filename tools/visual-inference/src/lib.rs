@@ -1,4 +1,4 @@
-//! Native ONNX image matchers for the Navigate visual pipeline.
+//! Native ONNX adapters for image matching and reference retrieval.
 //!
 //! The host supplies model files and initializes ONNX Runtime once. Model files
 //! retain their own licences. No weights are embedded or downloaded by this crate.
@@ -6,6 +6,7 @@
 //! Provider selection can include CPU operators. It is not device telemetry.
 
 mod adapter;
+mod camp;
 mod feature_cache;
 mod features;
 mod lighterglue;
@@ -19,6 +20,7 @@ mod xfeat;
 mod xfeat_dense;
 
 pub use adapter::{MatcherFiles, OnnxMatcher};
+pub use camp::{CampIndex, CampRetriever};
 pub use lightglue::LightGlueMatcher;
 pub use loftr::LoFtrMatcher;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
