@@ -4,18 +4,26 @@ import {downloadFiles,read,get,put} from '../storage.js';
 export class LocalMatcher {
   constructor(options={}){this.options=options;this.trackingPairs=new TrackingPairCache()}
   async initialize(progress){this.trackingPairs.clear();let manifest;try{const response=await fetch(assetUrl('models/manifest.json'));if(!response.ok)throw Error('Browser models are not prepared');manifest=await response.json();await put('state','public-xfeat-models-v2',manifest)}catch(e){manifest=await get('state','public-xfeat-models-v2')??await get('state','public-xfeat-models-v1');if(!manifest)throw e}
-    if(!manifest.xfeat||Object.keys(manifest).some(name=>!['xfeat','lighterglue','loftr'].includes(name)))throw Error('Unsupported public matcher manifest');this.progress=progress;this.denseAsset=this.options.matcher==='dense'?manifest.loftr:null;const selected={xfeat:manifest.xfeat,...(!this.denseAsset&&manifest.lighterglue?{lighterglue:manifest.lighterglue}:{})};const files=Object.values(selected);await downloadFiles(files,(n,total)=>progress(`Matching model ${(n/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`));
+    if(!manifest.xfeat||Object.keys(manifest).some(name=>!['xfeat','lighterglue','loftr'].includes(name)))throw Error('Unsupported public matcher manifest');this.progress=progress;this.denseAsset=this.options.matcher==='dense'?manifest.loftr:null;const selected={xfeat:manifest.xfeat,...(manifest.lighterglue?{lighterglue:manifest.lighterglue}:{})};const files=Object.values(selected);await downloadFiles(files,(n,total)=>progress(`Matching model ${(n/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`));
     const models={};for(const [name,f] of Object.entries(selected))models[name]=new Uint8Array(await read(`pilotage://chunks/${f.sha256}.bin`,0,f.size));
     progress('Loading image matcher…');const {XFeatMatcher}=await import('./xfeat.js');
-    progress('Preparing image matcher…');this.matcher=await XFeatMatcher.create(models);this.identity=this.matcher.identity+'/'+files.map(f=>f.sha256).join('/');
+    progress('Preparing image matcher…');this.matcher=await XFeatMatcher.create(models);
+    // The dense model loads while area-search features are prepared, so the first comparison does not wait for it.
+    if(this.denseAsset)this.denseLoading=this.loadDense(()=>{}).catch(()=>{this.denseLoading=null});this.identity=this.matcher.identity+'/'+files.map(f=>f.sha256).join('/');
   }
   async matchImages(reference,query,keys={}){
-    if(this.denseAsset){
+    // Consecutive camera frames share appearance, so sparse learned matching suffices; map and refinement checks keep the dense matcher across the camera-to-map domain gap.
+    if(this.denseAsset&&!(keys.stage==='tracking'&&this.matcher?.glue)){
       const progress=keys.progress??this.progress;
-      if(!this.dense){const f=this.denseAsset;await downloadFiles([f],(n,t)=>progress(`Image matching model ${(n/1048576).toFixed(1)} / ${(t/1048576).toFixed(1)} MB`));const {DenseMatcher}=await import('./loftr.js');this.dense=await DenseMatcher.create(new Uint8Array(await read(`pilotage://chunks/${f.sha256}.bin`,0,f.size)),this.matcher.gpu,this.matcher.metrics)}
+      if(!this.dense&&this.denseLoading)await this.denseLoading;
+      if(!this.dense)await this.loadDense(progress);
       const patches=this.options.refinementPatches&&keys.stage==='refinement'&&(this.options.refinementPatches!=='on_rejection'||keys.recovery===true);let pairs=this.trackingPairs.get(keys);if(pairs===undefined){pairs=await (patches?this.dense.refine(reference,query):this.dense.match(reference,query));this.trackingPairs.put(keys,pairs)}return {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/webgpu-wasm${patches?'/overlapping-refinement':''}`};
     }
 const base=this.options.keypoints??1024,limit=this.matcher.glue?(['refinement','tracking'].includes(keys.stage)?Math.min(2048,Math.max(1024,base*2)):Math.min(2048,Math.max(512,base))):(['refinement','tracking'].includes(keys.stage)?Math.min(4096,Math.max(2048,base*3)):2048);const q=await this.matcher.features(query,keys.query,limit);return {pairs:q.count<6?[]:await this.matcher.pairs(await this.matcher.features(reference,keys.reference,limit),q),backend_identity:this.identity}}
+  async loadDense(progress){
+    const f=this.denseAsset;await downloadFiles([f],(n,t)=>progress(`Image matching model ${(n/1048576).toFixed(1)} / ${(t/1048576).toFixed(1)} MB`));
+    const {DenseMatcher}=await import('./loftr.js');this.dense=await DenseMatcher.create(new Uint8Array(await read(`pilotage://chunks/${f.sha256}.bin`,0,f.size)),this.matcher.gpu,this.matcher.metrics);
+  }
   async *matchAlternatives(reference,query){
     if(this.dense)for await(const pairs of this.dense.alternatives(reference,query))yield {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/rotation-search-webgpu-wasm`};
   }
