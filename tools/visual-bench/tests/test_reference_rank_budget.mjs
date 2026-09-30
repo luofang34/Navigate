@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {IndexedReferenceSearch} from '../webapp/indexed-reference-search.js';
+
+const pack={pack_id:'a'.repeat(64),release_id:'fixture',anchor_lat_lon:[0,0]};
+const scales=[100,200,50,400],entries=scales.flatMap((width_m,group)=>Array.from({length:8},(_,rank)=>({id:group*10+rank,width_m,center_enu_m:[0,0]})));
+const retriever={catalog:{map_manifest_sha256:pack.pack_id,map_release:pack.release_id},identity:'fixture',async rank(_image,eligible,limit){return eligible.slice(0,limit)}};
+const image={width:2,height:2,gray:new Uint8Array(4),rgb:new Uint8Array(12)},prior={latitude:0,longitude:0,radius_m:500},camera={width:2,fx:2},reference={pack,elevation:()=>20};
+const orientations=Array.from({length:8},(_,i)=>[0,0,Math.sin(i*Math.PI/8),Math.cos(i*Math.PI/8)]);
+const search=new IndexedReferenceSearch(retriever,entries,scales);
+const result=await search.propose(image,prior,camera,reference,()=>{},{orientations});
+const expected=Array.from({length:4},(_,rank)=>scales.map((_,group)=>group*10+rank)).flat();
+assert.deepEqual(result.reference_ids,expected,'duplicate color and grayscale ranks must not consume the unique-reference budget');
+assert.equal(result.candidates.length,128,'reference expansion respects the pose cap');
+const gray=await search.propose({...image,rgb:undefined},prior,camera,reference,()=>{},{orientations});
+assert.deepEqual(gray.reference_ids,expected,'a grayscale camera can fill the same reference budget');
+const sparse=new IndexedReferenceSearch(retriever,entries.filter(e=>e.width_m===400).slice(0,3),scales);
+const few=await sparse.propose(image,prior,camera,reference,()=>{},{orientations});
+assert.deepEqual(few.reference_ids,[30,31,32],'empty scale groups do not consume slots or repeat evidence');
+const bounded=await search.propose(image,prior,camera,reference,()=>{},{orientations,limit:1});
+assert.deepEqual(bounded.reference_ids,[0,10],'a smaller budget stays bounded');
+console.info('Reference rankings fill unique slots across repeated channels and sparse scales, within the pose budget');

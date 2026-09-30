@@ -4,7 +4,7 @@ import {localPosition} from './geography.js';
 import {cropPlan} from './crop-plan.js';
 export class ReferencePack {
   static async open(pack){const self=new ReferencePack();self.pack=pack;self.tiles=[];
-    for(const tile of pack.tiles){const item={xyz:tile.xyz};for(const role of ['imagery','elevation']){const a=tile[role];if(!a)continue;const bytes=await read(`pilotage://chunks/${a.chunk}.bin`,a.offset,a.length);if(await sha256(bytes)!==a.sha256)throw Error('Reference tile checksum failed');const bitmap=await createImageBitmap(new Blob([bytes]));const c=makeCanvas();c.width=bitmap.width;c.height=bitmap.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(bitmap,0,0);bitmap.close();item[role]={canvas:role==='imagery'?c:undefined,pixels:role==='elevation'?ctx.getImageData(0,0,c.width,c.height).data:undefined}}
+    for(const tile of pack.tiles){const item={xyz:tile.xyz};for(const role of ['imagery','elevation']){const a=tile[role];if(!a)continue;const bytes=await read(`pilotage://chunks/${a.chunk}.bin`,a.offset,a.length);if(await sha256(bytes)!==a.sha256)throw Error('Reference tile checksum failed');const bitmap=await createImageBitmap(new Blob([bytes]),{colorSpaceConversion:'none'});const c=makeCanvas();c.width=bitmap.width;c.height=bitmap.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(bitmap,0,0);bitmap.close();item[role]={canvas:role==='imagery'?c:undefined,pixels:role==='elevation'?ctx.getImageData(0,0,c.width,c.height).data:undefined}}
       self.tiles.push(item);
     }self.dem=self.tiles.filter(t=>t.elevation).sort((a,b)=>b.xyz[0]-a.xyz[0]);return self;
   }

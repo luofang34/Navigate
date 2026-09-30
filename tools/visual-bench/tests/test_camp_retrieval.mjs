@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {CampIndex} from '../webapp/inference/camp-index.js';
+import {campPixels} from '../webapp/inference/camp-pixels.js';
+import {CampRetriever} from '../webapp/inference/camp.js';
+const descriptor=axis=>{const d=new Float32Array(1024);d[axis]=1;return d};
+const metadata={map_release:'map',map_manifest_sha256:'a'.repeat(64),catalog_manifest_sha256:'b'.repeat(64),model_sha256:'c'.repeat(64),ids:[7,2,5]};
+const values=new Float32Array([...descriptor(0),...descriptor(1),...descriptor(0)]),index=new CampIndex(metadata,values);
+assert.deepEqual(index.rank(descriptor(0),index.eligible([7,2,5],2),2),[5,7]);
+assert.deepEqual(index.rank(descriptor(1),index.eligible([7],2),2),[7]);
+assert.throws(()=>index.eligible([99],1),/eligible/);assert.throws(()=>index.eligible([7,7],1),/eligible/);
+assert.throws(()=>index.eligible([7],4097),/limit/);
+assert.throws(()=>new CampIndex({...metadata,ids:[1,1,2]},values),/repeated/);
+assert.throws(()=>new CampIndex(metadata,new Float32Array(3072)),/normalized/);
+assert.throws(()=>new CampIndex({...metadata,model_sha256:'unknown'},values),/identity/);
+const pixels=campPixels({width:2,height:1,rgb:new Uint8Array([0,10,200,100,10,200])},4);
+for(let row=0;row<4;row++)assert.deepEqual([...pixels.subarray(row*4,row*4+4)],[0,25,75,100]);
+assert.deepEqual([...pixels.subarray(16,32)],Array(16).fill(10));assert.deepEqual([...pixels.subarray(32)],Array(16).fill(200));
+assert.throws(()=>campPixels({width:0,height:0,rgb:new Uint8Array()}),/RGB/);
+await assert.rejects(CampRetriever.create(new Uint8Array([1,2,3]),index),/pinned index/);
+console.info('Browser CAMP binds IDs and model identity, ranks only eligible references, and preserves RGB preprocessing');
+
+const retriever=new CampRetriever(),feeds=[];
+retriever.index=index;retriever.metrics={};retriever.gpu={phase(){}};
+retriever.Tensor=class {constructor(_type,data){this.data=data}dispose(){}};
+retriever.session={async run({image}){feeds.push(image.data);return {descriptor:{dims:[1,1024],data:descriptor(0),dispose(){}}}}};
+const query={width:2,height:1,rgb:new Uint8Array([0,10,200,100,10,200])};
+for(const eligible of [[7],[2,5],[7,5],[2]])await retriever.rank(query,eligible,1);
+assert.equal(feeds.length,1,'one observation reuses inference across candidate groups');
+assert.equal(retriever.metrics.place_retrieval_preprocessing_runs,1,'candidate groups reuse the prepared observation descriptor');
+query.rgb.fill(77);await retriever.rank(query,[7],1);assert.equal(feeds.length,2,'changed pixels cannot reuse a stale descriptor');assert.ok(feeds[1].every(v=>v===77));
+await retriever.rank({...query,width:1,height:2},[7],1);assert.equal(feeds.length,3,'image dimensions are part of the cache identity');
+await assert.rejects(retriever.rank({...query,width:0},[7],1),/RGB/);
+console.info('CAMP caches preprocessing across groups and invalidates changed pixels or dimensions');
+
+const changing={width:2,height:1,rgb:new Uint8Array([12,34,56,78,90,123])},expected=campPixels(changing),pending=retriever.rank(changing,[7],1);
+changing.width=1;changing.height=2;changing.rgb.fill(0);await pending;
+assert.deepEqual(feeds.at(-1),expected,'in-flight preprocessing uses one captured image, even if the caller reuses its buffer');

@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {IndexedReferenceSearch} from '../webapp/indexed-reference-search.js';
+import {LocalizationPipeline} from '../webapp/localization.js';
+const pack={pack_id:'a'.repeat(64),release_id:'map',anchor_lat_lon:[0,0]},calls=[];
+const retriever={catalog:{map_manifest_sha256:pack.pack_id,map_release:'map'},identity:'another retrieval adapter',async rank(_image,eligible){calls.push(eligible);return eligible.slice(0,2)}};
+const entries=[{id:1,width_m:100,center_enu_m:[0,0]},{id:2,width_m:100,center_enu_m:[50,0]},{id:3,width_m:100,center_enu_m:[5000,0]},{id:4,width_m:800,center_enu_m:[0,0]}];
+const search=new IndexedReferenceSearch(retriever,entries,[100]),image={gray:new Uint8Array(4),rgb:new Uint8Array(12),width:2,height:2,time:0,timing:'still image'},prior={latitude:0,longitude:0,radius_m:500,agl_m:110},camera={width:2,fx:2};
+const q=[.6,0,0,.8],reference={pack,elevation:()=>20};
+let result=await search.propose(image,prior,camera,reference,()=>{},{orientations:[q]});
+assert.deepEqual(result.reference_ids,[1,2]);assert.equal(result.candidates.length,2);assert.deepEqual(result.candidates[0].eye_to_enu_xyzw,q);assert.deepEqual(result.candidates[0].position_enu_m,[0,0,120]);assert.ok(calls.every(ids=>!ids.includes(3)&&!ids.includes(4)),'prior filtering precedes backend ranking');
+await assert.rejects(search.propose(image,prior,camera,{...reference,pack:{...pack,pack_id:'other'}},()=>{},{orientations:[q]}),/different map/);
+result=await search.propose(image,prior,camera,{pack,elevation(){throw Error('missing terrain')}},()=>{},{orientations:[q]});
+assert.equal(result.candidates.length,0);assert.equal(result.unsupported_references.length,2);assert.match(result.unsupported_references[0].reason,/missing terrain/);
+retriever.rank=async()=>[3];await assert.rejects(search.propose(image,prior,camera,reference,()=>{},{orientations:[q]}),/ineligible/);
+const poses=[{position_enu_m:[1,2,110],eye_to_enu_xyzw:q},{position_enu_m:[101,2,110],eye_to_enu_xyzw:[0,0,0,1]}],evaluated=new Map(),keys=[];
+const pipeline=new LocalizationPipeline({async matchImages(_r,_q,key){keys.push(key);return {pairs:[],backend_identity:'separate matcher'}}},{temporal:false},{async propose(){return {candidates:poses,reference_ids:[1,2],backend_identity:'independent retrieval',scope:'bounded retrieval'}}});
+pipeline.references=reference;pipeline.pack=pack;pipeline.camera=camera;
+pipeline.renderer={begin(){evaluated.clear()},async render_reference(id,pose){evaluated.set(id,{candidate_id:id,...JSON.parse(pose)});return new Uint8Array(4)},refine(id){const report={...evaluated.get(id),accepted:true,spatial_support:24};evaluated.set(id,report);return JSON.stringify(report)},select:()=>JSON.stringify({accepted:false,decision:'unresolved',observation_sha256:'observation',candidate_hypotheses:[...evaluated.values()]})};
+result=await pipeline.estimate(image,prior,0,()=>{});
+assert.equal(result.retrieval.algorithm,'indexed_references_then_rendered_geometry');assert.equal(result.candidate_hypotheses.length,2);assert.deepEqual(result.candidate_hypotheses.map(h=>h.position_enu_m),poses.map(p=>p.position_enu_m));assert.equal(result.decision,'unresolved');assert.ok(keys.every(k=>k.query==='observation/query'));
+console.info('Indexed search validates map/prior/data support and sends separate alternatives through the same geometric pipeline');
+
+const inputs=[];retriever.rank=async(image,eligible)=>{inputs.push(image);return eligible.slice(0,1)};
+const original={width:4,height:3,rgb:new Uint8Array(36).fill(33)};
+const full=await search.propose({...image,original},prior,camera,reference,()=>{},{orientations:[q]});
+assert.ok(inputs.length>0&&inputs.every(input=>input.width===4&&input.height===3&&input.rgb.length===36),'retrieval receives the original pixel grid independently of the geometry camera');
+assert.deepEqual(full.input_image,{width:4,height:3,scope:'original decoded pixels'});
+await assert.rejects(search.propose({...image,original:{...original,rgb:new Uint8Array(1)}},prior,camera,reference,()=>{},{orientations:[q]}),/retrieval observation/);

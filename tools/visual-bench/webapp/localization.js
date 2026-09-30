@@ -1,3 +1,6 @@
+import {refineReferenceCandidates,recoverRejectedCandidates} from './candidate-refinement.js';
+import {similarityCandidates} from './retrieval-recovery.js';
+import {cropPoseCandidates} from './retrieval-poses.js';
 import {refineScenePaths} from './scene-path-refinement.js';
 import {registerScenePaths} from './scene-map.js';
 import {diverseShortlist} from './shortlist.js';
@@ -8,10 +11,10 @@ import {ReferencePack} from './reference-pack.js';
 import {read,saveImageTracks,loadImageTracks,saveSceneReconstruction,loadSceneReconstruction,saveSceneRegistration} from './storage.js';
 import {SequenceImages} from './sequence-images.js';
 import {reconstructImageGroups,refineImageGroups} from './scene-sequence.js';
-import {rotate,gray} from './observation.js';
+import {rotate,gray,consumeOriginalPixels} from './observation.js';
 import {localPosition} from './geography.js';
 export class LocalizationPipeline {
-  constructor(matcher=new LocalMatcher(),options={}){this.matcher=matcher;this.temporal=new TemporalSearch();this.options={scales:[1],shortlist:24,candidates:3,refinements:2,mapMotionFraction:0,...options}}
+  constructor(matcher=new LocalMatcher(),options={},referenceSearch=null){this.matcher=matcher;this.referenceSearch=referenceSearch;this.temporal=new TemporalSearch();this.options={scales:[1],shortlist:24,candidates:3,refinements:2,mapMotionFraction:0,...options}}
   beginSequence({maxFrames=64}={}){this.temporal=new TemporalSearch();this.imageSequence?.close();this.imageSequence=new SequenceImages({create:()=>new this.SceneTracks(JSON.stringify(this.camera)),matcher:this.matcher,save:saveImageTracks,camera:this.camera,maxFrames})}
   async finishSequence(){return await this.imageSequence?.finish()??[]}
   async reconstructSequence(groups,progress){return reconstructImageGroups(groups,{kernel:this.sceneKernel,load:loadImageTracks,loadScene:loadSceneReconstruction,save:saveSceneReconstruction,progress})}
@@ -27,8 +30,8 @@ export class LocalizationPipeline {
       reason:'Extra scene sample; geographic search was not run.',execution:this.matcher.diagnostics?.()};
   }
   async registerScene(plan,image,prior,progress){return registerScenePaths(plan,image,prior,{renderer:this.renderer,matcher:this.matcher,kernel:this.sceneKernel,camera:this.camera,pack:this.pack,navigationPrior:p=>this.navigationPrior(p),load:loadSceneReconstruction,save:saveSceneRegistration,progress})}
-  async initialize(pack,camera,progress){const {default:init,Preview,propose,SceneTracks,...sceneKernel}=await import('./wasm/navigate_visual_preview.js');await init();this.propose=propose;this.SceneTracks=SceneTracks;this.sceneKernel=sceneKernel;this.pack=pack;this.camera=camera;await this.matcher.initialize(progress);progress('Reading verified imagery and terrain…');this.references=await ReferencePack.open(pack);this.renderer=await Preview.create(JSON.stringify(pack),JSON.stringify(camera),read,false)}
-  async estimate(image,prior,sequence,progress){const start=performance.now();const terrain=this.references.elevation(prior.latitude,prior.longitude);const position=localPosition(this.pack,prior.latitude,prior.longitude,terrain+prior.agl_m);
+  async initialize(pack,camera,progress){const {default:init,Preview,propose,propose_nadir,SceneTracks,...sceneKernel}=await import('./wasm/navigate_visual_preview.js');await init();this.propose=propose;this.proposeNadir=propose_nadir;this.SceneTracks=SceneTracks;this.sceneKernel=sceneKernel;this.pack=pack;this.camera=camera;await this.matcher.initialize(progress);progress('Reading verified imagery and terrain…');this.references=await ReferencePack.open(pack);this.renderer=await Preview.create(JSON.stringify(pack),JSON.stringify(camera),read,false)}
+  async estimate(image,prior,sequence,progress){const start=performance.now();consumeOriginalPixels(image);const terrain=this.references.elevation(prior.latitude,prior.longitude);const position=localPosition(this.pack,prior.latitude,prior.longitude,terrain+prior.agl_m);
     const navigationPrior=this.navigationPrior(prior,position);this.renderer.begin(image.gray,JSON.stringify(navigationPrior),sequence,Math.round(image.time*1e9));
     const observation=JSON.parse(this.renderer.select()).observation_sha256;
     const adjacent=image.timing!=='still image'?await this.imageSequence?.observe(image,observation,sequence,progress):null;
@@ -63,7 +66,16 @@ export class LocalizationPipeline {
         execution:this.matcher.diagnostics?.()??{execution:'adapter does not report device metrics'},processing_ms:performance.now()-start};
       this.temporal.remember(report,image,{map:Boolean(localCheck)});return report;
     }
-    const temporalMs=performance.now()-start;const crops=this.references.crops(prior,this.camera,this.options.scales),candidates=[];let searched=0;
+    if(this.referenceSearch){
+      const orientations=headingAngles(8).map(angle=>[0,0,Math.sin(angle*Math.PI/360),Math.cos(angle*Math.PI/360)]),retrieved=await this.referenceSearch.propose(image,prior,this.camera,this.references,progress,{orientations});
+      const retrievalMs=performance.now()-start,checked=await refineReferenceCandidates(this.renderer,this.matcher,this.camera,retrieved.candidates,image,observation,progress,{candidateLimit:this.options.referenceCandidates??128});
+      const recovered=await this.recoverCandidates(checked,image,observation,progress);
+      const result=this.temporal.reacquired(recovered,relativeFallback,localFallback);this.temporal.remember(result,image,{regional:true});
+      return {...result,navigation_prior:navigationPrior,anchor_lat_lon:this.pack.anchor_lat_lon,requested_time_s:image.requested_time_s,timing_scope:image.timing,
+        retrieval:{algorithm:'indexed_references_then_rendered_geometry',stage:'retrieval_only',search_scope:retrieved.scope,backend_identity:retrieved.backend_identity,input_image:retrieved.input_image,reference_ids:retrieved.reference_ids,unsupported_references:retrieved.unsupported_references,pose_candidates:retrieved.candidates.length,evaluated_candidates:checked.verification_work.evaluated_candidate_ids.length,unexamined_candidate_ids:checked.verification_work.unexamined_candidates.map(h=>h.candidate_id)},
+        execution:{matching:this.matcher.diagnostics?.(),retrieval:this.referenceSearch.diagnostics?.()},stage_ms:{retrieval:retrievalMs,verification:performance.now()-start-retrievalMs},processing_ms:performance.now()-start};
+    }
+    const temporalMs=performance.now()-start;const crops=this.references.crops(prior,this.camera,this.options.scales),candidates=[],groundMatches=[];let searched=0;
     const coarseWidth=Math.round(image.width/Math.max(image.width,image.height)*80)*8,coarseHeight=Math.round(image.height/Math.max(image.width,image.height)*80)*8;
     const coarse=gray(image.canvas,coarseWidth,coarseHeight);
     const queries=headingAngles(this.options.headings).map(angle=>{const rotated=rotate(coarse,angle),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle,key:`${observation}/angle/${angle}`}});
@@ -75,17 +87,36 @@ export class LocalizationPipeline {
     for(const [index,{crop,rotated,angle,keys}] of shortlist.entries()){
       progress(`Comparing images ${index+1}/${shortlist.length} · ${candidates.length} proposals`);const {pairs}=await this.matcher.matchImages(crop.image,rotated,keys);if(pairs.length<12)continue;
       const ground=pairs.flatMap(p=>{const world=crop.world(p.reference);return world?[{world,query:rotated.unrotate(p.query)}]:[]});const proposal=JSON.parse(this.propose(JSON.stringify(this.camera),JSON.stringify(ground)));
+      if(this.options.similarityCandidates)groundMatches.push({ground,source_index:index});
       if(!proposal.retrieved||proposal.retrieval_inliers<10)continue;
       if(Math.hypot(...proposal.position_enu_m.map((v,i)=>v-position[i]))>prior.radius_m)continue;
-      candidates.push({...proposal,angle,crop:crop.key});
+      candidates.push({...proposal,angle,crop:crop.key,crop_center:crop.world([(crop.image.width-1)/2,(crop.image.height-1)/2])});
     }
     const matchingEnd=performance.now();
     candidates.sort((a,b)=>b.retrieval_inliers-a.retrieval_inliers);
     const chosen=candidates.slice(0,this.options.candidates);
-    const checked=await refineCandidates(this.renderer,this.matcher,this.camera,chosen,image,observation,this.options.refinements,progress);
+    let checked=await refineCandidates(this.renderer,this.matcher,this.camera,chosen,image,observation,this.options.refinements,progress,{recoveryAllowed:false});
+    let cropSeeds=[];
+    if(!checked.candidate_hypotheses.some(h=>h.accepted)&&this.options.cropSeedRegions){
+      cropSeeds=cropPoseCandidates(candidates,position,prior,this.options.cropSeedRegions);
+      checked=await refineCandidates(this.renderer,this.matcher,this.camera,cropSeeds,image,observation,this.options.refinements,progress,{recoveryAllowed:false,firstCandidateId:chosen.length});
+    }
+    checked=await this.recoverCandidates(checked,image,observation,progress);
+    let similaritySeeds=[];
+    if(!checked.candidate_hypotheses.some(h=>h.accepted)&&this.options.similarityCandidates){
+      progress('Checking extra camera seeds…');
+      similaritySeeds=similarityCandidates(groundMatches,this.proposeNadir,this.camera,position,prior.radius_m);
+      const firstCandidateId=chosen.length+cropSeeds.length;
+      const extra=await refineReferenceCandidates(this.renderer,this.matcher,this.camera,similaritySeeds,image,observation,progress,{candidateLimit:this.options.similarityCandidates,firstCandidateId});
+      checked={...checked,...extra,seed_verification_work:extra.verification_work};
+    }
     const result=this.temporal.reacquired(checked,relativeFallback,localFallback);
     this.temporal.remember(result,image,{regional:true});
-    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length,evaluated_candidates:chosen.length},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
+    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length+cropSeeds.length+similaritySeeds.length,similarity_pose_candidates:similaritySeeds.length,similarity_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',crop_pose_candidates:cropSeeds.length,crop_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',evaluated_candidates:chosen.length+cropSeeds.length+(checked.seed_verification_work?.evaluated_candidate_ids.length??0)},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
+  }
+  async recoverCandidates(checked,image,observation,progress){
+    if(!this.options.recoveryCandidates)return checked;
+    return {...checked,...await recoverRejectedCandidates(this.renderer,this.matcher,this.camera,image,observation,progress,{limit:this.options.recoveryCandidates,passes:2})};
   }
   async localUpdate(checked,seeds,relative,image,prior,progress){
     if(!this.options.localMotionCheck||!relative)return this.temporal.label(checked,seeds,relative);
@@ -156,5 +187,5 @@ export class LocalizationPipeline {
       retrieval:{algorithm:'pose_seeds_then_current_image_geometry',stage:'retrieval_only',search_scope:'supplied reference hypotheses only; no independent geographic search',searched_pairs:0,map_crops:0,pose_candidates:candidates.length,evaluated_candidates:candidates.length},
       execution:this.matcher.diagnostics?.()??{execution:'adapter does not report device metrics'},processing_ms:performance.now()-start};
   }
-  close(){this.imageSequence?.close();this.matcher?.close();this.renderer?.free()}
+  close(){this.referenceSearch?.close();this.imageSequence?.close();this.matcher?.close();this.renderer?.free()}
 }

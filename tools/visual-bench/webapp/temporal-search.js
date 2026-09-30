@@ -15,7 +15,7 @@ export class TemporalSearch {
     const accepted=report.candidate_hypotheses.filter(h=>h.accepted),tracked=relative?.candidate_hypotheses.filter(h=>h.tracking_supported)??[];
     const context={previous_observation_sha256:this.previous?.observation,relative_alternatives:tracked,...(local?{local_map_alternatives:local.candidate_hypotheses}:{}),association:'map restart; no fusion or independence claim'};
     const fallback=local??relative;
-    if(!accepted.length&&fallback)return {...fallback,regional_search:{...context,candidate_hypotheses:report.candidate_hypotheses,decision:report.decision},reason:local?'Local camera hypotheses retained. The fresh geographic search did not produce an accepted map pose.':'Relative camera tracking. The fresh geographic search did not produce an accepted map pose.'};
+    if(!accepted.length&&fallback)return {...fallback,regional_search:{...context,candidate_hypotheses:report.candidate_hypotheses,decision:report.decision,verification_work:report.verification_work,recovery_work:report.recovery_work},reason:local?'Local camera hypotheses retained. The fresh geographic search did not produce an accepted map pose.':'Relative camera tracking. The fresh geographic search did not produce an accepted map pose.'};
     const result={...report,regional_search:context};
     if(accepted.length===1&&tracked.length===1)result.candidate_hypotheses=report.candidate_hypotheses.map(h=>h===accepted[0]?{...h,track_id:tracked[0].track_id,parent_candidate_id:tracked[0].candidate_id,continuity_break:true,relative_alternative:tracked[0],anchor_policy:context.association}:h);
     return local?{...result,accepted:false,decision:'unresolved',reason:'Regional map hypotheses restart the active search. Local map alternatives remain in the same observation.',evidence_correlation:'unknown; current-image map checks share observation and map evidence; no fusion or independent confidence'}:result;
@@ -86,17 +86,20 @@ export function poseConverged(first,second){
   return distance<.1&&2*Math.acos(Math.min(1,dot))<.001;
 }
 
-export async function refineCandidates(renderer,matcher,camera,candidates,image,observation,passes,progress,{acceptedPasses=passes}={}){
-  for(let id=0;id<candidates.length;id++){
-    let candidate=candidates[id];
+export async function refineCandidates(renderer,matcher,camera,candidates,image,observation,passes,progress,{acceptedPasses=passes,recoveryAllowed=true,initialRecovery=false,firstCandidateId=0,work}={}){
+  if(!Number.isSafeInteger(firstCandidateId)||firstCandidateId<0||firstCandidateId+candidates.length>2**32)throw Error('Invalid candidate ID range');
+  for(let index=0;index<candidates.length;index++){
+    const id=firstCandidateId+index;let candidate=candidates[index],recovery=initialRecovery;
     for(let pass=0;pass<passes;pass++){
-      progress(`Checking camera pose · candidate ${id+1}/${candidates.length} · refinement ${pass+1}`);
-      const pixels=await renderer.render_reference(id,JSON.stringify(candidate));
-      const {pairs,backend_identity}=await matcher.matchImages({gray:pixels,width:camera.width,height:camera.height},image,{query:`${observation}/query`,stage:'refinement',progress});
-      const report=JSON.parse(renderer.refine(id,JSON.stringify(pairs),backend_identity));
+      progress(`Checking camera pose · candidate ${index+1}/${candidates.length} · refinement ${pass+1}`);
+      const renderStart=performance.now(),pixels=await renderer.render_reference(id,JSON.stringify(candidate)),matchStart=performance.now();
+      const {pairs,backend_identity}=await matcher.matchImages({gray:pixels,width:camera.width,height:camera.height},image,{query:`${observation}/query`,stage:'refinement',recovery,progress});
+      const geometryStart=performance.now(),report=JSON.parse(renderer.refine(id,JSON.stringify(pairs),backend_identity));
+      if(work){work.render_ms+=matchStart-renderStart;work.matching_ms+=geometryStart-matchStart;work.geometry_ms+=performance.now()-geometryStart;work.attempts++}
       const next=report.accepted?report:report.refinement_proposal;
-      if(!next||poseConverged(candidate,next)||(report.accepted&&pass+1>=acceptedPasses))break;
-      candidate=next;
+      const retry=recoveryAllowed&&!report.accepted&&Boolean(report.refinement_proposal)&&!recovery;
+      if(!next||(poseConverged(candidate,next)&&!retry)||(report.accepted&&pass+1>=acceptedPasses))break;
+      recovery||=retry;candidate=next;
     }
   }
   return JSON.parse(renderer.select());
