@@ -16,6 +16,7 @@ mod backend;
 mod cli;
 mod error;
 mod fixture;
+mod flight;
 mod matches;
 mod offline_pack;
 mod package;
@@ -58,7 +59,10 @@ fn directory_blocking(path: &Path) -> Result<(), BenchError> {
 fn main() -> Result<(), BenchError> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter("warn,visual_bench=info")
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,visual_bench=info")),
+        )
         .init();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

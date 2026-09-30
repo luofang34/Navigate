@@ -6,8 +6,8 @@
 //! match that frame. Its image path is unused. No trajectory is extrapolated
 //! across a visual rejection.
 
-mod decoder;
-mod probe;
+pub(crate) mod decoder;
+pub(crate) mod probe;
 
 use crate::{
     BenchError,

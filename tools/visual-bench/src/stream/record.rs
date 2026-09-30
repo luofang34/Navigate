@@ -83,3 +83,6 @@ impl FrameRecord {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

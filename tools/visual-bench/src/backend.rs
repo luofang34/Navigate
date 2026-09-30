@@ -68,3 +68,39 @@ impl ImageMatcher for Backend {
         }
     }
 }
+
+impl navigate_visual::PointTracker for Backend {
+    fn features_blocking(
+        &mut self,
+        image: &image::GrayImage,
+    ) -> Result<Vec<nalgebra::Vector2<f64>>, VisualError> {
+        match self {
+            Self::Cpu(m) => navigate_visual::PointTracker::features_blocking(m, image),
+            Self::Gpu(m) => navigate_visual::PointTracker::features_blocking(m.as_mut(), image),
+            Self::Matches(_) => Err(VisualError::Invalid {
+                field: "external correspondences cannot select tracked features",
+            }),
+        }
+    }
+    fn track_points_blocking(
+        &mut self,
+        reference: &image::GrayImage,
+        query: &image::GrayImage,
+        points: &[nalgebra::Vector2<f64>],
+    ) -> Result<Vec<Option<nalgebra::Vector2<f64>>>, VisualError> {
+        match self {
+            Self::Cpu(m) => {
+                navigate_visual::PointTracker::track_points_blocking(m, reference, query, points)
+            }
+            Self::Gpu(m) => navigate_visual::PointTracker::track_points_blocking(
+                m.as_mut(),
+                reference,
+                query,
+                points,
+            ),
+            Self::Matches(_) => Err(VisualError::Invalid {
+                field: "external correspondences cannot track feature identities",
+            }),
+        }
+    }
+}

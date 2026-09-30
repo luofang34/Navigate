@@ -53,6 +53,7 @@ The worker and models stay loaded across observations. Camera-to-camera tracking
 can update the pose between map checks. These updates remain conditional on the
 initial map hypothesis and rendered terrain. They are not new independent map
 fixes. See [camera sequence processing](FLIGHT-TRACKING.md).
+Use [original video replay](FLIGHT.md) for native track and sampling experiments.
 The optional [model probe](../visual-inference/README.md) is separate from the
 public demo. Do not put research-only SuperGlue weights in the public site.
 

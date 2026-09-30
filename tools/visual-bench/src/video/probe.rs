@@ -1,5 +1,6 @@
 //! Read frame presentation times without assuming a fixed frame rate.
 
+pub(crate) mod cache;
 use crate::BenchError;
 use navigate_visual::CameraModel;
 use serde::Deserialize;
@@ -17,7 +18,7 @@ struct ProbeFrame {
     height: u32,
 }
 
-pub(super) fn timestamps_blocking(
+pub(crate) fn timestamps_blocking(
     path: &Path,
     camera: CameraModel,
 ) -> Result<Vec<u64>, BenchError> {
