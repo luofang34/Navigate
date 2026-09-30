@@ -91,3 +91,15 @@ Object.assign(pipeline.renderer,{refine:originalRefine,select:originalSelect});
 console.info('Rejected local checks retain conditional tracking and preserve both retry clocks');
 
 assert.ok(pipeline.imageSequence.current.sources.includes('observation-2'),'map rejection does not discard uploaded image observations');
+
+
+pipeline.beginSequence();await estimate(0,100);
+const searchBeforeStills=searches;let borrowedPoses=0;
+pipeline.renderer.track=()=>{borrowedPoses++;return originalTrack()};
+for(const sequence of [101,102]){
+ const still=await pipeline.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time:0,timing:'still image'},prior,sequence,()=>{});
+ assert.equal(still.retrieval.algorithm,'descriptor_shortlist_then_regional_planar_proposals');
+ assert.equal(still.regional_search.relative_alternatives.length,0);
+}
+assert.equal(searches,searchBeforeStills+2,'each still image searches the map even with a previous accepted pose');
+assert.equal(borrowedPoses,0,'unknown capture times do not enter camera-to-camera tracking');

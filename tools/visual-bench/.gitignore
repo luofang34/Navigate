@@ -7,3 +7,4 @@ __pycache__/
 /webapp/runtime/
 /webapp/models/
 /webapp/*-check.html
+/webapp/retrieval/

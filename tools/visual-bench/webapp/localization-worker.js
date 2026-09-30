@@ -3,7 +3,7 @@ import {LocalMatcher} from './inference/local.js';
 let pipeline;
 self.onmessage=async({data})=>{const {id,method,args}=data;try{
   const progress=text=>self.postMessage({id,progress:text});let value;
-  if(method==='initialize'){const [pack,camera,options={}]=args;pipeline=new LocalizationPipeline(new LocalMatcher(options),options);await pipeline.initialize(pack,camera,progress);value=true}
+  if(method==='initialize'){const [pack,camera,options={}]=args;pipeline=new LocalizationPipeline(new LocalMatcher(options),options);await pipeline.initialize(pack,camera,progress);if(options.referenceSearch){const {openReferenceSearch}=await import('./reference-search-loading.js');pipeline.referenceSearch=await openReferenceSearch(pack,progress,pipeline.matcher.matcher)}value={original_pixels:Boolean(pipeline.referenceSearch)}}
   else if(method==='beginSequence'){pipeline.beginSequence(...args);value=true}
   else if(method==='finishSequence')value=await pipeline.finishSequence();
   else if(method==='reconstructSequence')value=await pipeline.reconstructSequence(...args,progress);
@@ -20,4 +20,4 @@ self.onmessage=async({data})=>{const {id,method,args}=data;try{
   else if(method==='checkMotion')value=await pipeline.checkMotion(...args,progress);
   else if(method==='refineAt')value=await pipeline.refineAt(...args,progress);
   else throw Error('Unknown localization request');self.postMessage({id,value});
-}catch(error){self.postMessage({id,error:String(error)})}};
+}catch(error){self.postMessage({id,error:String(error)})}finally{if(method==='estimate')args[0]?.original?.bitmap?.close()}};

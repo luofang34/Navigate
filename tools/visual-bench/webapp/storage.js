@@ -1,4 +1,5 @@
 import {assetUrl} from './asset-url.js';
+import {streamFile} from './http-file.js';
 const DB='navigate-visual-offline-v1';
 export async function requestPersistence(manager=navigator.storage){if(await manager.persisted())return true;return typeof manager.persist==='function'?manager.persist():false}
 function database(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>{for(const name of ['packs','state','missions'])r.result.createObjectStore(name)};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
@@ -19,9 +20,8 @@ export async function downloadFiles(files,progress){
   progress(completed,total);
   for(const chunk of missing){
     const temp=await dir.getFileHandle(chunk.sha256+'.partial',{create:true});const writer=await temp.createWritable();
-    try{const response=await fetch(assetUrl(chunk.url));if(!response.ok||!response.body)throw Error(`Download failed: ${response.status}`);
-      const reader=response.body.getReader();let size=0;
-      while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>chunk.size){await reader.cancel();throw Error('Chunk exceeds declared size')}await writer.write(value);progress(completed+size,total)}
+    try{let size=0;
+      for await(const value of streamFile(assetUrl(chunk.url),chunk.size)){size+=value.byteLength;await writer.write(value);progress(completed+size,total)}
       await writer.close();const file=await temp.getFile();
       if(file.size!==chunk.size||await sha256(await file.arrayBuffer())!==chunk.sha256)throw Error('Chunk checksum failed');
       const target=await dir.getFileHandle(chunk.sha256+'.bin',{create:true});const output=await target.createWritable();

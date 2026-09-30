@@ -41,6 +41,7 @@ export async function exportSite(state,output,regions,source=webapp){
   await cp(source,destination,{recursive:true,filter:path=>{
     const parts=relative(source,path).split('/');if(!parts[0])return true;
     if(parts.some(part=>part.startsWith('.')||part.startsWith('qa')))return false;
+    if(parts[0]==='retrieval')return false;
     if(parts[0]==='models'&&parts.length>1)return parts.length===2&&modelNames.has(parts[1]);
     if(parts[0]==='runtime'&&parts.length>1)return parts.length===2&&runtimeNames.has(parts[1]);
     return true;
