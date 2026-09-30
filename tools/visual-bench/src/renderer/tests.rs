@@ -143,3 +143,51 @@ fn the_bench_renderer_serves_the_navigate_reference_port() -> Result<(), Box<dyn
     assert!(views.iter().all(|v| v.depth_m.iter().any(|d| *d > 0.0)));
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn oblique_depth_unprojects_to_the_rendered_ground_plane() {
+    block_on(async {
+        let camera = CameraModel {
+            width: 320,
+            height: 180,
+            fx: 230.0,
+            fy: 235.0,
+            cx: 145.5,
+            cy: 83.5,
+        };
+        let mut package = nonzero_terrain();
+        package.tiles[0].imagery = Some(RgbaImage::from_pixel(512, 512, Rgba([90, 150, 100, 255])));
+        let mut renderer = ReferenceRenderer::new(package, camera)
+            .await
+            .expect("renderer");
+        for orientation in [
+            UnitQuaternion::identity(),
+            UnitQuaternion::from_euler_angles(0.2, -0.1, 0.8),
+            UnitQuaternion::from_euler_angles(0.45, 0.2, -1.4),
+        ] {
+            let pose = CameraPose {
+                position: Vector3::new(0.0, 0.0, 100.0),
+                orientation,
+            };
+            let view = renderer.render_blocking(pose).expect("reference render");
+            let mut checked = 0_usize;
+            for y in (20..160).step_by(30) {
+                for x in (20..300).step_by(40) {
+                    let depth = view.depth_m[y * camera.width as usize + x];
+                    if depth <= 0.0 {
+                        continue;
+                    }
+                    let world =
+                        camera.unproject(&pose, Vector2::new(x as f64, y as f64), f64::from(depth));
+                    assert!(
+                        (world.z - 17.0).abs() < 0.1,
+                        "optical depth and pose must describe the same surface: pixel=({x},{y}), pose={pose:?}, world={world:?}"
+                    );
+                    checked = checked.wrapping_add(1);
+                }
+            }
+            assert!(checked >= 20, "test scene must cover the sampled image");
+        }
+    });
+}

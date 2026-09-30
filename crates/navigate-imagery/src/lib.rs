@@ -4,14 +4,18 @@
 //! provider supplies its source terms to [`plan`] and writes the package chunks.
 mod coverage;
 mod error;
+mod overviews;
 mod package;
 mod reading;
 mod source;
+mod terrain_overviews;
 mod tiles;
 
 pub use coverage::{CoveragePlan, CoverageRequest, SourceTerms, plan, tile_envelope};
 pub use error::ImageryError;
+pub use overviews::raster_overviews;
 pub use package::{Asset, Chunk, Package, PackageBuilder, TileRecord, digest};
 pub use reading::{is_digest, verify_asset};
 pub use source::{SourceAsset, SourceManifest, SourceTile};
+pub use terrain_overviews::terrain_overviews;
 pub use tiles::{Tile, tile_bounds, tile_position};

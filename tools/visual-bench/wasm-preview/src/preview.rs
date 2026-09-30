@@ -234,9 +234,62 @@ pub(crate) async fn load(
     }
     if display {
         imagery.extend(crate::display_tiles::parents(&imagery));
+    } else {
+        reference_overviews(&mut imagery, &mut elevation)?;
     }
     map.render_frames_with_terrain(ProcessedLayers::default(), imagery, elevation, 3)
         .map_err(|e| render_error("tile upload", e))
+}
+fn reference_overviews(
+    imagery: &mut Vec<AvailableRasterLayerData>,
+    elevation: &mut Vec<(WorldTileCoords, image::RgbaImage)>,
+) -> Result<(), PreviewError> {
+    let overviews = navigate_imagery::raster_overviews(
+        imagery.iter().map(|t| {
+            (
+                navigate_imagery::Tile(
+                    u32::from(u8::from(t.coords.z)),
+                    t.coords.x as u32,
+                    t.coords.y as u32,
+                ),
+                &t.image,
+            )
+        }),
+        1,
+    )
+    .map_err(|e| render_error("reference overviews", e))?;
+    imagery.extend(
+        overviews
+            .into_iter()
+            .map(
+                |(navigate_imagery::Tile(z, x, y), image)| AvailableRasterLayerData {
+                    coords: WorldTileCoords::from((x as i32, y as i32, (z as u8).into())),
+                    source: "imagery".into(),
+                    image,
+                },
+            ),
+    );
+    let parents = navigate_imagery::terrain_overviews(
+        elevation.iter().map(|(c, image)| {
+            (
+                navigate_imagery::Tile(u32::from(u8::from(c.z)), c.x as u32, c.y as u32),
+                image,
+            )
+        }),
+        1,
+    )
+    .map_err(|e| render_error("terrain overviews", e))?;
+    elevation.extend(
+        parents
+            .into_iter()
+            .map(|(navigate_imagery::Tile(z, x, y), image)| {
+                (
+                    WorldTileCoords::from((x as i32, y as i32, (z as u8).into())),
+                    image,
+                )
+            }),
+    );
+    Ok(())
 }
 fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
     let imax = manifest
