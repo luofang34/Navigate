@@ -36,6 +36,45 @@ pub trait ImageMatcher {
         reference: &GrayImage,
         query: &GrayImage,
     ) -> Result<Vec<PixelMatch>, VisualError>;
+    /// Request one additional correspondence set for the same image pair.
+    ///
+    /// Attempts start at zero. `None` means no further alternatives exist.
+    /// Pixel coordinates must refer to the unchanged input images. The caller
+    /// bounds the number of requests and applies geometry and acceptance checks.
+    /// These sets share image evidence. They are not independent measurements.
+    /// The default implementation has no alternatives and does no work.
+    ///
+    /// # Errors
+    /// Returns an error for incompatible images or a backend failure.
+    fn match_alternative_blocking(
+        &mut self,
+        _reference: &GrayImage,
+        _query: &GrayImage,
+        _attempt: u32,
+    ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
+        Ok(None)
+    }
+}
+
+impl<M: ImageMatcher + ?Sized> ImageMatcher for Box<M> {
+    fn identity(&self) -> &str {
+        (**self).identity()
+    }
+    fn match_images_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+    ) -> Result<Vec<PixelMatch>, VisualError> {
+        (**self).match_images_blocking(reference, query)
+    }
+    fn match_alternative_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+        attempt: u32,
+    ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
+        (**self).match_alternative_blocking(reference, query, attempt)
+    }
 }
 
 /// CPU patch tracking for reference views close to the camera pose prior.
