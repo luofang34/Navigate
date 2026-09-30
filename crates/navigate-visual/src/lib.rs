@@ -57,19 +57,19 @@ mod candidates;
 mod error;
 mod frame;
 mod geometry;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod local_frame;
 mod local_scene;
 mod localizer;
 mod matching;
+pub mod place_retrieval;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
 pub mod reconstruction;
 mod reference;
 mod retrieval;
 mod search;
-
-#[cfg(feature = "gpu")]
-mod gpu;
 
 pub use camera::{CameraModel, CameraPose, PosePrior};
 pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
@@ -79,6 +79,8 @@ pub use geometry::{
     CandidateEvaluation, PoseVerifier, SurfaceTrackUpdate, SurfaceTracks, TrackingMotion,
     TrackingProposal, TrackingReference,
 };
+#[cfg(feature = "gpu")]
+pub use gpu::GpuPyramidalMatcher;
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use local_scene::{
     LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,
@@ -90,6 +92,3 @@ pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{GroundCorrespondence, RetrievalProposal, planar_proposal};
 pub use search::{SearchConfig, SearchPrior, SearchTier};
-
-#[cfg(feature = "gpu")]
-pub use gpu::GpuPyramidalMatcher;
