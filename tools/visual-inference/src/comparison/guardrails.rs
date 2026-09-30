@@ -4,7 +4,7 @@ use image::GrayImage;
 use navigate_visual::ImageMatcher;
 use serde_json::{Value, json};
 pub(super) fn check_blocking(
-    matcher: &mut impl ImageMatcher,
+    matcher: &mut (impl ImageMatcher + ?Sized),
     image: &GrayImage,
 ) -> Result<Value, Error> {
     tracing::info!(check = "image identity", "matcher control");

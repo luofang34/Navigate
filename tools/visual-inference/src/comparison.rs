@@ -8,7 +8,7 @@ use navigate_visual::{
     Frame, FrameStamp, ImageMatcher, LocalFrame, LocalizerConfig, MapRevision, PoseVerifier,
     ReferenceView,
 };
-use navigate_visual_onnx::{OnnxMatcher, initialize_blocking};
+use navigate_visual_onnx::initialize_blocking;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Instant};
@@ -31,18 +31,14 @@ pub(super) fn run_blocking() -> Result<(), Error> {
     let mut models = Vec::new();
     for model in &suite.models {
         let start = Instant::now();
-        let mut matcher = OnnxMatcher::load_blocking(
-            model.files(root),
-            suite.provider.execution(),
-            suite.keypoints,
-        )?;
+        let mut matcher = model.load_blocking(root, suite.provider.execution(), suite.keypoints)?;
         let load_ms = start.elapsed().as_secs_f64() * 1000.0;
         let first = suite.cases.first().ok_or("suite has no cases")?;
         let image = image::open(root.join(&first.reference))?.to_luma8();
-        let controls = guardrails::check_blocking(&mut matcher, &image)?;
+        let controls = guardrails::check_blocking(matcher.as_mut(), &image)?;
         models.push(json!({"backend":matcher.identity(),"load_ms":load_ms,"controls":controls}));
         for case in &suite.cases {
-            let report = match evaluate_blocking(case, root, &mut matcher) {
+            let report = match evaluate_blocking(case, root, matcher.as_mut()) {
                 Ok(report) => report,
                 Err(error) => {
                     json!({"case":case.id,"backend":matcher.identity(),"error":error_chain(error.as_ref())})
@@ -63,7 +59,11 @@ pub(super) fn run_blocking() -> Result<(), Error> {
     }
     Ok(())
 }
-fn evaluate_blocking(case: &Case, root: &Path, matcher: &mut OnnxMatcher) -> Result<Value, Error> {
+fn evaluate_blocking(
+    case: &Case,
+    root: &Path,
+    matcher: &mut dyn ImageMatcher,
+) -> Result<Value, Error> {
     let query = image::open(root.join(&case.query))?.to_luma8();
     let reference_image = image::open(root.join(&case.reference))?.to_luma8();
     let depth = std::fs::read(root.join(&case.depth))?;

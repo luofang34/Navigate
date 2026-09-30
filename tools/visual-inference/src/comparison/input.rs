@@ -1,7 +1,7 @@
 //! Explicit fixed-reference comparison inputs.
 use nalgebra::{Quaternion, UnitQuaternion};
 use navigate_visual::{CameraModel, CameraPose, PosePrior};
-use navigate_visual_onnx::{ExecutionConfig, MatcherFiles, Provider};
+use navigate_visual_onnx::{ExecutionConfig, MatcherFiles, OnnxMatcher, Provider};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 #[derive(Deserialize)]
@@ -29,6 +29,11 @@ pub(super) enum Model {
         detector: PathBuf,
         matcher: Option<PathBuf>,
     },
+    Lightglue {
+        detector: PathBuf,
+        matcher: PathBuf,
+        image_size: [usize; 2],
+    },
     Superglue {
         detector: PathBuf,
         matcher: PathBuf,
@@ -36,8 +41,22 @@ pub(super) enum Model {
     },
 }
 impl Model {
-    pub fn files(&self, root: &Path) -> MatcherFiles {
-        match self {
+    pub fn load_blocking(
+        &self,
+        root: &Path,
+        execution: ExecutionConfig,
+        keypoints: usize,
+    ) -> Result<Box<dyn navigate_visual::ImageMatcher>, Box<dyn std::error::Error>> {
+        let files = match self {
+            Self::Lightglue {
+                detector,
+                matcher,
+                image_size,
+            } => MatcherFiles::LightGlue {
+                detector: root.join(detector),
+                matcher: root.join(matcher),
+                image_size: *image_size,
+            },
             Self::Xfeat { path } => MatcherFiles::XFeat {
                 model: root.join(path),
             },
@@ -58,7 +77,10 @@ impl Model {
                 matcher: root.join(matcher),
                 image_size: *image_size,
             },
-        }
+        };
+        Ok(Box::new(OnnxMatcher::load_blocking(
+            files, execution, keypoints,
+        )?))
     }
 }
 #[derive(Deserialize)]

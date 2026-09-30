@@ -9,6 +9,15 @@ pub(crate) fn extract(
     size: [usize; 2],
     limit: usize,
 ) -> Result<Features, InferenceError> {
+    extract_with_threshold(session, image, size, limit, 0.005)
+}
+pub(crate) fn extract_with_threshold(
+    session: &mut Session,
+    image: &GrayImage,
+    size: [usize; 2],
+    limit: usize,
+    threshold: f32,
+) -> Result<Features, InferenceError> {
     let [width, height] = detector_size(session, image)?;
     let input = preprocessing::prepare(image, width, height, 1)?;
     let tensor = Tensor::from_array(([1, 1, height, width], input.data.clone()))
@@ -47,7 +56,7 @@ pub(crate) fn extract(
             let x = i % width;
             let y = i / width;
             let p = input.pixel([x as f64, y as f64]);
-            (*score > 0.005 && preprocessing::inside(p, image)).then_some((x, y, p, *score))
+            (*score > threshold && preprocessing::inside(p, image)).then_some((x, y, p, *score))
         })
         .collect();
     selected.sort_by(|a, b| b.3.total_cmp(&a.3));
@@ -87,20 +96,33 @@ fn heatmap(logits: &[f32], width: usize, height: usize) -> Vec<f32> {
     heat
 }
 fn maximum(values: &[f32], width: usize, height: usize) -> Vec<f32> {
-    let mut output = vec![0.0; values.len()];
-    for y in 0..height {
-        for x in 0..width {
-            let mut value = 0.0_f32;
-            for yy in y.saturating_sub(4)..=(y + 4).min(height - 1) {
-                for xx in x.saturating_sub(4)..=(x + 4).min(width - 1) {
-                    value = value.max(values[yy * width + xx]);
-                }
+    // A square maximum is separable. Two line passes keep the exact suppression rule.
+    let mut horizontal = vec![0.0; values.len()];
+    for (source, target) in values
+        .chunks_exact(width)
+        .zip(horizontal.chunks_exact_mut(width))
+    {
+        for (x, output) in target.iter_mut().enumerate() {
+            *output = source[x.saturating_sub(4)..=(x + 4).min(width - 1)]
+                .iter()
+                .copied()
+                .fold(0.0_f32, f32::max);
+        }
+    }
+    let mut output = vec![0.0_f32; values.len()];
+    for (y, row) in output.chunks_exact_mut(width).enumerate() {
+        for yy in y.saturating_sub(4)..=(y + 4).min(height - 1) {
+            for (value, candidate) in row
+                .iter_mut()
+                .zip(&horizontal[yy * width..(yy + 1) * width])
+            {
+                *value = (*value).max(*candidate);
             }
-            output[y * width + x] = value;
         }
     }
     output
 }
+
 fn suppress(heat: &[f32], width: usize, height: usize) -> Vec<f32> {
     let max = maximum(heat, width, height);
     let mut keep: Vec<_> = heat.iter().zip(max).map(|(v, m)| *v == m).collect();

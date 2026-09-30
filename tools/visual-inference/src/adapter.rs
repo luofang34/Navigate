@@ -1,7 +1,7 @@
 //! Model selection is separate from execution provider selection.
 use crate::{
-    ExecutionConfig, InferenceError, features, lighterglue, native_runtime, superpoint, xfeat,
-    xfeat_dense,
+    ExecutionConfig, InferenceError, LightGlueMatcher, features, lighterglue, native_runtime,
+    superpoint, xfeat, xfeat_dense,
 };
 use image::GrayImage;
 use navigate_visual::{ImageMatcher, PixelMatch, VisualError};
@@ -11,6 +11,15 @@ use std::path::PathBuf;
 
 /// Exports supported by the concrete native adapters.
 pub enum MatcherFiles {
+    /// SuperPoint and full-depth LightGlue exports with embedded weights.
+    LightGlue {
+        /// Dense SuperPoint score-logit and descriptor model.
+        detector: PathBuf,
+        /// Pixel-keypoint LightGlue assignment model.
+        matcher: PathBuf,
+        /// Width and height embedded in the matcher's coordinate normalization.
+        image_size: [usize; 2],
+    },
     /// Sparse XFeat export with 800 by 600 model coordinates.
     XFeat {
         /// Model path. Weights are not supplied by this library.
@@ -41,6 +50,7 @@ pub enum MatcherFiles {
     },
 }
 enum Model {
+    LightGlue(Box<LightGlueMatcher>),
     XFeat {
         detector: Session,
         matcher: Option<Session>,
@@ -76,13 +86,49 @@ impl OnnxMatcher {
                 "keypoint limit must be 32 through 4096".into(),
             ));
         }
-        let (model, identity) = load_model_blocking(files, &execution)?;
-        Ok(Self {
-            model,
-            identity: format!(
+        let (model, identity) = load_model_blocking(files, &execution, keypoints)?;
+        let identity = match &model {
+            Model::LightGlue(_) => identity,
+            _ => format!(
                 "{identity}/ort-requested-{:?}/kp{keypoints}",
                 execution.provider
             ),
+        };
+        Ok(Self {
+            model,
+            identity,
+            keypoints,
+        })
+    }
+    /// Load LightGlue with an exact full-feature profile and dynamic-count fallback.
+    ///
+    /// Model/device profiles need separate quality, memory, and latency checks.
+    /// The pixel matcher contract and geometric acceptance policy do not change.
+    ///
+    /// # Errors
+    /// Rejects other model families, incompatible dimensions, and runtime failures.
+    pub fn load_profiled_blocking(
+        files: MatcherFiles,
+        execution: ExecutionConfig,
+        keypoints: usize,
+    ) -> Result<Self, InferenceError> {
+        let MatcherFiles::LightGlue {
+            detector,
+            matcher,
+            image_size,
+        } = files
+        else {
+            return Err(InferenceError::Invalid(
+                "feature profiles require LightGlue".into(),
+            ));
+        };
+        let adapter = LightGlueMatcher::load_profiled_blocking(
+            &detector, &matcher, image_size, keypoints, &execution,
+        )?;
+        let identity = adapter.identity().to_owned();
+        Ok(Self {
+            model: Model::LightGlue(Box::new(adapter)),
+            identity,
             keypoints,
         })
     }
@@ -96,6 +142,7 @@ impl OnnxMatcher {
             return Ok(vec![]);
         }
         match &mut self.model {
+            Model::LightGlue(matcher) => matcher.pairs_blocking(first, second),
             Model::XFeat {
                 detector,
                 matcher,
@@ -223,8 +270,20 @@ fn glue(
 fn load_model_blocking(
     files: MatcherFiles,
     execution: &ExecutionConfig,
+    keypoints: usize,
 ) -> Result<(Model, String), InferenceError> {
     Ok(match files {
+        MatcherFiles::LightGlue {
+            detector,
+            matcher,
+            image_size,
+        } => {
+            let adapter = LightGlueMatcher::load_blocking(
+                &detector, &matcher, image_size, keypoints, execution,
+            )?;
+            let identity = adapter.identity().to_owned();
+            (Model::LightGlue(Box::new(adapter)), identity)
+        }
         MatcherFiles::XFeat { model } => {
             let hash = digest_blocking(&model)?;
             (
@@ -258,31 +317,7 @@ fn load_model_blocking(
             detector,
             matcher,
             image_size,
-        } => {
-            if image_size
-                .iter()
-                .any(|d| *d < 64 || *d > 1920 || d % 8 != 0)
-            {
-                return Err(InferenceError::Invalid(
-                    "SuperGlue normalization size must match its export".into(),
-                ));
-            }
-            let identity = format!(
-                "superpoint-superglue-v1/{}/{}/{}x{}",
-                digest_blocking(&detector)?,
-                digest_blocking(&matcher)?,
-                image_size[0],
-                image_size[1]
-            );
-            (
-                Model::SuperGlue {
-                    detector: native_runtime::session_blocking(&detector, execution)?,
-                    matcher: native_runtime::session_blocking(&matcher, execution)?,
-                    size: image_size,
-                },
-                identity,
-            )
-        }
+        } => load_superglue_blocking(detector, matcher, image_size, execution)?,
     })
 }
 
@@ -307,6 +342,37 @@ fn load_dense_blocking(
                 .map(|p| native_runtime::session_blocking(&p, execution))
                 .transpose()?,
             dense: true,
+        },
+        identity,
+    ))
+}
+
+fn load_superglue_blocking(
+    detector: PathBuf,
+    matcher: PathBuf,
+    image_size: [usize; 2],
+    execution: &ExecutionConfig,
+) -> Result<(Model, String), InferenceError> {
+    if image_size
+        .iter()
+        .any(|d| *d < 64 || *d > 1920 || d % 8 != 0)
+    {
+        return Err(InferenceError::Invalid(
+            "SuperGlue normalization size must match its export".into(),
+        ));
+    }
+    let identity = format!(
+        "superpoint-superglue-v1/{}/{}/{}x{}",
+        digest_blocking(&detector)?,
+        digest_blocking(&matcher)?,
+        image_size[0],
+        image_size[1]
+    );
+    Ok((
+        Model::SuperGlue {
+            detector: native_runtime::session_blocking(&detector, execution)?,
+            matcher: native_runtime::session_blocking(&matcher, execution)?,
+            size: image_size,
         },
         identity,
     ))
