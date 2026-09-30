@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use super::DataUri;
 #[test]
 fn storage_names_cannot_escape_the_root() {
