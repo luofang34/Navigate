@@ -289,12 +289,20 @@ Frames between these searches retain an explicit deferred result. They do not
 receive a pose from the previous frame. Independent still images each run a
 new search, even when their capture times are unknown.
 
-A host can set `mapIntervalSeconds` for local map checks and
-`regionalIntervalSeconds` for area searches. Both default to five seconds.
-`recoveryIntervalSeconds` bounds area retries when tracking has no supported
-pose. It also defaults to five seconds. Local checks retain relative
-alternatives and do not postpone the area-search clock. Both checks run when
-their clocks expire on the same observation. A failed area search does not
+A host can set `mapIntervalSeconds` for local map checks. The default is five
+seconds. An area search runs on the first frame and when tracking stays lost.
+Tracking is lost after one deferred frame and `recoveryIntervalSeconds` (default
+five seconds) since the last supported pose. Until then, each frame tracks from
+the last supported pose again. The recovery search is centred on that pose. Its
+radius is `reacquisitionRadiusM` (default 40 m) plus `maximumSpeedMps` (default
+25 m/s) multiplied by the elapsed time, and never larger than the prior. It
+compares as many image pairs per map crop as the search of the whole prior.
+Hypotheses closer than 15 m and 10 degrees are tracked as one pose. A host can
+also set `regionalIntervalSeconds` to run an area
+search at an interval while tracking continues. By default, no timed area search
+runs. Local checks retain relative alternatives and do not postpone the
+area-search clock. Both checks run when their clocks expire on the same
+observation. A failed area search does not
 discard a supported local map pose. A successful area search restarts the active
 candidate set. The report retains the local map and relative alternatives.
 These alternatives prevent a unique-fix claim. Local geometry does not establish
