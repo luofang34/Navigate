@@ -19,5 +19,5 @@ pub mod rejection;
 
 pub use config::FusionConfig;
 pub use navigation_filter::NavigationFilter;
-pub use observation::{Observation, ObservationValue};
+pub use observation::{MeasurementKind, Observation, ObservationValue};
 pub use rejection::{IngestOutcome, RejectionCounters, RejectionReason};

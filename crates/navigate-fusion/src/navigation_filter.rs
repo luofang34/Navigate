@@ -253,6 +253,11 @@ impl NavigationFilter {
                 velocity,
                 covariance,
             } => self.apply_velocity(velocity, covariance, obs.stamp.acquired_at),
+            ObservationValue::Range { .. }
+            | ObservationValue::Pseudorange { .. }
+            | ObservationValue::VisualPose { .. } => Err(RejectionReason::UnsupportedMeasurement {
+                kind: obs.value.kind(),
+            }),
         }
     }
 
@@ -431,6 +436,9 @@ fn check_composition(composition: SourceComposition) -> Result<(), RejectionReas
 }
 
 fn check_value(value: &ObservationValue) -> Result<(), RejectionReason> {
+    if !value.is_supported() {
+        return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
+    }
     let covariance = match value {
         ObservationValue::PositionFix {
             position,
@@ -449,6 +457,11 @@ fn check_value(value: &ObservationValue) -> Result<(), RejectionReason> {
                 return Err(RejectionReason::NonFiniteValue);
             }
             covariance
+        }
+        ObservationValue::Range { .. }
+        | ObservationValue::Pseudorange { .. }
+        | ObservationValue::VisualPose { .. } => {
+            return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
         }
     };
     if !covariance.is_plausible()

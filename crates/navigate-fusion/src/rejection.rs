@@ -7,6 +7,8 @@
 use navigate_contract::{
     ClockDomainId, DurationNanos, MonotonicNanos, SourceEpoch, WrappingSequence,
 };
+
+use crate::observation::MeasurementKind;
 use thiserror::Error;
 
 /// The result of offering one observation to the filter.
@@ -123,6 +125,13 @@ pub enum RejectionReason {
         /// The configured gate threshold.
         threshold: f64,
     },
+    /// The observation needs a measurement model that this build does not
+    /// have. The value is reserved vocabulary (ADR-0008), not silently dropped.
+    #[error("measurement model {kind:?} is not available in this build")]
+    UnsupportedMeasurement {
+        /// The measurement model the observation needs.
+        kind: MeasurementKind,
+    },
 }
 
 /// Per-reason rejection counters; every refusal increments exactly one.
@@ -155,6 +164,8 @@ pub struct RejectionCounters {
     pub not_initialized: u64,
     /// Refusals by the innovation gate.
     pub innovation_gate: u64,
+    /// Refusals of measurements whose model this build does not have.
+    pub unsupported_measurement: u64,
 }
 
 impl RejectionCounters {
@@ -173,6 +184,7 @@ impl RejectionCounters {
             }
             RejectionReason::NotInitialized => &mut self.not_initialized,
             RejectionReason::InnovationGate { .. } => &mut self.innovation_gate,
+            RejectionReason::UnsupportedMeasurement { .. } => &mut self.unsupported_measurement,
         };
         *counter = counter.wrapping_add(1);
     }
