@@ -115,7 +115,7 @@ See [Pages deployment](PAGES.md) for the public build.
 1. Select a region, or download an area or route corridor.
 2. Set the precise prior, position radius, height above ground, and sensor FOV.
 3. Download the package and wait for its checksum checks.
-4. Select images or one video. Images use filename order. For video, choose a frame or a sampled sequence.
+4. Select images or one video, or select **Use a live camera**. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time processes the newest decoded frame after each estimate. It pauses a video file during an area search. It cannot pause a live camera, so a live pose is only as recent as the last completed estimate.
 5. Choose matching detail. Higher detail costs more time and memory.
 6. Select **Estimate camera pose**. Results appear after each frame.
 7. Select a frame and a geometric hypothesis. Use **Cancel processing** to stop.
