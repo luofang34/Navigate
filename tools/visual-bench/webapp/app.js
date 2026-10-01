@@ -30,7 +30,7 @@ const dataService=new DataService();const request=(url,value)=>dataService.reque
 async function storageStatus(){const e=await navigator.storage.estimate(),persisted=await navigator.storage.persisted();$('storage-status').textContent=`${formatBytes(e.usage||0)} used / ${formatBytes(e.quota||0)} quota · ${persisted?'Persistent permission granted':'Best effort storage'}`}
 async function prepareOfflineStorage(){await storage.requestPersistence();await storageStatus()}
 function drawPrior(){if(!region)return;const [w,s,e,n]=region.bounds;const lat=+$('latitude').value,lon=+$('longitude').value;const merc=v=>Math.asinh(Math.tan(v*Math.PI/180));$('prior-dot').style.left=(lon-w)/(e-w)*100+'%';$('prior-dot').style.top=(merc(n)-merc(lat))/(merc(n)-merc(s))*100+'%'}
-function enable(){$('attach-video').disabled=busy||mediaLoading||!mission||mission.view.frames.some(f=>f.timing_scope==='still image');$('export-track').disabled=busy||!mission;$('missions').disabled=busy;$('frames').disabled=mediaLoading||!reviewContext?.frames.length;$('hypotheses').disabled=mediaLoading||!$('hypotheses').options.length;$('frame-time').disabled=mediaLoading||(busy&&!reviewContext);$('cancel').disabled=!activePipeline;$('video').controls=true;for(const id of ['region','latitude','longitude','radius','agl','fov','heading','input','live-camera','period','max-frames','download','video-mode','matching-quality','fetch-coverage'])$(id).disabled=busy;const ready=pack&&region&&pack.pack_id===region.pack_id;$('download').disabled=busy||!region;$('input').disabled=busy||mediaLoading;$('locate').disabled=busy||mediaLoading||!(ready&&input&&media);$('track-overview').disabled=$('reset').disabled=$('zoom-in').disabled=$('zoom-out').disabled=!map.preview;$('fetch-coverage').disabled=busy||dataService.static}
+function enable(){$('attach-video').disabled=busy||mediaLoading||!mission||mission.view.frames.some(f=>f.timing_scope==='still image');$('export-track').disabled=busy||!mission;$('missions').disabled=busy;$('frames').disabled=mediaLoading||!reviewContext?.frames.length;$('hypotheses').disabled=mediaLoading||!$('hypotheses').options.length;$('frame-time').disabled=mediaLoading||(busy&&!reviewContext);$('cancel').disabled=!activePipeline;$('video').controls=true;for(const id of ['region','latitude','longitude','radius','agl','fov','heading','camera-direction','input','live-camera','period','max-frames','download','video-mode','matching-quality','fetch-coverage'])$(id).disabled=busy;const ready=pack&&region&&pack.pack_id===region.pack_id;$('download').disabled=busy||!region;$('input').disabled=busy||mediaLoading;$('locate').disabled=busy||mediaLoading||!(ready&&input&&media);$('track-overview').disabled=$('reset').disabled=$('zoom-in').disabled=$('zoom-out').disabled=!map.preview;$('fetch-coverage').disabled=busy||dataService.static}
 async function chooseRegion(preservePrior=false){pipelineSession.close();pack=null;clearObservation('No observation selected for this region.');region=regions.find(r=>r.id===$('region').value);if(!region){$('pack-status').textContent='Download a new area or route to begin.';enable();return}$('overview').src=assetUrl(region.thumbnail);if(!preservePrior)[$('latitude').value,$('longitude').value]=region.anchor_lat_lon;drawPrior();enable();
   $('pack-status').textContent=`${formatBytes(region.bytes)} · prepared imagery and terrain`;
   const saved=await storage.get('packs',region.pack_id);
@@ -68,17 +68,23 @@ function prepareSoon(){clearTimeout(prepareTimer);prepareTimer=setTimeout(()=>{
   const task=(async()=>{const pipeline=await pipelineSession.acquire(selectedPack,cam,matchingOptions($('matching-quality').value),()=>{});await pipeline.prepareReferences(selectedPrior,()=>{})})();
   const current=task.catch(()=>{}).finally(()=>{if(preparing===current)preparing=null});preparing=current;
 },500)}
-for(const id of ['latitude','longitude','radius','agl','fov','heading','matching-quality'])$(id).addEventListener('change',prepareSoon);
+for(const id of ['latitude','longitude','radius','agl','fov','heading','camera-direction','matching-quality'])$(id).addEventListener('change',prepareSoon);
 // A recorded position inside the stored area becomes the prior, so a video can be localized without
-// typing a location. A position outside the area leaves the prior unchanged.
+// typing a location. The notice states each value taken from the file; the fields stay editable.
 async function priorFromVideo(file){
-  const location=await videoLocation(file);if(!location||!region)return;
+  const notice=$('prior-source');notice.hidden=true;notice.textContent='';
+  const found=await videoLocation(file);if(!found||!region)return;
   const [west,south,east,north]=region.bounds;
-  if(location.longitude<west||location.longitude>east||location.latitude<south||location.latitude>north)return;
-  $('latitude').value=location.latitude;$('longitude').value=location.longitude;drawPrior();
-  $('input-name').textContent+=' · prior from the recorded position';
+  if(found.longitude<west||found.longitude>east||found.latitude<south||found.latitude>north){
+    notice.textContent=`${file.name} records ${found.latitude.toFixed(5)}, ${found.longitude.toFixed(5)}, outside this area. The prior is unchanged.`;notice.hidden=false;return;
+  }
+  const used=[`position ${found.latitude.toFixed(5)}, ${found.longitude.toFixed(5)}`];
+  $('latitude').value=found.latitude;$('longitude').value=found.longitude;drawPrior();
+  if(Number.isFinite(found.heading_deg)){$('heading').value=Math.round(found.heading_deg);used.push(`camera heading ${Math.round(found.heading_deg)}°`)}
+  if(Number.isFinite(found.gimbal_pitch_deg)&&Math.abs(found.gimbal_pitch_deg+90)<=15){$('camera-direction').value='down';used.push(`camera straight down (gimbal ${found.gimbal_pitch_deg}°)`)}
+  notice.textContent=`Prior from ${file.name}: ${used.join(' · ')}. The fields below show these values. Change them to override.`;notice.hidden=false;
 }
-function priorValues(){return {region_id:region.id,pack_id:pack.pack_id,latitude:+$('latitude').value,longitude:+$('longitude').value,radius_m:+$('radius').value,agl_m:+$('agl').value,fov_deg:+$('fov').value,...($('heading').value===''?{}:{heading_deg:+$('heading').value}),sample_period:+$('period').value,max_frames:+$('max-frames').value}}
+function priorValues(){return {region_id:region.id,pack_id:pack.pack_id,latitude:+$('latitude').value,longitude:+$('longitude').value,radius_m:+$('radius').value,agl_m:+$('agl').value,fov_deg:+$('fov').value,...($('heading').value===''?{}:{heading_deg:+$('heading').value}),camera_down:$('camera-direction').value==='down',sample_period:+$('period').value,max_frames:+$('max-frames').value}}
 $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(),cam=camera();let pipeline;busy=true;clearObservation('Preparing this observation.');enable();try{
   if(!media)throw Error('Select a decoded image or video first');await prepareOfflineStorage();await requireOfflinePack(pack,()=>{pack=null;pipelineSession.close();$('pack-status').textContent='Offline data is missing or corrupt. Store this area offline to repair it.';enable()});
   clearTimeout(prepareTimer);await preparing;await loadMap(cam);const loading=pipelineSession.acquire(selectedPack,cam,matchingOptions($('matching-quality').value),status);activePipeline=pipelineSession.current;enable();pipeline=await loading;await pipeline.beginSequence();

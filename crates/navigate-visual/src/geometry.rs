@@ -83,6 +83,30 @@ impl PoseVerifier {
         matches: &[PixelMatch],
         matcher_identity: &str,
     ) -> CandidateEvaluation {
+        self.evaluate_with_motion(
+            frame,
+            reference,
+            prior,
+            matches,
+            matcher_identity,
+            TrackingMotion::Free,
+        )
+    }
+
+    /// Evaluate a candidate with an explicit motion assumption.
+    ///
+    /// `FixedTilt` holds the tilt of the reference pose and fits translation and rotation about
+    /// ENU up. The host must justify it, for example with a camera on a downward gimbal; it is
+    /// not a measured attitude.
+    pub fn evaluate_with_motion(
+        &self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+        matches: &[PixelMatch],
+        matcher_identity: &str,
+        motion: TrackingMotion,
+    ) -> CandidateEvaluation {
         if matcher_identity.is_empty() {
             return CandidateEvaluation {
                 acceptance: Err(VisualError::Invalid {
@@ -92,7 +116,7 @@ impl PoseVerifier {
             };
         }
         let (pose, inliers, depth_matches) =
-            match self.fit_candidate(frame, reference, prior, matches, pose_solver::Motion::Free) {
+            match self.fit_candidate(frame, reference, prior, matches, motion.solver()) {
                 Ok(fitted) => fitted,
                 Err(error) => {
                     return CandidateEvaluation {

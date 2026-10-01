@@ -1,6 +1,7 @@
 // Cameras such as DJI drones and phones store the recording position as an ISO 6709 string in a
-// `©xyz` box inside `moov`. Only box headers and the `moov` box are read, so a large video file is
-// never loaded whole.
+// `©xyz` box inside `moov`. DJI also stores the attitude at the start of recording as text boxes:
+// aircraft yaw `©fyw`, gimbal yaw relative to the aircraft `©gyw` and gimbal pitch `©gpt`, in
+// degrees. Only box headers and the `moov` box are read, so a large video file is never loaded whole.
 const MAX_MOOV_BYTES=64*1024*1024;
 
 async function bytes(file,start,end){return new Uint8Array(await file.slice(start,end).arrayBuffer())}
@@ -37,6 +38,24 @@ export function findLocation(moov){
  return null;
 }
 
+function textBox(moov,name){
+ const tag=[0xa9,...name].map(c=>typeof c==='number'?c:c.charCodeAt(0));
+ for(let i=4;i+8<=moov.length;i++){
+  if(tag.some((value,k)=>moov[i+k]!==value))continue;
+  const length=new DataView(moov.buffer,moov.byteOffset+i+4,2).getUint16(0);
+  return new TextDecoder().decode(moov.subarray(i+8,i+8+length)).replace(/\0+$/,'');
+ }
+ return null;
+}
+
+// The position, plus the camera heading (direction of the image top) and gimbal pitch when present.
+export function videoMetadata(moov){
+ const location=findLocation(moov);if(!location)return null;
+ const number=name=>{const value=Number.parseFloat(textBox(moov,name)??'');return Number.isFinite(value)?value:null};
+ const yaw=number('fyw'),gimbalYaw=number('gyw'),pitch=number('gpt');
+ return {...location,...(yaw!==null?{heading_deg:(((yaw+(gimbalYaw??0))%360)+360)%360}:{}),...(pitch!==null?{gimbal_pitch_deg:pitch}:{})};
+}
+
 export async function videoLocation(file){
- try{const moov=await moovBox(file);return moov?findLocation(moov):null}catch{return null}
+ try{const moov=await moovBox(file);return moov?videoMetadata(moov):null}catch{return null}
 }

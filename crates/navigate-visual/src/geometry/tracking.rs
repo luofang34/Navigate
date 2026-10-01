@@ -30,6 +30,15 @@ pub enum TrackingMotion {
     FixedTilt,
 }
 
+impl TrackingMotion {
+    pub(crate) fn solver(self) -> crate::pose_solver::Motion {
+        match self {
+            Self::Free => crate::pose_solver::Motion::Free,
+            Self::FixedTilt => crate::pose_solver::Motion::FixedTilt,
+        }
+    }
+}
+
 /// A relative tracking result, conditional on a previous pose and surface depth.
 ///
 /// This is not an independent geographic measurement. It has no absolute
@@ -99,10 +108,7 @@ impl PoseVerifier {
     ) -> Result<TrackingProposal, VisualError> {
         let (observation_sha256, reference_observation_sha256) =
             validate_tracking(frame, &reference, matcher_identity)?;
-        let solver_motion = match motion {
-            TrackingMotion::Free => crate::pose_solver::Motion::Free,
-            TrackingMotion::FixedTilt => crate::pose_solver::Motion::FixedTilt,
-        };
+        let solver_motion = motion.solver();
         let (pose, inliers, depth_matches) =
             self.fit_candidate(frame, reference.surface, prior, matches, solver_motion)?;
         let (quality, _) = self.assess(
