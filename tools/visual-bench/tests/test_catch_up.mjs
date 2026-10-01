@@ -7,7 +7,7 @@ assert.equal(buffer.frames[0].time,10,'the buffer keeps only the newest maxSecon
 assert.equal(buffer.frames.length,21,'frames are sampled at the buffer rate');
 assert.equal(buffer.next(10).time,11,'a supported pose tracks one hop forward');
 buffer.settle(true);assert.equal(buffer.hop,1.5);
-const hop=buffer.next(11);assert.equal(hop.time,12.5,'a supported hop widens the next hop');assert.equal(hop.catch_up,true);
+const hop=buffer.next(11);assert.equal(hop.time,12.5,'a supported hop widens the next hop');assert.equal(hop.catch_up,'hop');
 buffer.settle(false);assert.equal(buffer.hop,.75);
 assert.equal(buffer.next(11).time,12,'a failed hop retries closer to the same supported pose');
 buffer.settle(false);buffer.settle(false);assert.equal(buffer.hop,.5);

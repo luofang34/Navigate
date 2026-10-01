@@ -12,7 +12,9 @@ export function supportedPose(result){return Boolean(result?.candidate_hypothese
 
 // Frames presented while an estimate runs are sampled into a bounded buffer. Once a pose is supported,
 // the loop tracks forward through the buffer in hops of `hop` media seconds, faster than the source
-// plays, until the pose is current again. A failed hop halves the hop and retries closer to the supported pose; a supported hop widens it.
+// plays, until the pose is current again. A failed hop halves the hop and retries closer to the
+// supported pose; a supported hop widens it. A hop above the minimum is marked cheap to retry; the
+// nearest frame gets the full tracking and map checks.
 export class CatchUp {
  constructor({rateHz=2,maxSeconds=120,minHop=.5,maxHop=4}={}){Object.assign(this,{rateHz,maxSeconds,minHop,maxHop});this.frames=[];this.tried=new Set();this.hop=1}
  wants(mediaTime){const last=this.frames.at(-1);return !last||mediaTime-last.time>=1/this.rateHz}
@@ -25,7 +27,7 @@ export class CatchUp {
   const newest=this.frames.at(-1);if(!newest||newest.time-anchor<=this.hop)return null;
   const open=this.frames.filter(f=>!this.tried.has(f.time)),frame=open.find(f=>f.time>=anchor+this.hop)??open.at(-1);
   if(!frame)return null;
-  this.tried.add(frame.time);return {...frame,catch_up:true};
+  this.tried.add(frame.time);return {...frame,catch_up:this.hop>this.minHop?'hop':'nearest'};
  }
  settle(supported){this.hop=supported?Math.min(this.maxHop,this.hop*1.5):Math.max(this.minHop,this.hop/2)}
 }

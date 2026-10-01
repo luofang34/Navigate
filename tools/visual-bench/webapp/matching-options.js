@@ -8,6 +8,13 @@ export function matchingOptions(mode='balanced') {
   return structuredClone(profiles[mode]);
 }
 
+// A compass heading H (direction of the image top) aligns the camera image with north-up map crops
+// after a rotation of 360-H degrees. Without a heading every rotation is searched.
+export function searchAngles(count,headingDeg,toleranceDeg=30){
+  const all=headingAngles(count);if(!Number.isFinite(headingDeg)||!(toleranceDeg<180))return all;
+  const expected=((360-headingDeg)%360+360)%360,near=all.filter(a=>{const d=Math.abs(a-expected)%360;return Math.min(d,360-d)<=toleranceDeg});
+  return near.length?near:all;
+}
 export function headingAngles(count=8){
   if(!Number.isInteger(count)||count<4||count>72)throw Error('Invalid heading search count');
   return Array.from({length:count},(_,i)=>i*360/count);
