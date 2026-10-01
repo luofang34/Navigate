@@ -5,7 +5,7 @@ import {refineScenePaths} from './scene-path-refinement.js';
 import {registerScenePaths} from './scene-map.js';
 import {diverseShortlist} from './shortlist.js';
 import {TemporalSearch,refineCandidates,localMapContinuations} from './temporal-search.js';
-import {headingAngles} from './matching-options.js';
+import {headingAngles,searchAngles} from './matching-options.js';
 import {LocalMatcher} from './inference/local.js';
 import {ReferencePack} from './reference-pack.js';
 import {read,saveImageTracks,loadImageTracks,saveSceneReconstruction,loadSceneReconstruction,saveSceneRegistration} from './storage.js';
@@ -17,6 +17,16 @@ const STRONG_PROPOSAL_INLIERS=30;
 // Buffered frames that catch a stale pose up to the live frame check the map less often, so tracking
 // gains on the source; the pose still receives a map check every few buffered hops.
 const CATCH_UP_MAP_FACTOR=3;
+// A recovery search keeps the heading of the last supported pose; the tolerance grows with the time
+// the camera could have turned since then.
+// Tracking is often lost during a fast turn (the DJI_0029 test flight yaws at up to about 80 degrees
+// per second), so the window widens quickly and a loss of a few seconds searches every rotation.
+const HEADING_TOLERANCE_DEG=30,MAXIMUM_TURN_DEG_PER_S=60;
+// Compass direction of the image top (+y of the eye frame) projected onto the ground plane.
+export function cameraHeading([x,y,z,w]){
+  const east=2*(x*y-w*z),north=1-2*(x*x+z*z);
+  return ((Math.atan2(east,north)*180/Math.PI)+360)%360;
+}
 // A search around the last supported pose compares as many image pairs per map crop as the search of
 // the whole prior, never fewer than enough to fill the refined candidate set.
 export function searchBudget({shortlist,candidates},crops,priorCrops){
@@ -49,13 +59,19 @@ export class LocalizationPipeline {
     const crops=this.references.crops(prior,this.camera,this.options.scales);
     await this.matcher.prepareReferences?.(crops,progress);return crops.length;
   }
-  reacquisitionArea(prior,seeds,captureTimeNs){
-    const last=this.temporal.previous;if(!seeds.length||!last||!Number.isFinite(last.capture_time_ns))return prior;
+  // After the first supported pose, every later area search is centred on the last supported pose
+  // and keeps its heading; both bounds widen with the time since then. That pose supersedes a heading
+  // entered for the start of the run.
+  reacquisitionArea(prior,captureTimeNs){
+    const last=this.temporal.lastPose;if(!last||!Number.isFinite(last.capture_time_ns))return prior;
     const seconds=Math.max(0,(captureTimeNs-last.capture_time_ns)/1e9),radius=Math.min(prior.radius_m,(this.options.reacquisitionRadiusM??40)+(this.options.maximumSpeedMps??25)*seconds);
-    if(radius>=prior.radius_m)return prior;
+    const headingTolerance=HEADING_TOLERANCE_DEG+MAXIMUM_TURN_DEG_PER_S*seconds,{heading_deg:_heading,heading_tolerance_deg:_tolerance,...area}=prior;
+    const turn=headingTolerance<180?{heading_deg:cameraHeading(last.eye_to_enu_xyzw),heading_tolerance_deg:headingTolerance}:{};
+    if(radius>=prior.radius_m)return {...area,...turn,search_scope:'heading of the last supported pose'};
     // The prior height keeps the crop plan inside the limit the prior itself was checked against.
-    return {...prior,...geographicPosition(this.pack,seeds[0].position_enu_m.slice(0,2)),radius_m:radius,search_scope:'last supported pose'};
+    return {...area,...geographicPosition(this.pack,last.position_enu_m.slice(0,2)),radius_m:radius,...turn,search_scope:'last supported pose'};
   }
+
   async estimate(image,prior,sequence,progress){const start=performance.now();consumeOriginalPixels(image);const terrain=this.references.elevation(prior.latitude,prior.longitude);const position=localPosition(this.pack,prior.latitude,prior.longitude,terrain+prior.agl_m);
     const navigationPrior=this.navigationPrior(prior,position);this.renderer.begin(image.gray,JSON.stringify(navigationPrior),sequence,Math.round(image.time*1e9));
     const observation=JSON.parse(this.renderer.select()).observation_sha256;
@@ -66,10 +82,10 @@ export class LocalizationPipeline {
     // Supported tracking and map checks carry the pose; a timed area search is an explicit host choice.
     let regionalDue=!temporalEnabled||(this.options.regionalIntervalSeconds!=null&&this.temporal.regionalDue(captureTimeNs,this.options.regionalIntervalSeconds))||(!seeds.length&&this.temporal.regionalDue(captureTimeNs,this.options.recoveryIntervalSeconds??5)),relativeFallback=null,localCheck=null,localFallback=null;
     if(seeds.length){
-      const relative=await this.temporal.track(this.renderer,this.matcher,this.camera,seeds,image,observation,progress,adjacent?.reference===this.temporal.previous?.observation?adjacent.result:undefined,{alternatives:!image.catch_up});
+      const relative=await this.temporal.track(this.renderer,this.matcher,this.camera,seeds,image,observation,progress,adjacent?.reference===this.temporal.previous?.observation?adjacent.result:undefined,{alternatives:image.catch_up!=='hop'});
       let report=relative;
-      // A failed catch-up hop retries a closer buffered frame, which costs less than a map check.
-      if((!relative&&!image.catch_up)||this.temporal.mapDue(captureTimeNs,(this.options.mapIntervalSeconds??5)*(image.catch_up?CATCH_UP_MAP_FACTOR:1),this.options.mapMotionFraction?{candidates:relative.candidate_hypotheses.filter(h=>h.tracking_supported),camera:this.camera,agl_m:prior.agl_m,fraction:this.options.mapMotionFraction}:undefined)){
+      // A failed long catch-up hop retries a closer buffered frame, which costs less than a map check.
+      if((!relative&&image.catch_up!=='hop')||this.temporal.mapDue(captureTimeNs,(this.options.mapIntervalSeconds??5)*(image.catch_up?CATCH_UP_MAP_FACTOR:1),this.options.mapMotionFraction?{candidates:relative.candidate_hypotheses.filter(h=>h.tracking_supported),camera:this.camera,agl_m:prior.agl_m,fraction:this.options.mapMotionFraction}:undefined)){
         progress('Checking camera hypotheses against map imagery…');
         const initials=relative?relative.candidate_hypotheses.filter(h=>h.tracking_supported):seeds;
         localCheck=await refineCandidates(this.renderer,this.matcher,this.camera,initials,image,observation,this.options.refinements,progress,{acceptedPasses:2});
@@ -106,14 +122,17 @@ export class LocalizationPipeline {
         execution:{matching:this.matcher.diagnostics?.(),retrieval:this.referenceSearch.diagnostics?.()},stage_ms:{retrieval:retrievalMs,verification:performance.now()-start-retrievalMs},processing_ms:performance.now()-start};
     }
     const temporalMs=performance.now()-start;let stoppedEarly=null;
-    const search=this.reacquisitionArea(prior,seeds,captureTimeNs),searchPosition=localPosition(this.pack,search.latitude,search.longitude,this.references.elevation(search.latitude,search.longitude)+search.agl_m);
+    const search=this.reacquisitionArea(prior,captureTimeNs),recovery=search!==prior,searchPosition=localPosition(this.pack,search.latitude,search.longitude,this.references.elevation(search.latitude,search.longitude)+search.agl_m);
     const crops=this.references.crops(search,this.camera,this.options.scales),candidates=[],groundMatches=[];let searched=0;
     const coarseWidth=Math.round(image.width/Math.max(image.width,image.height)*80)*8,coarseHeight=Math.round(image.height/Math.max(image.width,image.height)*80)*8;
     const coarse=gray(image.canvas,coarseWidth,coarseHeight);
-    const queries=headingAngles(this.options.headings).map(angle=>{const rotated=rotate(coarse,angle),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle,key:`${observation}/angle/${angle}`}});
+    const angles=searchAngles(this.options.headings,search.heading_deg,search.heading_tolerance_deg),queries=angles.map(angle=>{const rotated=rotate(coarse,angle),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle,key:`${observation}/angle/${angle}`}});
     searched=crops.length*queries.length;
     if(search===prior)this.priorCrops=crops.length;
-    const budget=searchBudget(this.options,crops.length,search===prior?crops.length:this.priorCrops);
+    // A heading entered for the start of the run removes implausible rotations, and the pair budget
+    // shrinks with them. A recovery search keeps the pairs per crop of the whole-prior search, because a
+    // camera that lost tracking is often turning and its heading window is wide.
+    const budget=Math.max(this.options.candidates*(recovery?6:3),Math.ceil(searchBudget(this.options,crops.length,search===prior?crops.length:this.priorCrops)*(recovery?1:angles.length/this.options.headings)));
     const indices=this.matcher.retrievePairs?await this.matcher.retrievePairs(crops,queries,(this.options.diverse?crops.length*queries.length:budget),progress):queries.flatMap((_,q)=>crops.map((_,r)=>({reference_index:r,query_index:q})));
     const selected=this.options.diverse?diverseShortlist(indices,crops,queries,budget):indices;
     const shortlist=selected.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key,progress}}));
@@ -148,7 +167,7 @@ export class LocalizationPipeline {
     }
     const result=this.temporal.reacquired(checked,relativeFallback,localFallback);
     this.temporal.remember(result,image,{regional:true});
-    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,compared_pairs:stoppedEarly??shortlist.length,search_area:{latitude:search.latitude,longitude:search.longitude,radius_m:search.radius_m,scope:search.search_scope??'navigation prior'},shortlist_stop:stoppedEarly?`${this.options.candidates} proposals with at least ${STRONG_PROPOSAL_INLIERS} retrieval inliers`:'shortlist exhausted',search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length+cropSeeds.length+similaritySeeds.length,similarity_pose_candidates:similaritySeeds.length,similarity_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',crop_pose_candidates:cropSeeds.length,crop_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',evaluated_candidates:chosen.length+cropSeeds.length+(checked.seed_verification_work?.evaluated_candidate_ids.length??0)},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
+    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,compared_pairs:stoppedEarly??shortlist.length,search_area:{latitude:search.latitude,longitude:search.longitude,radius_m:search.radius_m,...(Number.isFinite(search.heading_deg)?{heading_deg:search.heading_deg,heading_tolerance_deg:search.heading_tolerance_deg??30,rotations:angles.length}:{}),scope:search.search_scope??'navigation prior'},shortlist_stop:stoppedEarly?`${this.options.candidates} proposals with at least ${STRONG_PROPOSAL_INLIERS} retrieval inliers`:'shortlist exhausted',search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length+cropSeeds.length+similaritySeeds.length,similarity_pose_candidates:similaritySeeds.length,similarity_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',crop_pose_candidates:cropSeeds.length,crop_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',evaluated_candidates:chosen.length+cropSeeds.length+(checked.seed_verification_work?.evaluated_candidate_ids.length??0)},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
   }
   async recoverCandidates(checked,image,observation,progress){
     if(!this.options.recoveryCandidates)return checked;

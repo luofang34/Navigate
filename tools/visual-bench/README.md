@@ -113,7 +113,7 @@ See [Pages deployment](PAGES.md) for the public build.
 ## Use the demo
 
 1. Select a region, or download an area or route corridor.
-2. Set the precise prior, position radius, height above ground, and sensor FOV.
+2. Set the precise prior, position radius, height above ground, and sensor FOV. If you know the compass direction of the image top, set **Camera heading**. The first search then compares only image rotations within 30 degrees of it, with a pair budget that shrinks to match.
 3. Download the package and wait for its checksum checks.
 4. Select images or one video, or select **Use a live camera**. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time follows the source clock and never pauses it. While a long estimate runs, such as the first area search, frames go into a buffer (2 per second, 120 s at most). After a supported pose, tracking steps through the buffer in hops of up to 4 s until the pose is current, and then uses the newest frame. During catch-up, map checks run at one third of their normal rate, and a failed hop retries a nearer buffered frame without a map check.
 5. Choose matching detail. Higher detail costs more time and memory.
@@ -293,10 +293,14 @@ A host can set `mapIntervalSeconds` for local map checks. The default is five
 seconds. An area search runs on the first frame and when tracking stays lost.
 Tracking is lost after one deferred frame and `recoveryIntervalSeconds` (default
 five seconds) since the last supported pose. Until then, each frame tracks from
-the last supported pose again. The recovery search is centred on that pose. Its
-radius is `reacquisitionRadiusM` (default 40 m) plus `maximumSpeedMps` (default
-25 m/s) multiplied by the elapsed time, and never larger than the prior. It
-compares as many image pairs per map crop as the search of the whole prior.
+the last supported pose again. Every later area search is centred on the last
+supported pose. Its radius is `reacquisitionRadiusM` (default 40 m) plus
+`maximumSpeedMps` (default 25 m/s) multiplied by the elapsed time, and never
+larger than the prior. It keeps the heading of that pose within 30 degrees plus
+60 degrees per elapsed second, so after a few seconds it compares every rotation.
+It compares as many image pairs per map crop as the search of the whole prior,
+and at least six times the refined candidate count. A heading entered for the
+start of the run is not used after the first supported pose.
 Hypotheses closer than 15 m and 10 degrees are tracked as one pose. A host can
 also set `regionalIntervalSeconds` to run an area
 search at an interval while tracking continues. By default, no timed area search

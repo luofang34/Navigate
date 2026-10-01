@@ -10,7 +10,7 @@ export function distinctPoses(hypotheses){
   return kept;
 }
 export class TemporalSearch {
-  constructor(){this.previous=null;this.lostSinceNs=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null;this.lastMapCandidates=[]}
+  constructor(){this.previous=null;this.lastPose=null;this.lostSinceNs=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null;this.lastMapCandidates=[]}
   regionalDue(captureTimeNs,intervalSeconds=5){
     if(!Number.isFinite(intervalSeconds)||intervalSeconds<=0)throw Error('Invalid geographic search interval');
     return this.lastRegionalSearchNs===null||captureTimeNs<this.lastRegionalSearchNs||captureTimeNs-this.lastRegionalSearchNs>=intervalSeconds*1e9;
@@ -52,6 +52,7 @@ export class TemporalSearch {
     }));
     if(regional||map)this.lastMapCandidates=structuredClone(candidates);
     const steps=report.decision==='relative_tracking'?((this.previous?.steps??0)+1)>>>0:0;
+    if(candidates.length)this.lastPose={position_enu_m:[...candidates[0].position_enu_m],eye_to_enu_xyzw:[...candidates[0].eye_to_enu_xyzw],capture_time_ns:report.capture_time_ns};
     this.previous=candidates.length?{observation:report.observation_sha256,candidates,steps,report:structuredClone(report),
       image:image?{gray:image.gray.slice(),width:image.width,height:image.height}:null,
       sequence:report.sequence,capture_time_ns:report.capture_time_ns}:null;

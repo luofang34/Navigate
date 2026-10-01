@@ -17,14 +17,15 @@ async function mapChecks(catchUp,{tracking=true}={}){
     refine(id){checks++;return JSON.stringify({candidate_id:id,accepted:true,...pose(1)})}
   };
   for(let sequence=0;sequence<=(tracking?15:2);sequence++)
-    await pipeline.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time:sequence*2,timing:'decoded video',catch_up:catchUp&&sequence>0},{latitude:0,longitude:0,agl_m:100,radius_m:500},sequence,()=>{});
+    await pipeline.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time:sequence*2,timing:'decoded video',catch_up:sequence>0?catchUp:undefined},{latitude:0,longitude:0,agl_m:100,radius_m:500},sequence,()=>{});
   return checks;
 }
-const live=await mapChecks(false),catching=await mapChecks(true);
+const live=await mapChecks(false),catching=await mapChecks('hop');
 assert.ok(catching*2<live,`catch-up frames check the map less often: ${catching} against ${live}`);
 assert.ok(catching>=1,'catch-up frames still receive map checks');
-alternatives=0;assert.equal(await mapChecks(true,{tracking:false}),0,'a failed catch-up hop defers without a map check');
+alternatives=0;assert.equal(await mapChecks('hop',{tracking:false}),0,'a failed catch-up hop defers without a map check');
 assert.equal(alternatives,0,'a failed catch-up hop does not try alternative matchers');
 await mapChecks(false,{tracking:false});assert.ok(alternatives>0,'a failed live frame still tries alternative matchers');
+assert.ok(await mapChecks('nearest',{tracking:false})>0,'the nearest buffered frame still checks the map when tracking fails');
 assert.ok(await mapChecks(false,{tracking:false})>0,'a failed live frame still checks the map');
 console.info('Catch-up frames space map checks so tracking gains on the source');
