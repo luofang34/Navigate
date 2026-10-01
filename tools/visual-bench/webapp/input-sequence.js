@@ -36,6 +36,8 @@ export function sequenceTrack(frames){
 export function videoTimes(duration,start,{mode='whole',period=.2,maxFrames=120}={}){
  if(!Number.isFinite(duration)||duration<=0||!Number.isFinite(start)||start<0||start>=duration)throw Error('Invalid video time');
  if(mode==='frame')return [start];
+ // Real-time playback selects frames from the playback clock, not a precomputed schedule.
+ if(mode==='realtime')return [];
  if(!['whole','sequence'].includes(mode)||!Number.isFinite(period)||period<.1)throw Error('Invalid video sampling interval');
  if(mode==='sequence'&&(!Number.isInteger(maxFrames)||maxFrames<1||maxFrames>120))throw Error('Invalid frame limit');
  const first=mode==='whole'?0:start,count=Math.max(1,Math.ceil((duration-.02-first)/period));
