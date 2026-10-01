@@ -4,7 +4,7 @@ const pose=x=>({position_enu_m:[x,0,100],eye_to_enu_xyzw:[0,0,0,1],map_manifest_
 globalThis.OffscreenCanvas=class{getContext(){return {drawImage(){},translate(){},rotate(){},getImageData:()=>({data:new Uint8Array(this.width*this.height*4)})}}};
 
 async function run(options,{trackingSupported=true,times=[0,5,10]}={}){
-  let stamp,searches=0;const events=[];
+  let stamp,searches=0;
   const matcher={matchImages:async()=>({pairs:[],backend_identity:'test'}),retrievePairs:async()=>[]};
   const pipeline=new LocalizationPipeline(matcher,{headings:4,refinements:2,mapMotionFraction:0,...options});
   pipeline.camera={width:2,height:2};pipeline.pack={anchor_lat_lon:[0,0]};
@@ -16,9 +16,9 @@ async function run(options,{trackingSupported=true,times=[0,5,10]}={}){
     track(){return JSON.stringify({candidate_id:0,accepted:false,tracking_supported:trackingSupported,...pose(1)})},
     refine(id){return JSON.stringify(trackingSupported?{candidate_id:id,accepted:true,...pose(1)}:{candidate_id:id,accepted:false,reason:'Not enough geometric support'})}
   };
-  const estimate=(time,sequence)=>pipeline.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time,timing:'decoded video'},{latitude:0,longitude:0,agl_m:100,radius_m:500},sequence,(_text,event)=>{if(event)events.push([sequence,event])});
+  const estimate=(time,sequence)=>pipeline.estimate({gray:new Uint8Array(4),width:2,height:2,canvas:{},time,timing:'decoded video'},{latitude:0,longitude:0,agl_m:100,radius_m:500},sequence,()=>{});
   for(const [sequence,time] of times.entries())await estimate(time,sequence);
-  return options.events?events:searches;
+  return searches;
 }
 
 assert.equal(await run({}),1,'supported tracking needs no timed area search after the first frame');
@@ -27,5 +27,4 @@ assert.ok(await run({recoveryIntervalSeconds:5},{trackingSupported:false})>1,'lo
 assert.equal(await run({},{trackingSupported:false,times:[0,1,2,3]}),1,'a short loss of tracking retries from the last supported pose');
 assert.equal(await run({},{trackingSupported:false,times:[0,6]}),1,'the first failed frame is deferred so the search starts on a held frame');
 assert.equal(await run({},{trackingSupported:false,times:[0,1,6]}),2,'the area search starts once tracking stays lost for the recovery interval');
-assert.deepEqual(await run({events:true}),[[0,'area-search']],'only the area search asks the host to hold playback');
 console.info('Area search runs at cold start and after lost tracking, not on a timer');

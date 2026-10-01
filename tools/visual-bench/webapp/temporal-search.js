@@ -56,7 +56,7 @@ export class TemporalSearch {
       image:image?{gray:image.gray.slice(),width:image.width,height:image.height}:null,
       sequence:report.sequence,capture_time_ns:report.capture_time_ns}:null;
   }
-  async track(renderer,matcher,camera,seeds,image,observation,progress,prepared){
+  async track(renderer,matcher,camera,seeds,image,observation,progress,prepared,{alternatives=true}={}){
     if(!this.previous?.image||typeof renderer.track!=='function')return null;
     progress('Tracking between camera frames…');
     const keys={reference:`${this.previous.observation}/query`,query:`${observation}/query`,stage:'tracking',progress};
@@ -71,7 +71,7 @@ export class TemporalSearch {
       this.lastAttempt=proposals;return proposals;
     };
     let proposals=await verify(prepared??await matcher.matchImages(this.previous.image,image,keys));
-    if(!proposals.some(h=>h.tracking_supported)&&matcher.matchAlternatives){
+    if(alternatives&&!proposals.some(h=>h.tracking_supported)&&matcher.matchAlternatives){
       for await(const matches of matcher.matchAlternatives(this.previous.image,image,keys)){
         proposals=await verify(matches);if(proposals.some(h=>h.tracking_supported))break;
       }
