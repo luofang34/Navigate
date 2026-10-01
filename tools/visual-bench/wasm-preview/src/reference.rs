@@ -78,20 +78,64 @@ impl Preview {
         camera: navigate_visual::CameraModel,
         pose: navigate_visual::CameraPose,
     ) {
-        for (i, d) in depth.iter_mut().enumerate() {
-            if *d <= 0.0 {
-                continue;
-            }
-            let p = Vector2::new(
-                (i % camera.width as usize) as f64,
-                (i / camera.width as usize) as f64,
-            );
-            let world = camera.unproject(&pose, p, f64::from(*d));
+        let valid = |x: usize, y: usize, d: f32| {
+            let world = camera.unproject(&pose, Vector2::new(x as f64, y as f64), f64::from(d));
             let xy = self.frame.mercator_xy(world);
-            let terrain = self.map.rendered_terrain_sample_cached(xy);
-            if !self.coverage.supports(xy) || !terrain.is_some_and(|t| t.covered && t.dem_loaded) {
-                *d = 0.0;
+            self.coverage.supports(xy)
+                && self
+                    .map
+                    .rendered_terrain_sample_cached(xy)
+                    .is_some_and(|t| t.covered && t.dem_loaded)
+        };
+        mask_blocks(depth, camera.width as usize, camera.height as usize, valid);
+    }
+}
+
+/// Mask blocks are evaluated at their corners; coverage and DEM availability vary at tile scale.
+const MASK_BLOCK: usize = 8;
+
+/// Zeroes depth where `valid` rejects the surface point. A block whose four corners are valid keeps
+/// its pixels and a block whose four corners are invalid is cleared; mixed blocks are checked pixel
+/// by pixel. Clearing can only drop depth, so no rejected surface point is kept.
+fn mask_blocks(
+    depth: &mut [f32],
+    width: usize,
+    height: usize,
+    valid: impl Fn(usize, usize, f32) -> bool,
+) {
+    let check = |depth: &[f32], x: usize, y: usize| {
+        let d = depth[y * width + x];
+        d > 0.0 && valid(x, y, d)
+    };
+    let columns = width.div_ceil(MASK_BLOCK) + 1;
+    let rows = height.div_ceil(MASK_BLOCK) + 1;
+    let corner = |i: usize, extent: usize| (i * MASK_BLOCK).min(extent - 1);
+    let corners: Vec<bool> = (0..rows * columns)
+        .map(|k| {
+            check(
+                depth,
+                corner(k % columns, width),
+                corner(k / columns, height),
+            )
+        })
+        .collect();
+    for by in 0..rows - 1 {
+        for bx in 0..columns - 1 {
+            let block = [(bx, by), (bx + 1, by), (bx, by + 1), (bx + 1, by + 1)]
+                .map(|(cx, cy)| corners[cy * columns + cx]);
+            let whole = block.iter().all(|&v| v);
+            let none = block.iter().all(|&v| !v);
+            for y in by * MASK_BLOCK..((by + 1) * MASK_BLOCK).min(height) {
+                for x in bx * MASK_BLOCK..((bx + 1) * MASK_BLOCK).min(width) {
+                    let i = y * width + x;
+                    if depth[i] > 0.0 && (none || !(whole || check(depth, x, y))) {
+                        depth[i] = 0.0;
+                    }
+                }
             }
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
