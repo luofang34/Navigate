@@ -4,7 +4,7 @@ import {cropPoseCandidates} from './retrieval-poses.js';
 import {refineScenePaths} from './scene-path-refinement.js';
 import {registerScenePaths} from './scene-map.js';
 import {diverseShortlist} from './shortlist.js';
-import {TemporalSearch,refineCandidates,localMapContinuations} from './temporal-search.js';
+import {TemporalSearch,refineCandidates,localMapContinuations,distinctPoses} from './temporal-search.js';
 import {headingAngles,searchAngles} from './matching-options.js';
 import {LocalMatcher} from './inference/local.js';
 import {ReferencePack} from './reference-pack.js';
@@ -17,6 +17,9 @@ const STRONG_PROPOSAL_INLIERS=30;
 // Buffered frames that catch a stale pose up to the live frame check the map less often, so tracking
 // gains on the source; the pose still receives a map check every few buffered hops.
 const CATCH_UP_MAP_FACTOR=3;
+// A gimbal set straight down still pitches with wind and manoeuvres; 25 degrees covers that and
+// excludes the strongly tilted, lower poses that a small flat ground patch can also fit.
+const DOWNWARD_TILT_RAD=25*Math.PI/180;
 // A recovery search keeps the heading of the last supported pose; the tolerance grows with the time
 // the camera could have turned since then.
 // Tracking is often lost during a fast turn (the DJI_0029 test flight yaws at up to about 80 degrees
@@ -149,7 +152,12 @@ export class LocalizationPipeline {
     }
     const matchingEnd=performance.now();
     candidates.sort((a,b)=>b.retrieval_inliers-a.retrieval_inliers);
-    const chosen=candidates.slice(0,this.options.candidates);
+    // For a camera known to look down, the straight-down seeds fitted to the same ground matches go
+    // first: planar proposals from a small flat patch are often tilted poses at a lower height, which
+    // the tilt bound rejects. Seeds that describe the same camera are refined once.
+    const chosen=prior.camera_down&&this.options.similarityCandidates
+      ?distinctPoses(similarityCandidates(groundMatches,this.proposeNadir,this.camera,position,prior.radius_m).map(s=>({...s,spatial_support:s.retrieval_support}))).slice(0,this.options.candidates)
+      :candidates.slice(0,this.options.candidates);
     let checked=await refineCandidates(this.renderer,this.matcher,this.camera,chosen,image,observation,this.options.refinements,progress,{recoveryAllowed:false});
     let cropSeeds=[];
     if(!checked.candidate_hypotheses.some(h=>h.accepted)&&this.options.cropSeedRegions){
@@ -185,7 +193,9 @@ export class LocalizationPipeline {
   }
   navigationPrior(prior,position){
     position??=localPosition(this.pack,prior.latitude,prior.longitude,this.references.elevation(prior.latitude,prior.longitude)+prior.agl_m);
-    return {pose:{position_enu_m:position,eye_to_enu_xyzw:[0,0,0,1]},position_radius_m:prior.radius_m,attitude_radius_rad:Math.PI};
+    // A camera on a downward gimbal bounds the tilt of every accepted pose; heading stays free.
+    return {pose:{position_enu_m:position,eye_to_enu_xyzw:[0,0,0,1]},position_radius_m:prior.radius_m,attitude_radius_rad:Math.PI,
+      ...(prior.camera_down?{tilt_radius_rad:DOWNWARD_TILT_RAD}:{})};
   }
   async trackFrom(reference,image,prior,sequence,progress){
     const start=performance.now(),navigationPrior=this.navigationPrior(prior),previous=reference.report;

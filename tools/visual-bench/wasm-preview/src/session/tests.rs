@@ -17,6 +17,7 @@ fn scene() -> (Session, ReferenceView, Vec<PixelMatch>) {
         pose,
         position_radius_m: 50.0,
         attitude_radius_rad: 0.5,
+        tilt_radius_rad: None,
     };
     let session =
         Session::new(camera, vec![100; 160 * 120], prior, 0, 0.0).expect("fixture observation");
@@ -163,4 +164,53 @@ fn relative_tracking_never_becomes_an_accepted_map_candidate() {
             .track(1, &previous, &reference, &pairs, "test")
             .is_err()
     );
+}
+
+#[test]
+fn downward_keeps_position_and_image_top_heading() {
+    use nalgebra::{UnitQuaternion, Vector3};
+    let tilted = navigate_visual::CameraPose {
+        position: Vector3::new(755.0, 662.0, 82.0),
+        // Heading 240 degrees (image top towards west-southwest), tilted 59 degrees.
+        orientation: UnitQuaternion::from_euler_angles(0.0, 0.0, 120f64.to_radians())
+            * UnitQuaternion::from_euler_angles(59f64.to_radians(), 0.0, 0.0),
+    };
+    assert!((super::tilt(&tilted).to_degrees() - 59.0).abs() < 1e-6);
+    let level = super::downward(&tilted);
+    assert_eq!(level.position, tilted.position);
+    assert!(super::tilt(&level) < 1e-9, "the result looks straight down");
+    let top = |p: &navigate_visual::CameraPose| {
+        let up = p.orientation.transform_vector(&Vector3::y());
+        up.x.atan2(up.y).to_degrees().rem_euclid(360.0)
+    };
+    assert!(
+        (top(&level) - top(&tilted)).abs() < 1e-6,
+        "the heading of the image top is kept"
+    );
+}
+
+#[test]
+fn the_tilt_bound_rejects_only_poses_beyond_it() {
+    use nalgebra::{UnitQuaternion, Vector3};
+    let (mut session, _, _) = scene();
+    let at = |degrees: f64| navigate_visual::CameraPose {
+        position: Vector3::new(0.0, 0.0, 150.0),
+        orientation: UnitQuaternion::from_euler_angles(degrees.to_radians(), 0.0, 0.0),
+    };
+    assert!(
+        session.check_tilt(&at(59.0)).is_ok(),
+        "without a bound every tilt is allowed"
+    );
+    assert_eq!(session.motion(), navigate_visual::TrackingMotion::Free);
+    session.tilt_radius_rad = Some(25f64.to_radians());
+    assert_eq!(
+        session.motion(),
+        navigate_visual::TrackingMotion::FixedTilt,
+        "a downward camera keeps the reference tilt"
+    );
+    assert!(session.check_tilt(&at(10.0)).is_ok());
+    assert!(matches!(
+        session.check_tilt(&at(59.0)),
+        Err(VisualError::OutsidePrior { .. })
+    ));
 }

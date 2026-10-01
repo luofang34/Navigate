@@ -18,6 +18,11 @@ struct Prior {
     pose: Pose,
     position_radius_m: f64,
     attitude_radius_rad: f64,
+    /// Maximum angle between the camera view axis and straight down. A camera on a downward gimbal
+    /// sees flat ground, where a strongly tilted pose at a lower height can fit a small matched
+    /// patch about as well as the true pose; this bound removes that alternative.
+    #[serde(default)]
+    tilt_radius_rad: Option<f64>,
 }
 #[derive(Deserialize)]
 struct Pair {
@@ -27,6 +32,7 @@ struct Pair {
 pub(crate) struct Session {
     frame: Frame,
     prior: PosePrior,
+    tilt_radius_rad: Option<f64>,
     results: CandidateResults,
     reports: BTreeMap<u32, Value>,
     active: Option<u32>,
@@ -58,6 +64,12 @@ impl Session {
                 }
             })?,
         };
+        let tilt_radius_rad = prior.tilt_radius_rad;
+        if tilt_radius_rad.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
+            return Err(PreviewError::Input {
+                reason: "invalid camera tilt bound".into(),
+            });
+        }
         let prior = PosePrior {
             pose: prior.pose.model()?,
             position_radius_m: prior.position_radius_m,
@@ -68,6 +80,7 @@ impl Session {
         Ok(Self {
             frame,
             prior,
+            tilt_radius_rad,
             results,
             reports: BTreeMap::new(),
             active: None,
@@ -97,14 +110,24 @@ impl Session {
             });
         }
         self.invalidate(id)?;
-        let evaluation = PoseVerifier::new(LocalizerConfig::default())?.evaluate(
+        let evaluation = PoseVerifier::new(LocalizerConfig::default())?.evaluate_with_motion(
             &self.frame,
             reference,
             &self.prior,
             pairs,
             backend,
+            self.motion(),
         );
-        let result = evaluation.acceptance;
+        let mut tilted = None;
+        let result = evaluation
+            .acceptance
+            .and_then(|e| match self.check_tilt(&e.pose) {
+                Ok(()) => Ok(e),
+                Err(error) => {
+                    tilted = Some(e.pose);
+                    Err(error)
+                }
+            });
         let mut report = match &result {
             Ok(e) => {
                 let p = e.pose.position;
@@ -116,7 +139,13 @@ impl Session {
                 json!({"candidate_id":id,"accepted":false,"acceptance_stage":"geometry_and_prior","reason":e.to_string()})
             }
         };
-        if result.is_err()
+        if let Some(pose) = tilted {
+            // The next refinement starts from the same position and heading looking straight down.
+            let level = downward(&pose);
+            let p = level.position;
+            let q = level.orientation.quaternion();
+            report["refinement_proposal"] = json!({"position_enu_m":[p.x,p.y,p.z],"eye_to_enu_xyzw":[q.i,q.j,q.k,q.w],"stage":"render_initialization_only","accepted":false,"reason":"tilt bound"});
+        } else if result.is_err()
             && let Some(seed) = evaluation.refinement
         {
             let p = seed.pose.position;
@@ -127,6 +156,24 @@ impl Session {
         self.results.record(CandidateId(u64::from(id)), result)?;
         self.reports.insert(id, report.clone());
         Ok(report)
+    }
+    /// A camera bounded to look down keeps the tilt of the reference render, so planar ground
+    /// cannot pull the fit to a tilted pose at a lower height.
+    pub(crate) fn motion(&self) -> navigate_visual::TrackingMotion {
+        if self.tilt_radius_rad.is_some() {
+            navigate_visual::TrackingMotion::FixedTilt
+        } else {
+            navigate_visual::TrackingMotion::Free
+        }
+    }
+    pub(crate) fn check_tilt(&self, pose: &navigate_visual::CameraPose) -> Result<(), VisualError> {
+        match self.tilt_radius_rad {
+            Some(bound) if tilt(pose) > bound => Err(VisualError::OutsidePrior {
+                meters: (pose.position - self.prior.pose.position).norm(),
+                radians: tilt(pose),
+            }),
+            _ => Ok(()),
+        }
     }
     pub(crate) fn active_observation(&self, id: u32) -> Result<String, PreviewError> {
         if self.active != Some(id) {
@@ -156,6 +203,37 @@ impl Session {
         value["geographic_accuracy"] = "not_independently_measured".into();
         value["evidence_correlation"] = "unknown; refinements share image and map evidence".into();
         value
+    }
+}
+/// Angle between the camera view axis and straight down. Eye axes are right, up and back.
+pub(crate) fn tilt(pose: &navigate_visual::CameraPose) -> f64 {
+    pose.orientation
+        .transform_vector(&nalgebra::Vector3::z())
+        .angle(&nalgebra::Vector3::z())
+}
+/// The same position and heading (the horizontal direction of the image top) looking straight down.
+pub(crate) fn downward(pose: &navigate_visual::CameraPose) -> navigate_visual::CameraPose {
+    use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
+    let up = pose.orientation.transform_vector(&Vector3::y());
+    let forward = -pose.orientation.transform_vector(&Vector3::z());
+    let horizontal = if up.xy().norm() > 1e-6 {
+        up.xy()
+    } else {
+        forward.xy()
+    };
+    let heading = if horizontal.norm() > 1e-9 {
+        horizontal.normalize()
+    } else {
+        Vector2::new(0.0, 1.0)
+    };
+    let up = Vector3::new(heading.x, heading.y, 0.0);
+    let back = Vector3::z();
+    let right = up.cross(&back);
+    navigate_visual::CameraPose {
+        position: pose.position,
+        orientation: UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(
+            Matrix3::from_columns(&[right, up, back]),
+        )),
     }
 }
 pub(crate) fn reference_provenance(report: &mut Value, reference: &ReferenceView) {

@@ -22,16 +22,19 @@ impl Session {
                 reason: "tracking reference candidate identity does not match".into(),
             });
         }
-        let result = PoseVerifier::new(LocalizerConfig::default())?.track(
-            &self.frame,
-            TrackingReference {
-                observation: previous,
-                surface: reference,
-            },
-            &self.prior,
-            pairs,
-            backend,
-        );
+        let result = PoseVerifier::new(LocalizerConfig::default())?
+            .track_with_motion(
+                &self.frame,
+                TrackingReference {
+                    observation: previous,
+                    surface: reference,
+                },
+                &self.prior,
+                pairs,
+                backend,
+                self.motion(),
+            )
+            .and_then(|e| self.check_tilt(&e.pose).map(|()| e));
         let mut report = match result {
             Ok(e) => {
                 let p = e.pose.position;
