@@ -3,6 +3,8 @@ use crate::{
     model::{Camera, Manifest, Pose},
     storage::BrowserStore,
 };
+#[cfg(test)]
+mod tests;
 use cgmath::{Matrix4, SquareMatrix};
 use maplibre::{
     coords::{LatLon, WorldTileCoords},
@@ -307,13 +309,30 @@ fn style(manifest: &Manifest, globe: bool) -> Result<Style, PreviewError> {
         .map(|t| t.xyz.0)
         .max()
         .unwrap_or(0);
-    Ok(serde_json::from_value(
-        serde_json::json!({"version":8,"center":[manifest.anchor_lat_lon[1],manifest.anchor_lat_lon[0]],"zoom":12,
-        "projection":{"type":if globe {"vertical-perspective"} else {"mercator"}},"terrain":{"source":"dem","exaggeration":1},
-        "sources":{"context":{"type":"raster","tiles":["pilotage://context/{z}/{x}/{y}"],"tileSize":512,"maxzoom":0},"imagery":{"type":"raster","tiles":["pilotage://imagery/{z}/{x}/{y}"],"tileSize":512,"maxzoom":imax},
-        "dem":{"type":"raster-dem","tiles":["pilotage://dem/{z}/{x}/{y}"],"tileSize":256,"maxzoom":dmax,"encoding":"terrarium"}},
-        "layers":[{"id":"background","type":"background","paint":{"background-color":if globe {"#254551"} else {"rgba(0,0,0,0)"}}},{"id":"context","type":"raster","source":"context","paint":{"raster-fade-duration":0}},{"id":"imagery","type":"raster","source":"imagery","paint":{"raster-fade-duration":0}}]}),
-    )?)
+    Ok(serde_json::from_value(style_json(
+        manifest.anchor_lat_lon,
+        imax,
+        dmax,
+        globe,
+    ))?)
+}
+
+/// Declares only the raster sources this renderer receives tiles for. The globe context tile
+/// is uploaded only to globe renderers; a declared source without tiles blanks the drape.
+fn style_json(anchor_lat_lon: [f64; 2], imax: u32, dmax: u32, globe: bool) -> serde_json::Value {
+    let mut sources = serde_json::json!({
+        "imagery":{"type":"raster","tiles":["pilotage://imagery/{z}/{x}/{y}"],"tileSize":512,"maxzoom":imax},
+        "dem":{"type":"raster-dem","tiles":["pilotage://dem/{z}/{x}/{y}"],"tileSize":256,"maxzoom":dmax,"encoding":"terrarium"}});
+    let mut layers = vec![serde_json::json!({"id":"background","type":"background",
+        "paint":{"background-color":if globe {"#254551"} else {"rgba(0,0,0,0)"}}})];
+    if globe {
+        sources["context"] = serde_json::json!({"type":"raster","tiles":["pilotage://context/{z}/{x}/{y}"],"tileSize":512,"maxzoom":0});
+        layers.push(serde_json::json!({"id":"context","type":"raster","source":"context","paint":{"raster-fade-duration":0}}));
+    }
+    layers.push(serde_json::json!({"id":"imagery","type":"raster","source":"imagery","paint":{"raster-fade-duration":0}}));
+    serde_json::json!({"version":8,"center":[anchor_lat_lon[1],anchor_lat_lon[0]],"zoom":12,
+        "projection":{"type":if globe {"vertical-perspective"} else {"mercator"}},
+        "terrain":{"source":"dem","exaggeration":1},"sources":sources,"layers":layers})
 }
 
 fn renderer_settings(format: Option<wgpu::TextureFormat>) -> RendererSettings {
