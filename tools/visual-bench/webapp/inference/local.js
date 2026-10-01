@@ -27,6 +27,7 @@ const base=this.options.keypoints??1024,limit=this.matcher.glue?(['refinement','
   async *matchAlternatives(reference,query){
     if(this.dense)for await(const pairs of this.dense.alternatives(reference,query))yield {pairs,backend_identity:`browser-loftr-ds-640x480/${this.denseAsset.sha256}/rotation-search-webgpu-wasm`};
   }
+  async prepareReferences(references,progress){for(const [i,reference] of references.entries()){progress(`Preparing reference images ${i+1}/${references.length}`);await this.matcher.features(reference.image,reference.key,512,'reference')}}
   async retrievePairs(references,queries,limit,progress){
     const features=[],queryFeatures=[];
     for(const [i,reference] of references.entries()){progress(`Preparing reference images ${i+1}/${references.length}`);features.push(await this.matcher.features(reference.image,reference.key,512,'reference'))}

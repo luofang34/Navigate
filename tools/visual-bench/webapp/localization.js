@@ -14,6 +14,9 @@ import {reconstructImageGroups,refineImageGroups} from './scene-sequence.js';
 import {rotate,gray,consumeOriginalPixels} from './observation.js';
 import {localPosition,geographicPosition} from './geography.js';
 const STRONG_PROPOSAL_INLIERS=30;
+// Buffered frames that catch a stale pose up to the live frame check the map less often, so tracking
+// gains on the source; the pose still receives a map check every few buffered hops.
+const CATCH_UP_MAP_FACTOR=3;
 // A search around the last supported pose compares as many image pairs per map crop as the search of
 // the whole prior, never fewer than enough to fill the refined candidate set.
 export function searchBudget({shortlist,candidates},crops,priorCrops){
@@ -40,6 +43,12 @@ export class LocalizationPipeline {
   async initialize(pack,camera,progress){const {default:init,Preview,propose,propose_nadir,SceneTracks,...sceneKernel}=await import('./wasm/navigate_visual_preview.js');await init();this.propose=propose;this.proposeNadir=propose_nadir;this.SceneTracks=SceneTracks;this.sceneKernel=sceneKernel;this.pack=pack;this.camera=camera;await this.matcher.initialize(progress);progress('Reading verified imagery and terrain…');this.references=await ReferencePack.open(pack);this.renderer=await Preview.create(JSON.stringify(pack),JSON.stringify(camera),read,false)}
   // After lost tracking the camera is near its last supported pose. The search area grows with
   // elapsed time at the maximum expected speed and never exceeds the navigation prior.
+  // Reference features depend only on the map, the prior and the camera, so a host can compute them
+  // before the first frame arrives; the first area search then reads them from the feature cache.
+  async prepareReferences(prior,progress){
+    const crops=this.references.crops(prior,this.camera,this.options.scales);
+    await this.matcher.prepareReferences?.(crops,progress);return crops.length;
+  }
   reacquisitionArea(prior,seeds,captureTimeNs){
     const last=this.temporal.previous;if(!seeds.length||!last||!Number.isFinite(last.capture_time_ns))return prior;
     const seconds=Math.max(0,(captureTimeNs-last.capture_time_ns)/1e9),radius=Math.min(prior.radius_m,(this.options.reacquisitionRadiusM??40)+(this.options.maximumSpeedMps??25)*seconds);
@@ -57,9 +66,10 @@ export class LocalizationPipeline {
     // Supported tracking and map checks carry the pose; a timed area search is an explicit host choice.
     let regionalDue=!temporalEnabled||(this.options.regionalIntervalSeconds!=null&&this.temporal.regionalDue(captureTimeNs,this.options.regionalIntervalSeconds))||(!seeds.length&&this.temporal.regionalDue(captureTimeNs,this.options.recoveryIntervalSeconds??5)),relativeFallback=null,localCheck=null,localFallback=null;
     if(seeds.length){
-      const relative=await this.temporal.track(this.renderer,this.matcher,this.camera,seeds,image,observation,progress,adjacent?.reference===this.temporal.previous?.observation?adjacent.result:undefined);
+      const relative=await this.temporal.track(this.renderer,this.matcher,this.camera,seeds,image,observation,progress,adjacent?.reference===this.temporal.previous?.observation?adjacent.result:undefined,{alternatives:!image.catch_up});
       let report=relative;
-      if(!relative||this.temporal.mapDue(captureTimeNs,this.options.mapIntervalSeconds??5,this.options.mapMotionFraction?{candidates:relative.candidate_hypotheses.filter(h=>h.tracking_supported),camera:this.camera,agl_m:prior.agl_m,fraction:this.options.mapMotionFraction}:undefined)){
+      // A failed catch-up hop retries a closer buffered frame, which costs less than a map check.
+      if((!relative&&!image.catch_up)||this.temporal.mapDue(captureTimeNs,(this.options.mapIntervalSeconds??5)*(image.catch_up?CATCH_UP_MAP_FACTOR:1),this.options.mapMotionFraction?{candidates:relative.candidate_hypotheses.filter(h=>h.tracking_supported),camera:this.camera,agl_m:prior.agl_m,fraction:this.options.mapMotionFraction}:undefined)){
         progress('Checking camera hypotheses against map imagery…');
         const initials=relative?relative.candidate_hypotheses.filter(h=>h.tracking_supported):seeds;
         localCheck=await refineCandidates(this.renderer,this.matcher,this.camera,initials,image,observation,this.options.refinements,progress,{acceptedPasses:2});
@@ -85,7 +95,7 @@ export class LocalizationPipeline {
       if(seeds.length)this.temporal.markLost(captureTimeNs);else this.temporal.remember(report,image,{map:Boolean(localCheck)});
       return report;
     }
-    progress('Searching the map area…','area-search');
+    progress('Searching the map area…');
     if(this.referenceSearch){
       const orientations=headingAngles(8).map(angle=>[0,0,Math.sin(angle*Math.PI/360),Math.cos(angle*Math.PI/360)]),retrieved=await this.referenceSearch.propose(image,prior,this.camera,this.references,progress,{orientations});
       const retrievalMs=performance.now()-start,checked=await refineReferenceCandidates(this.renderer,this.matcher,this.camera,retrieved.candidates,image,observation,progress,{candidateLimit:this.options.referenceCandidates??128});

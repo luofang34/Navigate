@@ -115,7 +115,7 @@ See [Pages deployment](PAGES.md) for the public build.
 1. Select a region, or download an area or route corridor.
 2. Set the precise prior, position radius, height above ground, and sensor FOV.
 3. Download the package and wait for its checksum checks.
-4. Select images or one video, or select **Use a live camera**. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time processes the newest decoded frame after each estimate. It pauses a video file during an area search. It cannot pause a live camera, so a live pose is only as recent as the last completed estimate.
+4. Select images or one video, or select **Use a live camera**. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time follows the source clock and never pauses it. While a long estimate runs, such as the first area search, frames go into a buffer (2 per second, 120 s at most). After a supported pose, tracking steps through the buffer in hops of up to 4 s until the pose is current, and then uses the newest frame. During catch-up, map checks run at one third of their normal rate, and a failed hop retries a nearer buffered frame without a map check.
 5. Choose matching detail. Higher detail costs more time and memory.
 6. Select **Estimate camera pose**. Results appear after each frame.
 7. Select a frame and a geometric hypothesis. Use **Cancel processing** to stop.

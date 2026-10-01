@@ -32,19 +32,6 @@ const partial=await runRealtime({video:stopped,camera:{width:4,height:3},clock:(
   capture:(_video,_camera,mediaTime)=>({time:mediaTime}),
   estimate:async(_observation,index)=>{stopped.advance(100);if(index===4)stop.abort();return {index}}});
 assert.equal(partial.summary.processed,5,'a stop request keeps the processed frames and ends the run');
-const held=fakeVideo(900);let pauses=0;
-held.pause=(()=>{const pause=held.pause;return ()=>{pauses++;pause()}})();
-const acquired=await runRealtime({video:held,camera:{width:4,height:3},clock:()=>0,
-  capture:(_video,_camera,mediaTime)=>({time:mediaTime}),
-  estimate:async(_observation,index,hold)=>{if(index===0||index===2)hold();if(index>=3)held.ended=true;return {index}}});
-assert.equal(pauses,3,'held during the two searching estimates, then paused at the end');
-assert.equal(acquired.summary.processed,4);
-const live=fakeVideo(900);let livePauses=0;
-live.pause=(()=>{const pause=live.pause;return ()=>{livePauses++;pause()}})();
-await runRealtime({video:live,camera:{width:4,height:3},clock:()=>0,holdable:false,
-  capture:(_video,_camera,mediaTime)=>({time:mediaTime}),
-  estimate:async(_observation,index,hold)=>{hold();if(index>=1)live.ended=true;return {index}}});
-assert.equal(livePauses,1,'a live source is never held; it pauses only when the run ends');
 const repeated=fakeVideo(900),times=[];
 const deliver=repeated.requestVideoFrameCallback;let calls=0;
 repeated.requestVideoFrameCallback=fn=>{calls++;if(calls===2){setTimeout(()=>fn(0,{mediaTime:0,presentedFrames:1}),0);return}deliver(fn)};

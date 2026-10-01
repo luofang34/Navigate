@@ -2,8 +2,9 @@ import {LocalizationPipeline} from './localization.js';
 import {LocalMatcher} from './inference/local.js';
 let pipeline;
 self.onmessage=async({data})=>{const {id,method,args}=data;try{
-  const progress=(text,event)=>self.postMessage({id,progress:text,...(event?{event}:{})});let value;
+  const progress=text=>self.postMessage({id,progress:text});let value;
   if(method==='initialize'){const [pack,camera,options={}]=args;pipeline=new LocalizationPipeline(new LocalMatcher(options),options);await pipeline.initialize(pack,camera,progress);if(options.referenceSearch){const {openReferenceSearch}=await import('./reference-search-loading.js');pipeline.referenceSearch=await openReferenceSearch(pack,progress,pipeline.matcher.matcher)}value={original_pixels:Boolean(pipeline.referenceSearch)}}
+  else if(method==='prepareReferences')value=await pipeline.prepareReferences(...args,progress);
   else if(method==='beginSequence'){pipeline.beginSequence(...args);value=true}
   else if(method==='finishSequence')value=await pipeline.finishSequence();
   else if(method==='reconstructSequence')value=await pipeline.reconstructSequence(...args,progress);
