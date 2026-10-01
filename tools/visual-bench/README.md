@@ -115,7 +115,7 @@ See [Pages deployment](PAGES.md) for the public build.
 1. Select a region, or download an area or route corridor.
 2. Set the precise prior, position radius, height above ground, and sensor FOV. If you know the compass direction of the image top, set **Camera heading**. The first search then compares only image rotations within 30 degrees of it, with a pair budget that shrinks to match.
 3. Download the package and wait for its checksum checks.
-4. Select images or one video, or select **Use a live camera**. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time follows the source clock and never pauses it. While a long estimate runs, such as the first area search, frames go into a buffer (2 per second, 120 s at most). After a supported pose, tracking steps through the buffer in hops of up to 4 s until the pose is current, and then uses the newest frame. During catch-up, map checks run at one third of their normal rate, and a failed hop retries a nearer buffered frame without a map check.
+4. Select images or one video, or select **Use a live camera**. If a video stores its recorded position (DJI drones and phones do this) and that position is in the stored area, the app uses it as the prior. Images use filename order. For video, choose **Real time**, a frame, or a sampled sequence. Real time follows the source clock and never pauses it. While a long estimate runs, such as the first area search, frames go into a buffer (2 per second, 120 s at most). After a supported pose, tracking steps through the buffer in hops of up to 4 s until the pose is current, and then uses the newest frame. During catch-up, map checks run at one third of their normal rate, and a failed hop retries a nearer buffered frame without a map check.
 5. Choose matching detail. Higher detail costs more time and memory.
 6. Select **Estimate camera pose**. Results appear after each frame.
 7. Select a frame and a geometric hypothesis. Use **Cancel processing** to stop.
@@ -261,6 +261,24 @@ The GPU upload counters cover the worker lifetime. Compare counter differences
 when the worker processes more than one frame. A completed evaluation can contain
 rejected frames. It is not a successful localization check.
 The public export excludes these test pages and private input files.
+
+## Library use
+
+`webapp/localize-video.js` exports `localizeVideo`. It localizes a live camera stream or a playing
+video element against an area package that is already stored offline, with the same real-time
+processing as the app:
+
+```js
+import {localizeVideo} from './localize-video.js';
+const stream=await navigator.mediaDevices.getUserMedia({video:true});
+const stop=new AbortController();
+await localizeVideo({pack,source:stream,signal:stop.signal,
+  prior:{latitude:40.5442,longitude:-74.4564,radius_m:500,agl_m:110,heading_deg:260},
+  onResult:(result,mediaTime)=>console.info(mediaTime,result.decision)});
+```
+
+`heading_deg` is optional. The call loads the models and reference features first. It returns a
+summary when the stream ends or the signal aborts.
 
 ## Video track preview
 

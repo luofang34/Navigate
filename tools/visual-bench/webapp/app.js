@@ -15,7 +15,8 @@ import {MapView,localPosition} from './map.js';
 import {hypotheses,frameLabel} from './hypotheses.js';
 import {PipelineSession} from './pipeline-session.js';
 import {openInput,frameAt,gray} from './observation.js';
-import {runRealtime,openLiveCamera} from './realtime-video.js';
+import {runRealtime,openLiveCamera,orderedInsert} from './realtime-video.js';
+import {videoLocation} from './video-location.js';
 import {cameraForImage} from './calibration.js';
 import {matchingOptions} from './matching-options.js';
 const $=id=>document.getElementById(id);const map=new MapView($('map'));let preparing=null,prepareTimer=null,realtimeStop=null,regions=[],region,pack,mission,input,queryURL,loadedCamera,busy=false,media,baseMapLabel,activePipeline,mediaLoading=false,mediaMissionId=null,reviewContext=null,frameReview=null;let inputFiles=[];
@@ -51,7 +52,7 @@ function clearObservation(message){
   baseMapLabel=$('map-label').textContent='REFERENCE VIEW · NO CAMERA POSE FOR THIS OBSERVATION';
   enable();
 }
-$('input').onchange=async()=>{mediaMissionId=null;mediaLoading=true;clearObservation('No estimate for this observation.');status('');$('query').removeAttribute('src');$('query-empty').hidden=false;enable();try{media?.close();inputFiles=selectedInputs($('input').files);input=inputFiles[0];media=null;$('input-name').textContent=input?(inputFiles.length>1?`${inputFiles.length} images · filename order; flight times unknown`:`${input.name} · ${formatBytes(input.size)}`):'No file selected';if(!input){enable();return}$('video').hidden=!input.type.startsWith('video/');media=await openInput(input,input.type.startsWith('video/')?document.createElement('video'):$('video'));if(media.type==='video'){$('video').src=media.source.src;$('video').load()}$('video-controls').hidden=media.type!=='video';if(media.type==='video'){$('video').hidden=false;$('frame-time').max=Math.max(0,media.duration-.04);$('frame-time').value=0;$('frame-time-label').textContent=`0.00 / ${media.duration.toFixed(2)} s`}else $('video').hidden=true;await previewInput();$('query').hidden=media.type==='video';enable()}catch(e){input=null;error(e)}finally{mediaLoading=false;enable();prepareSoon()}};
+$('input').onchange=async()=>{mediaMissionId=null;mediaLoading=true;clearObservation('No estimate for this observation.');status('');$('query').removeAttribute('src');$('query-empty').hidden=false;enable();try{media?.close();inputFiles=selectedInputs($('input').files);input=inputFiles[0];media=null;$('input-name').textContent=input?(inputFiles.length>1?`${inputFiles.length} images · filename order; flight times unknown`:`${input.name} · ${formatBytes(input.size)}`):'No file selected';if(!input){enable();return}$('video').hidden=!input.type.startsWith('video/');media=await openInput(input,input.type.startsWith('video/')?document.createElement('video'):$('video'));if(media.type==='video'){$('video').src=media.source.src;$('video').load();await priorFromVideo(input)}$('video-controls').hidden=media.type!=='video';if(media.type==='video'){$('video').hidden=false;$('frame-time').max=Math.max(0,media.duration-.04);$('frame-time').value=0;$('frame-time-label').textContent=`0.00 / ${media.duration.toFixed(2)} s`}else $('video').hidden=true;await previewInput();$('query').hidden=media.type==='video';enable()}catch(e){input=null;error(e)}finally{mediaLoading=false;enable();prepareSoon()}};
 async function previewInput(){if(!media||media.live)return;if(media.type==='video'&&Number.isFinite($('video').duration))$('video').currentTime=+$('frame-time').value||0;clearObservation('No estimate for this observation.');status('');const frame=await frameAt(media,+$('frame-time').value||0,camera());if(queryURL)URL.revokeObjectURL(queryURL);queryURL=URL.createObjectURL(frame.blob);$('query').src=queryURL;$('query-empty').hidden=true}
 $('live-camera').onclick=async()=>{mediaMissionId=null;mediaLoading=true;clearObservation('No estimate for this observation.');status('');enable();try{
   media?.close();media=null;$('input').value='';$('video').removeAttribute('src');media=await openLiveCamera($('video'));input={name:'Live camera',size:0};inputFiles=[];
@@ -68,6 +69,15 @@ function prepareSoon(){clearTimeout(prepareTimer);prepareTimer=setTimeout(()=>{
   const current=task.catch(()=>{}).finally(()=>{if(preparing===current)preparing=null});preparing=current;
 },500)}
 for(const id of ['latitude','longitude','radius','agl','fov','heading','matching-quality'])$(id).addEventListener('change',prepareSoon);
+// A recorded position inside the stored area becomes the prior, so a video can be localized without
+// typing a location. A position outside the area leaves the prior unchanged.
+async function priorFromVideo(file){
+  const location=await videoLocation(file);if(!location||!region)return;
+  const [west,south,east,north]=region.bounds;
+  if(location.longitude<west||location.longitude>east||location.latitude<south||location.latitude>north)return;
+  $('latitude').value=location.latitude;$('longitude').value=location.longitude;drawPrior();
+  $('input-name').textContent+=' · prior from the recorded position';
+}
 function priorValues(){return {region_id:region.id,pack_id:pack.pack_id,latitude:+$('latitude').value,longitude:+$('longitude').value,radius_m:+$('radius').value,agl_m:+$('agl').value,fov_deg:+$('fov').value,...($('heading').value===''?{}:{heading_deg:+$('heading').value}),sample_period:+$('period').value,max_frames:+$('max-frames').value}}
 $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(),cam=camera();let pipeline;busy=true;clearObservation('Preparing this observation.');enable();try{
   if(!media)throw Error('Select a decoded image or video first');await prepareOfflineStorage();await requireOfflinePack(pack,()=>{pack=null;pipelineSession.close();$('pack-status').textContent='Offline data is missing or corrupt. Store this area offline to repair it.';enable()});
@@ -79,7 +89,11 @@ $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(
     const run=await runRealtime({video,camera:cam,signal:realtimeStop.signal,estimate:async(observation,i)=>{
       const blob=observation.blob??new Promise(resolve=>observation.canvas.toBlob(resolve,'image/png'));
       const result=await pipeline.estimate(observation,selectedPrior,i,s=>status(`Real time · ${observation.time.toFixed(1)} s · ${s}`));
-      result.input_name=input.name;frames.push(result);blobs.push(await blob);$('frames').append(frameOption(result,i));trackPreview.setFrames(frames,{period:selectedPrior.sample_period});return result}});
+      result.input_name=input.name;
+      // A deferred frame only records that the pose is still being recovered; catch-up retries can also
+      // arrive out of time order.
+      if(result.decision!=='search_deferred'){orderedInsert(frames,blobs,result,await blob);$('frames').replaceChildren(...frames.map(frameOption));trackPreview.setFrames(frames,{period:selectedPrior.sample_period})}
+      return result}});
     mission=await storage.saveLocalMission({camera:cam,prior:selectedPrior,frames,input:{name:input.name,names:inputFiles.map(f=>f.name),size:inputFiles.reduce((n,f)=>n+f.size,0),processing:'browser-local real-time',calibration:'assumed full-width 4:3 sensor crop; not independently calibrated'},processing:{stage:'real-time',complete:true,realtime:run.summary}},selectedPack,blobs);
     mediaMissionId=mission.id;await refreshMissions(mission.id);await showMission(mission);
     status(`${missionSummary(frames)} · ${run.summary.processed} frames in ${(run.summary.wall_ms/1000).toFixed(1)} s · ${run.summary.dropped_frames} presented frames skipped`);await storageStatus();return;

@@ -1,5 +1,13 @@
 export function supportedPose(h){return Boolean(h&&(h.accepted||h.tracking_supported||h.scene_supported)&&h.position_enu_m?.length===3&&h.eye_to_enu_xyzw?.length===4)}
 
+// The track preview interpolates only between samples of one track closer than this period. Real-time
+// catch-up tracks buffered frames up to 4 s apart, so the period grows to the widest spacing between
+// frames, up to that hop. A loss of tracking starts a new track, which playback never bridges.
+const MAXIMUM_DISPLAY_GAP_S=4;
+export function displayGap(frames,period){
+ const times=frames.map(f=>f.capture_time_ns/1e9).filter(Number.isFinite),gaps=times.slice(1).map((t,i)=>t-times[i]).filter(g=>g>0);
+ return Math.max(period,Math.min(MAXIMUM_DISPLAY_GAP_S,gaps.length?Math.max(...gaps):0));
+}
 export function interpolatePose(a,b,t){
  const first=a.eye_to_enu_xyzw,raw=b.eye_to_enu_xyzw;
  const sign=first.reduce((s,v,i)=>s+v*raw[i],0)<0?-1:1,last=raw.map(v=>v*sign);

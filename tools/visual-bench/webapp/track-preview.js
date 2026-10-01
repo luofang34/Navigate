@@ -1,5 +1,5 @@
 import {toGlobePose} from './geography.js';
-import {playbackPose,supportedPose,connectedSamples,VideoPoseClock} from './pose-playback.js';
+import {playbackPose,supportedPose,connectedSamples,VideoPoseClock,displayGap} from './pose-playback.js';
 
 import {branchKey} from './hypotheses.js';
 import {TrackProjection,projectPoint} from './track-projection.js';
@@ -46,7 +46,7 @@ export class TrackPreview {
  }
  fail(error){this.status.textContent=String(error)}
  clear(){this.projection=null;this.selectionProjection=null;this.trackSelection=null;this.branches.clear();this.key=null;this.selectedTime=null;this.current=null;this.follow.checked=false;this.camera.disabled=true;this.status.textContent='';this.paint()}
- setFrames(frames,{period=.5}={}){this.branches=trackBranches(frames);this.maxGap=Math.max(.05,period*1.1);if(!this.branches.has(this.key))this.key=this.branches.keys().next().value??null;this.update(this.clock.time)}
+ setFrames(frames,{period=.5}={}){this.branches=trackBranches(frames);this.maxGap=Math.max(.05,displayGap(frames,period)*1.1);if(!this.branches.has(this.key))this.key=this.branches.keys().next().value??null;this.update(this.clock.time)}
  select(frame,h){this.selectedTime=frame.capture_time_ns/1e9;this.key=h?branchKey(frame,h):null;this.update(this.clock.time)}
  update(time,{notify=false}={}){
   if(this.video.hidden)time=this.selectedTime??0;

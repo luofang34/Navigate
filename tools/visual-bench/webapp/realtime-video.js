@@ -90,6 +90,11 @@ export async function openLiveCamera(video){
  return {type:'video',source:video,live:true,duration:Infinity,close(){for(const track of stream.getTracks())track.stop();video.srcObject=null}};
 }
 
+export function orderedInsert(frames,blobs,frame,blob){
+ const at=frames.findIndex(f=>f.capture_time_ns>frame.capture_time_ns),index=at<0?frames.length:at;
+ frames.splice(index,0,frame);blobs.splice(index,0,blob);return index;
+}
+
 export function grab(video,camera,mediaTime){
  const image=gray(video,camera.width,camera.height);
  return {...image,time:mediaTime,requested_time_s:mediaTime,timing:'browser decoded frame presentation timestamp; real-time playback'};
