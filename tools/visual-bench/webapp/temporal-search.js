@@ -1,6 +1,16 @@
 import {mapViewChanged} from './map-check-motion.js';
+// Hypotheses closer than these bounds describe the same camera. Tracking each copy repeats the same
+// dense work per frame without adding a geographic alternative.
+const SAME_POSE_M=15,SAME_ATTITUDE_RAD=10*Math.PI/180;
+function attitudeAngle(a,b){return 2*Math.acos(Math.min(1,Math.abs(a.reduce((sum,v,i)=>sum+v*b[i],0))))}
+export function distinctPoses(hypotheses){
+  const support=h=>h.spatial_support??h.inliers??0,kept=[];
+  for(const h of [...hypotheses].sort((a,b)=>support(b)-support(a)))
+    if(!kept.some(k=>Math.hypot(...k.position_enu_m.map((v,i)=>v-h.position_enu_m[i]))<=SAME_POSE_M&&attitudeAngle(k.eye_to_enu_xyzw,h.eye_to_enu_xyzw)<=SAME_ATTITUDE_RAD))kept.push(h);
+  return kept;
+}
 export class TemporalSearch {
-  constructor(){this.previous=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null;this.lastMapCandidates=[]}
+  constructor(){this.previous=null;this.lostSinceNs=null;this.lastRegionalSearchNs=null;this.lastMapSearchNs=null;this.lastMapCandidates=[]}
   regionalDue(captureTimeNs,intervalSeconds=5){
     if(!Number.isFinite(intervalSeconds)||intervalSeconds<=0)throw Error('Invalid geographic search interval');
     return this.lastRegionalSearchNs===null||captureTimeNs<this.lastRegionalSearchNs||captureTimeNs-this.lastRegionalSearchNs>=intervalSeconds*1e9;
@@ -11,6 +21,13 @@ export class TemporalSearch {
     if(this.lastMapSearchNs===null||elapsed<0||elapsed>=intervalSeconds*1e9)return true;
     return Boolean(motion&&elapsed>=Math.min(1,intervalSeconds)*1e9&&mapViewChanged(this.lastMapCandidates,motion.candidates,motion));
   }
+  // Lock counts as lost only after a deferred frame, so the frame that starts an area search always
+  // follows an unsupported result and a file source is held while the search runs.
+  recoveryDue(captureTimeNs,intervalSeconds=5){
+    if(!Number.isFinite(intervalSeconds)||intervalSeconds<=0)throw Error('Invalid recovery interval');
+    return this.lostSinceNs!=null&&Number.isFinite(this.previous?.capture_time_ns)&&captureTimeNs-this.previous.capture_time_ns>=intervalSeconds*1e9;
+  }
+  markLost(captureTimeNs){this.lostSinceNs??=captureTimeNs}
   reacquired(report,relative,local){
     const accepted=report.candidate_hypotheses.filter(h=>h.accepted),tracked=relative?.candidate_hypotheses.filter(h=>h.tracking_supported)??[];
     const context={previous_observation_sha256:this.previous?.observation,relative_alternatives:tracked,...(local?{local_map_alternatives:local.candidate_hypotheses}:{}),association:'map restart; no fusion or independence claim'};
@@ -26,8 +43,9 @@ export class TemporalSearch {
   }
   remember(report,image,{regional=false,map=false}={}){
     if(regional)this.lastRegionalSearchNs=report.capture_time_ns;
+    this.lostSinceNs=null;
     if(regional||map)this.lastMapSearchNs=report.capture_time_ns;
-    const candidates=report.candidate_hypotheses.filter(h=>h.accepted||h.tracking_supported).map(h=>({
+    const candidates=distinctPoses(report.candidate_hypotheses.filter(h=>h.accepted||h.tracking_supported)).map(h=>({
       candidate_id:h.candidate_id,position_enu_m:[...h.position_enu_m],eye_to_enu_xyzw:[...h.eye_to_enu_xyzw],
       tracking_anchor:h.tracking_anchor??{observation_sha256:report.observation_sha256,candidate_id:h.candidate_id,map_manifest_sha256:h.map_manifest_sha256},
       track_id:h.track_id??JSON.stringify(h.tracking_anchor??{observation_sha256:report.observation_sha256,candidate_id:h.candidate_id,map_manifest_sha256:h.map_manifest_sha256}),

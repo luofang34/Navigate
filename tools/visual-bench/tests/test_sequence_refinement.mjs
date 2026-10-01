@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {refineSequenceGaps} from '../webapp/sequence-refinement.js';
 import {LocalizationPipeline} from '../webapp/localization.js';
-const hypothesis=id=>({accepted:true,candidate_id:id,map_manifest_sha256:'map',position_enu_m:[id,0,100],eye_to_enu_xyzw:[0,0,0,1]});
+const hypothesis=id=>({accepted:true,candidate_id:id,map_manifest_sha256:'map',position_enu_m:[id*100,0,100],eye_to_enu_xyzw:[0,0,0,1]});
 const frame=(sequence,candidates=[])=>({sequence,capture_time_ns:sequence*1e9,observation_sha256:`observation-${sequence}-7`,accepted:false,decision:candidates.length?'unresolved':'rejected',candidate_hypotheses:candidates,query:`frame-${sequence}.png`});
 const pixels=()=>({gray:new Uint8Array([7,7,7,7]),width:2,height:2});
 const frames=[frame(0),frame(1),frame(2,[hypothesis(0),hypothesis(1)]),frame(3)],initial=structuredClone(frames),calls=[];

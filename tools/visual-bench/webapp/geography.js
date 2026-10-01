@@ -1,5 +1,7 @@
 export function localPosition(pack,lat,lon,height){const [lat0,lon0]=pack.anchor_lat_lon;const radians=Math.PI/180,scale=6371008.8*Math.cos(lat0*radians);return [scale*(lon-lon0)*radians,scale*(Math.asinh(Math.tan(lat*radians))-Math.asinh(Math.tan(lat0*radians))),height]}
 
+export function geographicPosition(pack,[x,y]){const [lat0,lon0]=pack.anchor_lat_lon;const radians=Math.PI/180,scale=6371008.8*Math.cos(lat0*radians);return {latitude:Math.atan(Math.sinh(Math.asinh(Math.tan(lat0*radians))+y/scale))/radians,longitude:lon0+x/scale/radians}}
+
 export function toGlobePose(pack,pose){
   const r=6371008.8,[lat0,lon0]=pack.anchor_lat_lon.map(v=>v*Math.PI/180),[x,y,h]=pose.position_enu_m;
   const lon=lon0+x/(r*Math.cos(lat0)),lat=Math.atan(Math.sinh(Math.asinh(Math.tan(lat0))+y/(r*Math.cos(lat0))));

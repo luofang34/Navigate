@@ -12,10 +12,17 @@ import {read,saveImageTracks,loadImageTracks,saveSceneReconstruction,loadSceneRe
 import {SequenceImages} from './sequence-images.js';
 import {reconstructImageGroups,refineImageGroups} from './scene-sequence.js';
 import {rotate,gray,consumeOriginalPixels} from './observation.js';
-import {localPosition} from './geography.js';
+import {localPosition,geographicPosition} from './geography.js';
+const STRONG_PROPOSAL_INLIERS=30;
+// A search around the last supported pose compares as many image pairs per map crop as the search of
+// the whole prior, never fewer than enough to fill the refined candidate set.
+export function searchBudget({shortlist,candidates},crops,priorCrops){
+  if(!priorCrops)return shortlist;
+  return Math.min(shortlist,Math.max(candidates*3,Math.ceil(shortlist*crops/priorCrops)));
+}
 export class LocalizationPipeline {
   constructor(matcher=new LocalMatcher(),options={},referenceSearch=null){this.matcher=matcher;this.referenceSearch=referenceSearch;this.temporal=new TemporalSearch();this.options={scales:[1],shortlist:24,candidates:3,refinements:2,mapMotionFraction:0,...options}}
-  beginSequence({maxFrames=64}={}){this.temporal=new TemporalSearch();this.imageSequence?.close();this.imageSequence=new SequenceImages({create:()=>new this.SceneTracks(JSON.stringify(this.camera)),matcher:this.matcher,save:saveImageTracks,camera:this.camera,maxFrames})}
+  beginSequence({maxFrames=64}={}){this.temporal=new TemporalSearch();this.priorCrops=null;this.imageSequence?.close();this.imageSequence=new SequenceImages({create:()=>new this.SceneTracks(JSON.stringify(this.camera)),matcher:this.matcher,save:saveImageTracks,camera:this.camera,maxFrames})}
   async finishSequence(){return await this.imageSequence?.finish()??[]}
   async reconstructSequence(groups,progress){return reconstructImageGroups(groups,{kernel:this.sceneKernel,load:loadImageTracks,loadScene:loadSceneReconstruction,save:saveSceneReconstruction,progress})}
   async refineScenePaths(groups,reconstruction,frames,progress){return refineScenePaths(groups,reconstruction,frames,{kernel:this.sceneKernel,load:loadImageTracks,loadScene:loadSceneReconstruction,save:saveSceneReconstruction,progress})}
@@ -31,6 +38,15 @@ export class LocalizationPipeline {
   }
   async registerScene(plan,image,prior,progress){return registerScenePaths(plan,image,prior,{renderer:this.renderer,matcher:this.matcher,kernel:this.sceneKernel,camera:this.camera,pack:this.pack,navigationPrior:p=>this.navigationPrior(p),load:loadSceneReconstruction,save:saveSceneRegistration,progress})}
   async initialize(pack,camera,progress){const {default:init,Preview,propose,propose_nadir,SceneTracks,...sceneKernel}=await import('./wasm/navigate_visual_preview.js');await init();this.propose=propose;this.proposeNadir=propose_nadir;this.SceneTracks=SceneTracks;this.sceneKernel=sceneKernel;this.pack=pack;this.camera=camera;await this.matcher.initialize(progress);progress('Reading verified imagery and terrain…');this.references=await ReferencePack.open(pack);this.renderer=await Preview.create(JSON.stringify(pack),JSON.stringify(camera),read,false)}
+  // After lost tracking the camera is near its last supported pose. The search area grows with
+  // elapsed time at the maximum expected speed and never exceeds the navigation prior.
+  reacquisitionArea(prior,seeds,captureTimeNs){
+    const last=this.temporal.previous;if(!seeds.length||!last||!Number.isFinite(last.capture_time_ns))return prior;
+    const seconds=Math.max(0,(captureTimeNs-last.capture_time_ns)/1e9),radius=Math.min(prior.radius_m,(this.options.reacquisitionRadiusM??40)+(this.options.maximumSpeedMps??25)*seconds);
+    if(radius>=prior.radius_m)return prior;
+    // The prior height keeps the crop plan inside the limit the prior itself was checked against.
+    return {...prior,...geographicPosition(this.pack,seeds[0].position_enu_m.slice(0,2)),radius_m:radius,search_scope:'last supported pose'};
+  }
   async estimate(image,prior,sequence,progress){const start=performance.now();consumeOriginalPixels(image);const terrain=this.references.elevation(prior.latitude,prior.longitude);const position=localPosition(this.pack,prior.latitude,prior.longitude,terrain+prior.agl_m);
     const navigationPrior=this.navigationPrior(prior,position);this.renderer.begin(image.gray,JSON.stringify(navigationPrior),sequence,Math.round(image.time*1e9));
     const observation=JSON.parse(this.renderer.select()).observation_sha256;
@@ -38,7 +54,8 @@ export class LocalizationPipeline {
     this.temporal.lastAttempt=[];
     const temporalEnabled=this.options.temporal!==false&&image.timing!=='still image';
     const captureTimeNs=Math.round(image.time*1e9),seeds=temporalEnabled?this.temporal.seeds(observation,position,prior.radius_m):[];
-    let regionalDue=!temporalEnabled||this.temporal.regionalDue(captureTimeNs,this.options.regionalIntervalSeconds??5)||(!seeds.length&&this.temporal.regionalDue(captureTimeNs,this.options.recoveryIntervalSeconds??5)),relativeFallback=null,localCheck=null,localFallback=null;
+    // Supported tracking and map checks carry the pose; a timed area search is an explicit host choice.
+    let regionalDue=!temporalEnabled||(this.options.regionalIntervalSeconds!=null&&this.temporal.regionalDue(captureTimeNs,this.options.regionalIntervalSeconds))||(!seeds.length&&this.temporal.regionalDue(captureTimeNs,this.options.recoveryIntervalSeconds??5)),relativeFallback=null,localCheck=null,localFallback=null;
     if(seeds.length){
       const relative=await this.temporal.track(this.renderer,this.matcher,this.camera,seeds,image,observation,progress,adjacent?.reference===this.temporal.previous?.observation?adjacent.result:undefined);
       let report=relative;
@@ -55,7 +72,7 @@ export class LocalizationPipeline {
           execution:this.matcher.diagnostics?.()??{execution:'adapter does not report device metrics'},stage_ms:{retrieval:0,learned_matching:0,geometry:performance.now()-start},processing_ms:performance.now()-start};
       }
       relativeFallback=relative;
-      if(!report)regionalDue||=this.temporal.regionalDue(captureTimeNs,this.options.recoveryIntervalSeconds??5);
+      if(!report)regionalDue||=this.temporal.recoveryDue(captureTimeNs,this.options.recoveryIntervalSeconds??5);
       this.renderer.begin(image.gray,JSON.stringify(navigationPrior),sequence,Math.round(image.time*1e9));
     }
     if(!regionalDue){
@@ -64,8 +81,11 @@ export class LocalizationPipeline {
         navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,
         retrieval:{algorithm:'scheduled_geographic_search',stage:'not_run',last_search_time_ns:this.temporal.lastRegionalSearchNs,search_scope:'deferred until the geographic search interval; this observation has no supported pose',searched_pairs:0,map_crops:0,pose_candidates:0,evaluated_candidates:0},
         execution:this.matcher.diagnostics?.()??{execution:'adapter does not report device metrics'},processing_ms:performance.now()-start};
-      this.temporal.remember(report,image,{map:Boolean(localCheck)});return report;
+      // The last supported pose stays the tracking reference until the recovery interval ends.
+      if(seeds.length)this.temporal.markLost(captureTimeNs);else this.temporal.remember(report,image,{map:Boolean(localCheck)});
+      return report;
     }
+    progress('Searching the map area…','area-search');
     if(this.referenceSearch){
       const orientations=headingAngles(8).map(angle=>[0,0,Math.sin(angle*Math.PI/360),Math.cos(angle*Math.PI/360)]),retrieved=await this.referenceSearch.propose(image,prior,this.camera,this.references,progress,{orientations});
       const retrievalMs=performance.now()-start,checked=await refineReferenceCandidates(this.renderer,this.matcher,this.camera,retrieved.candidates,image,observation,progress,{candidateLimit:this.options.referenceCandidates??128});
@@ -75,13 +95,17 @@ export class LocalizationPipeline {
         retrieval:{algorithm:'indexed_references_then_rendered_geometry',stage:'retrieval_only',search_scope:retrieved.scope,backend_identity:retrieved.backend_identity,input_image:retrieved.input_image,reference_ids:retrieved.reference_ids,unsupported_references:retrieved.unsupported_references,pose_candidates:retrieved.candidates.length,evaluated_candidates:checked.verification_work.evaluated_candidate_ids.length,unexamined_candidate_ids:checked.verification_work.unexamined_candidates.map(h=>h.candidate_id)},
         execution:{matching:this.matcher.diagnostics?.(),retrieval:this.referenceSearch.diagnostics?.()},stage_ms:{retrieval:retrievalMs,verification:performance.now()-start-retrievalMs},processing_ms:performance.now()-start};
     }
-    const temporalMs=performance.now()-start;const crops=this.references.crops(prior,this.camera,this.options.scales),candidates=[],groundMatches=[];let searched=0;
+    const temporalMs=performance.now()-start;let stoppedEarly=null;
+    const search=this.reacquisitionArea(prior,seeds,captureTimeNs),searchPosition=localPosition(this.pack,search.latitude,search.longitude,this.references.elevation(search.latitude,search.longitude)+search.agl_m);
+    const crops=this.references.crops(search,this.camera,this.options.scales),candidates=[],groundMatches=[];let searched=0;
     const coarseWidth=Math.round(image.width/Math.max(image.width,image.height)*80)*8,coarseHeight=Math.round(image.height/Math.max(image.width,image.height)*80)*8;
     const coarse=gray(image.canvas,coarseWidth,coarseHeight);
     const queries=headingAngles(this.options.headings).map(angle=>{const rotated=rotate(coarse,angle),unrotate=rotated.unrotate;rotated.unrotate=p=>{const q=unrotate(p);return [(q[0]+.5)*image.width/coarseWidth-.5,(q[1]+.5)*image.height/coarseHeight-.5]};return {image:rotated,angle,key:`${observation}/angle/${angle}`}});
     searched=crops.length*queries.length;
-    const indices=this.matcher.retrievePairs?await this.matcher.retrievePairs(crops,queries,(this.options.diverse?crops.length*queries.length:this.options.shortlist),progress):queries.flatMap((_,q)=>crops.map((_,r)=>({reference_index:r,query_index:q})));
-    const selected=this.options.diverse?diverseShortlist(indices,crops,queries,this.options.shortlist):indices;
+    if(search===prior)this.priorCrops=crops.length;
+    const budget=searchBudget(this.options,crops.length,search===prior?crops.length:this.priorCrops);
+    const indices=this.matcher.retrievePairs?await this.matcher.retrievePairs(crops,queries,(this.options.diverse?crops.length*queries.length:budget),progress):queries.flatMap((_,q)=>crops.map((_,r)=>({reference_index:r,query_index:q})));
+    const selected=this.options.diverse?diverseShortlist(indices,crops,queries,budget):indices;
     const shortlist=selected.map(({reference_index:r,query_index:q})=>({crop:crops[r],rotated:queries[q].image,angle:queries[q].angle,keys:{reference:crops[r].key,query:queries[q].key,progress}}));
     const retrievalEnd=performance.now();
     for(const [index,{crop,rotated,angle,keys}] of shortlist.entries()){
@@ -89,8 +113,10 @@ export class LocalizationPipeline {
       const ground=pairs.flatMap(p=>{const world=crop.world(p.reference);return world?[{world,query:rotated.unrotate(p.query)}]:[]});const proposal=JSON.parse(this.propose(JSON.stringify(this.camera),JSON.stringify(ground)));
       if(this.options.similarityCandidates)groundMatches.push({ground,source_index:index});
       if(!proposal.retrieved||proposal.retrieval_inliers<10)continue;
-      if(Math.hypot(...proposal.position_enu_m.map((v,i)=>v-position[i]))>prior.radius_m)continue;
+      if(Math.hypot(...proposal.position_enu_m.map((v,i)=>v-position[i]))>prior.radius_m||Math.hypot(...proposal.position_enu_m.slice(0,2).map((v,i)=>v-searchPosition[i]))>search.radius_m)continue;
       candidates.push({...proposal,angle,crop:crop.key,crop_center:crop.world([(crop.image.width-1)/2,(crop.image.height-1)/2])});
+      // The shortlist is in rank order and only the strongest `candidates` proposals are refined.
+      if(candidates.filter(c=>c.retrieval_inliers>=STRONG_PROPOSAL_INLIERS).length>=this.options.candidates){stoppedEarly=index+1;break}
     }
     const matchingEnd=performance.now();
     candidates.sort((a,b)=>b.retrieval_inliers-a.retrieval_inliers);
@@ -112,7 +138,7 @@ export class LocalizationPipeline {
     }
     const result=this.temporal.reacquired(checked,relativeFallback,localFallback);
     this.temporal.remember(result,image,{regional:true});
-    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length+cropSeeds.length+similaritySeeds.length,similarity_pose_candidates:similaritySeeds.length,similarity_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',crop_pose_candidates:cropSeeds.length,crop_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',evaluated_candidates:chosen.length+cropSeeds.length+(checked.seed_verification_work?.evaluated_candidate_ids.length??0)},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
+    return {...result,...(localCheck?{local_map_check:localCheck}:{}),tracking_attempts:this.temporal.lastAttempt,navigation_prior:navigationPrior,requested_time_s:image.requested_time_s,timing_scope:image.timing,anchor_lat_lon:this.pack.anchor_lat_lon,retrieval:{algorithm:'descriptor_shortlist_then_regional_planar_proposals',shortlist_pairs:shortlist.length,compared_pairs:stoppedEarly??shortlist.length,search_area:{latitude:search.latitude,longitude:search.longitude,radius_m:search.radius_m,scope:search.search_scope??'navigation prior'},shortlist_stop:stoppedEarly?`${this.options.candidates} proposals with at least ${STRONG_PROPOSAL_INLIERS} retrieval inliers`:'shortlist exhausted',search_scope:'bounded retrieval; unexamined alternatives can remain',stage:'retrieval_only',searched_pairs:searched,map_crops:crops.length,pose_candidates:candidates.length+cropSeeds.length+similaritySeeds.length,similarity_pose_candidates:similaritySeeds.length,similarity_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',crop_pose_candidates:cropSeeds.length,crop_pose_scope:'auxiliary near-nadir seeds; final pose attitude is unrestricted',evaluated_candidates:chosen.length+cropSeeds.length+(checked.seed_verification_work?.evaluated_candidate_ids.length??0)},execution:this.matcher.diagnostics?.()??{execution:"adapter does not report device metrics"},stage_ms:{temporal_attempt:temporalMs,retrieval:retrievalEnd-start-temporalMs,learned_matching:matchingEnd-retrievalEnd,geometry:performance.now()-matchingEnd},processing_ms:performance.now()-start};
   }
   async recoverCandidates(checked,image,observation,progress){
     if(!this.options.recoveryCandidates)return checked;

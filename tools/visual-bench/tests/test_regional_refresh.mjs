@@ -42,7 +42,7 @@ const check=(time,sequence,timing='browser decoded frame presentation timestamp'
 const before=searches;await check(0,0);assert.equal(searches,before+1);
 const deferred=await check(.2,1);assert.equal(searches,before+1,'unsupported adjacent video frames do not each repeat the full geographic search');
 assert.equal(deferred.decision,'search_deferred');assert.equal(deferred.accepted,false);assert.equal(deferred.retrieval.stage,'not_run');assert.equal(deferred.candidate_hypotheses.length,0);assert.equal(deferred.observation_sha256,'waiting-1');
-assert.equal(waiting.temporal.previous,null,'a deferred frame does not preserve stale pose seeds');
+assert.equal(waiting.temporal.previous,null,'without pose seeds, a deferred frame leaves no tracking reference');
 await check(5,2);assert.equal(searches,before+2,'search resumes at the configured capture-time interval');
 await check(0,3,'still image');await check(0,4,'still image');assert.equal(searches,before+4,'independent still images with unknown times each receive their own geographic search');
 const {resultSummary}=await import('../webapp/result-summary.js');const summary=resultSummary(deferred);assert.equal(summary.title,'No pose for this frame');assert.match(summary.explanation,/search was not run/);assert.deepEqual(summary.metrics,[]);
@@ -71,10 +71,13 @@ const originalTrack=pipeline.renderer.track,originalRefine=pipeline.renderer.ref
 pipeline.renderer.track=()=>JSON.stringify({accepted:false,tracking_supported:false});
 pipeline.renderer.refine=()=>JSON.stringify({accepted:false,reason:'No reference geometry'});
 pipeline.renderer.select=()=>JSON.stringify({...stamp,accepted:false,decision:'rejected',candidate_hypotheses:[]});
-const beforeLoss=searches,loss=await estimate(36,6);
+const beforeLoss=searches,firstLoss=await estimate(36,6);
+assert.equal(searches,beforeLoss,'the first unsupported frame is deferred so a file source can be held before the search');
+assert.equal(firstLoss.decision,'search_deferred');assert.ok(pipeline.temporal.previous,'the last supported pose stays the tracking reference');
+const loss=await estimate(36.2,7);
 assert.equal(searches,beforeLoss+1,'loss of supported motion and local map geometry triggers bounded area recovery before the normal area interval');
 assert.equal(loss.candidate_hypotheses.length,0);assert.equal(pipeline.temporal.previous,null);
-await estimate(36.2,7);assert.equal(searches,beforeLoss+1,'adjacent unsupported frames do not repeat the recovery search');
+await estimate(36.4,8);assert.equal(searches,beforeLoss+1,'adjacent unsupported frames do not repeat the recovery search');
 Object.assign(pipeline.renderer,{track:originalTrack,refine:originalRefine,select:originalSelect});
 console.info('Lost tracks enter bounded area recovery without inventing a pose or reusing stale seeds');
 
