@@ -38,7 +38,7 @@ const context={setTimeout:()=>1,clearTimeout(){},console:{error:e=>errors.push(e
  refineSceneSampling,hypotheses,frameLabel,missionSummary,resultSummary,executionSummary,replaySeekTime,
  assetUrl:p=>p,localPosition:()=>[0,0,100],selectedInputs:files=>files,cameraForImage:()=>camera,matchingOptions:()=>({longEdge:960}),
  videoTimes:()=>[0,.2,.4],openInput:async()=>({type:'video',source:{videoWidth:1920,videoHeight:1080,src:'test-video'},duration:.6,close(){}}),
- frameAt:async(_,time)=>({blob:new Blob([String(time)]),time}),requireOfflinePack:async()=>{},refineSequenceBackward:async()=>{},storage,
+ videoLocation:async()=>null,frameAt:async(_,time)=>({blob:new Blob([String(time)]),time}),requireOfflinePack:async()=>{},refineSequenceBackward:async()=>{},storage,
 };
 const source=(await fs.readFile(new URL('../webapp/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 vm.runInNewContext(source,context);await ready.promise;
