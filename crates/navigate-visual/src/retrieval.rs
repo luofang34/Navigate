@@ -68,7 +68,7 @@ fn proposals(camera: CameraModel, pairs: &[GroundCorrespondence]) -> Option<Retr
             )
         })
         .collect();
-    let best = planar_consensus(camera, &normalized);
+    let best = planar_consensus(camera, &normalized, 4.0);
     if best.len() < 8 {
         return None;
     }
@@ -83,9 +83,12 @@ fn proposals(camera: CameraModel, pairs: &[GroundCorrespondence]) -> Option<Retr
         separated_inliers: separated_support(pairs, &best),
     })
 }
-fn planar_consensus(
+/// Indices of the largest homography consensus. `threshold_px` is the
+/// transfer error limit in pixels of the second image.
+pub(crate) fn planar_consensus(
     camera: CameraModel,
     normalized: &[(Vector2<f64>, Vector2<f64>)],
+    threshold_px: f64,
 ) -> Vec<usize> {
     let mut seed = 0x915a_31d7_u64;
     let mut best = Vec::new();
@@ -111,7 +114,7 @@ fn planar_consensus(
                         && ((Vector2::new(r.x / r.z, r.y / r.z) - q)
                             .component_mul(&Vector2::new(camera.fx, camera.fy)))
                         .norm()
-                            < 4.0)
+                            < threshold_px)
                         .then_some(i)
                 })
                 .collect();
@@ -126,35 +129,40 @@ fn planar_consensus(
     }
     best
 }
-fn fit(points: &[(Vector2<f64>, Vector2<f64>)], indices: &[usize]) -> Option<Matrix3<f64>> {
+/// Direct linear homography fit with `h33 = 1`.
+pub(crate) fn fit(
+    points: &[(Vector2<f64>, Vector2<f64>)],
+    indices: &[usize],
+) -> Option<Matrix3<f64>> {
     let mut normal = SMatrix::<f64, 8, 8>::zeros();
     let mut rhs = SVector::<f64, 8>::zeros();
     for &i in indices {
-        let (p, q) = points[i];
-        let a = SVector::<f64, 8>::from_row_slice(&[
-            p.x,
-            p.y,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            -q.x * p.x,
-            -q.x * p.y,
-        ]);
-        let b = SVector::<f64, 8>::from_row_slice(&[
-            0.0,
-            0.0,
-            0.0,
-            p.x,
-            p.y,
-            1.0,
-            -q.y * p.x,
-            -q.y * p.y,
-        ]);
-        normal += a * a.transpose() + b * b.transpose();
-        rhs += a * q.x + b * q.y;
+        let (p, q) = points.get(i)?;
+        let (n, r) = fit_terms(p, q);
+        normal += n;
+        rhs += r;
     }
-    let h = normal.lu().solve(&rhs)?;
+    solve_fit(&normal, &rhs)
+}
+
+/// Normal-equation terms of one correspondence in the `h33 = 1` fit.
+pub(crate) fn fit_terms(
+    p: &Vector2<f64>,
+    q: &Vector2<f64>,
+) -> (SMatrix<f64, 8, 8>, SVector<f64, 8>) {
+    let a =
+        SVector::<f64, 8>::from_row_slice(&[p.x, p.y, 1.0, 0.0, 0.0, 0.0, -q.x * p.x, -q.x * p.y]);
+    let b =
+        SVector::<f64, 8>::from_row_slice(&[0.0, 0.0, 0.0, p.x, p.y, 1.0, -q.y * p.x, -q.y * p.y]);
+    (a * a.transpose() + b * b.transpose(), a * q.x + b * q.y)
+}
+
+/// Solve summed normal equations into a homography.
+pub(crate) fn solve_fit(
+    normal: &SMatrix<f64, 8, 8>,
+    rhs: &SVector<f64, 8>,
+) -> Option<Matrix3<f64>> {
+    let h = normal.lu().solve(rhs)?;
     Some(Matrix3::new(
         h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0,
     ))

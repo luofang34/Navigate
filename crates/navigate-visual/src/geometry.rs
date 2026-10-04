@@ -9,6 +9,8 @@ mod refinement;
 mod support;
 use refinement::FitSupport;
 pub use refinement::RefinementSeed;
+mod plane;
+pub use plane::{PlaneMotion, PlaneMotionConfig, PlaneSolution, plane_motion};
 mod surface_tracks;
 mod tracking;
 pub use surface_tracks::{SurfaceTrackUpdate, SurfaceTracks};
