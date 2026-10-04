@@ -3,17 +3,22 @@ import {runRealtime,openLiveCamera} from '../webapp/realtime-video.js';
 
 // A video that presents 30 frames per second on a virtual clock until `frames` have been shown.
 function fakeVideo(frames){
-  let presented=0,now=0,playing=false;const listeners=new Map();
-  const video={ended:false,currentTime:0,
+  let presented=0,now=0,playing=false;const listeners=new Map(),callbacks=new Set();
+  // Listeners follow the DOM: each registration is kept until it is removed or fires with `once`.
+  const video={ended:false,currentTime:0,listeners,callbacks,
     async play(){playing=true},pause(){playing=false},
-    addEventListener(name,fn){listeners.set(name,fn)},
-    requestVideoFrameCallback(fn){setTimeout(()=>{
-      if(!playing)return;
+    addEventListener(name,fn,options){if(!listeners.has(name))listeners.set(name,new Map());listeners.get(name).set(fn,options?.once===true)},
+    removeEventListener(name,fn){listeners.get(name)?.delete(fn)},
+    listenerCount(name){return listeners.get(name)?.size??0},
+    dispatch(name){for(const [fn,once] of [...(listeners.get(name)??[])]){if(once)listeners.get(name).delete(fn);fn()}},
+    cancelVideoFrameCallback(handle){callbacks.delete(handle)},
+    requestVideoFrameCallback(fn){const handle=Symbol('frame');callbacks.add(handle);setTimeout(()=>{
+      if(!callbacks.delete(handle)||!playing)return;
       // Frames keep being presented while an estimate runs; the next callback reports the newest one.
       presented=Math.min(frames,Math.max(presented+1,Math.floor(now*30)));video.currentTime=presented/30;
-      if(presented>=frames){video.ended=true;listeners.get('ended')?.();return}
+      if(presented>=frames){video.ended=true;video.dispatch('ended');return}
       fn(now*1000,{mediaTime:presented/30,presentedFrames:presented});
-    },0)},
+    },0);return handle},
     advance(ms){now+=ms/1000}};
   return video;
 }
@@ -26,6 +31,19 @@ const run=await runRealtime({video,camera:{width:4,height:3},clock:()=>0,
 assert.ok(run.summary.processed>=25&&run.summary.processed<=31,`about 10 estimates per second for 3 s, got ${run.summary.processed}`);
 assert.ok(run.summary.dropped_frames>=50,'frames presented during an estimate are skipped');
 assert.ok(seen.every((t,i)=>i===0||t>seen[i-1]),'each estimate uses a newer presented frame');
+assert.equal(video.listenerCount('ended'),0,'the run removes its end listener');
+assert.equal(run.results,undefined,'the run keeps no per-frame result list');
+
+// A long live stream never ends by itself. Listeners, pending frame callbacks, and latency records stay bounded.
+const live=fakeVideo(Infinity),liveStop=new AbortController();let peakEnded=0,peakCallbacks=0;
+const long=await runRealtime({video:live,camera:{width:4,height:3},clock:()=>0,signal:liveStop.signal,latencyWindow:16,
+  capture:(_video,_camera,mediaTime)=>({time:mediaTime}),
+  estimate:async(_observation,index)=>{peakEnded=Math.max(peakEnded,live.listenerCount('ended'));peakCallbacks=Math.max(peakCallbacks,live.callbacks.size);live.advance(40);if(index===399)liveStop.abort();return {index}}});
+assert.equal(long.summary.processed,400);
+assert.ok(peakEnded<=1,`one end listener for the whole run, found ${peakEnded}`);
+assert.ok(peakCallbacks<=2,`frame callbacks do not build up, found ${peakCallbacks}`);
+assert.equal(long.summary.latency_ms.samples,16,'latency statistics use a fixed window');
+assert.equal(live.listenerCount('ended')+live.listenerCount('abort'),0,'the run removes all listeners');
 
 const stop=new AbortController();const stopped=fakeVideo(900);
 const partial=await runRealtime({video:stopped,camera:{width:4,height:3},clock:()=>0,signal:stop.signal,
