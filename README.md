@@ -55,6 +55,7 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
 | `navigate-visual` | Camera pose observations from calibrated images, a pose prior, and rendered map references |
 | `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
+| `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
 | `navigate-data` | Read interface for immutable navigation data on native and web hosts |
 | `navigate-data-fs` | File system implementation of the `navigate-data` read interface |
 | `navigate-imagery` | Coverage plans and content-addressed imagery packages |

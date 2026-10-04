@@ -10,6 +10,7 @@ members = [
     "tools/navrun",
     "crates/navigate-visual",
     "crates/navigate-visual-fusion",
+    "crates/navigate-visual-session",
     "crates/navigate-data",
     "crates/navigate-data-fs",
     "crates/navigate-imagery",
