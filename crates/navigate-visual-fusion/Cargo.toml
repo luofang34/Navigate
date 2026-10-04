@@ -10,6 +10,7 @@ publish.workspace = true
 navigate-contract = { workspace = true }
 navigate-fusion = { workspace = true }
 navigate-visual = { path = "../navigate-visual" }
+navigate-visual-session = { path = "../navigate-visual-session" }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
 

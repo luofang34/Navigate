@@ -264,3 +264,45 @@ fn covariance_bounds_perfectly_correlated_error_terms() {
             .all(|v| *v >= -1e-9)
     );
 }
+
+#[test]
+fn session_labels_refuse_shared_map_cells_and_never_grant_independence() {
+    use navigate_visual_session::{
+        ContinuityEpoch, FrameKey, FusionEligibility, MapCell, StreamId,
+    };
+    let earlier = FrameKey {
+        stream: StreamId(1),
+        continuity: ContinuityEpoch(0),
+        index: 4,
+    };
+    let shared = FusionEligibility::SharedMapError {
+        cell: MapCell {
+            map_manifest_sha256: "a".repeat(64),
+            east: 0,
+            north: 0,
+        },
+        earlier,
+    };
+    let validated = EvidenceIndependence::ValidatedIndependent;
+    let unknown = EvidenceIndependence::Unknown;
+    assert_eq!(
+        unknown.restricted_by(&FusionEligibility::Independent),
+        unknown
+    );
+    let mut source = VisualFixSource::new(identity(), budget()).expect("budget");
+    source
+        .convert(
+            &estimate(1, 100, "a", 0.0),
+            validated.restricted_by(&FusionEligibility::Independent),
+        )
+        .expect("host-validated first anchor of the cell");
+    for label in [shared, FusionEligibility::Untracked] {
+        assert_eq!(
+            source
+                .convert(&estimate(2, 200, "b", 5.0), validated.restricted_by(&label))
+                .err(),
+            Some(VisualFusionError::UnknownCorrelation),
+            "{label:?}"
+        );
+    }
+}
