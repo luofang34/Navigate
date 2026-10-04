@@ -219,3 +219,82 @@ fn supplied_pose_checks_expose_conflicts_without_refitting_the_candidate() {
     surface.depth_m.fill(0.0);
     assert!(check(&current, &surface, &expected).is_err());
 }
+
+#[test]
+fn a_reversed_revisit_is_fitted_from_the_prior_and_keeps_its_bounds() {
+    let (previous, current, surface, _, _, _) = scene();
+    let expected = CameraPose {
+        position: surface.pose.position + Vector3::new(3.0, 2.0, -1.0),
+        orientation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 3.0)
+            * surface.pose.orientation,
+    };
+    let pairs: Vec<_> = (30..290)
+        .step_by(25)
+        .flat_map(|x| {
+            (30..210).step_by(25).filter_map(move |y| {
+                let reference = Vector2::new(f64::from(x), f64::from(y));
+                let world = current.camera.unproject(&surface.pose, reference, 100.0);
+                let query = current.camera.project(&expected, world)?;
+                let inside = query.x > 2.0 && query.y > 2.0 && query.x < 317.0 && query.y < 237.0;
+                inside.then_some(PixelMatch { reference, query })
+            })
+        })
+        .collect();
+    let predicted = CameraPose {
+        position: expected.position + Vector3::new(1.5, -1.0, 0.5),
+        orientation: UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.05)
+            * expected.orientation,
+    };
+    let prior = PosePrior {
+        pose: predicted,
+        position_radius_m: 10.0,
+        attitude_radius_rad: 0.3,
+    };
+    let verifier = PoseVerifier::new(LocalizerConfig::default()).expect("policy");
+    let reference = || TrackingReference {
+        observation: &previous,
+        surface: &surface,
+    };
+    let result = verifier
+        .track_from_prior(
+            &current,
+            reference(),
+            &prior,
+            &pairs,
+            "test",
+            TrackingMotion::Free,
+        )
+        .expect("fit from the predicted pose");
+    assert!((result.pose.position - expected.position).norm() < 0.01);
+    assert!(result.pose.orientation.angle_to(&expected.orientation) < 0.0001);
+    assert_eq!(
+        result.reference_observation_sha256,
+        previous.evidence_sha256()
+    );
+    assert!(matches!(
+        verifier.track_from_prior(
+            &current,
+            reference(),
+            &prior,
+            &pairs,
+            "test",
+            TrackingMotion::FixedTilt
+        ),
+        Err(VisualError::Invalid { .. })
+    ));
+    let narrow = PosePrior {
+        position_radius_m: 1.0,
+        ..prior
+    };
+    assert!(matches!(
+        verifier.track_from_prior(
+            &current,
+            reference(),
+            &narrow,
+            &pairs,
+            "test",
+            TrackingMotion::Free
+        ),
+        Err(VisualError::OutsidePrior { .. })
+    ));
+}
