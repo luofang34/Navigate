@@ -6,6 +6,7 @@ import {TrackPreview} from '../webapp/track-preview.js';
 import {hypotheses,frameLabel} from '../webapp/hypotheses.js';
 import {missionSummary,resultSummary,executionSummary} from '../webapp/result-summary.js';
 import {replaySeekTime} from '../webapp/video-timing.js';
+import {orderedInsert} from '../webapp/realtime-video.js';
 
 class Element extends EventTarget {
  constructor(){super();this.value='';this.children=[];this.hidden=false;this.disabled=false;this.currentTime=0;this.duration=.6;this.width=640;this.height=360;this.clientWidth=640;this.dataset={};this.style={setProperty(){}};this.classList={toggle(){},remove(){}}}
@@ -103,6 +104,22 @@ assert.equal(saved.get('saved-failure').view.scene_registration.results.length,3
 assert.equal(saved.get('saved-failure').view.scene_registration.geographic_acceptance,false);
 assert.equal(errors.length,1);
 console.info('Scene registration shares a bounded preview budget and retains every registration result.');
+// A stopped real-time run still stores the partial last image group with the mission.
+context.orderedInsert=orderedInsert;context.AbortController=AbortController;
+context.runRealtime=async({estimate})=>{await estimate({time:0,capture_time_ns:0,blob:new Blob(['frame 0'])},0);return {summary:{processed:1,wall_ms:1,dropped_frames:0}}};
+pipeline.finishSequence=async()=>[{sha256:'realtime-last-group'}];
+node('video-mode').value='realtime';
+const realtime=node('locate').onclick();(await nextEstimate()).resolve(frame(0,[pose(0,0)]));await realtime;
+assert.deepEqual(saved.get('saved-failure').view.image_track_groups,[{sha256:'realtime-last-group'}],'a real-time mission keeps its last image group');
+assert.equal(saved.get('saved-failure').view.processing.stage,'real-time');
+pipeline.finishSequence=async()=>{throw new DOMException('Storage quota exceeded','QuotaExceededError')};
+const failedFlush=node('locate').onclick();(await nextEstimate()).resolve(frame(0,[pose(0,0)]));await failedFlush;
+const kept=saved.get('saved-failure');
+assert.equal(kept.view.frames.length,1,'a failed image-group write keeps the saved real-time frames');
+assert.equal(kept.view.image_track_groups,undefined);
+assert.match(String(errors.at(-1)),/Storage quota exceeded/,'the failed write is reported');errors.length=1;
+node('video-mode').value='whole';
+console.info('A stopped real-time run stores its last image group.');
 const reads=[],readStarted=deferred();storage.queryBlob=(mission,frame)=>{const request={...deferred(),frame};reads.push(request);readStarted.resolve();return request.promise};
 node('latitude').value='0';node('longitude').value='0';node('radius').value='1';
 node('missions').value='saved-mission';const loaded=node('missions').onchange();

@@ -278,7 +278,8 @@ await localizeVideo({pack,source:stream,signal:stop.signal,
 ```
 
 `heading_deg` is optional. The call loads the models and reference features first. It returns a
-summary when the stream ends or the signal aborts.
+summary when the stream ends or the signal aborts. The summary contains `image_track_groups`, which
+includes the last partial image group.
 
 ## Video track preview
 

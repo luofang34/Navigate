@@ -1,11 +1,24 @@
 import {gray} from './observation.js';
 
 // Real-time processing follows the playback clock and never waits for frames to be decoded on demand.
+// `cancel` releases the callback when another event ends the wait first.
 export function presentedFrame(video){
- return new Promise((resolve,reject)=>{
+ let handle=null;
+ const frame=new Promise((resolve,reject)=>{
   if(typeof video.requestVideoFrameCallback!=='function'){reject(Error('This browser cannot report presented video frames'));return}
-  video.requestVideoFrameCallback((now,metadata)=>resolve({mediaTime:metadata.mediaTime,presentedFrames:metadata.presentedFrames,now}));
+  handle=video.requestVideoFrameCallback((now,metadata)=>{handle=null;resolve({mediaTime:metadata.mediaTime,presentedFrames:metadata.presentedFrames,now})});
  });
+ return {frame,cancel(){if(handle!==null)video.cancelVideoFrameCallback?.(handle);handle=null}};
+}
+
+// Latency statistics use the most recent `capacity` records, so a live stream keeps a fixed memory size.
+export class LatencyWindow {
+ constructor(capacity=512){if(!Number.isInteger(capacity)||capacity<1)throw Error('Invalid latency window');this.capacity=capacity;this.values=[];this.next=0;this.last=null}
+ add(value){if(this.values.length<this.capacity)this.values.push(value);else this.values[this.next]=value;this.next=(this.next+1)%this.capacity;this.last=value}
+ summary(){
+  const sorted=[...this.values].sort((a,b)=>a-b),at=q=>sorted.length?sorted[Math.min(sorted.length-1,Math.floor(q*sorted.length))]:null;
+  return {p50:at(.5),p90:at(.9),last:this.last,samples:sorted.length,scope:`wall time from frame presentation to its estimate; the most recent ${this.capacity} frames`};
+ }
 }
 
 export function supportedPose(result){return Boolean(result?.candidate_hypotheses?.some(h=>h.accepted||h.tracking_supported))}
@@ -39,23 +52,29 @@ function compact(observation){
 }
 
 // File and live sources play on their own clock. Frames presented during a long estimate, such as an
-// area search, wait in the catch-up buffer instead of pausing the source.
-export async function runRealtime({video,camera,estimate,signal,capture=grab,catchUp=new CatchUp(),supported=supportedPose,onDropped=()=>{},clock=()=>performance.now()}){
- const results=[],latencies=[];let anchor=null,presented=0,lastMediaTime=-Infinity,dropped=0,busyMs=0,buffered=0,sampling=false;const started=clock();
+// area search, wait in the catch-up buffer instead of pausing the source. The caller receives each
+// result through `estimate`; the run keeps only counters and a fixed latency window.
+export async function runRealtime({video,camera,estimate,signal,capture=grab,catchUp=new CatchUp(),supported=supportedPose,onDropped=()=>{},clock=()=>performance.now(),latencyWindow=512}){
+ const latencies=new LatencyWindow(latencyWindow);let processed=0,anchor=null,presented=0,lastMediaTime=-Infinity,dropped=0,busyMs=0,buffered=0,sampling=false,sampleHandle=null;const started=clock();
  const ended=()=>video.ended||Boolean(signal?.aborted);
- // A stopped or frozen live stream presents no further frame, so a stop request must not wait for one.
- const stopped=new Promise(resolve=>signal?.addEventListener('abort',()=>resolve(null),{once:true}));
- const sample=()=>{if(!sampling||ended())return;video.requestVideoFrameCallback((now,metadata)=>{
+ // One listener for each event serves the whole run. A stopped or frozen live stream presents no
+ // further frame, so a stop request must not wait for one.
+ let finish;const finished=new Promise(resolve=>{finish=()=>resolve(null)});
+ video.addEventListener('ended',finish);signal?.addEventListener('abort',finish);
+ const sample=()=>{if(!sampling||ended())return;sampleHandle=video.requestVideoFrameCallback((now,metadata)=>{
+  sampleHandle=null;
   if(sampling&&catchUp.wants(metadata.mediaTime)){catchUp.add({...compact(capture(video,camera,metadata.mediaTime)),time:metadata.mediaTime,presented_at:now});buffered++}
   sample();
  })};
- await video.play();
+ const stopSampling=()=>{sampling=false;if(sampleHandle!==null)video.cancelVideoFrameCallback?.(sampleHandle);sampleHandle=null};
  try{
+  await video.play();
   while(!ended()){
    let observation=anchor===null?null:catchUp.next(anchor);
    if(anchor===null)catchUp.clear();
    if(!observation){
-    const frame=await Promise.race([presentedFrame(video),stopped,new Promise(resolve=>video.addEventListener('ended',()=>resolve(null),{once:true}))]);
+    const next=presentedFrame(video);let frame;
+    try{frame=await Promise.race([next.frame,finished])}finally{next.cancel()}
     if(!frame||ended())break;
     if(frame.mediaTime<=lastMediaTime)continue;
     if(presented)dropped+=Math.max(0,frame.presentedFrames-presented-1);
@@ -64,19 +83,18 @@ export async function runRealtime({video,camera,estimate,signal,capture=grab,cat
    }
    lastMediaTime=Math.max(lastMediaTime,observation.time);
    const t=clock();let result;sampling=true;sample();
-   try{result=await estimate(observation,results.length)}finally{sampling=false}
-   busyMs+=clock()-t;
+   try{result=await estimate(observation,processed)}finally{stopSampling()}
+   busyMs+=clock()-t;processed++;
    if(observation.catch_up)catchUp.settle(supported(result));
    // A deferred frame keeps the last supported pose as the tracking reference; any other result without
    // support means the pipeline searches again from the newest frame.
    if(supported(result))anchor=observation.time;else if(result?.decision!=='search_deferred')anchor=null;
-   if(Number.isFinite(observation.presented_at))latencies.push(clock()-observation.presented_at);
-   results.push(result);
+   if(Number.isFinite(observation.presented_at))latencies.add(clock()-observation.presented_at);
   }
- }finally{sampling=false;video.pause()}
- const wallMs=clock()-started,sorted=[...latencies].sort((a,b)=>a-b),at=q=>sorted.length?sorted[Math.min(sorted.length-1,Math.floor(q*sorted.length))]:null;
- return {results,summary:{processed:results.length,dropped_frames:dropped,buffered_frames:buffered,wall_ms:wallMs,busy_fraction:wallMs>0?busyMs/wallMs:0,
-  media_seconds:video.currentTime,latency_ms:{p50:at(.5),p90:at(.9),last:latencies.at(-1)??null,scope:'wall time from frame presentation to its estimate'},
+ }finally{stopSampling();video.removeEventListener('ended',finish);signal?.removeEventListener('abort',finish);video.pause()}
+ const wallMs=clock()-started;
+ return {summary:{processed,dropped_frames:dropped,buffered_frames:buffered,wall_ms:wallMs,busy_fraction:wallMs>0?busyMs/wallMs:0,
+  media_seconds:video.currentTime,latency_ms:latencies.summary(),
   scope:'newest presented frame when no pose is supported; otherwise buffered frames until the pose is current'}};
 }
 
@@ -86,8 +104,17 @@ export async function openLiveCamera(video){
  if(!navigator.mediaDevices?.getUserMedia)throw Error('This browser cannot open a camera stream');
  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
  video.muted=true;video.playsInline=true;video.srcObject=stream;
- await new Promise((resolve,reject)=>{video.addEventListener('loadedmetadata',resolve,{once:true});video.addEventListener('error',()=>reject(Error('The camera stream cannot be decoded')),{once:true})});
+ await loadedMetadata(video,'The camera stream cannot be decoded');
  return {type:'video',source:video,live:true,duration:Infinity,close(){for(const track of stream.getTracks())track.stop();video.srcObject=null}};
+}
+
+// Waits for decoded dimensions and removes the listener that did not fire.
+export function loadedMetadata(video,message){
+ return new Promise((resolve,reject)=>{
+  const done=()=>{video.removeEventListener?.('loadedmetadata',loaded);video.removeEventListener?.('error',failed)};
+  const loaded=()=>{done();resolve()},failed=()=>{done();reject(Error(message))};
+  video.addEventListener('loadedmetadata',loaded,{once:true});video.addEventListener('error',failed,{once:true});
+ });
 }
 
 export function orderedInsert(frames,blobs,frame,blob){
