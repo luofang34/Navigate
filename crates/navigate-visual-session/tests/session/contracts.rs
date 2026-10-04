@@ -1,7 +1,8 @@
 //! Input contracts: refused inputs change no state, and evidence is not counted twice.
 
 use crate::support::*;
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix6, Vector3};
+use navigate_visual::LocalFrame;
 use navigate_visual_session::{
     AnchorDecision, Confirmation, MapPose, Pose, RevisitConstraint, ScaleSource, SessionConfig,
     SessionError, SessionEvent, SessionLimits, SurfaceModel,
@@ -174,7 +175,7 @@ fn an_anchor_covariance_without_a_square_root_is_refused() {
     let k = flight.truth[0].0;
     let mut observation = anchor(&flight, &k, Vector3::zeros());
     observation.reliability.surface = SurfaceModel::Surface;
-    observation.geometry_position_m2 = Matrix3::zeros();
+    observation.geometry_covariance = Matrix6::zeros();
     assert!(matches!(
         flight.session.submit_anchor(observation),
         Err(SessionError::Invalid { .. })
@@ -267,4 +268,49 @@ fn wrong_ground_planes_cannot_hold_the_attitude_or_lock_out_anchors() {
             );
         }
     }
+}
+
+/// Submit a first anchor, then a second one that the host may express in
+/// another local frame; return the second decision and the located pose.
+fn second_anchor(other: Option<LocalFrame>) -> (AnchorDecision, Pose) {
+    let mut flight = Flight::standard();
+    fly(&mut flight, 12, 6.0);
+    let (first, last) = (flight.truth[0].0, flight.truth[11].0);
+    flight
+        .session
+        .submit_anchor(anchor(&flight, &first, Vector3::zeros()))
+        .unwrap();
+    let mut second = anchor(&flight, &last, Vector3::new(2.0, -1.0, 0.0));
+    if let Some(frame) = other {
+        let geodetic = second.local_frame.geodetic(second.pose.translation.vector);
+        let ratio = frame.mercator_scale_m() / second.local_frame.mercator_scale_m();
+        second.pose.translation.vector = frame.local(geodetic).unwrap();
+        for i in 0..6 {
+            for j in 0..6 {
+                let scale = |k: usize| if k < 2 { ratio } else { 1.0 };
+                second.geometry_covariance[(i, j)] *= scale(i) * scale(j);
+            }
+        }
+        second.local_frame = frame;
+    }
+    let decision = flight.session.submit_anchor(second).unwrap();
+    match flight.session.pose_at(&last).unwrap().map {
+        MapPose::Located { pose, .. } => (decision, pose),
+        MapPose::Unlocated(reason) => panic!("not located: {reason:?}"),
+    }
+}
+
+#[test]
+fn an_anchor_from_another_local_frame_keeps_its_pose_and_covariance() {
+    let (same, a) = second_anchor(None);
+    let other = LocalFrame::anchor_mercator(47.05, 11.04).unwrap();
+    let (moved, b) = second_anchor(Some(other));
+    assert!(matches!(same, AnchorDecision::Accepted { .. }), "{same:?}");
+    assert!(
+        matches!(moved, AnchorDecision::Accepted { .. }),
+        "{moved:?}"
+    );
+    let position = (a.translation.vector - b.translation.vector).norm();
+    assert!(position < 1e-6, "{position} m");
+    assert!(a.rotation.angle_to(&b.rotation) < 1e-9);
 }

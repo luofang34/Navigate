@@ -233,6 +233,7 @@ impl VisualSession {
     fn evict(&mut self, id: KeyframeId) {
         let bounds = self.bounds();
         let attitudes = self.attitude_bounds();
+        let tilts = self.map_tilt_bounds();
         let Some(kf) = self.keyframes.remove(&id) else {
             return;
         };
@@ -245,9 +246,12 @@ impl VisualSession {
         // The next keyframe keeps the located estimate as a prior, so the
         // remaining trajectory keeps its map reference. The bound is a
         // conservative sum, which limits the weight of the repeated evidence.
-        // A kept prior claims the attitude bound of the removed keyframe;
-        // without map attitude it claims a full radian.
-        let attitude = attitudes.get(&id).copied().flatten().unwrap_or(1.0);
+        // A kept prior claims the larger of the heading and tilt bounds of the
+        // removed keyframe; without map attitude it claims a full radian.
+        let bound = |map: &std::collections::BTreeMap<KeyframeId, Option<f64>>| {
+            map.get(&id).copied().flatten().unwrap_or(1.0)
+        };
+        let attitude = bound(&attitudes).max(bound(&tilts));
         if let Some(bound) = bounds.get(&id).copied().flatten() {
             match next.and_then(|n| self.keyframes.get(&n).map(|k| (n, k))) {
                 Some((next, n)) => {

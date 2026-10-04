@@ -112,22 +112,36 @@ impl VisualSession {
         })
     }
 
-    /// Attitude bound from map evidence: anchors and kept priors.
+    /// Attitude bound from map evidence: anchors and kept priors. Anchors
+    /// give their heading error here; ground planes do not observe heading.
     pub(super) fn attitude_bounds(&self) -> BTreeMap<KeyframeId, Option<f64>> {
-        self.propagate(self.attitude_sources(), |_, link| link.rad)
+        let anchors = self
+            .anchors
+            .iter()
+            .map(|(id, a)| (*id, a.budget.heading_rad + a.transfer_rad));
+        self.propagate(anchors.chain(self.frozen_sources()), |_, link| link.rad)
+    }
+
+    /// Tilt bound from map evidence only: anchors and kept priors.
+    pub(super) fn map_tilt_bounds(&self) -> BTreeMap<KeyframeId, Option<f64>> {
+        self.propagate(self.map_tilt_sources(), |_, link| link.rad)
     }
 
     /// Tilt bound from map evidence and ground-plane observations.
     pub(super) fn tilt_bounds(&self) -> BTreeMap<KeyframeId, Option<f64>> {
         let ground = self.grounds.iter().map(|(id, g)| (*id, g.sigma_rad));
-        self.propagate(self.attitude_sources().chain(ground), |_, link| link.rad)
+        self.propagate(self.map_tilt_sources().chain(ground), |_, link| link.rad)
     }
 
-    fn attitude_sources(&self) -> impl Iterator<Item = (KeyframeId, f64)> + '_ {
+    fn map_tilt_sources(&self) -> impl Iterator<Item = (KeyframeId, f64)> + '_ {
         self.anchors
             .iter()
-            .map(|(id, a)| (*id, a.budget.rotation_rad + a.transfer_rad))
-            .chain(self.frozen.iter().map(|(id, f)| (*id, f.sigma_rad)))
+            .map(|(id, a)| (*id, a.budget.tilt_rad + a.transfer_rad))
+            .chain(self.frozen_sources())
+    }
+
+    fn frozen_sources(&self) -> impl Iterator<Item = (KeyframeId, f64)> + '_ {
+        self.frozen.iter().map(|(id, f)| (*id, f.sigma_rad))
     }
 
     /// Smallest source value plus link weights along any path.

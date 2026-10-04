@@ -10,6 +10,8 @@ mod continuity;
 #[cfg(test)]
 mod contracts;
 #[cfg(test)]
+mod footprint;
+#[cfg(test)]
 mod height;
 #[cfg(test)]
 mod memory;

@@ -15,6 +15,8 @@ pub(super) struct Topology {
     pub bounds: BTreeMap<KeyframeId, Option<f64>>,
     /// Attitude bound from map anchors and kept priors.
     pub attitude: BTreeMap<KeyframeId, Option<f64>>,
+    /// Tilt bound from map evidence only.
+    pub map_tilt: BTreeMap<KeyframeId, Option<f64>>,
     /// Tilt bound from map evidence and ground planes.
     pub tilt: BTreeMap<KeyframeId, Option<f64>>,
     /// Anchor capture times of each component.
@@ -27,6 +29,7 @@ pub(super) struct Topology {
 pub(super) struct Bounds {
     pub position_m: Option<f64>,
     pub tilt_rad: Option<f64>,
+    pub map_tilt_rad: Option<f64>,
     pub attitude_rad: Option<f64>,
 }
 
@@ -39,6 +42,7 @@ impl Bounds {
         Self {
             position_m: min(self.position_m, other.position_m),
             tilt_rad: min(self.tilt_rad, other.tilt_rad),
+            map_tilt_rad: min(self.map_tilt_rad, other.map_tilt_rad),
             attitude_rad: min(self.attitude_rad, other.attitude_rad),
         }
     }
@@ -148,6 +152,7 @@ impl VisualSession {
         self.topology = Topology {
             bounds: self.bounds(),
             attitude: self.attitude_bounds(),
+            map_tilt: self.map_tilt_bounds(),
             tilt: self.tilt_bounds(),
             anchor_times: self.anchor_times(),
             components: self.components(),
@@ -174,6 +179,7 @@ impl VisualSession {
             let bounds = Bounds {
                 position_m: grow(&self.topology.bounds, m + turned),
                 tilt_rad: grow(&self.topology.tilt, rad),
+                map_tilt_rad: grow(&self.topology.map_tilt, rad),
                 attitude_rad: grow(&self.topology.attitude, rad),
             };
             Some((self.correction(id)?, bounds, id, kf.odometry.path_m))

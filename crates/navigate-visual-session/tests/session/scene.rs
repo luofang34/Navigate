@@ -163,3 +163,59 @@ pub fn view_error_deg(estimate: &Pose, truth: &Pose) -> f64 {
         .angle(&(truth.rotation * axis))
         .to_degrees()
 }
+
+/// Matches between a map reference and the true camera where the map shows
+/// objects above the elevation model. The host drapes map imagery over the
+/// bare earth, so a roof in the map gets the ground depth, while the camera
+/// sees the roof top. The elevation model also has a local slope error
+/// `slope_error` (east, north) about the ground under the reference centre.
+/// Pixel noise is deterministic.
+pub fn object_map_matches(
+    reference: &Pose,
+    truth: &Pose,
+    slope_error: Vector2<f64>,
+    seed: &mut u64,
+) -> Vec<PixelMatch> {
+    let (c, seen) = (camera(), true_camera());
+    let Some(centre) = centre_ground(reference) else {
+        return Vec::new();
+    };
+    let mut pairs = Vec::new();
+    for row in 0..8 {
+        for col in 0..10 {
+            let pixel = Vector2::new(20.0 + 31.0 * f64::from(col), 15.0 + 30.0 * f64::from(row));
+            let d = ray(&c, reference, pixel);
+            let Some(t) = plane_depth(reference, &d, 0.0) else {
+                continue;
+            };
+            let ground = reference.translation.vector + d * t;
+            let lift = if roof(ground.x, ground.y) {
+                ROOF_M
+            } else {
+                0.0
+            };
+            let slope = slope_error.dot(&(ground - centre).xy());
+            let world = ground + Vector3::new(0.0, 0.0, lift + slope);
+            if let Some(q) = seen.project(&to_camera(truth), world)
+                && q.x > 2.0
+                && q.y > 2.0
+                && q.x < 317.0
+                && q.y < 237.0
+            {
+                pairs.push(PixelMatch {
+                    reference: pixel,
+                    query: q + noise(seed),
+                });
+            }
+        }
+    }
+    pairs
+}
+
+/// The bare-earth point under the image centre: the ground that a mosaic
+/// puts at the centre of the frame.
+pub fn centre_ground(pose: &Pose) -> Option<Vector3<f64>> {
+    let c = camera();
+    let d = ray(&c, pose, Vector2::new(c.cx, c.cy));
+    plane_depth(pose, &d, 0.0).map(|t| pose.translation.vector + d * t)
+}
