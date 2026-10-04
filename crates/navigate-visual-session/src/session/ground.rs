@@ -107,7 +107,7 @@ pub enum GroundDecision {
     /// optimization and was retracted.
     Retracted,
     /// The observation disagrees with the estimate by more than its error and
-    /// the attitude bound from map evidence allow.
+    /// the tilt bound from map evidence allow.
     Inconsistent {
         /// Angle between the predicted and the observed normal, in radians.
         angle_rad: f64,
@@ -119,9 +119,9 @@ pub enum GroundDecision {
 impl VisualSession {
     /// Submit a ground normal observed in a camera.
     ///
-    /// The gate width uses the attitude bound from map evidence, not the
-    /// bound of tracked attitude, because tracked attitude can drift without
-    /// a visible residual. A trajectory without map attitude takes no
+    /// The gate width uses the tilt bound from map evidence, not the bound
+    /// of tracked attitude, because tracked attitude can drift without a
+    /// visible residual. A trajectory without map attitude takes no
     /// observation. An observation that stays an outlier after optimization
     /// is retracted.
     ///
@@ -197,7 +197,7 @@ impl VisualSession {
 
     /// Refuse an observation for a frame without map attitude, or one that
     /// disagrees with the current estimate by more than the observation error
-    /// and the attitude bound from map evidence allow.
+    /// and the tilt bound from map evidence allow.
     fn ground_gate(
         &self,
         frame: &FrameKey,
@@ -211,7 +211,7 @@ impl VisualSession {
         };
         // Before a map anchor, the session frame is the odometry frame: the
         // terrain normal has no meaning in it.
-        let Some(bound) = bounds.attitude_rad else {
+        let Some(bound) = bounds.map_tilt_rad else {
             return Some(GroundDecision::Unanchored);
         };
         let pose = crate::pose::compose(&correction, &odometry.pose);

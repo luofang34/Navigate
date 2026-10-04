@@ -4,7 +4,7 @@ use super::{Anchor, VisualSession};
 use crate::{
     AnchorObservation, AnchorRejection, FrameKey, FusionEligibility, RegionChange, RevisionCause,
     SegmentId, SegmentStart, SessionError, SessionEvent,
-    anchor::budget,
+    anchor::{MIN_ROTATION_RAD, budget},
     evidence::MapCell,
     pose::{Pose, finite},
     store::KeyframeId,
@@ -57,7 +57,7 @@ impl VisualSession {
         // Every check that can refuse the input runs before any state change.
         self.check_anchor(&anchor)?;
         let start = self.segment_start(anchor.frame)?;
-        anchor.pose = self.pose_in_session_frame(&anchor)?;
+        self.to_session_frame(&mut anchor)?;
         if anchor.reliability.change == RegionChange::Changed {
             return Ok(self.reject(anchor.frame, AnchorRejection::ChangedRegion));
         }
@@ -69,7 +69,7 @@ impl VisualSession {
         let Some((predicted, bound)) = self.predict(&anchor.frame) else {
             return self.accept(anchor, true);
         };
-        let horizontal = budget(&anchor, self.half_fov()).horizontal_m();
+        let horizontal = self.anchor_budget(&anchor).horizontal_m();
         let distance = horizontal_distance(&predicted, &anchor.pose);
         let policy = self.config.anchors;
         let gate = policy.gate_sigma * (bound.powi(2) + horizontal.powi(2)).sqrt();
@@ -116,13 +116,12 @@ impl VisualSession {
                 anchor.observation_sha256.clone(),
             ));
         }
-        let geometry_ok = anchor.geometry_position_m2.iter().all(|v| v.is_finite())
-            && anchor.geometry_rotation_rad.is_finite();
+        let geometry_ok = anchor.geometry_covariance.iter().all(|v| v.is_finite());
         if !anchor.reliability.validate() || !finite(&anchor.pose) || !geometry_ok {
             return Err(SessionError::Invalid { field: "anchor" });
         }
         // A covariance without a positive-definite square root cannot weight the anchor.
-        let independent = budget(anchor, self.half_fov()).independent_m2;
+        let independent = self.anchor_budget(anchor).independent;
         if ((independent + independent.transpose()) * 0.5)
             .cholesky()
             .is_none()
@@ -134,10 +133,11 @@ impl VisualSession {
         Ok(())
     }
 
-    fn pose_in_session_frame(&self, anchor: &AnchorObservation) -> Result<Pose, SessionError> {
+    /// Move the anchor pose and its covariance into the session frame.
+    fn to_session_frame(&self, anchor: &mut AnchorObservation) -> Result<(), SessionError> {
         let frame = self.local_frame.unwrap_or(anchor.local_frame);
         if frame == anchor.local_frame {
-            return Ok(anchor.pose);
+            return Ok(());
         }
         let geodetic = anchor.local_frame.geodetic(anchor.pose.translation.vector);
         let position = frame
@@ -146,7 +146,13 @@ impl VisualSession {
                 frame: anchor.frame,
                 source,
             })?;
-        Ok(Pose::from_parts(position.into(), anchor.pose.rotation))
+        anchor.pose = Pose::from_parts(position.into(), anchor.pose.rotation);
+        anchor.geometry_covariance = crate::anchor::rescaled(
+            &anchor.geometry_covariance,
+            frame.mercator_scale_m() / anchor.local_frame.mercator_scale_m(),
+        );
+        anchor.local_frame = frame;
+        Ok(())
     }
 
     /// The segment of an anchored frame, or `None` for a frame after the
@@ -169,11 +175,12 @@ impl VisualSession {
     /// The anchor error budget. An unknown lens model adds attitude error,
     /// because uncorrected distortion moves the fitted camera axis.
     fn anchor_budget(&self, anchor: &AnchorObservation) -> crate::AnchorBudget {
-        let mut result = budget(anchor, self.half_fov());
-        if self.calibration.lens == crate::LensModel::Unknown {
-            result.rotation_rad += UNKNOWN_LENS_ROTATION_RAD;
-        }
-        result
+        let floor = if self.calibration.lens == crate::LensModel::Unknown {
+            MIN_ROTATION_RAD + UNKNOWN_LENS_ROTATION_RAD
+        } else {
+            MIN_ROTATION_RAD
+        };
+        budget(anchor, self.half_fov(), floor)
     }
 
     pub(super) fn half_fov(&self) -> f64 {
@@ -355,8 +362,10 @@ impl VisualSession {
         }
         let predicted = a.pose * oa.pose.inv_mul(&ob.pose);
         let (drift, _) = oa.drift_to(&ob, &self.config.drift);
-        let fov = self.half_fov();
-        let (ha, hb) = (budget(a, fov).horizontal_m(), budget(b, fov).horizontal_m());
+        let (ha, hb) = (
+            self.anchor_budget(a).horizontal_m(),
+            self.anchor_budget(b).horizontal_m(),
+        );
         let gate =
             self.config.anchors.gate_sigma * (ha.powi(2) + hb.powi(2) + drift.powi(2)).sqrt();
         horizontal_distance(&predicted, &b.pose) <= gate

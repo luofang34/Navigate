@@ -13,7 +13,7 @@ mod linear;
 
 use crate::pose::{Pose, skew};
 use linear::{BlockSystem, Dims};
-use nalgebra::{Matrix3, SMatrix, SVector, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Matrix6, SMatrix, SVector, Translation3, UnitQuaternion, Vector3};
 
 /// One graph factor. Indices refer to `Problem::poses` and `Problem::biases`.
 #[derive(Clone, Debug)]
@@ -28,13 +28,17 @@ pub(crate) enum Factor {
         robust: bool,
     },
     /// Map-frame pose of one camera, offset by a shared map-cell bias.
+    ///
+    /// The residual is the position error and the camera-frame rotation
+    /// error. One whitening matrix holds both, because a map match fixes the
+    /// ground under the image better than it fixes position or tilt alone.
     Anchor {
         node: usize,
         bias: Option<usize>,
         pose: Pose,
-        /// Whitening matrix `L^-1`, where `L L^T` is the position covariance.
-        position_sqrt_info: Matrix3<f64>,
-        sigma_rad: f64,
+        /// Whitening matrix `L^-1`, where `L L^T` is the pose covariance:
+        /// position in metres, then rotation `R = R_measured Exp(theta)` in radians.
+        sqrt_info: Box<Matrix6<f64>>,
     },
     /// Weak gauge prior for a pose graph component without anchors.
     Prior {
@@ -147,9 +151,8 @@ impl Problem {
                 node,
                 bias,
                 pose,
-                position_sqrt_info,
-                sigma_rad,
-            } => self.anchor(*node, *bias, pose, (position_sqrt_info, *sigma_rad)),
+                sqrt_info,
+            } => self.anchor(*node, *bias, pose, sqrt_info),
             Factor::Prior {
                 node,
                 pose,
@@ -157,12 +160,12 @@ impl Problem {
                 sigma_rad,
             } => {
                 let current = self.poses.get(*node)?;
-                let info = Matrix3::identity() / *sigma_m;
+                let info = isotropic(*sigma_m, *sigma_rad);
                 Some(absolute(
                     current,
                     pose,
                     None,
-                    (&info, *sigma_rad),
+                    &info,
                     dims.pose(*node),
                     false,
                 ))
@@ -195,7 +198,7 @@ impl Problem {
         node: usize,
         bias: Option<usize>,
         pose: &Pose,
-        weights: (&Matrix3<f64>, f64),
+        sqrt_info: &Matrix6<f64>,
     ) -> Option<Linearized> {
         let dims = self.dims();
         let current = self.poses.get(node)?;
@@ -207,7 +210,7 @@ impl Problem {
             current,
             pose,
             offset,
-            weights,
+            sqrt_info,
             dims.pose(node),
             true,
         ))
@@ -330,37 +333,50 @@ fn relative(
     }
 }
 
+/// Whitening matrix of independent isotropic position and rotation errors.
+fn isotropic(sigma_m: f64, sigma_rad: f64) -> Matrix6<f64> {
+    let mut info = Matrix6::zeros();
+    for i in 0..3 {
+        info[(i, i)] = 1.0 / sigma_m;
+        info[(i + 3, i + 3)] = 1.0 / sigma_rad;
+    }
+    info
+}
+
 /// Absolute-pose factor with an optional bias (value, column).
+///
+/// The unwhitened residual is `[p + bias - p_m; Log(R_m^-1 R)]`. With
+/// `R' = Exp(phi) R`, its rotation Jacobian is `R^T`.
 fn absolute(
     current: &Pose,
     measured: &Pose,
     bias: Option<(Vector3<f64>, usize)>,
-    (position_sqrt_info, sigma_rad): (&Matrix3<f64>, f64),
+    sqrt_info: &Matrix6<f64>,
     column: usize,
     robust: bool,
 ) -> Linearized {
     let r = current.rotation.to_rotation_matrix().into_inner();
     let offset = bias.map_or_else(Vector3::zeros, |(value, _)| value);
-    let ep = current.translation.vector + offset - measured.translation.vector;
-    let er = (measured.rotation.inverse() * current.rotation).scaled_axis();
-    let mut residual = SVector::<f64, 6>::zeros();
-    residual
+    let mut error = SVector::<f64, 6>::zeros();
+    error
         .fixed_rows_mut::<3>(0)
-        .copy_from(&(position_sqrt_info * ep));
-    residual.fixed_rows_mut::<3>(3).copy_from(&(er / sigma_rad));
-    let mut j = SMatrix::<f64, 6, 6>::zeros();
-    j.fixed_view_mut::<3, 3>(0, 0).copy_from(position_sqrt_info);
-    j.fixed_view_mut::<3, 3>(3, 3)
-        .copy_from(&(r.transpose() / sigma_rad));
-    let mut blocks = vec![(column, j, 6)];
+        .copy_from(&(current.translation.vector + offset - measured.translation.vector));
+    error
+        .fixed_rows_mut::<3>(3)
+        .copy_from(&(measured.rotation.inverse() * current.rotation).scaled_axis());
+    let mut motion = SMatrix::<f64, 6, 6>::identity();
+    motion
+        .fixed_view_mut::<3, 3>(3, 3)
+        .copy_from(&r.transpose());
+    let mut blocks = vec![(column, sqrt_info * motion, 6)];
     if let Some((_, bias_column)) = bias {
         let mut jb = SMatrix::<f64, 6, 6>::zeros();
-        jb.fixed_view_mut::<3, 3>(0, 0)
-            .copy_from(position_sqrt_info);
+        jb.fixed_view_mut::<6, 3>(0, 0)
+            .copy_from(&sqrt_info.fixed_view::<6, 3>(0, 0));
         blocks.push((bias_column, jb, 3));
     }
     Linearized {
-        residual,
+        residual: sqrt_info * error,
         rows: 6,
         blocks,
         robust,
