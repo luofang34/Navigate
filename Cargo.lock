@@ -1724,6 +1724,7 @@ dependencies = [
  "navigate-contract",
  "navigate-fusion",
  "navigate-visual",
+ "navigate-visual-session",
  "thiserror 2.0.19",
 ]
 

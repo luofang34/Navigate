@@ -15,6 +15,10 @@
 //! Each accepted fix names its [`navigate_visual::MapRevision`]. Fixes from
 //! one map release share map error. The filter treats them as independent,
 //! so the budget must be conservative. See ADR-0007.
+//!
+//! [`EvidenceIndependence::restricted_by`] applies the fusion label of a
+//! `navigate_visual_session` anchor. Anchors whose map cell already gave a
+//! fix in the session are refused.
 
 mod adapter;
 mod budget;
