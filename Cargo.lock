@@ -1728,6 +1728,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-visual-session"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-visual",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "navrun"
 version = "0.1.0"
 dependencies = [
