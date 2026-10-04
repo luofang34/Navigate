@@ -106,11 +106,58 @@ impl PoseVerifier {
         matcher_identity: &str,
         motion: TrackingMotion,
     ) -> Result<TrackingProposal, VisualError> {
-        let (observation_sha256, reference_observation_sha256) =
-            validate_tracking(frame, &reference, matcher_identity)?;
-        let solver_motion = motion.solver();
-        let (pose, inliers, depth_matches) =
-            self.fit_candidate(frame, reference.surface, prior, matches, solver_motion)?;
+        let identities = validate_tracking(frame, &reference, matcher_identity)?;
+        let fit = self.fit_candidate(frame, reference.surface, prior, matches, motion.solver())?;
+        self.proposal(frame, &reference, fit, identities, matcher_identity, motion)
+    }
+
+    /// Check relative geometry with the fit starting at the prior pose.
+    ///
+    /// A revisit can see the same ground with a very different heading, so
+    /// the reference pose is a poor start. This method starts the fit at
+    /// `prior.pose`, for example a predicted pose. It keeps the support and
+    /// prior checks of [`PoseVerifier::track_with_motion`].
+    ///
+    /// [`TrackingMotion::FixedTilt`] holds the tilt of the start pose. From a
+    /// predicted pose that would make a predicted tilt a constraint, so this
+    /// method accepts only [`TrackingMotion::Free`].
+    ///
+    /// # Errors
+    /// Rejects fixed tilt, invalid observations, missing depth, weak support,
+    /// or prior violations.
+    pub fn track_from_prior(
+        &self,
+        frame: &Frame,
+        reference: TrackingReference<'_>,
+        prior: &PosePrior,
+        matches: &[PixelMatch],
+        matcher_identity: &str,
+        motion: TrackingMotion,
+    ) -> Result<TrackingProposal, VisualError> {
+        if motion != TrackingMotion::Free {
+            return Err(VisualError::Invalid {
+                field: "fixed tilt needs the reference pose as the fit start",
+            });
+        }
+        let identities = validate_tracking(frame, &reference, matcher_identity)?;
+        let points = super::depth_correspondences(frame, reference.surface, matches);
+        let fit = self.fit_points(frame, prior.pose, prior, points, motion.solver())?;
+        self.proposal(frame, &reference, fit, identities, matcher_identity, motion)
+    }
+
+    fn proposal(
+        &self,
+        frame: &Frame,
+        reference: &TrackingReference<'_>,
+        (pose, inliers, depth_matches): (
+            CameraPose,
+            Vec<crate::pose_solver::Correspondence>,
+            usize,
+        ),
+        (observation_sha256, reference_observation_sha256): (String, String),
+        matcher_identity: &str,
+        motion: TrackingMotion,
+    ) -> Result<TrackingProposal, VisualError> {
         let (quality, _) = self.assess(
             frame,
             &reference.surface.pose,
