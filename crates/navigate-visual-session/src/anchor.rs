@@ -148,8 +148,10 @@ impl AnchorBudget {
 }
 
 const MAX_PARALLAX_ANGLE_RAD: f64 = 1.31;
-/// Elevation-model tilt and calibration limit anchor attitude accuracy.
-const MIN_ROTATION_RAD: f64 = 0.01;
+/// A map match fits the camera to bare-earth depth. Roofs, trees, elevation
+/// model tilt, and calibration limit its attitude to about two degrees, even
+/// when the image residuals are small.
+const MIN_ROTATION_RAD: f64 = 0.035;
 
 /// Combine image geometry, parallax, imagery age, and map accuracy.
 ///

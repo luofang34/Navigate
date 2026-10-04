@@ -125,6 +125,76 @@ impl Default for RevisitPolicy {
     }
 }
 
+/// Error model of ground-plane attitude observations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroundPolicy {
+    /// Normal error per unit of relief ratio (object height divided by the
+    /// plane distance). Objects cover part of the image, so the normal moves
+    /// by a fraction of the relief angle.
+    pub relief_fraction: f64,
+}
+
+impl Default for GroundPolicy {
+    fn default() -> Self {
+        Self {
+            relief_fraction: 0.25,
+        }
+    }
+}
+
+/// When a located frame is usable for each purpose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OutputPolicy {
+    /// Largest capture-time distance to an anchor for recent map support, in nanoseconds.
+    pub recent_anchor_ns: u64,
+    /// Largest position bound for a navigation position, in metres.
+    pub navigation_bound_m: f64,
+    /// Largest position bound for ground projection, in metres.
+    pub projection_bound_m: f64,
+    /// Largest tilt bound for ground projection, in radians.
+    pub projection_tilt_bound_rad: f64,
+    /// Largest view angle from straight down for ground projection, in radians.
+    pub projection_off_nadir_rad: f64,
+    /// Largest attitude bound from map evidence for ground projection, in
+    /// radians. Ground planes do not observe heading, and a heading error
+    /// moves the image corners on the ground.
+    pub projection_attitude_bound_rad: f64,
+}
+
+impl Default for OutputPolicy {
+    fn default() -> Self {
+        Self {
+            recent_anchor_ns: 30_000_000_000,
+            navigation_bound_m: 50.0,
+            projection_bound_m: 30.0,
+            projection_tilt_bound_rad: 0.087,
+            projection_off_nadir_rad: 1.22,
+            projection_attitude_bound_rad: 0.087,
+        }
+    }
+}
+
+/// Map relocation proposals.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelocationPolicy {
+    /// Largest number of proposals for one frame.
+    pub max_candidates: usize,
+    /// Distance between proposal positions, in metres.
+    pub spacing_m: f64,
+    /// Largest proposal distance from the predicted position, in metres.
+    pub max_radius_m: f64,
+}
+
+impl Default for RelocationPolicy {
+    fn default() -> Self {
+        Self {
+            max_candidates: 9,
+            spacing_m: 40.0,
+            max_radius_m: 160.0,
+        }
+    }
+}
+
 /// Memory bounds of one session.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SessionLimits {
@@ -169,6 +239,12 @@ pub struct SessionConfig {
     pub anchors: AnchorPolicy,
     /// Revisit search and closure.
     pub revisits: RevisitPolicy,
+    /// Ground-plane attitude error model.
+    pub ground: GroundPolicy,
+    /// Usability of located frames.
+    pub output: OutputPolicy,
+    /// Map relocation proposals.
+    pub relocation: RelocationPolicy,
     /// Memory bounds.
     pub limits: SessionLimits,
     /// Position bound above which a frame is reported as not located, in metres.
@@ -194,7 +270,24 @@ impl SessionConfig {
         let a = &self.anchors;
         let r = &self.revisits;
         let l = &self.limits;
-        let checks: [(&'static str, bool); 8] = [
+        let o = &self.output;
+        let checks: [(&'static str, bool); 11] = [
+            ("ground policy", positive(&[self.ground.relief_fraction])),
+            (
+                "output policy",
+                positive(&[
+                    o.navigation_bound_m,
+                    o.projection_bound_m,
+                    o.projection_tilt_bound_rad,
+                    o.projection_off_nadir_rad,
+                    o.projection_attitude_bound_rad,
+                ]) && o.recent_anchor_ns > 0,
+            ),
+            (
+                "relocation policy",
+                positive(&[self.relocation.spacing_m, self.relocation.max_radius_m])
+                    && (1..=64).contains(&self.relocation.max_candidates),
+            ),
             (
                 "drift model",
                 positive(&[

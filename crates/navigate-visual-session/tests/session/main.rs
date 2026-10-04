@@ -4,6 +4,8 @@
 mod support;
 
 #[cfg(test)]
+mod attitude;
+#[cfg(test)]
 mod continuity;
 #[cfg(test)]
 mod contracts;
@@ -15,3 +17,5 @@ mod memory;
 mod recovery;
 #[cfg(test)]
 mod revisit;
+#[cfg(test)]
+mod scene;

@@ -7,9 +7,6 @@ use crate::{
     store::{Carry, Keyframe, KeyframeId, Odometry, wants_keyframe},
 };
 
-/// Rotation error of a kept prior, in radians.
-const FROZEN_SIGMA_RAD: f64 = 0.05;
-
 /// A frame joined to a keyframe of its segment.
 pub(super) struct Attachment {
     pub keyframe: KeyframeId,
@@ -116,7 +113,7 @@ impl VisualSession {
         let frozen = Frozen {
             pose: estimate,
             sigma_m: carry.sigma_m + drift_m,
-            sigma_rad: FROZEN_SIGMA_RAD + drift_rad,
+            sigma_rad: carry.sigma_rad + drift_rad,
         };
         self.frozen.insert(id, frozen);
         self.refresh();
@@ -235,6 +232,7 @@ impl VisualSession {
 
     fn evict(&mut self, id: KeyframeId) {
         let bounds = self.bounds();
+        let attitudes = self.attitude_bounds();
         let Some(kf) = self.keyframes.remove(&id) else {
             return;
         };
@@ -247,6 +245,9 @@ impl VisualSession {
         // The next keyframe keeps the located estimate as a prior, so the
         // remaining trajectory keeps its map reference. The bound is a
         // conservative sum, which limits the weight of the repeated evidence.
+        // A kept prior claims the attitude bound of the removed keyframe;
+        // without map attitude it claims a full radian.
+        let attitude = attitudes.get(&id).copied().flatten().unwrap_or(1.0);
         if let Some(bound) = bounds.get(&id).copied().flatten() {
             match next.and_then(|n| self.keyframes.get(&n).map(|k| (n, k))) {
                 Some((next, n)) => {
@@ -255,7 +256,7 @@ impl VisualSession {
                     let frozen = Frozen {
                         pose: n.estimate,
                         sigma_m: bound + drift_m,
-                        sigma_rad: FROZEN_SIGMA_RAD + drift_rad,
+                        sigma_rad: attitude + drift_rad,
                     };
                     self.frozen.entry(next).or_insert(frozen);
                 }
@@ -263,6 +264,7 @@ impl VisualSession {
                     let carry = Carry {
                         correction: crate::pose::compose(&kf.estimate, &kf.odometry.pose.inverse()),
                         sigma_m: bound,
+                        sigma_rad: attitude,
                         odometry: kf.odometry.clone(),
                     };
                     if let Some(s) = self.segments.get_mut(&segment) {
@@ -273,6 +275,7 @@ impl VisualSession {
         }
         self.anchors.remove(&id);
         self.frozen.remove(&id);
+        self.grounds.remove(&id);
         let before = self.closures.len();
         self.closures.retain(|c| c.earlier != id && c.later != id);
         if self.closures.len() != before {

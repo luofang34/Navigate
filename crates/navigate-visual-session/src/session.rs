@@ -1,9 +1,11 @@
 //! The session state machine.
 
 mod anchoring;
+mod ground;
 mod keyframes;
 mod optimize;
 mod query;
+mod relocate;
 mod revisit;
 mod topology;
 
@@ -22,7 +24,9 @@ use navigate_visual::LocalFrame;
 use std::collections::BTreeMap;
 
 pub use anchoring::AnchorDecision;
-pub use query::{Confirmation, FramePose, MapPose, OdometryPose, Unlocated};
+pub use ground::{GroundDecision, GroundPlaneObservation, TerrainNormal};
+pub use query::{Confirmation, FramePose, MapPose, OdometryPose, Unlocated, Usability};
+pub use relocate::{GroundView, PositionBasis, RelocationCandidate, TiltBasis};
 pub use revisit::{RevisitCandidate, RevisitConstraint, RevisitDecision, RevisitEvidence};
 
 /// An accepted anchor, transferred to its keyframe.
@@ -37,6 +41,20 @@ struct Anchor {
     /// Drift between the anchored frame and its keyframe, in radians.
     transfer_rad: f64,
     cell: MapCell,
+    /// Capture time of the anchored frame.
+    capture_ns: u64,
+}
+
+/// A ground-plane direction transferred to its keyframe.
+#[derive(Clone, Debug)]
+struct Ground {
+    /// Terrain normal in the world frame.
+    world: Vector3<f64>,
+    /// The same normal in the keyframe camera frame.
+    camera: Vector3<f64>,
+    sigma_rad: f64,
+    /// Frame of the observation.
+    frame: FrameKey,
 }
 
 /// A frozen prior that keeps information from evicted keyframes.
@@ -107,6 +125,7 @@ pub struct VisualSession {
     pending: BTreeMap<SegmentId, Vec<anchoring::Pending>>,
     closures: Vec<Closure>,
     frozen: BTreeMap<KeyframeId, Frozen>,
+    grounds: BTreeMap<KeyframeId, Ground>,
     biases: BTreeMap<MapCell, Vector3<f64>>,
     local_frame: Option<LocalFrame>,
     ledger: Ledger,
@@ -142,6 +161,7 @@ impl VisualSession {
             pending: BTreeMap::new(),
             closures: Vec::new(),
             frozen: BTreeMap::new(),
+            grounds: BTreeMap::new(),
             biases: BTreeMap::new(),
             local_frame: None,
             ledger: Ledger::default(),

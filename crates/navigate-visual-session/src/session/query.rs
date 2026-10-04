@@ -3,7 +3,7 @@
 use super::VisualSession;
 use crate::{
     CaptureTime, FrameKey, MediaTime, ScaleSource, SegmentId, SessionError,
-    pose::{Pose, blend},
+    pose::{Pose, blend, off_nadir},
     store::{KeyframeId, Odometry},
 };
 use navigate_visual::LocalFrame;
@@ -13,8 +13,35 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default)]
 pub(super) struct Topology {
     pub bounds: BTreeMap<KeyframeId, Option<f64>>,
+    /// Attitude bound from map anchors and kept priors.
+    pub attitude: BTreeMap<KeyframeId, Option<f64>>,
+    /// Tilt bound from map evidence and ground planes.
+    pub tilt: BTreeMap<KeyframeId, Option<f64>>,
+    /// Anchor capture times of each component.
+    pub anchor_times: BTreeMap<KeyframeId, Vec<u64>>,
     pub components: BTreeMap<KeyframeId, KeyframeId>,
-    pub anchors: BTreeMap<KeyframeId, usize>,
+}
+
+/// Bounds of one frame. Each value is a conservative sum, not a covariance.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Bounds {
+    pub position_m: Option<f64>,
+    pub tilt_rad: Option<f64>,
+    pub attitude_rad: Option<f64>,
+}
+
+impl Bounds {
+    fn tighter(&self, other: &Self) -> Self {
+        let min = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(x), Some(y)) => Some(x.min(y)),
+            (x, y) => x.or(y),
+        };
+        Self {
+            position_m: min(self.position_m, other.position_m),
+            tilt_rad: min(self.tilt_rad, other.tilt_rad),
+            attitude_rad: min(self.attitude_rad, other.attitude_rad),
+        }
+    }
 }
 
 /// Continuous odometry of one frame.
@@ -30,16 +57,28 @@ pub struct OdometryPose {
     pub scale: Option<ScaleSource>,
 }
 
-/// How many independent anchors support a located frame.
+/// How many recent anchors support a located frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirmation {
-    /// One anchor, with no agreement from another frame.
+    /// Fewer than two anchors within the recent window of this frame.
     Unconfirmed,
-    /// Two or more anchors or kept priors in the connected trajectory.
+    /// Two or more anchors of the connected trajectory within the recent window.
     Confirmed {
-        /// Number of anchors and kept priors.
+        /// Number of anchors within the window.
         anchors: usize,
     },
+}
+
+/// What a located frame can be used for. Each use needs its own evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Usability {
+    /// An anchor of the connected trajectory is within the recent window.
+    pub recent_map_support: bool,
+    /// The position bound permits use as a navigation position.
+    pub navigation: bool,
+    /// Position, tilt, and map-attitude bounds permit projection of the image
+    /// onto the ground.
+    pub ground_projection: bool,
 }
 
 /// Why a frame has no map pose.
@@ -67,8 +106,19 @@ pub enum MapPose {
         map_from_odom: Pose,
         /// Conservative position bound, in metres. It is not a covariance.
         position_bound_m: f64,
+        /// Conservative tilt bound from map anchors and ground planes, in
+        /// radians, or `None` when nothing observes tilt.
+        tilt_bound_rad: Option<f64>,
+        /// Conservative attitude bound from map anchors alone, in radians,
+        /// including heading, or `None` when no anchor observes attitude.
+        attitude_bound_rad: Option<f64>,
+        /// Capture-time distance to the nearest anchor of the connected
+        /// trajectory, in nanoseconds.
+        nearest_anchor_ns: Option<u64>,
         /// Anchor support.
         confirmation: Confirmation,
+        /// Permitted uses of this pose.
+        usability: Usability,
         /// Local frame of `pose`.
         local_frame: LocalFrame,
     },
@@ -97,30 +147,36 @@ impl VisualSession {
     pub(super) fn refresh(&mut self) {
         self.topology = Topology {
             bounds: self.bounds(),
+            attitude: self.attitude_bounds(),
+            tilt: self.tilt_bounds(),
+            anchor_times: self.anchor_times(),
             components: self.components(),
-            anchors: self.anchor_counts(),
         };
     }
 
-    /// Correction and bound for a frame with odometry.
-    fn locate(
+    /// Correction, bounds, and the nearest earlier keyframe for a frame with odometry.
+    pub(super) fn locate(
         &self,
         frame: &FrameKey,
         odometry: &Odometry,
-    ) -> Option<(Pose, Option<f64>, KeyframeId)> {
+    ) -> Option<(Pose, Bounds, KeyframeId)> {
         let (before, after) = self.neighbours(odometry.segment, frame.index);
         let side = |id: Option<KeyframeId>| {
             let id = id?;
             let kf = self.keyframes.get(&id)?;
-            let correction = self.correction(id)?;
-            let bound = self
-                .topology
-                .bounds
-                .get(&id)
-                .copied()
-                .flatten()
-                .map(|b| b + kf.odometry.drift_to(odometry, &self.config.drift).0);
-            Some((correction, bound, id, kf.odometry.path_m))
+            let (m, rad) = kf.odometry.drift_to(odometry, &self.config.drift);
+            let grow = |map: &BTreeMap<KeyframeId, Option<f64>>, add: f64| {
+                map.get(&id).copied().flatten().map(|b| b + add)
+            };
+            let attitude = self.topology.attitude.get(&id).copied().flatten();
+            let travel = (odometry.path_m - kf.odometry.path_m).abs();
+            let turned = travel * attitude.unwrap_or(1.0).min(1.0).sin();
+            let bounds = Bounds {
+                position_m: grow(&self.topology.bounds, m + turned),
+                tilt_rad: grow(&self.topology.tilt, rad),
+                attitude_rad: grow(&self.topology.attitude, rad),
+            };
+            Some((self.correction(id)?, bounds, id, kf.odometry.path_m))
         };
         match (side(before), side(after)) {
             (Some(a), Some(b)) => {
@@ -130,11 +186,7 @@ impl VisualSession {
                 } else {
                     0.0
                 };
-                let bound = match (a.1, b.1) {
-                    (Some(x), Some(y)) => Some(x.min(y)),
-                    (x, y) => x.or(y),
-                };
-                Some((blend(&a.0, &b.0, t), bound, a.2))
+                Some((blend(&a.0, &b.0, t), a.1.tighter(&b.1), a.2))
             }
             (Some(a), None) | (None, Some(a)) => Some((a.0, a.1, a.2)),
             (None, None) => None,
@@ -144,8 +196,11 @@ impl VisualSession {
     /// Predicted map pose and position bound of a located frame.
     pub(super) fn predict(&self, frame: &FrameKey) -> Option<(Pose, f64)> {
         let odometry = self.frames.get(frame)?.odometry.clone()?;
-        let (correction, bound, _) = self.locate(frame, &odometry)?;
-        Some((crate::pose::compose(&correction, &odometry.pose), bound?))
+        let (correction, bounds, _) = self.locate(frame, &odometry)?;
+        Some((
+            crate::pose::compose(&correction, &odometry.pose),
+            bounds.position_m?,
+        ))
     }
 
     /// Odometry and map pose of a frame at the current revision.
@@ -182,32 +237,59 @@ impl VisualSession {
     }
 
     fn map_pose(&self, frame: &FrameKey, odometry: &Odometry) -> MapPose {
-        let (Some((correction, Some(bound), keyframe)), Some(local_frame)) =
-            (self.locate(frame, odometry), self.local_frame)
+        let located = self.locate(frame, odometry);
+        let (Some((correction, bounds, keyframe)), Some(local_frame)) = (located, self.local_frame)
         else {
+            return MapPose::Unlocated(Unlocated::NoAnchor);
+        };
+        let Some(bound) = bounds.position_m else {
             return MapPose::Unlocated(Unlocated::NoAnchor);
         };
         // A bound that is not a number is not a usable bound.
         if bound.is_nan() || bound > self.config.max_located_bound_m {
             return MapPose::Unlocated(Unlocated::BoundExceeded { bound_m: bound });
         }
-        let anchors = self
+        let capture = self.frames.get(frame).map_or(0, |s| s.record.capture.at_ns);
+        let times = self
             .topology
             .components
             .get(&keyframe)
-            .and_then(|root| self.topology.anchors.get(root))
-            .copied()
-            .unwrap_or(0);
-        let confirmation = if anchors >= 2 {
-            Confirmation::Confirmed { anchors }
-        } else {
-            Confirmation::Unconfirmed
-        };
+            .and_then(|root| self.topology.anchor_times.get(root))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let window = self.config.output.recent_anchor_ns;
+        let recent = times
+            .iter()
+            .filter(|t| t.abs_diff(capture) <= window)
+            .count();
+        let nearest_anchor_ns = times.iter().map(|t| t.abs_diff(capture)).min();
+        let pose = crate::pose::compose(&correction, &odometry.pose);
+        let output = &self.config.output;
+        let heading_ok = bounds
+            .attitude_rad
+            .is_some_and(|a| a <= output.projection_attitude_bound_rad);
+        let projectable = heading_ok
+            && bounds.tilt_rad.is_some_and(|tilt| {
+                tilt <= output.projection_tilt_bound_rad
+                    && off_nadir(&pose) + tilt <= output.projection_off_nadir_rad
+            });
         MapPose::Located {
-            pose: crate::pose::compose(&correction, &odometry.pose),
+            pose,
             map_from_odom: correction,
             position_bound_m: bound,
-            confirmation,
+            tilt_bound_rad: bounds.tilt_rad,
+            attitude_bound_rad: bounds.attitude_rad,
+            nearest_anchor_ns,
+            confirmation: if recent >= 2 {
+                Confirmation::Confirmed { anchors: recent }
+            } else {
+                Confirmation::Unconfirmed
+            },
+            usability: Usability {
+                recent_map_support: recent >= 1,
+                navigation: bound <= output.navigation_bound_m,
+                ground_projection: projectable && bound <= output.projection_bound_m,
+            },
             local_frame,
         }
     }

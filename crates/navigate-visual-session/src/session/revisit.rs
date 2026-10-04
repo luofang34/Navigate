@@ -437,19 +437,10 @@ impl VisualSession {
 
     /// Smallest declared drift along links between two keyframes.
     fn path_drift(&self, from: KeyframeId, to: KeyframeId) -> Option<f64> {
-        let links = self.links();
-        let mut best = std::collections::BTreeMap::from([(from, 0.0_f64)]);
-        let mut open = vec![from];
-        while let Some(id) = open.pop() {
-            let value = best.get(&id).copied()?;
-            for (next, weight) in links.get(&id).map(Vec::as_slice).unwrap_or_default() {
-                if best.get(next).is_none_or(|b| value + weight < *b) {
-                    best.insert(*next, value + weight);
-                    open.push(*next);
-                }
-            }
-        }
-        best.get(&to).copied()
+        self.propagate(std::iter::once((from, 0.0)), |_, link| link.m)
+            .get(&to)
+            .copied()
+            .flatten()
     }
 
     /// Move an unlocated component next to the other end of a new closure.
