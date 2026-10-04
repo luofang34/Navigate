@@ -43,6 +43,16 @@ pub(crate) enum Factor {
         sigma_m: f64,
         sigma_rad: f64,
     },
+    /// A world direction observed in the camera frame, such as the ground
+    /// normal. It constrains tilt and leaves the heading free.
+    Direction {
+        node: usize,
+        /// Unit direction in the world frame.
+        world: Vector3<f64>,
+        /// Unit direction in the camera eye frame.
+        camera: Vector3<f64>,
+        sigma_rad: f64,
+    },
     /// Zero-mean prior of a map-cell bias.
     BiasPrior {
         bias: usize,
@@ -139,22 +149,7 @@ impl Problem {
                 pose,
                 position_sqrt_info,
                 sigma_rad,
-            } => {
-                let current = self.poses.get(*node)?;
-                let offset = match bias {
-                    Some(j) => Some((*self.biases.get(*j)?, dims.bias(*j))),
-                    None => None,
-                };
-                let weights = (position_sqrt_info, *sigma_rad);
-                Some(absolute(
-                    current,
-                    pose,
-                    offset,
-                    weights,
-                    dims.pose(*node),
-                    true,
-                ))
-            }
+            } => self.anchor(*node, *bias, pose, (position_sqrt_info, *sigma_rad)),
             Factor::Prior {
                 node,
                 pose,
@@ -172,12 +167,50 @@ impl Problem {
                     false,
                 ))
             }
+            Factor::Direction {
+                node,
+                world,
+                camera,
+                sigma_rad,
+            } => {
+                let current = self.poses.get(*node)?;
+                Some(direction(
+                    current,
+                    world,
+                    camera,
+                    *sigma_rad,
+                    dims.pose(*node),
+                ))
+            }
             Factor::BiasPrior { bias, sqrt_info } => Some(bias_prior(
                 self.biases.get(*bias)?,
                 sqrt_info,
                 dims.bias(*bias),
             )),
         }
+    }
+
+    fn anchor(
+        &self,
+        node: usize,
+        bias: Option<usize>,
+        pose: &Pose,
+        weights: (&Matrix3<f64>, f64),
+    ) -> Option<Linearized> {
+        let dims = self.dims();
+        let current = self.poses.get(node)?;
+        let offset = match bias {
+            Some(j) => Some((*self.biases.get(j)?, dims.bias(j))),
+            None => None,
+        };
+        Some(absolute(
+            current,
+            pose,
+            offset,
+            weights,
+            dims.pose(node),
+            true,
+        ))
     }
 
     /// Optimize all variables with damped Gauss-Newton steps.
@@ -331,6 +364,35 @@ fn absolute(
         rows: 6,
         blocks,
         robust,
+    }
+}
+
+/// Residual `R^T w - c`. With `R' = Exp(phi) R`, its rotation Jacobian is `R^T [w]x`.
+fn direction(
+    current: &Pose,
+    world: &Vector3<f64>,
+    camera: &Vector3<f64>,
+    sigma_rad: f64,
+    column: usize,
+) -> Linearized {
+    let rt = current
+        .rotation
+        .to_rotation_matrix()
+        .into_inner()
+        .transpose();
+    let mut residual = SVector::<f64, 6>::zeros();
+    residual
+        .fixed_rows_mut::<3>(0)
+        .copy_from(&((rt * world - camera) / sigma_rad));
+    let mut jacobian = SMatrix::<f64, 6, 6>::zeros();
+    jacobian
+        .fixed_view_mut::<3, 3>(0, 3)
+        .copy_from(&(rt * skew(world) / sigma_rad));
+    Linearized {
+        residual,
+        rows: 3,
+        blocks: vec![(column, jacobian, 6)],
+        robust: true,
     }
 }
 

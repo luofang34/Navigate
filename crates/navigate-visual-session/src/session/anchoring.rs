@@ -166,6 +166,16 @@ impl VisualSession {
         Ok(None)
     }
 
+    /// The anchor error budget. An unknown lens model adds attitude error,
+    /// because uncorrected distortion moves the fitted camera axis.
+    fn anchor_budget(&self, anchor: &AnchorObservation) -> crate::AnchorBudget {
+        let mut result = budget(anchor, self.half_fov());
+        if self.calibration.lens == crate::LensModel::Unknown {
+            result.rotation_rad += UNKNOWN_LENS_ROTATION_RAD;
+        }
+        result
+    }
+
     pub(super) fn half_fov(&self) -> f64 {
         let c = &self.calibration.intrinsics;
         let half = (f64::from(c.width).powi(2) + f64::from(c.height).powi(2)).sqrt() * 0.5;
@@ -187,6 +197,7 @@ impl VisualSession {
         let shift = if first { Shift::Component } else { Shift::None };
         let frame = anchor.frame;
         let sha = anchor.observation_sha256.clone();
+        let copy = anchor.clone();
         let Some((keyframe, eligibility)) = self.insert_anchor(anchor, shift)? else {
             return Ok(AnchorDecision::SameViewpoint);
         };
@@ -195,10 +206,23 @@ impl VisualSession {
             .anchors
             .get(&keyframe)
             .is_some_and(|a| a.observation.observation_sha256 == sha);
-        if !kept {
-            return Ok(self.reject(frame, AnchorRejection::Retracted));
+        if kept {
+            return Ok(AnchorDecision::Accepted { eligibility });
         }
-        Ok(AnchorDecision::Accepted { eligibility })
+        // Other evidence outvoted it. It still counts as evidence for a
+        // relocation if later frames agree with it.
+        let segment = self
+            .frames
+            .get(&frame)
+            .and_then(|s| s.odometry.as_ref())
+            .map(|o| o.segment);
+        if let Some(segment) = segment {
+            self.queue_pending(segment, copy);
+            if let Some(decision) = self.try_consensus(segment)? {
+                return Ok(decision);
+            }
+        }
+        Ok(self.reject(frame, AnchorRejection::Retracted))
     }
 
     /// Insert without optimization. `None` reports a better anchor at the same keyframe.
@@ -208,7 +232,7 @@ impl VisualSession {
         shift: Shift,
     ) -> Result<Option<(KeyframeId, FusionEligibility)>, SessionError> {
         let attachment = self.attach(anchor.frame, &[])?;
-        let budget = budget(&anchor, self.half_fov());
+        let budget = self.anchor_budget(&anchor);
         if let Some(existing) = self.anchors.get(&attachment.keyframe)
             && existing.budget.horizontal_m() + existing.transfer_m
                 <= budget.horizontal_m() + attachment.drift_m
@@ -230,6 +254,10 @@ impl VisualSession {
             self.config.limits.max_ledger_cells,
         );
         let frame = anchor.frame;
+        let capture_ns = self
+            .frames
+            .get(&frame)
+            .map_or(0, |s| s.record.capture.at_ns);
         let record = Anchor {
             observation: anchor,
             keyframe_pose,
@@ -237,6 +265,7 @@ impl VisualSession {
             transfer_m: attachment.drift_m,
             transfer_rad: attachment.drift_rad,
             cell,
+            capture_ns,
         };
         if let Some(replaced) = self.anchors.insert(attachment.keyframe, record) {
             self.event(SessionEvent::AnchorRetracted {
@@ -413,18 +442,36 @@ impl VisualSession {
         }
         let agreeing = members.len();
         let mut shift = Shift::Segment;
+        let mut inserted = Vec::new();
         for anchor in members.drain(..) {
-            if self.insert_anchor(anchor, shift)?.is_some() {
+            let sha = anchor.observation_sha256.clone();
+            if let Some((keyframe, _)) = self.insert_anchor(anchor, shift)? {
                 shift = Shift::None;
+                inserted.push((keyframe, sha));
             }
         }
         self.optimize(RevisionCause::Relocation, &before);
+        let survived = inserted.iter().any(|(keyframe, sha)| {
+            self.anchors
+                .get(keyframe)
+                .is_some_and(|a| a.observation.observation_sha256 == *sha)
+        });
+        if inserted.is_empty() {
+            // The agreeing anchors share keyframes with better anchors.
+            return Ok(Some(AnchorDecision::SameViewpoint));
+        }
+        if !survived {
+            return Ok(Some(AnchorDecision::Rejected(AnchorRejection::Retracted)));
+        }
         Ok(Some(AnchorDecision::Relocated {
             agreeing,
             retracted: conflicting.len(),
         }))
     }
 }
+
+/// Attitude error added for an uncalibrated lens, in radians.
+const UNKNOWN_LENS_ROTATION_RAD: f64 = 0.03;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shift {

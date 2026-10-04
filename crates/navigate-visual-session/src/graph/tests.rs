@@ -46,6 +46,14 @@ fn analytic_jacobians_match_central_differences() {
         ],
         disabled: vec![false, false],
     };
+    let mut problem = problem;
+    problem.factors.push(Factor::Direction {
+        node: 0,
+        world: Vector3::z(),
+        camera: a.rotation.inverse() * Vector3::z(),
+        sigma_rad: 0.03,
+    });
+    problem.disabled.push(false);
     for factor in &problem.factors {
         let lin = problem.linearize(factor).unwrap();
         for (column, jacobian, width) in &lin.blocks {
@@ -199,4 +207,36 @@ fn a_shared_bias_takes_a_common_anchor_offset() {
     problem.solve(30);
     assert!(problem.biases[0].x > 4.0, "bias {:?}", problem.biases[0]);
     assert!((problem.poses[3].translation.vector - truth[3].translation.vector).norm() < 1.0);
+}
+
+#[test]
+fn a_ground_direction_bounds_tilt_and_leaves_heading_free() {
+    let truth = pose(0.0, 0.0, 100.0, 0.05, -0.03, 1.2);
+    let start = pose(0.0, 0.0, 100.0, 0.6, 0.4, 1.2);
+    let factors = vec![
+        Factor::Direction {
+            node: 0,
+            world: Vector3::z(),
+            camera: truth.rotation.inverse() * Vector3::z(),
+            sigma_rad: 0.02,
+        },
+        Factor::Prior {
+            node: 0,
+            pose: start,
+            sigma_m: 1.0,
+            sigma_rad: 10.0,
+        },
+    ];
+    let mut problem = Problem {
+        poses: vec![start],
+        biases: vec![],
+        disabled: vec![false; 2],
+        factors,
+    };
+    problem.solve(30);
+    let up = problem.poses[0].rotation.inverse() * Vector3::z();
+    assert!(
+        up.angle(&(truth.rotation.inverse() * Vector3::z())) < 1e-3,
+        "tilt follows the direction"
+    );
 }

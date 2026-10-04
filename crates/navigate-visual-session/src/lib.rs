@@ -58,7 +58,8 @@ pub use height::{
 pub use motion::{RelativeMotion, ScaleSource};
 pub use pose::{Pose, from_camera, to_camera};
 pub use session::{
-    AnchorDecision, Confirmation, FramePose, MapPose, MotionOutcome, OdometryPose,
-    RevisitCandidate, RevisitConstraint, RevisitDecision, RevisitEvidence, SessionUsage, Unlocated,
-    VisualSession,
+    AnchorDecision, Confirmation, FramePose, GroundDecision, GroundPlaneObservation, GroundView,
+    MapPose, MotionOutcome, OdometryPose, PositionBasis, RelocationCandidate, RevisitCandidate,
+    RevisitConstraint, RevisitDecision, RevisitEvidence, SessionUsage, TerrainNormal, TiltBasis,
+    Unlocated, Usability, VisualSession,
 };

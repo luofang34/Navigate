@@ -79,7 +79,9 @@ fn map_corrections_revise_map_poses_without_moving_odometry() {
             position_bound_m,
             ..
         } => {
-            assert_eq!(confirmation, Confirmation::Confirmed { anchors: 3 });
+            // Frames are 1 s apart: the anchors at 30 s and 59 s are within the
+            // 30 s window of frame 45; the anchor at 0 s is not.
+            assert_eq!(confirmation, Confirmation::Confirmed { anchors: 2 });
             assert!(position_bound_m.is_finite() && position_bound_m > 0.0);
         }
         other => panic!("frame 45 is located: {other:?}"),

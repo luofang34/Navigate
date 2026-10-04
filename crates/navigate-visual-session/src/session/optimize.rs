@@ -24,6 +24,7 @@ enum Source {
     Closure(usize),
     Anchor(KeyframeId),
     Frozen(KeyframeId),
+    Ground(KeyframeId),
 }
 
 struct Built {
@@ -60,6 +61,7 @@ impl VisualSession {
         self.add_motion(&mut built);
         self.add_closures(&mut built);
         self.add_anchors(&mut built);
+        self.add_grounds(&mut built);
         self.add_priors(&mut built);
         built.problem.disabled = vec![false; built.problem.factors.len()];
         built
@@ -147,6 +149,22 @@ impl VisualSession {
         for (j, (h, v)) in shared {
             let sqrt_info = Matrix3::from_diagonal(&Vector3::new(1.0 / h, 1.0 / h, 1.0 / v));
             built.push(Factor::BiasPrior { bias: j, sqrt_info }, Source::Fixed);
+        }
+    }
+
+    /// Ground normals observed in keyframe cameras. They are robust and can be
+    /// retracted, because a wrong plane or an understated error must not hold
+    /// the attitude.
+    fn add_grounds(&self, built: &mut Built) {
+        for (id, ground) in &self.grounds {
+            let Some(node) = built.node(id) else { continue };
+            let factor = Factor::Direction {
+                node,
+                world: ground.world,
+                camera: ground.camera,
+                sigma_rad: ground.sigma_rad,
+            };
+            built.push(factor, Source::Ground(*id));
         }
     }
 
@@ -252,6 +270,15 @@ impl VisualSession {
             }
             // A kept prior repeats evidence that the trajectory now contradicts.
             Some((Source::Frozen(id), _)) => self.frozen.remove(&id).is_some(),
+            Some((Source::Ground(id), _)) => match self.grounds.remove(&id) {
+                Some(ground) => {
+                    self.event(SessionEvent::GroundPlaneRetracted {
+                        frame: ground.frame,
+                    });
+                    true
+                }
+                None => false,
+            },
             _ => false,
         }
     }

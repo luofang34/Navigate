@@ -74,6 +74,8 @@ pub(crate) struct Segment {
 pub(crate) struct Carry {
     pub correction: Pose,
     pub sigma_m: f64,
+    /// Attitude bound of the removed keyframe, in radians.
+    pub sigma_rad: f64,
     /// Odometry of the removed keyframe, for the drift to the next one.
     pub odometry: Odometry,
 }

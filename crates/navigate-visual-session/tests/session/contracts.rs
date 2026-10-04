@@ -64,13 +64,9 @@ fn an_agreeing_anchor_near_the_consensus_is_not_retracted() {
         .session
         .submit_anchor(anchor(&flight, &keys[6], Vector3::zeros()))
         .unwrap();
-    assert_eq!(
-        decision,
-        AnchorDecision::Relocated {
-            agreeing: 2,
-            retracted: 0
-        }
-    );
+    // Both agreeing frames are within one keyframe of the first anchor, so
+    // they add no new evidence.
+    assert_eq!(decision, AnchorDecision::SameViewpoint);
     let events = flight.session.drain_events().events;
     assert!(
         !events
@@ -189,4 +185,86 @@ fn an_anchor_covariance_without_a_square_root_is_refused() {
         "a refused first anchor does not fix the local frame"
     );
     assert_eq!(flight.session.usage().anchors, 0);
+}
+
+fn wrong_ground(
+    flight: &Flight,
+    index: usize,
+    error_rad: f64,
+) -> navigate_visual_session::GroundPlaneObservation {
+    let (k, truth, _) = &flight.truth[index];
+    // The true ground normal in the camera, tilted by `error_rad`, with an understated error.
+    let up =
+        nalgebra::UnitQuaternion::from_euler_angles(error_rad, 0.0, 0.0) * nalgebra::Vector3::z();
+    navigate_visual_session::GroundPlaneObservation {
+        frame: *k,
+        normal_camera: nalgebra::Unit::new_normalize(truth.rotation.inverse() * up),
+        geometry_sigma_rad: 0.005,
+        terrain: navigate_visual_session::TerrainNormal {
+            normal: nalgebra::Vector3::z_axis(),
+            sigma_rad: 0.0,
+        },
+        relief_ratio: 0.0,
+    }
+}
+
+#[test]
+fn wrong_ground_planes_cannot_hold_the_attitude_or_lock_out_anchors() {
+    use navigate_visual_session::GroundDecision;
+    let mut flight = Flight::standard();
+    fly(&mut flight, 30, 5.0);
+    let (usage, revision) = (flight.session.usage(), flight.session.revision());
+    for index in 5..10 {
+        let decision = flight
+            .session
+            .submit_ground_plane(wrong_ground(&flight, index, 0.35))
+            .unwrap();
+        assert_eq!(
+            decision,
+            GroundDecision::Unanchored,
+            "the odometry frame has no map attitude"
+        );
+    }
+    assert_eq!(
+        (flight.session.usage(), flight.session.revision()),
+        (usage, revision),
+        "refusals change nothing"
+    );
+
+    for index in [0, 29] {
+        let k = flight.truth[index].0;
+        let decision = flight
+            .session
+            .submit_anchor(anchor(&flight, &k, Vector3::zeros()))
+            .unwrap();
+        assert!(
+            matches!(decision, AnchorDecision::Accepted { .. }),
+            "{decision:?}"
+        );
+    }
+    for index in 10..16 {
+        flight
+            .session
+            .submit_ground_plane(wrong_ground(&flight, index, 0.09))
+            .unwrap();
+    }
+    assert_eq!(flight.session.usage().anchors, 2, "correct anchors stay");
+    for (k, truth, _) in &flight.truth {
+        if let MapPose::Located {
+            pose,
+            tilt_bound_rad: Some(bound),
+            ..
+        } = flight.session.pose_at(k).unwrap().map
+        {
+            let axis = nalgebra::Vector3::new(0.0, 0.0, -1.0);
+            let error = (pose.rotation * axis).angle(&(truth.rotation * axis));
+            assert!(
+                error <= 3.0 * bound + 0.5_f64.to_radians(),
+                "frame {}: {:.2} deg error, {:.2} deg bound",
+                k.index,
+                error.to_degrees(),
+                bound.to_degrees()
+            );
+        }
+    }
 }

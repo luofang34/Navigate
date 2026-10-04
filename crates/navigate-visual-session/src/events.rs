@@ -51,6 +51,8 @@ pub enum RevisionCause {
     Closure,
     /// A closure or an anchor left the graph after optimization.
     Retraction,
+    /// A ground-plane observation constrained a keyframe tilt.
+    GroundPlane,
 }
 
 /// Frames of one segment whose map pose changed.
@@ -108,6 +110,21 @@ pub enum SessionEvent {
         frame: FrameKey,
         /// Reason.
         reason: AnchorRejection,
+    },
+    /// A ground-plane observation constrains a keyframe tilt.
+    GroundPlaneAccepted {
+        /// Frame of the observation.
+        frame: FrameKey,
+    },
+    /// A ground-plane observation left the graph after optimization.
+    GroundPlaneRetracted {
+        /// Frame of the observation.
+        frame: FrameKey,
+    },
+    /// A ground-plane observation disagrees with attitude from map anchors.
+    GroundPlaneRejected {
+        /// Frame of the observation.
+        frame: FrameKey,
     },
     /// An accepted anchor left the trajectory after a relocation.
     AnchorRetracted {
