@@ -237,7 +237,7 @@ impl VisualSession {
         }
         let odometry = Odometry {
             segment: segment_id,
-            pose: from.pose * motion.from_to,
+            pose: crate::pose::compose(&from.pose, &motion.from_to),
             path_m: from.path_m + motion.from_to.translation.vector.norm(),
             turn_rad: from.turn_rad + motion.from_to.rotation.angle(),
             steps: from.steps.wrapping_add(1),

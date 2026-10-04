@@ -145,7 +145,7 @@ impl VisualSession {
     pub(super) fn predict(&self, frame: &FrameKey) -> Option<(Pose, f64)> {
         let odometry = self.frames.get(frame)?.odometry.clone()?;
         let (correction, bound, _) = self.locate(frame, &odometry)?;
-        Some((correction * odometry.pose, bound?))
+        Some((crate::pose::compose(&correction, &odometry.pose), bound?))
     }
 
     /// Odometry and map pose of a frame at the current revision.
@@ -204,7 +204,7 @@ impl VisualSession {
             Confirmation::Unconfirmed
         };
         MapPose::Located {
-            pose: correction * odometry.pose,
+            pose: crate::pose::compose(&correction, &odometry.pose),
             map_from_odom: correction,
             position_bound_m: bound,
             confirmation,

@@ -310,3 +310,90 @@ fn changed_areas_and_wrong_places_are_refused_without_moving_the_track() {
         "a refused anchor does not revise poses"
     );
 }
+
+#[test]
+fn returned_map_poses_stay_valid_through_the_host_tracking_loop() {
+    // The host renders each tracking reference at the returned map pose, and
+    // the visual crate refuses quaternions whose norm differs from one by more
+    // than 1e-8. Blended corrections and composed motions must not drift.
+    use navigate_visual::{LocalizerConfig, PosePrior, PoseVerifier, TrackingReference};
+    let mut flight = Flight::standard();
+    let verifier = PoseVerifier::new(LocalizerConfig::default()).unwrap();
+    let mut previous: Option<(
+        navigate_visual_session::FrameKey,
+        navigate_visual_session::Pose,
+        navigate_visual::Frame,
+    )> = None;
+    for i in 0..80_u64 {
+        let truth = nadir(
+            Vector3::new(2.0 * i as f64, 0.3 * i as f64, 100.0),
+            0.004 * i as f64,
+        );
+        let frame = image_frame(i);
+        let k = key(0, i);
+        flight.session.observe_frame(record(k, &frame)).unwrap();
+        if let Some((pk, pt, pf)) = &previous
+            && let MapPose::Located { pose, .. } = flight.session.pose_at(pk).unwrap().map
+        {
+            let reference = ground_view(&pose, 0.0);
+            let surface = TrackingReference {
+                observation: pf,
+                surface: &reference,
+            };
+            let prior = PosePrior {
+                pose: navigate_visual_session::to_camera(&pose),
+                position_radius_m: 500.0,
+                attitude_radius_rad: 1.0,
+            };
+            let proposal = verifier
+                .track(
+                    &frame,
+                    surface,
+                    &prior,
+                    &ground_matches(pt, &truth, 0.0),
+                    "synthetic",
+                )
+                .unwrap_or_else(|e| panic!("frame {i}: {e}"));
+            let motion = navigate_visual_session::RelativeMotion::from_tracking(
+                *pk,
+                k,
+                &reference.pose,
+                &proposal,
+            );
+            flight.session.apply_motion(motion).unwrap();
+        }
+        if i == 0 || i == 20 {
+            let offset = if i == 0 {
+                Vector3::zeros()
+            } else {
+                Vector3::new(3.0, -2.0, 0.0)
+            };
+            let estimate = map_estimate(&frame, &truth, offset);
+            let observation = navigate_visual_session::AnchorObservation::from_estimate(
+                k,
+                &estimate,
+                reliability(),
+            );
+            flight.session.submit_anchor(observation).unwrap();
+        }
+        previous = Some((k, truth, frame));
+    }
+    // Hosts can also read the returned isometries directly.
+    for i in 0..80_u64 {
+        let pose = flight.session.pose_at(&key(0, i)).unwrap();
+        if let MapPose::Located {
+            pose,
+            map_from_odom,
+            ..
+        } = pose.map
+        {
+            for rotation in [pose.rotation, map_from_odom.rotation] {
+                assert!(
+                    (rotation.norm() - 1.0).abs() <= 1e-12,
+                    "frame {i}: norm {}",
+                    rotation.norm()
+                );
+            }
+        }
+    }
+}
