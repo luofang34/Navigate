@@ -19,7 +19,7 @@ assert.equal(new CatchUp().next(0),null,'an empty buffer has nothing to catch up
 // A live source keeps presenting frames while a slow first estimate runs. After the pose is supported,
 // the loop processes buffered frames forward instead of jumping to the newest frame.
 let now=0,presented=0;const listeners=new Map();
-const video={ended:false,currentTime:0,async play(){},pause(){},addEventListener(name,fn){listeners.set(name,fn)},
+const video={ended:false,currentTime:0,async play(){},pause(){},addEventListener(name,fn){listeners.set(name,fn)},removeEventListener(name,fn){if(listeners.get(name)===fn)listeners.delete(name)},
  requestVideoFrameCallback(fn){setTimeout(()=>{if(video.ended)return;presented=Math.max(presented+1,Math.floor(now*30));video.currentTime=presented/30;fn(now*1000,{mediaTime:presented/30,presentedFrames:presented})},0)}};
 const times=[];
 await runRealtime({video,camera:{width:4,height:3},clock:()=>now*1000,catchUp:new CatchUp({rateHz:2}),

@@ -1,5 +1,5 @@
 import {BrowserPipeline} from './browser-pipeline.js';
-import {runRealtime} from './realtime-video.js';
+import {runRealtime,loadedMetadata} from './realtime-video.js';
 import {cameraForImage} from './calibration.js';
 import {matchingOptions} from './matching-options.js';
 
@@ -7,10 +7,11 @@ import {matchingOptions} from './matching-options.js';
 // package that is already stored offline. `prior` uses the app's prior fields (latitude, longitude,
 // radius_m, agl_m, and an optional heading_deg). Each estimate with a pose or a search result reaches
 // `onResult`; deferred frames that only wait for tracking to recover are not reported. `capture`
-// replaces the default canvas grab when a host supplies its own grayscale frames.
+// replaces the default canvas grab when a host supplies its own grayscale frames. The returned summary
+// includes the stored image track groups.
 export async function localizeVideo({pack,source,prior,quality='balanced',fovDeg=82.1,signal,capture,onResult=()=>{},onProgress=()=>{},createPipeline=()=>new BrowserPipeline()}){
   const video=typeof MediaStream!=='undefined'&&source instanceof MediaStream?streamVideo(source):source;
-  if(!video.videoWidth)await new Promise((resolve,reject)=>{video.addEventListener('loadedmetadata',resolve,{once:true});video.addEventListener('error',()=>reject(Error('The video source cannot be decoded')),{once:true})});
+  if(!video.videoWidth)await loadedMetadata(video,'The video source cannot be decoded');
   const options=matchingOptions(quality),camera=cameraForImage(video.videoWidth,video.videoHeight,fovDeg,options.longEdge),pipeline=createPipeline();
   try{
     await pipeline.initialize(pack,camera,onProgress,options);
@@ -21,7 +22,8 @@ export async function localizeVideo({pack,source,prior,quality='balanced',fovDeg
       if(result.decision!=='search_deferred')onResult(result,observation.time);
       return result;
     }});
-    return run.summary;
+    // A stop or the end of the source still stores the partial last image group.
+    return {...run.summary,image_track_groups:await pipeline.finishSequence()};
   }finally{pipeline.close()}
 }
 

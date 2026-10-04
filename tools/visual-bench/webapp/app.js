@@ -101,7 +101,11 @@ $('locate').onclick=async()=>{const selectedPack=pack,selectedPrior=priorValues(
       if(result.decision!=='search_deferred'){orderedInsert(frames,blobs,result,await blob);$('frames').replaceChildren(...frames.map(frameOption));trackPreview.setFrames(frames,{period:selectedPrior.sample_period})}
       return result}});
     mission=await storage.saveLocalMission({camera:cam,prior:selectedPrior,frames,input:{name:input.name,names:inputFiles.map(f=>f.name),size:inputFiles.reduce((n,f)=>n+f.size,0),processing:'browser-local real-time',calibration:'assumed full-width 4:3 sensor crop; not independently calibrated'},processing:{stage:'real-time',complete:true,realtime:run.summary}},selectedPack,blobs);
-    mediaMissionId=mission.id;await refreshMissions(mission.id);await showMission(mission);
+    // The frames are saved first. A stop request or the end of the source then stores the partial
+    // last image group; a failure to store it keeps the saved frames.
+    mediaMissionId=mission.id;
+    mission.view.image_track_groups=await pipeline.finishSequence();await storage.put('missions',mission.id,mission);
+    await refreshMissions(mission.id);await showMission(mission);
     status(`${missionSummary(frames)} · ${run.summary.processed} frames in ${(run.summary.wall_ms/1000).toFixed(1)} s · ${run.summary.dropped_frames} presented frames skipped`);await storageStatus();return;
   }
   for(let i=0;i<times.length;i++){if(sourceAspect!==null){media.close();media=await openInput(inputFiles[i],$('video'));if(Math.abs(media.source.width/media.source.height-sourceAspect)>1e-6)throw Error('Sequence images must have the same aspect ratio. Process this image separately.')}status(`Processing frame ${i+1}/${times.length}…`);const observation=await frameAt(media,times[i],cam,{retainOriginal:pipeline.requiresOriginalImage});if(queryURL)URL.revokeObjectURL(queryURL);queryURL=URL.createObjectURL(observation.blob);$('query').src=queryURL;$('query-empty').hidden=true;const result=await pipeline.estimate(observation,selectedPrior,i,s=>status(`Frame ${i+1}/${times.length} · ${s}`));result.input_name=sourceAspect!==null?inputFiles[i].name:input.name;frames.push(result);blobs.push(observation.blob);$('frames').append(frameOption(result,i));trackPreview.setFrames(frames,{period:selectedPrior.sample_period});if(media.type!=='video'){const options=fillHypotheses(result);await showHypothesis(result,options[0]);showDetails(result)}enable()}
