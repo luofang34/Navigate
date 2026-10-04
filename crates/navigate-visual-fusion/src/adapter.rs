@@ -43,6 +43,24 @@ pub enum EvidenceIndependence {
     ValidatedIndependent,
 }
 
+impl EvidenceIndependence {
+    /// Restrict a host assessment with the label of a visual session anchor.
+    ///
+    /// A session label can refuse independence but cannot give it. The label
+    /// covers only the map cells of one session ledger. The host assessment
+    /// must cover all other shared error, for example calibration, earlier
+    /// sessions, other map revisions, and other sources in the filter. Anchors
+    /// that share a map cell with an earlier anchor, and anchors that the
+    /// ledger could not track, become `Unknown`.
+    pub fn restricted_by(self, label: &navigate_visual_session::FusionEligibility) -> Self {
+        match label {
+            navigate_visual_session::FusionEligibility::Independent => self,
+            navigate_visual_session::FusionEligibility::SharedMapError { .. }
+            | navigate_visual_session::FusionEligibility::Untracked => Self::Unknown,
+        }
+    }
+}
+
 /// Converts the visual estimates of one capture stream into position fixes.
 ///
 /// One frame gives at most one fix. A second estimate from the same frame
