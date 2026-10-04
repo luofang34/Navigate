@@ -1,0 +1,19 @@
+[package]
+name = "navigate-visual-session"
+description = "Continuous visual odometry, map anchoring, revisit closure, and per-frame height for one camera session"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+navigate-contract = { workspace = true }
+navigate-visual = { path = "../navigate-visual" }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+
+[lints]
+workspace = true
