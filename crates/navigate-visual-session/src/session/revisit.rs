@@ -188,7 +188,7 @@ impl VisualSession {
             descriptor: descriptor.and_then(normalized),
             estimate: keyframe
                 .and_then(|k| self.correction(k))
-                .map(|c| c * odometry.pose),
+                .map(|c| crate::pose::compose(&c, &odometry.pose)),
             root: keyframe
                 .and_then(|k| self.topology.components.get(&k))
                 .copied(),

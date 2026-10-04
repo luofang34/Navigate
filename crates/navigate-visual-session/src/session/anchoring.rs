@@ -271,7 +271,7 @@ impl VisualSession {
                 Shift::None => false,
             };
             if moves {
-                kf.estimate = delta * kf.estimate;
+                kf.estimate = crate::pose::compose(&delta, &kf.estimate);
             }
         }
     }

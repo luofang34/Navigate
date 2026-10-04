@@ -1,6 +1,6 @@
 //! Rigid camera poses and their conversion to `navigate_visual::CameraPose`.
 
-use nalgebra::{Isometry3, Matrix3, Translation3, Vector3};
+use nalgebra::{Isometry3, Matrix3, Translation3, UnitQuaternion, Vector3};
 use navigate_visual::CameraPose;
 
 /// World-from-camera rigid transform. Camera axes are right, up, and back.
@@ -15,8 +15,22 @@ pub fn from_camera(pose: &CameraPose) -> Pose {
 pub fn to_camera(pose: &Pose) -> CameraPose {
     CameraPose {
         position: pose.translation.vector,
-        orientation: pose.rotation,
+        orientation: unit(&pose.rotation),
     }
+}
+
+/// Remove the norm error that slerp and repeated composition leave. The
+/// visual crate refuses quaternions whose norm differs from one by more than
+/// 1e-8, and a host feeds returned poses back into it.
+pub(crate) fn unit(rotation: &UnitQuaternion<f64>) -> UnitQuaternion<f64> {
+    UnitQuaternion::new_normalize(rotation.into_inner())
+}
+
+/// Compose two poses and renormalize the rotation.
+pub(crate) fn compose(a: &Pose, b: &Pose) -> Pose {
+    let mut pose = a * b;
+    pose.rotation = unit(&pose.rotation);
+    pose
 }
 
 /// Skew-symmetric matrix of a vector.
@@ -31,7 +45,7 @@ pub(crate) fn blend(a: &Pose, b: &Pose, t: f64) -> Pose {
         .rotation
         .try_slerp(&b.rotation, t, 1e-12)
         .unwrap_or(a.rotation);
-    Isometry3::from_parts(Translation3::from(translation), rotation)
+    Isometry3::from_parts(Translation3::from(translation), unit(&rotation))
 }
 
 /// Angle between the camera view axis and straight down, in radians.

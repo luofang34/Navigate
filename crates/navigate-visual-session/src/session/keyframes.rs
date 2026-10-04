@@ -70,7 +70,10 @@ impl VisualSession {
     /// Map-from-odometry correction implied by one keyframe.
     pub(super) fn correction(&self, id: KeyframeId) -> Option<Pose> {
         let kf = self.keyframes.get(&id)?;
-        Some(kf.estimate * kf.odometry.pose.inverse())
+        Some(crate::pose::compose(
+            &kf.estimate,
+            &kf.odometry.pose.inverse(),
+        ))
     }
 
     pub(super) fn extend_keyframes(
@@ -92,7 +95,8 @@ impl VisualSession {
             .get(&last)
             .is_some_and(|kf| wants_keyframe(kf, odometry, &self.config.keyframes));
         if wanted {
-            let estimate = self.correction(last).unwrap_or_else(Pose::identity) * odometry.pose;
+            let correction = self.correction(last).unwrap_or_else(Pose::identity);
+            let estimate = crate::pose::compose(&correction, &odometry.pose);
             self.push_keyframe(segment, frame, odometry, estimate, &[]);
         }
         wanted
@@ -106,7 +110,7 @@ impl VisualSession {
             self.push_keyframe(segment, frame, odometry, odometry.pose, &[]);
             return;
         };
-        let estimate = carry.correction * odometry.pose;
+        let estimate = crate::pose::compose(&carry.correction, &odometry.pose);
         let id = self.push_keyframe(segment, frame, odometry, estimate, &[]);
         let (drift_m, drift_rad) = carry.odometry.drift_to(odometry, &self.config.drift);
         let frozen = Frozen {
@@ -169,7 +173,7 @@ impl VisualSession {
                     .or(after)
                     .and_then(|k| self.correction(k))
                     .unwrap_or_else(Pose::identity);
-                let estimate = base * odometry.pose;
+                let estimate = crate::pose::compose(&base, &odometry.pose);
                 self.push_keyframe(odometry.segment, frame, &odometry, estimate, protect)
             }
         };
@@ -257,7 +261,7 @@ impl VisualSession {
                 }
                 None => {
                     let carry = Carry {
-                        correction: kf.estimate * kf.odometry.pose.inverse(),
+                        correction: crate::pose::compose(&kf.estimate, &kf.odometry.pose.inverse()),
                         sigma_m: bound,
                         odometry: kf.odometry.clone(),
                     };

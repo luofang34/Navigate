@@ -241,7 +241,8 @@ impl Problem {
             let (Some(rho), Some(phi)) = (vector(step, at), vector(step, at + 3)) else {
                 continue;
             };
-            let rotation = UnitQuaternion::from_scaled_axis(phi) * pose.rotation;
+            let rotation =
+                crate::pose::unit(&(UnitQuaternion::from_scaled_axis(phi) * pose.rotation));
             *pose = Pose::from_parts(Translation3::from(pose.translation.vector + rho), rotation);
         }
         for (j, bias) in self.biases.iter_mut().enumerate() {
