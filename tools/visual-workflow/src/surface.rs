@@ -5,6 +5,7 @@ mod matching;
 pub mod prepare;
 pub mod probe;
 mod report;
+pub mod windows;
 
 use crate::{Error, assets, config::Config};
 use navigate_visual::{LocalizerConfig, PoseVerifier};

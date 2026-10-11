@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 mod detector;
 mod packet;
+mod window;
 use detector::Detector;
 
 /// XFeat detector input and output contract.

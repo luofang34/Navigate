@@ -97,19 +97,23 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),
-        "locate" | "locate-surface" => (if name == "locate" {
-            run::locate_blocking
-        } else {
-            surface::run_blocking
-        })(
-            &config,
-            root,
-            &path("job")?,
-            &path("output")?,
-            *args
-                .get_one::<usize>("iterations")
-                .ok_or_else(|| Error::Input("missing iterations".into()))?,
-        ),
+        "locate" | "locate-surface" | "probe-surface-windows" => {
+            (if name == "probe-surface-windows" {
+                surface::windows::run_blocking
+            } else if name == "locate" {
+                run::locate_blocking
+            } else {
+                surface::run_blocking
+            })(
+                &config,
+                root,
+                &path("job")?,
+                &path("output")?,
+                *args
+                    .get_one::<usize>("iterations")
+                    .ok_or_else(|| Error::Input("missing iterations".into()))?,
+            )
+        }
         _ => Err(Error::Input(format!("unknown command {name}"))),
     }
 }

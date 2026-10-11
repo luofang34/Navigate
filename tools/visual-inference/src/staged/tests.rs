@@ -56,3 +56,42 @@ fn equivalence_checks_feature_payload_not_only_image_and_encoder() {
 
 #[cfg(target_os = "macos")]
 mod masked;
+
+#[test]
+fn window_selection_preserves_parent_identity_and_all_record_bits() {
+    let mut source = feature_packet();
+    source
+        .features
+        .push([80.0, 60.0], [640.0, 450.0], 0.7, &[0.125; 64])
+        .unwrap();
+    source = XFeatFeatures::new(
+        source.contract,
+        source.image_digest,
+        source.image_size,
+        source.features,
+    );
+    let selected = source.select_window([0, 0, 50, 40]).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected.encode(), feature_packet().encode());
+    assert_eq!(selected.image_digest, source.image_digest);
+    assert_eq!(selected.image_size, source.image_size);
+    assert_eq!(
+        XFeatFeatures::decode(&selected.encode(), 2048)
+            .unwrap()
+            .encode(),
+        selected.encode()
+    );
+    assert!(source.select_window([0, 0, 10, 12]).unwrap().is_empty());
+    assert_eq!(
+        source.select_window([0, 0, 100, 80]).unwrap().encode(),
+        source.encode()
+    );
+    for window in [
+        [0, 0, 0, 20],
+        [99, 0, 2, 2],
+        [0, 79, 1, 2],
+        [u32::MAX, 0, 2, 2],
+    ] {
+        assert!(source.select_window(window).is_err());
+    }
+}

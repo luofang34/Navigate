@@ -178,7 +178,7 @@ fn validate_rotations(rotations: &[u8], limit: usize) -> Result<(), Error> {
     }
     Ok(())
 }
-fn rotate(image: &GrayImage, rotation: u8) -> GrayImage {
+pub(super) fn rotate(image: &GrayImage, rotation: u8) -> GrayImage {
     match rotation {
         1 => imageops::rotate90(image),
         2 => imageops::rotate180(image),
@@ -186,16 +186,23 @@ fn rotate(image: &GrayImage, rotation: u8) -> GrayImage {
         _ => image.clone(),
     }
 }
-fn restore(pair: &mut PixelMatch, rotation: u8, size: (u32, u32)) {
-    let p = pair.reference;
+pub(super) fn restore(pair: &mut PixelMatch, rotation: u8, size: (u32, u32)) {
+    pair.reference = restore_point(pair.reference, rotation, size);
+}
+pub(super) fn restore_point(
+    p: nalgebra::Vector2<f64>,
+    rotation: u8,
+    size: (u32, u32),
+) -> nalgebra::Vector2<f64> {
     let w = f64::from(size.0) - 1.0;
     let h = f64::from(size.1) - 1.0;
-    pair.reference = match rotation {
+    match rotation {
         1 => [p.y, h - p.x].into(),
         2 => [w - p.x, h - p.y].into(),
         3 => [w - p.y, p.x].into(),
         _ => p,
-    };
+    }
 }
+
 #[cfg(test)]
 mod tests;

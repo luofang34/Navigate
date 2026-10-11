@@ -51,6 +51,7 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
+        .subcommand(window_command())
         .subcommand(cascade_command())
         .subcommand(motion_command())
         .subcommand(render_command())
@@ -121,4 +122,18 @@ fn motion_command() -> Command {
         .about("Check frozen poses against image-only temporal correspondences")
         .arg(path("manifest"))
         .arg(path("output"))
+}
+
+fn window_command() -> Command {
+    Command::new("probe-surface-windows")
+        .about("Compare independent crops and shared map-block features on fixed windows")
+        .arg(path("config"))
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("iterations")
+                .long("iterations")
+                .default_value("1")
+                .value_parser(value_parser!(usize)),
+        )
 }
