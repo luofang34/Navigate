@@ -122,7 +122,7 @@ impl Compute {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+            pass.dispatch_workgroups(count, 1, 1);
         }
         encoder.copy_buffer_to_buffer(output, 0, readback, 0, u64::from(count) * 16);
         self.queue.submit([encoder.finish()]);
