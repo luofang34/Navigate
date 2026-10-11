@@ -331,6 +331,15 @@ Set `fold` to null for a coverage and timing run with all matches. This mode has
 no test score. `query_focal_scale` changes query rays only; map geometry stays
 fixed. Compare several scales to measure sensitivity to calibration.
 
+For a fixed-match comparison, set `focal_probe_scales` to a list of 1 through 21
+values in `[0.8, 1.2]`. Each value scales the effective query focal lengths.
+On each map-matching frame, the probe reuses the same training matches, reference
+geometry, prior, and test controls. It runs no extra neural inference.
+Results include the match digests, poses, test errors, and geometry times.
+Probe time is part of `validation_ms`, outside `pipeline_ms`.
+No probe result changes tracking, acceptance, or session state. A focal sweep
+measures conditional sensitivity; it does not establish calibrated intrinsics.
+
 If query images were cropped and resized, set `query_transform` to
 `{"crop":[left,top,width,height],"size":[output_width,output_height]}`.
 The job camera must describe the uncropped source image. The program transforms
@@ -340,7 +349,9 @@ crop and resize already applied. It does not change reference calibration.
 Set each reference's `camera` explicitly when its image grid differs from the
 source query grid. Omit `query_transform` when the job camera already describes
 the supplied query images. Results include the effective `query_camera`.
-Keep source calibration tied to the actual capture mode. A shared image size or
+Keep source calibration tied to the actual capture mode.
+Keep fitted candidate intrinsics separate from capture calibration. Validate
+them independently before reuse across frames. A shared image size or
 camera model does not establish equal photo and video fields of view.
 
 Each frame can include `position_check` with `source`, `latitude_longitude`,

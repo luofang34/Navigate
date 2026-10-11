@@ -1,5 +1,6 @@
 //! Compare map matching with bounded temporal reuse on spatially withheld evidence.
 mod backend;
+mod focal;
 mod metrics;
 mod navigation;
 mod position;
@@ -41,6 +42,7 @@ struct Experiment {
     query_focal_scale: f64,
     query_transform: Option<metrics::ImageTransform>,
     navigation: Option<navigation::Settings>,
+    focal_probe_scales: Option<Vec<f64>>,
     #[serde(default)]
     retain_valid_track: bool,
     #[serde(default)]
@@ -146,6 +148,7 @@ pub fn run_blocking(
         "query_focal_scale":runner.experiment.query_focal_scale,"frames":records,
         "query_transform":runner.experiment.query_transform,
         "navigation":runner.experiment.navigation,
+        "focal_probe_scales":runner.experiment.focal_probe_scales,
         "query_camera":{"size":[runner.query_camera.width,runner.query_camera.height],
         "focal":[runner.query_camera.fx,runner.query_camera.fy],
         "principal":[runner.query_camera.cx,runner.query_camera.cy]},
@@ -170,6 +173,10 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
         .max_map_track_disagreement_m
         .is_some_and(|v| !v.is_finite() || v <= 0.0)
         || experiment.navigation.is_some_and(|s| !s.valid())
+        || experiment
+            .focal_probe_scales
+            .as_ref()
+            .is_some_and(|s| !focal::valid_scales(s))
         || invalid_controls
         || experiment
             .frames
@@ -398,7 +405,7 @@ impl Runner {
         } = outcome;
         let pipeline_ms = start.elapsed().as_secs_f64() * 1000.0;
         let validation_start = Instant::now();
-        let withheld = self.controls_blocking(index, &frame, matches)?;
+        let (withheld, probe) = self.validation_blocking(index, &frame, matches)?;
         let mut record = json!({"index":index,"capture_time_ns":frame.stamp.capture_time_ns,
             "observation_sha256":frame.evidence_sha256(),"pipeline_ms":pipeline_ms,
             "stage_ms":timings,"frame_loading_ms":frame_loading_ms,
@@ -409,6 +416,7 @@ impl Runner {
             "controls":withheld.iter().map(|p|[p.reference.x,p.reference.y,p.query.x,p.query.y]).collect::<Vec<_>>(),
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});
+        record["focal_probe"] = json!(probe);
         self.position_checks(index, &frame, &decision, navigation, &mut record);
         match decision {
             Ok(estimate) => {
