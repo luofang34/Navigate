@@ -1,0 +1,20 @@
+[package]
+name = "navigate-celestial"
+description = "Observer states and celestial reception geometry without a map or host clock"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+anise = ["dep:anise"]
+
+[dependencies]
+anise = { version = "0.10.6", default-features = false, optional = true }
+hifitime = "4.3.1"
+nalgebra.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

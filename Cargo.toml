@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/navigate-celestial",
     "crates/navigate-contract",
     "crates/navigate-geodesy",
     "crates/navigate-fusion",

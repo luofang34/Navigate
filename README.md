@@ -48,6 +48,7 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | Crate | Responsibility |
 |---|---|
 | `navigate-contract` | The typed boundary vocabulary external consumers pin: solutions, integrity, stamps, plans, guidance setpoints, draft aiding schema |
+| `navigate-celestial` | Celestial directions from a framed observer state and a reception event; supports non-Earth origins and moving observers |
 | `navigate-geodesy` | WGS84 geodesy: geodetic ↔ ECEF ↔ local NED, great-circle distance/bearing, cross-track geometry |
 | `navigate-fusion` | The navigation filter: typed observations, admission gates, correlation discipline, integrity assessment |
 | `navigate-fpl` | Flight-plan validation and leg-sequencing execution |
@@ -63,6 +64,18 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
 records.
+
+`navigate-celestial` takes position and velocity in metres and metres per TDB
+second. Each state has a NAIF origin, a NAIF orientation, and a time scale.
+The crate is an opt-in dependency. Other navigation crates do not depend on it.
+The default build has no ANISE backend. Enable its `anise` feature to use
+`AniseEphemeris`. The host supplies kernels and explicit NAIF-to-ANISE
+orientation ID mappings. Other providers implement the `Ephemeris` trait.
+Geometric queries and reception queries are separate modes. Reception queries
+use Euclidean light time and special-relativistic aberration. They do not model
+gravitational light deflection, gravitational delay, refraction, or clock drift.
+The WGS84/NED `NavigationSolution` belongs to Earth navigation. Do not encode
+states from other bodies as WGS84 positions to enter that filter.
 
 The [visual positioning tool](tools/visual-bench/README.md) runs image and video
 matching in the browser. Its Rust service provides optional imagery downloads.
