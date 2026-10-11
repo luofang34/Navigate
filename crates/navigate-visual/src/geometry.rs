@@ -5,6 +5,7 @@ use crate::{
     pose_solver::{self, Correspondence},
 };
 use nalgebra::{SMatrix, Vector2};
+mod calibrated;
 mod refinement;
 mod support;
 use refinement::FitSupport;
