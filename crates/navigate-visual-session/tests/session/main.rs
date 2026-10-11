@@ -21,3 +21,5 @@ mod recovery;
 mod revisit;
 #[cfg(test)]
 mod scene;
+#[cfg(test)]
+mod frames;
