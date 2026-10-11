@@ -41,3 +41,15 @@ fn empty_packet_is_a_valid_absence_of_evidence() {
     let f = XFeatFeatures::new([1; 32], [2; 32], [100, 80], Features::empty(64));
     assert!(XFeatFeatures::decode(&f.encode(), 512).unwrap().is_empty());
 }
+
+#[test]
+fn equivalence_checks_feature_payload_not_only_image_and_encoder() {
+    let original = feature_packet();
+    let mut second = feature_packet();
+    assert!(original == second);
+    second.features.descriptors[0] = 0.25;
+    assert!(original != second);
+    second = feature_packet();
+    second.features.pixels[0][0] += 1.0;
+    assert!(original != second);
+}

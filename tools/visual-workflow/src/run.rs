@@ -114,6 +114,9 @@ pub(crate) fn report(report: FrameReport) -> Value {
         let mut value=json!({"reference_index":candidate.reference_index,"matches":candidate.matches,
             "matching_ms":candidate.times.matching.as_secs_f64()*1000.0,"geometry_ms":candidate.times.geometry.as_secs_f64()*1000.0,
             "accepted":candidate.decision.is_ok()});
+        if let Some(index) = candidate.matching_reused_from {
+            value["matching_reused_from"] = json!(index);
+        }
         match candidate.decision {
             Ok(estimate)=>{value["pose"]=json!(Pose::from(estimate.pose));value["geodetic"]=json!(estimate.frame.geodetic(estimate.pose.position));
                 value["quality"]=json!({"inliers":estimate.quality.inliers,"spatial_support":estimate.quality.spatial_support,

@@ -85,6 +85,7 @@ impl<M: ImageMatcher> PairLocalizer<M> {
                 self.verifier
                     .verify(frame, reference, prior, &matches, self.matcher.identity());
             candidates.push(CandidateReport {
+                matching_reused_from: None,
                 reference_index: index,
                 matches: matches.len(),
                 decision,

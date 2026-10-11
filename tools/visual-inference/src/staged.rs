@@ -17,11 +17,12 @@ pub enum XFeatGraph {
     Sparse,
     /// Normalized 800 by 576 grayscale input and dense output maps.
     Dense,
-    /// 800 by 600 RGB input with normalization inside the dense graph.
+    /// 800 by 600 grayscale or RGB input with normalization inside the dense graph.
     DenseImage,
 }
 
 /// Immutable host features bound to an encoder and a source image.
+#[derive(PartialEq)]
 pub struct XFeatFeatures {
     contract: [u8; 32],
     image_digest: [u8; 32],
@@ -196,6 +197,9 @@ impl FeatureBackend for XFeatStages {
             resident_bytes: features.resident_bytes(),
             count: features.len(),
         })
+    }
+    fn equivalent_features(&self, first: &XFeatFeatures, second: &XFeatFeatures) -> bool {
+        first == second
     }
     fn match_features_blocking(
         &mut self,

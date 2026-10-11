@@ -42,6 +42,14 @@ pub trait FeatureBackend {
         image: &GrayImage,
     ) -> Result<FeatureMetadata, VisualError>;
 
+    /// Whether both handles produce identical matches with any fixed query.
+    ///
+    /// Return true only when all matcher inputs and output pixel coordinates agree.
+    /// The default disables reuse for backends without an equivalence contract.
+    fn equivalent_features(&self, _first: &Self::Features, _second: &Self::Features) -> bool {
+        false
+    }
+
     /// Match two resident feature handles in their source image coordinates.
     ///
     /// # Errors

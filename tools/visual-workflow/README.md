@@ -3,6 +3,10 @@
 This Rust program makes reference feature packets and estimates camera poses.
 It can extract reference features at startup or load feature packets.
 One query extraction serves all supplied reference candidates.
+XFeat reuses matches within a query when reference feature contents are identical.
+Each candidate still runs its own geometry checks. The result field
+`matching_reused_from` identifies the source candidate when reuse occurs.
+Reused matches do not constitute independent observations.
 LoFTR uses an image-pair path because its computation depends on both images.
 All paths use the same Navigate pose verifier.
 
@@ -76,7 +80,7 @@ The graph contracts are:
 | --- | --- | --- |
 | `sparse` | XFeat `images`, RGB, 800 × 600 | Sparse XFeat features |
 | `dense` | XFeat `image`, normalized grayscale, 800 × 576 | Dense XFeat maps |
-| `dense_image` | XFeat `images`, RGB, 800 × 600 | Dense maps with preprocessing in the graph |
+| `dense_image` | XFeat `images`, grayscale or RGB, 800 × 600 | Dense maps with preprocessing in the graph |
 | `loftr` | LoFTR `image0` and `image1`, grayscale, 640 × 480 | Matched coordinates |
 
 The matcher accepts the original `log_assignment` output, an `assignment`

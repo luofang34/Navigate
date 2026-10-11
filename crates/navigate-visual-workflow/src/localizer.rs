@@ -68,6 +68,8 @@ pub struct StageTimes {
 pub struct CandidateReport {
     /// Index in the supplied reference list.
     pub reference_index: usize,
+    /// Earlier candidate whose matches were reused. Geometry is always evaluated separately.
+    pub matching_reused_from: Option<usize>,
     /// Pixel correspondences before geometric filtering.
     pub matches: usize,
     /// Shared geometry acceptance decision.
@@ -254,10 +256,7 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
             self.limits.query_feature_bytes,
         )?;
         let extraction = extraction_started.elapsed();
-        let mut candidates = Vec::with_capacity(references.len());
-        for (index, reference) in references.iter().enumerate() {
-            candidates.push(self.evaluate(frame, prior, reference, &query, index)?);
-        }
+        let candidates = self.evaluate_candidates(frame, prior, references, &query)?;
         Ok(FrameReport {
             extraction,
             total: started.elapsed(),
@@ -265,40 +264,62 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
         })
     }
 
-    fn evaluate(
+    fn evaluate_candidates(
         &mut self,
         frame: &Frame,
         prior: &PosePrior,
-        reference: &PreparedReference<B::Features>,
+        references: &[&PreparedReference<B::Features>],
         query: &B::Features,
-        index: usize,
-    ) -> Result<CandidateReport, WorkflowError> {
-        let start = Instant::now();
-        let matches = self
-            .backend
-            .match_features_blocking(&reference.features, query)
-            .map_err(|source| WorkflowError::Backend {
-                stage: "match features",
-                source,
-            })?;
-        let matching = start.elapsed();
-        let start = Instant::now();
-        let decision = self.verifier.verify(
-            frame,
-            &reference.view,
-            prior,
-            &matches,
-            self.backend.identity(),
-        );
-        Ok(CandidateReport {
-            reference_index: index,
-            matches: matches.len(),
-            decision,
-            times: StageTimes {
-                matching,
-                geometry: start.elapsed(),
-            },
-        })
+    ) -> Result<Vec<CandidateReport>, WorkflowError> {
+        let mut reports: Vec<Option<CandidateReport>> =
+            (0..references.len()).map(|_| None).collect();
+        for (index, reference) in references.iter().enumerate() {
+            if reports[index].is_some() {
+                continue;
+            }
+            let start = Instant::now();
+            let matches = self
+                .backend
+                .match_features_blocking(&reference.features, query)
+                .map_err(|source| WorkflowError::Backend {
+                    stage: "match features",
+                    source,
+                })?;
+            let matching = start.elapsed();
+            for (other, candidate) in references.iter().enumerate().skip(index) {
+                if reports[other].is_some()
+                    || (other != index
+                        && !self
+                            .backend
+                            .equivalent_features(&reference.features, &candidate.features))
+                {
+                    continue;
+                }
+                let start = Instant::now();
+                let decision = self.verifier.verify(
+                    frame,
+                    &candidate.view,
+                    prior,
+                    &matches,
+                    self.backend.identity(),
+                );
+                reports[other] = Some(CandidateReport {
+                    reference_index: other,
+                    matching_reused_from: (other != index).then_some(index),
+                    matches: matches.len(),
+                    decision,
+                    times: StageTimes {
+                        matching: if other == index {
+                            matching
+                        } else {
+                            Duration::ZERO
+                        },
+                        geometry: start.elapsed(),
+                    },
+                });
+            }
+        }
+        Ok(reports.into_iter().flatten().collect())
     }
 
     fn check_image(&self, image: &image::GrayImage) -> Result<(), WorkflowError> {

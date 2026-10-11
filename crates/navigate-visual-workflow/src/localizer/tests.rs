@@ -35,6 +35,9 @@ impl FeatureBackend for Backend {
             count: 24,
         })
     }
+    fn equivalent_features(&self, first: &GrayImage, second: &GrayImage) -> bool {
+        first == second
+    }
     fn match_features_blocking(
         &mut self,
         _: &Self::Features,
@@ -72,7 +75,7 @@ fn cached_references_extract_one_query_for_all_candidates() {
     let (frame, prior) = query();
     let report = workflow.estimate_blocking(&frame, &prior, &refs).unwrap();
     assert_eq!(workflow.backend().extractions, 3);
-    assert_eq!(workflow.backend().matches, 2);
+    assert_eq!(workflow.backend().matches, 1);
     assert_eq!(report.candidates.len(), 2);
     assert!(report.candidates.iter().all(|r| r.matches == 24));
     assert!(report.candidates.iter().all(|r| r.decision.is_ok()));
@@ -170,7 +173,7 @@ fn borrowed_references_reuse_features_across_queries() {
         );
     }
     assert_eq!(workflow.backend().extractions, 4);
-    assert_eq!(workflow.backend().matches, 4);
+    assert_eq!(workflow.backend().matches, 2);
     assert_eq!(std::sync::Arc::strong_count(&first), 1);
 }
 
@@ -197,4 +200,47 @@ fn borrowed_references_enforce_aggregate_memory_before_query_extraction() {
         })
     ));
     assert_eq!(workflow.backend().extractions, 1);
+}
+
+#[test]
+fn equivalent_features_reuse_matches_but_keep_distinct_geometry_decisions() {
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        limits(),
+    )
+    .unwrap();
+    let mut bad_geometry = reference();
+    bad_geometry.depth_m.fill(0.0);
+    let mut different_image = reference();
+    different_image.image.put_pixel(0, 0, image::Luma([101]));
+    let refs = vec![
+        workflow.prepare_reference_blocking(reference()).unwrap(),
+        workflow.prepare_reference_blocking(bad_geometry).unwrap(),
+        workflow
+            .prepare_reference_blocking(different_image)
+            .unwrap(),
+    ];
+    let (frame, prior) = query();
+    let report = workflow.estimate_blocking(&frame, &prior, &refs).unwrap();
+    assert_eq!(workflow.backend().matches, 2);
+    assert_eq!(workflow.backend().extractions, 4);
+    assert_eq!(report.candidates.len(), 3);
+    assert!(report.candidates[0].decision.is_ok());
+    assert!(report.candidates[1].decision.is_err());
+    assert!(report.candidates[2].decision.is_ok());
+    assert_eq!(report.candidates[1].matching_reused_from, Some(0));
+    assert_eq!(report.candidates[1].times.matching, Duration::ZERO);
+    assert_eq!(report.candidates[2].matching_reused_from, None);
+    assert_eq!(
+        report
+            .candidates
+            .iter()
+            .map(|c| c.reference_index)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
 }
