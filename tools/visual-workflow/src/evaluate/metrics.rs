@@ -2,6 +2,26 @@
 use navigate_visual::{CameraModel, CameraPose, PixelMatch, ReferenceView};
 use serde_json::{Value, json};
 
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ImageTransform {
+    pub crop: [u32; 4],
+    pub size: [u32; 2],
+}
+pub(super) fn prepare_query_camera(
+    camera: CameraModel,
+    transform: Option<ImageTransform>,
+    scale: f64,
+) -> Result<CameraModel, navigate_visual::VisualError> {
+    let camera = match transform {
+        Some(t) => camera.crop_and_resize(t.crop, t.size)?,
+        None => camera,
+    };
+    let camera = query_camera(camera, scale);
+    camera.validate()?;
+    Ok(camera)
+}
+
 pub(super) fn partition(pair: &PixelMatch, fold: u32) -> Option<bool> {
     let p = pair.reference;
     if !p.iter().all(|v| v.is_finite() && (0.0..8192.0).contains(v)) {

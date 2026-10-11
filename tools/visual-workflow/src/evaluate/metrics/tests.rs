@@ -152,3 +152,24 @@ fn reference_camera_controls_depth_index_and_world_rays() {
     let wrong = score(&[pair], &camera, (&reference, &camera), &pose);
     assert_eq!(wrong["valid_depth"], 0);
 }
+
+#[test]
+fn image_transform_is_explicit_and_focal_sensitivity_keeps_the_new_pixel_grid() {
+    let source = camera();
+    assert_eq!(prepare_query_camera(source, None, 1.0).unwrap(), source);
+    let transform = ImageTransform {
+        crop: [8, 16, 100, 80],
+        size: [64, 64],
+    };
+    let output = prepare_query_camera(source, Some(transform), 1.1).unwrap();
+    assert_eq!([output.width, output.height], [64, 64]);
+    assert!((output.fx - 70.4).abs() < 1e-10);
+    assert!((output.fy - 88.0).abs() < 1e-10);
+    assert!((output.cx - 35.66).abs() < 1e-10);
+    assert!((output.cy - 38.3).abs() < 1e-10);
+    let invalid = ImageTransform {
+        crop: [100, 0, 100, 80],
+        ..transform
+    };
+    assert!(prepare_query_camera(source, Some(invalid), 1.0).is_err());
+}

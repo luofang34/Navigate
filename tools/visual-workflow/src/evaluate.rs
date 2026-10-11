@@ -36,6 +36,7 @@ struct Experiment {
     fold: Option<u32>,
     refresh_interval: usize,
     query_focal_scale: f64,
+    query_transform: Option<metrics::ImageTransform>,
     #[serde(default)]
     retain_valid_track: bool,
     #[serde(default)]
@@ -67,6 +68,7 @@ struct Runner {
     tracks: Option<Tracks>,
     reference: ReferenceView,
     reference_camera: CameraModel,
+    query_camera: CameraModel,
     job: Job,
     experiment: Experiment,
 }
@@ -88,6 +90,11 @@ pub fn run_blocking(
         ));
     }
     let job_root = job_path.parent().unwrap_or(Path::new("."));
+    let query_camera = metrics::prepare_query_camera(
+        job.camera.model(),
+        experiment.query_transform,
+        experiment.query_focal_scale,
+    )?;
     let start = Instant::now();
     let mut source = job.references_blocking(job_root, config.limits.image_pixels)?;
     let reference = job.reference_blocking(
@@ -104,6 +111,7 @@ pub fn run_blocking(
         tracker,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         tracks: None,
+        query_camera,
         reference,
         reference_camera: job.references[0]
             .camera
@@ -124,6 +132,10 @@ pub fn run_blocking(
         "holdout_enabled":runner.experiment.fold.is_some(),
         "refresh_interval":runner.experiment.refresh_interval,
         "query_focal_scale":runner.experiment.query_focal_scale,"frames":records,
+        "query_transform":runner.experiment.query_transform,
+        "query_camera":{"size":[runner.query_camera.width,runner.query_camera.height],
+        "focal":[runner.query_camera.fx,runner.query_camera.fy],
+        "principal":[runner.query_camera.cx,runner.query_camera.cy]},
         "retain_valid_track":runner.experiment.retain_valid_track,
         "max_map_track_disagreement_m":runner.experiment.max_map_track_disagreement_m,
         "scope":"Conditional local navigation with an existing map hypothesis. When enabled, spatial holdout is fixed across the sequence. Validation matching is excluded from pipeline_ms. No geographic ground truth or independent confidence is asserted."}),
@@ -192,10 +204,7 @@ impl Runner {
     ) -> Result<Frame, Error> {
         let sample = &self.experiment.frames[index];
         let frame = Frame {
-            camera: metrics::query_camera(
-                self.job.camera.model(),
-                self.experiment.query_focal_scale,
-            ),
+            camera: self.query_camera,
             stamp: navigate_visual::FrameStamp {
                 sequence: index as u64,
                 capture_time_ns: sample.capture_time_ns,

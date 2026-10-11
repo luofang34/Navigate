@@ -4,6 +4,8 @@ use nalgebra::{UnitQuaternion, Vector2, Vector3};
 
 use crate::VisualError;
 
+mod transform;
+
 /// Pinhole intrinsics for an image with lens distortion removed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraModel {

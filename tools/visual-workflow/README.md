@@ -331,6 +331,18 @@ Set `fold` to null for a coverage and timing run with all matches. This mode has
 no test score. `query_focal_scale` changes query rays only; map geometry stays
 fixed. Compare several scales to measure sensitivity to calibration.
 
+If query images were cropped and resized, set `query_transform` to
+`{"crop":[left,top,width,height],"size":[output_width,output_height]}`.
+The job camera must describe the uncropped source image. The program transforms
+its focal lengths and principal point into the output pixel grid, then applies
+`query_focal_scale`. This field changes calibration only; supply images with the
+crop and resize already applied. It does not change reference calibration.
+Set each reference's `camera` explicitly when its image grid differs from the
+source query grid. Omit `query_transform` when the job camera already describes
+the supplied query images. Results include the effective `query_camera`.
+Keep source calibration tied to the actual capture mode. A shared image size or
+camera model does not establish equal photo and video fields of view.
+
 A refresh interval of 1 requests map matching for every frame. Larger intervals
 permit tracking between map requests. Tracking stops across a gap above 200 ms.
 With `retain_valid_track`, a rejected map result does not remove a valid track.
