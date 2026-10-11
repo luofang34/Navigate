@@ -14,14 +14,11 @@ pub(super) fn partition(pair: &PixelMatch, fold: u32) -> Option<bool> {
     Some(((p.x / 64.0) as u32 + 3 * (p.y / 64.0) as u32) % 5 == fold)
 }
 
-pub(super) fn calibrated(pair: PixelMatch, camera: &CameraModel, scale: f64) -> PixelMatch {
-    PixelMatch {
-        reference: pair.reference,
-        query: nalgebra::Vector2::new(
-            camera.cx + (pair.query.x - camera.cx) / scale,
-            camera.cy + (pair.query.y - camera.cy) / scale,
-        ),
-    }
+pub(super) fn query_camera(mut camera: CameraModel, scale: f64) -> CameraModel {
+    // Keep residuals and acceptance thresholds in the unchanged observation pixel grid.
+    camera.fx *= scale;
+    camera.fy *= scale;
+    camera
 }
 
 pub(super) fn residual(
@@ -58,11 +55,10 @@ pub(super) fn score(
     camera: &CameraModel,
     reference: (&ReferenceView, &CameraModel),
     pose: &CameraPose,
-    scale: f64,
 ) -> Value {
     let mut errors: Vec<_> = pairs
         .iter()
-        .filter_map(|p| residual(calibrated(*p, camera, scale), camera, reference, pose))
+        .filter_map(|p| residual(*p, camera, reference, pose))
         .collect();
     errors.sort_by(f64::total_cmp);
     let below = errors.iter().filter(|e| **e <= 2.5).count();

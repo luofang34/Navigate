@@ -31,15 +31,39 @@ fn spatial_membership_depends_only_on_fixed_reference_coordinates() {
 }
 
 #[test]
-fn focal_perturbation_keeps_map_geometry_fixed() {
-    let camera = camera();
-    let pair = PixelMatch {
-        reference: Vector2::new(80.0, 70.0),
-        query: Vector2::new(120.0, 100.0),
+fn focal_perturbation_keeps_errors_in_observation_pixels() {
+    let reference_camera = camera();
+    let pose = CameraPose {
+        position: Vector3::zeros(),
+        orientation: UnitQuaternion::identity(),
     };
-    let changed = calibrated(pair, &camera, 1.1);
-    assert_eq!(changed.reference, pair.reference);
-    assert!((changed.query.x - (64.0 + 56.0 / 1.1)).abs() < 1e-10);
+    let reference = ReferenceView {
+        map: MapRevision {
+            release_id: "test".into(),
+            manifest_sha256: "a".repeat(64),
+        },
+        frame: LocalFrame::anchor_mercator(35.0, -115.0).unwrap(),
+        pose,
+        image: image::GrayImage::new(128, 128),
+        depth_m: vec![100.0; 128 * 128],
+    };
+    for scale in [0.8, 1.0, 1.2] {
+        let camera = query_camera(reference_camera, scale);
+        assert_eq!(camera.cx, reference_camera.cx);
+        assert_eq!(camera.cy, reference_camera.cy);
+        let point = nalgebra::Vector2::new(80.0, 70.0);
+        let world = reference_camera.unproject(&pose, point, 100.0);
+        let projected = camera.project(&pose, world).unwrap();
+        for error in [2.4, 2.7] {
+            let pair = PixelMatch {
+                reference: point,
+                query: projected + Vector2::new(error, 0.0),
+            };
+            let measured = score(&[pair], &camera, (&reference, &reference_camera), &pose);
+            assert!((measured["median_px"].as_f64().unwrap() - error).abs() < 1e-10);
+            assert_eq!(measured["within_2_5_px"], usize::from(error < 2.5));
+        }
+    }
 }
 
 #[test]
@@ -66,18 +90,18 @@ fn heldout_errors_include_bad_matches_and_wrong_poses() {
             query: Vector2::new(x, 60.0),
         })
         .collect();
-    let correct = score(&pairs, &camera, (&reference, &camera), &pose, 1.0);
+    let correct = score(&pairs, &camera, (&reference, &camera), &pose);
     assert_eq!(correct["within_2_5_px"], 4);
     let wrong = CameraPose {
         position: Vector3::new(10.0, 0.0, 0.0),
         ..pose
     };
-    let result = score(&pairs, &camera, (&reference, &camera), &wrong, 1.0);
+    let result = score(&pairs, &camera, (&reference, &camera), &wrong);
     assert_eq!(result["within_2_5_px"], 0);
     assert!((result["median_px"].as_f64().unwrap() - 10.0).abs() < 1e-10);
     let mut contaminated = pairs;
     contaminated[0].query.x += 50.0;
-    let result = score(&contaminated, &camera, (&reference, &camera), &pose, 1.0);
+    let result = score(&contaminated, &camera, (&reference, &camera), &pose);
     assert_eq!(result["valid_depth"], 4);
     assert_eq!(result["within_2_5_px"], 3);
     assert_eq!(result["p90_px"], 50.0);
@@ -123,14 +147,8 @@ fn reference_camera_controls_depth_index_and_world_rays() {
         reference: Vector2::new(180.0, 60.0),
         query: Vector2::new(90.0, 60.0),
     };
-    let correct = score(
-        &[pair],
-        &camera,
-        (&reference, &reference_camera),
-        &pose,
-        1.0,
-    );
+    let correct = score(&[pair], &camera, (&reference, &reference_camera), &pose);
     assert_eq!(correct["within_2_5_px"], 1);
-    let wrong = score(&[pair], &camera, (&reference, &camera), &pose, 1.0);
+    let wrong = score(&[pair], &camera, (&reference, &camera), &pose);
     assert_eq!(wrong["valid_depth"], 0);
 }

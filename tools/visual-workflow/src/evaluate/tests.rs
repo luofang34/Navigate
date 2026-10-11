@@ -35,15 +35,7 @@ fn a_real_tracked_shift_preserves_map_points_and_acceptance() {
     let estimate = verifier
         .verify(&first, &reference, &prior, &pairs, "test")
         .unwrap();
-    let tracks = Tracks::update(
-        first,
-        pairs,
-        (&reference, &camera),
-        &estimate,
-        1.0,
-        None,
-        true,
-    );
+    let tracks = Tracks::update(first, pairs, (&reference, &camera), &estimate, None, true);
     let shifted = image::GrayImage::from_fn(320, 240, |x, y| *image.get_pixel((x + 1).min(319), y));
     let second = Frame {
         camera,

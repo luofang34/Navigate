@@ -41,20 +41,14 @@ impl Tracks {
         pairs: Vec<PixelMatch>,
         reference: (&ReferenceView, &CameraModel),
         estimate: &Estimate,
-        scale: f64,
         old: Option<&Self>,
         refreshed: bool,
     ) -> Self {
         let pairs = pairs
             .into_iter()
             .filter(|p| {
-                metrics::residual(
-                    metrics::calibrated(*p, &previous.camera, scale),
-                    &previous.camera,
-                    reference,
-                    &estimate.pose,
-                )
-                .is_some_and(|e| e <= 2.5)
+                metrics::residual(*p, &previous.camera, reference, &estimate.pose)
+                    .is_some_and(|e| e <= 2.5)
             })
             .collect();
         Self {

@@ -150,16 +150,12 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
 }
 impl Runner {
     fn fit(&self, frame: &Frame, pairs: &[PixelMatch]) -> Result<Estimate, Error> {
-        let calibrated: Vec<_> = pairs
-            .iter()
-            .map(|p| metrics::calibrated(*p, &frame.camera, self.experiment.query_focal_scale))
-            .collect();
         Ok(self.verifier.verify_calibrated_reference(
             frame,
             &self.reference,
             &self.reference_camera,
             &self.job.prior()?,
-            &calibrated,
+            pairs,
             self.matcher.identity(),
         )?)
     }
@@ -182,7 +178,10 @@ impl Runner {
     ) -> Result<Frame, Error> {
         let sample = &self.experiment.frames[index];
         let frame = Frame {
-            camera: self.job.camera.model(),
+            camera: metrics::query_camera(
+                self.job.camera.model(),
+                self.experiment.query_focal_scale,
+            ),
             stamp: navigate_visual::FrameStamp {
                 sequence: index as u64,
                 capture_time_ns: sample.capture_time_ns,
@@ -316,7 +315,6 @@ impl Runner {
                     &frame.camera,
                     (&self.reference, &self.reference_camera),
                     &estimate.pose,
-                    self.experiment.query_focal_scale,
                 );
                 let update_start = Instant::now();
                 self.tracks = Some(Tracks::update(
@@ -324,7 +322,6 @@ impl Runner {
                     pairs,
                     (&self.reference, &self.reference_camera),
                     &estimate,
-                    self.experiment.query_focal_scale,
                     self.tracks.as_ref(),
                     refreshed,
                 ));
