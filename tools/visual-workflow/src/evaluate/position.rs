@@ -25,10 +25,14 @@ impl PositionCheck {
     }
 
     pub fn compare(&self, capture_time_ns: u64, estimate: Option<&Estimate>) -> Value {
-        let distance = estimate.map(|e| {
-            let p = e.frame.geodetic(e.pose.position);
-            horizontal_distance(self.latitude_longitude, [p[0], p[1]])
-        });
+        self.compare_position(
+            capture_time_ns,
+            estimate.map(|e| e.frame.geodetic(e.pose.position)),
+        )
+    }
+
+    pub fn compare_position(&self, capture_time_ns: u64, position: Option<[f64; 3]>) -> Value {
+        let distance = position.map(|p| horizontal_distance(self.latitude_longitude, [p[0], p[1]]));
         json!({
             "source":self.source,"latitude_longitude":self.latitude_longitude,
             "reported_horizontal_error_m":self.reported_horizontal_error_m,

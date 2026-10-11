@@ -1,6 +1,7 @@
 //! Compare map matching with bounded temporal reuse on spatially withheld evidence.
 mod backend;
 mod metrics;
+mod navigation;
 mod position;
 mod temporal;
 mod tracker;
@@ -39,6 +40,7 @@ struct Experiment {
     refresh_interval: usize,
     query_focal_scale: f64,
     query_transform: Option<metrics::ImageTransform>,
+    navigation: Option<navigation::Settings>,
     #[serde(default)]
     retain_valid_track: bool,
     #[serde(default)]
@@ -51,8 +53,10 @@ struct StageTimings {
     tracking_ms: f64,
     geometry_ms: f64,
     map_matching_ms: f64,
+    navigation_ms: f64,
 }
 struct Outcome {
+    evidence: navigation::Evidence,
     timings: StageTimings,
     decision: Result<Estimate, Error>,
     pairs: Vec<PixelMatch>,
@@ -64,6 +68,7 @@ struct Outcome {
     disagreement_m: Option<f64>,
 }
 struct Runner {
+    navigation: Option<navigation::Navigation>,
     matcher: Matcher,
     tracker: Tracker,
     verifier: PoseVerifier,
@@ -107,8 +112,13 @@ pub fn run_blocking(
     )?;
     let matcher = Matcher::new_blocking(config.load_blocking(root)?, &reference.image)?;
     let tracker = Tracker::new_blocking(experiment.tracking_backend)?;
+    let navigation = experiment
+        .navigation
+        .map(|s| navigation::Navigation::new(query_camera, s))
+        .transpose()?;
     let setup_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mut runner = Runner {
+        navigation,
         matcher,
         tracker,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
@@ -135,6 +145,7 @@ pub fn run_blocking(
         "refresh_interval":runner.experiment.refresh_interval,
         "query_focal_scale":runner.experiment.query_focal_scale,"frames":records,
         "query_transform":runner.experiment.query_transform,
+        "navigation":runner.experiment.navigation,
         "query_camera":{"size":[runner.query_camera.width,runner.query_camera.height],
         "focal":[runner.query_camera.fx,runner.query_camera.fy],
         "principal":[runner.query_camera.cx,runner.query_camera.cy]},
@@ -158,6 +169,7 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
     if experiment
         .max_map_track_disagreement_m
         .is_some_and(|v| !v.is_finite() || v <= 0.0)
+        || experiment.navigation.is_some_and(|s| !s.valid())
         || invalid_controls
         || experiment
             .frames
@@ -258,6 +270,7 @@ impl Runner {
     }
     fn process_blocking(&mut self, frame: &Frame) -> Result<Outcome, Error> {
         let mut result = Outcome {
+            evidence: navigation::Evidence::default(),
             timings: StageTimings::default(),
             decision: Err(Error::Input("map initialization required".into())),
             pairs: Vec::new(),
@@ -283,6 +296,9 @@ impl Runner {
             result.timings.tracking_ms = start.elapsed().as_secs_f64() * 1000.0;
             let start = Instant::now();
             result.decision = self.fit(frame, &result.pairs);
+            if self.navigation.is_some() {
+                result.evidence.tracked = result.decision.as_ref().ok().cloned();
+            }
             result.timings.geometry_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
         let scheduled = self
@@ -305,6 +321,9 @@ impl Runner {
         let pairs = self.training(&matches);
         let start = Instant::now();
         let decision = self.fit(frame, &pairs);
+        if self.navigation.is_some() {
+            result.evidence.matched = decision.as_ref().ok().cloned();
+        }
         result.timings.geometry_ms += start.elapsed().as_secs_f64() * 1000.0;
         let (replace, disagreement) = select_map(
             &result.decision,
@@ -321,12 +340,52 @@ impl Runner {
         result.matches = Some(matches);
         Ok(())
     }
+    fn position_checks(
+        &self,
+        index: usize,
+        frame: &Frame,
+        decision: &Result<Estimate, Error>,
+        navigation: Option<navigation::Output>,
+        record: &mut Value,
+    ) {
+        let check = self.experiment.frames[index].position_check.as_ref();
+        if let Some(check) = check {
+            record["position_check"] =
+                check.compare(frame.stamp.capture_time_ns, decision.as_ref().ok());
+        }
+        if let Some(mut output) = navigation {
+            if let Some(check) = check {
+                output.record["position_check"] =
+                    check.compare_position(frame.stamp.capture_time_ns, output.position);
+            }
+            record["navigation"] = output.record;
+        }
+    }
+    fn advance_navigation(
+        &mut self,
+        frame: &Frame,
+        outcome: &mut Outcome,
+    ) -> Result<Option<navigation::Output>, Error> {
+        let navigation_start = Instant::now();
+        let navigation = self
+            .navigation
+            .as_mut()
+            .map(|s| s.step(frame, &outcome.evidence, outcome.decision.as_ref().ok()))
+            .transpose()?;
+        if navigation.is_some() {
+            outcome.timings.navigation_ms = navigation_start.elapsed().as_secs_f64() * 1000.0;
+        }
+        Ok(navigation)
+    }
     fn frame_blocking(&mut self, index: usize, root: &Path, pixels: usize) -> Result<Value, Error> {
         let start = Instant::now();
         let frame = self.load_frame_blocking(index, root, pixels)?;
         self.reference.validate_camera(&self.reference_camera)?;
         let frame_loading_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let mut outcome = self.process_blocking(&frame)?;
+        let navigation = self.advance_navigation(&frame, &mut outcome)?;
         let Outcome {
+            evidence: _,
             timings,
             decision,
             pairs,
@@ -336,7 +395,7 @@ impl Runner {
             refreshed,
             map_rejection,
             disagreement_m,
-        } = self.process_blocking(&frame)?;
+        } = outcome;
         let pipeline_ms = start.elapsed().as_secs_f64() * 1000.0;
         let validation_start = Instant::now();
         let withheld = self.controls_blocking(index, &frame, matches)?;
@@ -350,10 +409,7 @@ impl Runner {
             "controls":withheld.iter().map(|p|[p.reference.x,p.reference.y,p.query.x,p.query.y]).collect::<Vec<_>>(),
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});
-        if let Some(check) = &self.experiment.frames[index].position_check {
-            record["position_check"] =
-                check.compare(frame.stamp.capture_time_ns, decision.as_ref().ok());
-        }
+        self.position_checks(index, &frame, &decision, navigation, &mut record);
         match decision {
             Ok(estimate) => {
                 record["pose"] = json!(Pose::from(estimate.pose));

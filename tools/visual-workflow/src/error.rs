@@ -36,6 +36,8 @@ pub enum Error {
     #[error(transparent)]
     Inference(#[from] navigate_visual_onnx::InferenceError),
     #[error(transparent)]
+    Session(#[from] navigate_visual_session::SessionError),
+    #[error(transparent)]
     Visual(#[from] navigate_visual::VisualError),
     #[error(transparent)]
     Workflow(#[from] navigate_visual_workflow::WorkflowError),

@@ -11,6 +11,8 @@ gpu = ["navigate-visual/gpu"]
 rustnn-coreml = ["navigate-visual-onnx/rustnn-coreml"]
 
 [dependencies]
+navigate-contract.workspace = true
+navigate-visual-session = { path = "../../crates/navigate-visual-session" }
 navigate-visual = { path = "../../crates/navigate-visual" }
 navigate-visual-workflow = { path = "../../crates/navigate-visual-workflow" }
 navigate-visual-render = { path = "../../crates/navigate-visual-render" }

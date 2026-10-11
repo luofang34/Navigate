@@ -73,7 +73,7 @@ fn a_real_tracked_shift_preserves_map_points_and_acceptance() {
 }
 
 #[cfg(test)]
-fn fixture() -> (CameraModel, ReferenceView) {
+pub(super) fn fixture() -> (CameraModel, ReferenceView) {
     let camera = CameraModel {
         width: 320,
         height: 240,

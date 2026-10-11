@@ -351,6 +351,24 @@ This check does not change fitting, candidate selection, or acceptance.
 The program does not verify source accuracy or independence from map preparation
 and priors. It does not compare altitude. Keep this check separate from truth labels.
 
+Set `navigation` to an object with `map_horizontal_sigma_m`,
+`map_vertical_sigma_m`, `max_object_height_m`, `capture_time_error_bound_ns`,
+and `max_located_bound_m` to evaluate the session state layer. All fields are
+required. Map sigma values must be positive. Object height can be zero.
+The session uses the standard drift and anchor policies. The lens, mount,
+vertical datum, and map age are unknown. No age growth is modelled.
+These declarations are assumptions; session bounds are not measured accuracy.
+
+The session receives each geometric map fit before the map-track distance gate.
+It receives relative motion from propagated map points, before a new map fit
+replaces them. This motion shares map error. A lost track starts a new segment.
+Session output does not change frontend matching, tracking, or acceptance.
+Each frame records the causal session pose, continuous odometry, anchor decision,
+trajectory revisions, and permitted uses. A revision is not vehicle motion.
+`stage_ms.navigation_ms` is included in `pipeline_ms`. External position checks
+also score the causal session pose without entering session decisions.
+Omit `navigation` to disable this evaluation path.
+
 A refresh interval of 1 requests map matching for every frame. Larger intervals
 permit tracking between map requests. Tracking stops across a gap above 200 ms.
 With `retain_valid_track`, a rejected map result does not remove a valid track.
