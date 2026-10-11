@@ -42,6 +42,40 @@ pub(super) fn run(
     pixels: [&[f32]; 2],
     capacity: usize,
 ) -> Result<Vec<PixelMatch>, InferenceError> {
+    run_with(session, features, pixels, capacity, |output| {
+        if output.get("assignment").is_some() {
+            return probabilities(output, features, capacity);
+        }
+        compact::decode_bounded(
+            output,
+            &features[0].pixels,
+            &features[1].pixels,
+            [capacity; 2],
+        )
+    })
+}
+pub(super) fn run_scored(
+    session: &mut Session,
+    features: [&Features; 2],
+    pixels: [&[f32]; 2],
+    capacity: usize,
+) -> Result<Vec<crate::ScoredPixelMatch>, InferenceError> {
+    run_with(session, features, pixels, capacity, |output| {
+        compact::decode_scored_bounded(
+            output,
+            &features[0].pixels,
+            &features[1].pixels,
+            [capacity; 2],
+        )
+    })
+}
+fn run_with<T>(
+    session: &mut Session,
+    features: [&Features; 2],
+    pixels: [&[f32]; 2],
+    capacity: usize,
+    decode: impl Fn(&ort::session::SessionOutputs<'_>) -> Result<Vec<T>, InferenceError>,
+) -> Result<Vec<T>, InferenceError> {
     let a = Padded::new(features[0], pixels[0], capacity)?;
     let b = Padded::new(features[1], pixels[1], capacity)?;
     let mut inputs = Vec::new();
@@ -62,15 +96,7 @@ pub(super) fn run(
     let output = session
         .run(inputs)
         .map_err(|e| runtime("run masked matcher", e))?;
-    if output.get("assignment").is_some() {
-        return probabilities(&output, features, capacity);
-    }
-    compact::decode_bounded(
-        &output,
-        &features[0].pixels,
-        &features[1].pixels,
-        [capacity; 2],
-    )
+    decode(&output)
 }
 
 struct Padded<'a> {

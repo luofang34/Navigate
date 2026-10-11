@@ -31,6 +31,6 @@ pub use lightglue::LightGlueMatcher;
 pub use loftr::LoFtrMatcher;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
 
-pub use staged::{XFeatFeatures, XFeatGraph, XFeatStages};
+pub use staged::{ScoredPixelMatch, XFeatFeatures, XFeatGraph, XFeatStages};
 
 pub use selection::{CandidateFailure, MatcherCandidate, MatcherSelection, SelectionError};

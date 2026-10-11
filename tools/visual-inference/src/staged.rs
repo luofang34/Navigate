@@ -8,8 +8,10 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 mod detector;
 mod packet;
+mod scored;
 mod window;
 use detector::Detector;
+pub use scored::ScoredPixelMatch;
 
 /// XFeat detector input and output contract.
 #[derive(Clone, Copy, Debug)]

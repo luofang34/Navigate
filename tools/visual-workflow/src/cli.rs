@@ -51,7 +51,8 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
-        .subcommand(window_command())
+        .subcommand(window_command("probe-surface-windows"))
+        .subcommand(window_command("probe-surface-scores"))
         .subcommand(cascade_command())
         .subcommand(motion_command())
         .subcommand(render_command())
@@ -124,8 +125,8 @@ fn motion_command() -> Command {
         .arg(path("output"))
 }
 
-fn window_command() -> Command {
-    Command::new("probe-surface-windows")
+fn window_command(name: &'static str) -> Command {
+    Command::new(name)
         .about("Compare independent crops and shared map-block features on fixed windows")
         .arg(path("config"))
         .arg(path("job"))

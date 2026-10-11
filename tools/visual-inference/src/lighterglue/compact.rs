@@ -15,6 +15,28 @@ pub(super) fn decode_bounded(
     b: &[[f64; 2]],
     capacity: [usize; 2],
 ) -> Result<Vec<PixelMatch>, InferenceError> {
+    decode_with(output, a, b, capacity, |pair, _| pair)
+}
+pub(super) fn decode_scored_bounded(
+    output: &SessionOutputs<'_>,
+    a: &[[f64; 2]],
+    b: &[[f64; 2]],
+    capacity: [usize; 2],
+) -> Result<Vec<crate::ScoredPixelMatch>, InferenceError> {
+    decode_with(output, a, b, capacity, |pair, assignment_score| {
+        crate::ScoredPixelMatch {
+            pair,
+            assignment_score,
+        }
+    })
+}
+fn decode_with<T>(
+    output: &SessionOutputs<'_>,
+    a: &[[f64; 2]],
+    b: &[[f64; 2]],
+    capacity: [usize; 2],
+    make: impl Fn(PixelMatch, f32) -> T,
+) -> Result<Vec<T>, InferenceError> {
     if output.len() != 3 {
         return Err(InferenceError::Invalid(
             "compact matcher requires exactly three outputs".into(),
@@ -41,9 +63,10 @@ pub(super) fn decode_bounded(
     if shape.as_ref() != [1, capacity[0] as i64] {
         return Err(InferenceError::Invalid("invalid row_scores shape".into()));
     }
-    pairs(rows, columns, scores, a, b)
+    map_pairs(rows, columns, scores, a, b, make)
 }
 
+#[cfg(test)]
 fn pairs(
     rows: &[i64],
     columns: &[i64],
@@ -51,6 +74,16 @@ fn pairs(
     a: &[[f64; 2]],
     b: &[[f64; 2]],
 ) -> Result<Vec<PixelMatch>, InferenceError> {
+    map_pairs(rows, columns, scores, a, b, |pair, _| pair)
+}
+fn map_pairs<T>(
+    rows: &[i64],
+    columns: &[i64],
+    scores: &[f32],
+    a: &[[f64; 2]],
+    b: &[[f64; 2]],
+    make: impl Fn(PixelMatch, f32) -> T,
+) -> Result<Vec<T>, InferenceError> {
     if rows.len() < a.len()
         || scores.len() != rows.len()
         || columns.len() < b.len()
@@ -76,9 +109,14 @@ fn pairs(
         .filter(|(i, (j, s))| {
             **s > 0.1 && (**j as usize) < b.len() && columns[**j as usize] == *i as i64
         })
-        .map(|(i, (j, _))| PixelMatch {
-            reference: a[i].into(),
-            query: b[*j as usize].into(),
+        .map(|(i, (j, score))| {
+            make(
+                PixelMatch {
+                    reference: a[i].into(),
+                    query: b[*j as usize].into(),
+                },
+                *score,
+            )
         })
         .collect())
 }

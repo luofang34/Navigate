@@ -1,4 +1,4 @@
-//! Decode the LighterGlue assignment without exposing model scores to geometry.
+//! Decode LighterGlue assignments; scores are optional diagnostics.
 use crate::{InferenceError, features::Features, native_runtime::runtime};
 use navigate_visual::PixelMatch;
 use ort::{session::Session, value::TensorRef};
@@ -135,3 +135,19 @@ fn assignment_pairs(
 mod device_tests;
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn match_prepared_scored(
+    session: &mut Session,
+    a: &Features,
+    b: &Features,
+    pa: &[f32],
+    pb: &[f32],
+) -> Result<Vec<crate::ScoredPixelMatch>, InferenceError> {
+    let capacity = masked::capacity(session)?.ok_or_else(|| {
+        InferenceError::Invalid("assignment scores require a compact masked matcher".into())
+    })?;
+    if a.pixels.is_empty() || b.pixels.is_empty() {
+        return Ok(Vec::new());
+    }
+    masked::run_scored(session, [a, b], [pa, pb], capacity)
+}
