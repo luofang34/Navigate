@@ -67,7 +67,10 @@ records.
 
 `navigate-celestial` takes position and velocity in metres and metres per TDB
 second. Each state has a NAIF origin, a NAIF orientation, and a time scale.
-The host supplies kernels and explicit NAIF-to-ANISE orientation ID mappings.
+The crate is an opt-in dependency. Other navigation crates do not depend on it.
+The default build has no ANISE backend. Enable its `anise` feature to use
+`AniseEphemeris`. The host supplies kernels and explicit NAIF-to-ANISE
+orientation ID mappings. Other providers implement the `Ephemeris` trait.
 Geometric queries and reception queries are separate modes. Reception queries
 use Euclidean light time and special-relativistic aberration. They do not model
 gravitational light deflection, gravitational delay, refraction, or clock drift.

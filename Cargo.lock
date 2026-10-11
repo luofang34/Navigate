@@ -1810,6 +1810,8 @@ name = "navigate-celestial"
 version = "0.1.0"
 dependencies = [
  "anise",
+ "hifitime",
+ "nalgebra 0.34.2",
  "thiserror 2.0.19",
 ]
 

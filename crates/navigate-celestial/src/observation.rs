@@ -1,5 +1,7 @@
 use crate::{Duration, Ephemeris, Epoch, FrameId, ObservationError, State, TimeScale};
-use anise::math::Vector3;
+use nalgebra::Vector3 as Vector;
+
+type Vector3 = Vector<f64>;
 
 const LIGHT_SPEED_M_S: f64 = 299_792_458.0;
 

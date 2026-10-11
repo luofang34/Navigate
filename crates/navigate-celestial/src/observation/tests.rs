@@ -163,6 +163,7 @@ fn utc_reception_uses_continuous_tdb_across_a_leap_second() {
     );
 }
 
+#[cfg(feature = "anise")]
 #[test]
 fn missing_kernel_coverage_is_an_error() {
     let almanac = anise::almanac::Almanac::default();
