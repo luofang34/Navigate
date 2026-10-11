@@ -1,0 +1,142 @@
+use super::*;
+use crate::FeatureMetadata;
+use crate::test_scene::{limits, query, reference};
+use image::GrayImage;
+use navigate_visual::PixelMatch;
+
+struct Backend {
+    extractions: usize,
+    matches: usize,
+}
+impl FeatureBackend for Backend {
+    type Features = GrayImage;
+    fn identity(&self) -> &str {
+        "test-grid"
+    }
+    fn extract_features_blocking(
+        &mut self,
+        image: &GrayImage,
+    ) -> Result<Self::Features, VisualError> {
+        self.extractions = self.extractions.wrapping_add(1);
+        Ok(image.clone())
+    }
+    fn validate_features(
+        &self,
+        features: &Self::Features,
+        image: &GrayImage,
+    ) -> Result<FeatureMetadata, VisualError> {
+        if features != image {
+            return Err(VisualError::Invalid {
+                field: "test source",
+            });
+        }
+        Ok(FeatureMetadata {
+            resident_bytes: features.as_raw().len(),
+            count: 24,
+        })
+    }
+    fn match_features_blocking(
+        &mut self,
+        _: &Self::Features,
+        _: &Self::Features,
+    ) -> Result<Vec<PixelMatch>, VisualError> {
+        self.matches = self.matches.wrapping_add(1);
+        Ok((0..4)
+            .flat_map(|y| {
+                (0..6).map(move |x| {
+                    let p = [10.0 + f64::from(x) * 14.0, 10.0 + f64::from(y) * 20.0];
+                    PixelMatch {
+                        reference: p.into(),
+                        query: p.into(),
+                    }
+                })
+            })
+            .collect())
+    }
+}
+#[test]
+fn cached_references_extract_one_query_for_all_candidates() {
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        limits(),
+    )
+    .unwrap();
+    let refs = vec![
+        workflow.prepare_reference_blocking(reference()).unwrap(),
+        workflow.prepare_reference_blocking(reference()).unwrap(),
+    ];
+    let (frame, prior) = query();
+    let report = workflow.estimate_blocking(&frame, &prior, &refs).unwrap();
+    assert_eq!(workflow.backend().extractions, 3);
+    assert_eq!(workflow.backend().matches, 2);
+    assert_eq!(report.candidates.len(), 2);
+    assert!(report.candidates.iter().all(|r| r.matches == 24));
+    assert!(report.candidates.iter().all(|r| r.decision.is_ok()));
+}
+#[test]
+fn rejected_resource_request_does_not_extract_query() {
+    let mut config = limits();
+    config.candidates = 1;
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        config,
+    )
+    .unwrap();
+    let refs = vec![
+        workflow.prepare_reference_blocking(reference()).unwrap(),
+        workflow.prepare_reference_blocking(reference()).unwrap(),
+    ];
+    let (frame, prior) = query();
+    assert!(matches!(
+        workflow.estimate_blocking(&frame, &prior, &refs),
+        Err(WorkflowError::ResourceLimit {
+            resource: "reference candidates",
+            ..
+        })
+    ));
+    assert_eq!(workflow.backend().extractions, 2);
+    assert_eq!(workflow.backend().matches, 0);
+}
+#[test]
+fn imported_reference_requires_matching_source_pixels() {
+    let workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        limits(),
+    )
+    .unwrap();
+    let features = GrayImage::new(100, 80);
+    assert!(workflow.import_reference(reference(), features).is_err());
+}
+#[test]
+fn no_candidates_does_not_run_extraction() {
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        limits(),
+    )
+    .unwrap();
+    let (frame, prior) = query();
+    assert!(
+        workflow
+            .estimate_blocking(&frame, &prior, &[])
+            .unwrap()
+            .candidates
+            .is_empty()
+    );
+    assert_eq!(workflow.backend().extractions, 0);
+}

@@ -19,7 +19,8 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub(crate) fn model(self) -> CameraModel {
+    /// Convert the wire calibration into the geometry model.
+    pub fn model(self) -> CameraModel {
         CameraModel {
             width: self.size[0],
             height: self.size[1],
@@ -42,7 +43,11 @@ pub struct Pose {
 }
 
 impl Pose {
-    pub(crate) fn camera(self) -> Result<CameraPose, Error> {
+    /// Convert the wire pose into a validated camera pose.
+    ///
+    /// # Errors
+    /// Rejects non-finite coordinates and invalid unit quaternions.
+    pub fn camera(self) -> Result<CameraPose, Error> {
         let [x, y, z, w] = self.rotation;
         let q = Quaternion::new(w, x, y, z);
         if !q.coords.iter().all(|v| v.is_finite()) || (q.norm_squared() - 1.0).abs() > 1e-6 {

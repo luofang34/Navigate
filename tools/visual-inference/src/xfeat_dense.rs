@@ -63,7 +63,7 @@ fn normalize_resized(input: &[f32]) -> Vec<f32> {
     resized
 }
 
-fn decode(
+pub(crate) fn decode(
     descriptors: &[f32],
     logits: &[f32],
     reliability: &[f32],

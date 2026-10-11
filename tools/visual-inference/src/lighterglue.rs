@@ -1,7 +1,7 @@
 //! Decode the LighterGlue assignment without exposing model scores to geometry.
 use crate::{InferenceError, features::Features, native_runtime::runtime};
 use navigate_visual::PixelMatch;
-use ort::{session::Session, value::Tensor};
+use ort::{session::Session, value::TensorRef};
 
 pub(crate) fn match_features(
     session: &mut Session,
@@ -11,28 +11,41 @@ pub(crate) fn match_features(
     if a.pixels.is_empty() || b.pixels.is_empty() {
         return Ok(vec![]);
     }
-    let mut inputs = Vec::new();
-    for (i, f) in [a, b].into_iter().enumerate() {
-        // The sparse detector export uses an 800 by 600 pixel coordinate system.
-        let pixels: Vec<f32> = f
-            .model_pixels
+    let normalized = [a, b].map(|f| {
+        f.model_pixels
             .as_chunks::<2>()
             .0
             .iter()
             .flat_map(|p| [(p[0] - 400.0) / 400.0, (p[1] - 300.0) / 400.0])
-            .collect();
+            .collect::<Vec<_>>()
+    });
+    match_prepared(session, a, b, &normalized[0], &normalized[1])
+}
+
+pub(crate) fn match_prepared(
+    session: &mut Session,
+    a: &Features,
+    b: &Features,
+    pa: &[f32],
+    pb: &[f32],
+) -> Result<Vec<PixelMatch>, InferenceError> {
+    if a.pixels.is_empty() || b.pixels.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut inputs = Vec::new();
+    for (i, (f, pixels)) in [(a, pa), (b, pb)].into_iter().enumerate() {
         for (name, shape, data) in [
-            ("keypoints", vec![1, f.pixels.len(), 2], pixels),
+            ("keypoints", [1, f.pixels.len(), 2], pixels),
             (
                 "descriptors",
-                vec![1, f.pixels.len(), 64],
-                f.descriptors.clone(),
+                [1, f.pixels.len(), 64],
+                f.descriptors.as_slice(),
             ),
         ] {
             inputs.push((
                 format!("{name}{i}"),
-                Tensor::from_array((shape, data))
-                    .map_err(|e| runtime("build LighterGlue input", e))?
+                TensorRef::from_array_view((shape, data))
+                    .map_err(|e| runtime("borrow LighterGlue input", e))?
                     .into_dyn(),
             ));
         }

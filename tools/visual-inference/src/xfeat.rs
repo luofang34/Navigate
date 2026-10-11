@@ -1,7 +1,7 @@
 //! Sparse XFeat output decoding, bounded to the supplied image.
 use crate::{InferenceError, features::Features, native_runtime::runtime, preprocessing};
 use image::GrayImage;
-use ort::{session::Session, value::Tensor};
+use ort::{session::Session, value::TensorRef};
 
 pub(crate) fn extract(
     session: &mut Session,
@@ -9,8 +9,9 @@ pub(crate) fn extract(
     limit: usize,
 ) -> Result<Features, InferenceError> {
     let input = preprocessing::prepare(image, 800, 600, 3)?;
-    let tensor = Tensor::from_array(([1, 3, input.height, input.width], input.data.clone()))
-        .map_err(|e| runtime("build XFeat tensor", e))?;
+    let tensor =
+        TensorRef::from_array_view(([1, 3, input.height, input.width], input.data.as_slice()))
+            .map_err(|e| runtime("build XFeat tensor", e))?;
     let output = match session.run(ort::inputs!["images"=>tensor]) {
         Ok(output) => output,
         Err(error)

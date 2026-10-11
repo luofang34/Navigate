@@ -1,0 +1,27 @@
+[package]
+name = "navigate-workflow"
+description = "Native feature package and visual localization workflow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+rustnn-coreml = ["navigate-visual-onnx/rustnn-coreml"]
+
+[dependencies]
+navigate-visual = { path = "../../crates/navigate-visual" }
+navigate-visual-workflow = { path = "../../crates/navigate-visual-workflow" }
+navigate-recording = { path = "../../crates/navigate-recording" }
+navigate-visual-onnx = { package = "visual-inference-probe", path = "../visual-inference" }
+image = { workspace = true, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+clap = "4"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@ mod patches;
 use crate::{ExecutionConfig, InferenceError, native_runtime, preprocessing};
 use image::GrayImage;
 use navigate_visual::{ImageMatcher, PixelMatch, VisualError};
-use ort::{session::Session, value::Tensor};
+use ort::{session::Session, value::TensorRef};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -76,13 +76,13 @@ impl LoFtrMatcher {
     ) -> Result<Vec<PixelMatch>, InferenceError> {
         let a = preprocessing::prepare(first, 640, 480, 1)?;
         let b = preprocessing::prepare(second, 640, 480, 1)?;
-        let tensor = |data: &[f32]| {
-            Tensor::from_array(([1, 1, 480, 640], data.to_vec()))
-                .map_err(|e| native_runtime::runtime("build LoFTR input", e))
-        };
+        let first_tensor = TensorRef::from_array_view(([1, 1, 480, 640], a.data.as_slice()))
+            .map_err(|e| native_runtime::runtime("build first LoFTR input", e))?;
+        let second_tensor = TensorRef::from_array_view(([1, 1, 480, 640], b.data.as_slice()))
+            .map_err(|e| native_runtime::runtime("build second LoFTR input", e))?;
         let output = self
             .session
-            .run(ort::inputs!["image0"=>tensor(&a.data)?, "image1"=>tensor(&b.data)?])
+            .run(ort::inputs!["image0"=>first_tensor, "image1"=>second_tensor])
             .map_err(|e| native_runtime::runtime("run LoFTR", e))?;
         let read = |name: &str, columns: Option<i64>| -> Result<&[f32], InferenceError> {
             let (shape, data) = output

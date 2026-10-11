@@ -87,7 +87,11 @@ pub struct ReferenceView {
 }
 
 impl ReferenceView {
-    pub(crate) fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
+    /// Check the reference geometry and its dimensions against a query frame.
+    ///
+    /// # Errors
+    /// Rejects invalid geometry, map identity, or image and depth dimensions.
+    pub fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
         self.validate_camera(&frame.camera)?;
         if frame.image.dimensions() != self.image.dimensions() {
             return Err(VisualError::Dimensions {
