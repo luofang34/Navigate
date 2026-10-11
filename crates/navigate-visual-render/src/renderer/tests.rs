@@ -51,7 +51,7 @@ fn scene(frame: LocalFrame) -> RenderScene {
 #[test]
 fn resource_and_coverage_limits_are_checked_before_device_creation() {
     let mut scene = scene(LocalFrame::anchor_mercator(0.0, 0.0).unwrap());
-    assert_eq!(validate(&scene, camera(), limits()).unwrap(), 2_621_440);
+    assert_eq!(validate(&scene, camera(), limits()).unwrap(), 1_572_864);
     assert!(
         validate(
             &scene,
@@ -69,6 +69,67 @@ fn resource_and_coverage_limits_are_checked_before_device_creation() {
     assert!(validate(&scene, camera(), limits()).is_ok());
     scene.imagery.layout.origin_tile[0] = 16_383;
     assert!(validate(&scene, camera(), limits()).is_err());
+}
+
+#[test]
+fn oversized_views_and_unbounded_terrain_are_rejected_before_allocation() {
+    let mut scene = scene(LocalFrame::anchor_mercator(0.0, 0.0).unwrap());
+    let oversized = CameraModel {
+        width: u32::MAX,
+        height: u32::MAX,
+        ..camera()
+    };
+    assert!(
+        validate(
+            &scene,
+            oversized,
+            RenderLimits {
+                pixels: usize::MAX,
+                ..limits()
+            }
+        )
+        .is_err()
+    );
+    scene.terrain.heights_m[0] = 100_001.0;
+    assert!(validate(&scene, camera(), limits()).is_err());
+    scene.terrain.coverage[0] = 0;
+    assert!(validate(&scene, camera(), limits()).is_ok());
+}
+
+#[test]
+#[ignore = "requires a hardware GPU"]
+fn hardware_packed_coverage_preserves_valid_edges_and_refuses_buried_entries() {
+    let frame = LocalFrame::anchor_mercator(0.0, 0.0).unwrap();
+    let mut half = scene(frame);
+    for index in 0..half.terrain.heights_m.len() {
+        if index % 512 >= 256 {
+            half.terrain.coverage[index] = 0;
+            half.terrain.heights_m[index] = f32::NAN;
+        }
+    }
+    let pose = CameraPose {
+        position: Vector3::new(0.0, 0.0, 1000.0),
+        orientation: UnitQuaternion::identity(),
+    };
+    let mut renderer = pollster::block_on(GpuRenderer::new(half, camera(), limits())).unwrap();
+    let view = renderer.render_blocking(pose).unwrap();
+    for (index, depth) in view.depth_m.iter().enumerate() {
+        let expected = if index % 48 < 24 { 1000.0 } else { 0.0 };
+        assert!((*depth - expected).abs() < 0.003);
+    }
+    let mut buried = scene(frame);
+    buried.terrain.heights_m.fill(1500.0);
+    for (index, coverage) in buried.terrain.coverage.iter_mut().enumerate() {
+        *coverage = if index % 512 < 256 { 0 } else { 255 };
+    }
+    let mut renderer = pollster::block_on(GpuRenderer::new(buried, camera(), limits())).unwrap();
+    let view = renderer
+        .render_blocking(CameraPose {
+            position: Vector3::new(-500.0, 0.0, 1000.0),
+            ..pose
+        })
+        .unwrap();
+    assert!(view.depth_m.iter().all(|d| *d == 0.0));
 }
 
 #[test]
@@ -94,7 +155,7 @@ fn hardware_plane_render_reuses_the_scene_and_preserves_optical_depth() {
         })
         .unwrap();
     assert!(next.depth_m.iter().all(|d| (*d - 800.0).abs() < 0.003));
-    assert_eq!(renderer.resident_texture_bytes(), 2_621_440);
+    assert_eq!(renderer.resident_texture_bytes(), 1_572_864);
     assert_eq!(renderer.identity().style_sha256.len(), 64);
 }
 

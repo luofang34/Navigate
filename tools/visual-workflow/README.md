@@ -152,7 +152,9 @@ Set `map_sha256` to the catalog digest and the anchor to the midpoint of its
 bounding box. The loader verifies each tile's size and digest. Imagery and
 Terrarium elevation tiles must be 256 × 256. `imagery_tile_pixels` is a power
 of two from 1 through 256; a lower value reduces imagery detail and memory.
-Each assembled grid must fit 8192 pixels per side and the scene byte limit.
+Each assembled grid must fit 16384 pixels per side, the hardware adapter's texture
+limit, and the scene byte limit. The renderer requests the dimensions it needs.
+GPU imagery uses two bytes per pixel; terrain uses four, including missing coverage.
 Missing coverage produces zero depth. Rays must observe an above-ground sample
 before crossing terrain; coarse depth steps can miss narrow terrain features.
 

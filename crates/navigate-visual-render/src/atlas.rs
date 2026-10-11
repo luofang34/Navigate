@@ -81,7 +81,7 @@ impl ImageAtlas {
 pub struct TerrainAtlas {
     /// Geographic grid layout.
     pub layout: AtlasLayout,
-    /// Row-major terrain heights, in metres. Uncovered values are ignored.
+    /// Row-major terrain heights, in metres, within ±100 km. Uncovered values are ignored.
     pub heights_m: Vec<f32>,
     /// Row-major coverage, zero or 255.
     pub coverage: Vec<u8>,
@@ -96,7 +96,7 @@ impl TerrainAtlas {
                 .heights_m
                 .iter()
                 .zip(&self.coverage)
-                .any(|(h, c)| *c == 255 && !h.is_finite())
+                .any(|(h, c)| *c == 255 && (!h.is_finite() || h.abs() > 100_000.0))
         {
             return Err(RenderError::Invalid("terrain heights or coverage"));
         }

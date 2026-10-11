@@ -2,7 +2,9 @@ use super::*;
 use sha2::{Digest, Sha256};
 use wgpu::util::DeviceExt;
 
-pub(super) async fn create() -> Result<(wgpu::Device, wgpu::Queue, String), RenderError> {
+pub(super) async fn create(
+    dimension: u32,
+) -> Result<(wgpu::Device, wgpu::Queue, String), RenderError> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -16,12 +18,21 @@ pub(super) async fn create() -> Result<(wgpu::Device, wgpu::Queue, String), Rend
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(RenderError::Adapter);
     }
+    if dimension > adapter.limits().max_texture_dimension_2d {
+        return Err(RenderError::Invalid(
+            "atlas dimension exceeds hardware adapter limits",
+        ));
+    }
+    let required_limits = wgpu::Limits {
+        max_texture_dimension_2d: dimension.max(wgpu::Limits::default().max_texture_dimension_2d),
+        ..wgpu::Limits::default()
+    };
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("terrain reference"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits,
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
             },
             None,
@@ -43,7 +54,10 @@ pub(super) async fn upload(
     queue: wgpu::Queue,
     identity: String,
 ) -> Result<GpuRenderer, RenderError> {
-    let output_bytes = u64::from(camera.width) * u64::from(camera.height) * 8;
+    let output_bytes = u64::from(camera.width)
+        .checked_mul(u64::from(camera.height))
+        .and_then(|n| n.checked_mul(8))
+        .ok_or(RenderError::Invalid("output byte count overflow"))?;
     let maximum = device.limits();
     if [scene.imagery.layout, scene.terrain.layout]
         .iter()
@@ -53,6 +67,8 @@ pub(super) async fn upload(
                 .any(|n| *n > maximum.max_texture_dimension_2d)
         })
         || output_bytes > u64::from(maximum.max_storage_buffer_binding_size)
+        || camera.width.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
+        || camera.height.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
     {
         return Err(RenderError::Invalid("scene exceeds selected GPU limits"));
     }
@@ -201,12 +217,13 @@ fn scene_textures(
         .zip(&scene.imagery.coverage)
         .flat_map(|(p, c)| [*p, *c])
         .collect();
-    let terrain: Vec<[f32; 2]> = scene
+    let terrain: Vec<f32> = scene
         .terrain
         .heights_m
         .iter()
         .zip(&scene.terrain.coverage)
-        .map(|(h, c)| if *c == 255 { [*h, 1.0] } else { [0.0, 0.0] })
+        // A finite out-of-range sentinel preserves coverage without a second float channel.
+        .map(|(h, c)| if *c == 255 { *h } else { -1.0e30 })
         .collect();
     let image_texture = texture(
         device,
@@ -220,9 +237,9 @@ fn scene_textures(
         device,
         queue,
         scene.terrain.layout,
-        wgpu::TextureFormat::Rg32Float,
+        wgpu::TextureFormat::R32Float,
         bytemuck::cast_slice(&terrain),
-        8,
+        4,
     );
     (image_texture, height_texture)
 }

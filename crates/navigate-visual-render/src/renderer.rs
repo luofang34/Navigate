@@ -14,7 +14,7 @@ use navigate_visual::ReferenceRenderer;
 pub struct RenderLimits {
     /// Maximum texture bytes in the resident scene, excluding driver overhead.
     pub scene_bytes: usize,
-    /// Maximum pixels in one rendered view. Output and readback each use eight bytes per pixel.
+    /// Maximum pixels in one view, at most 16,777,216. Output and readback each use eight bytes per pixel.
     pub pixels: usize,
     /// Maximum optical-axis depth, in metres.
     pub far_m: f32,
@@ -66,7 +66,15 @@ impl GpuRenderer {
         limits: RenderLimits,
     ) -> Result<Self, RenderError> {
         let bytes = validate(&scene, camera, limits)?;
-        let (device, queue, identity) = device::create().await?;
+        let dimension = scene
+            .imagery
+            .layout
+            .size
+            .into_iter()
+            .chain(scene.terrain.layout.size)
+            .max()
+            .ok_or(RenderError::Invalid("empty scene dimensions"))?;
+        let (device, queue, identity) = device::create(dimension).await?;
         device::upload(scene, camera, limits, bytes, device, queue, identity).await
     }
 
@@ -142,10 +150,11 @@ fn validate(
     let terrain = scene.terrain.validate()?;
     let bytes = image
         .saturating_mul(2)
-        .saturating_add(terrain.saturating_mul(8));
+        .saturating_add(terrain.saturating_mul(4));
     if bytes > limits.scene_bytes
         || limits.scene_bytes == 0
         || limits.pixels == 0
+        || limits.pixels > 16_777_216
         || (camera.width as usize).saturating_mul(camera.height as usize) > limits.pixels
         || !limits.far_m.is_finite()
         || !(20.0..=100_000.0).contains(&limits.far_m)
@@ -180,5 +189,5 @@ fn validate(
     Ok(bytes)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

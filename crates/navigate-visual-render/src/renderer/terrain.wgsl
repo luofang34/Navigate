@@ -33,7 +33,16 @@ fn coordinates(point: vec3<f32>, offset: u32) -> vec2<f32> {
     return vec2<f32>(p[offset], p[offset + 1u]) + vec2<f32>(point.x, -point.y) * scale;
 }
 
-fn sample_map(map: texture_2d<f32>, xy: vec2<f32>) -> vec2<f32> {
+fn load_map(map: texture_2d<f32>, xy: vec2<i32>, height: bool) -> vec2<f32> {
+    let value = textureLoad(map, xy, 0).xy;
+    if !height { return value; }
+    // Remove the finite missing-height sentinel before interpolation, including
+    // at zero-weight edges. NaN texture padding would poison covered neighbours.
+    if value.x < -1.0e29 { return vec2<f32>(0.0); }
+    return vec2<f32>(value.x, 1.0);
+}
+
+fn sample_map(map: texture_2d<f32>, xy: vec2<f32>, height: bool) -> vec2<f32> {
     let size = vec2<f32>(textureDimensions(map));
     if any(xy < vec2<f32>(0.0)) || any(xy > size - vec2<f32>(1.0)) {
         return vec2<f32>(0.0);
@@ -41,16 +50,16 @@ fn sample_map(map: texture_2d<f32>, xy: vec2<f32>) -> vec2<f32> {
     let base = vec2<i32>(floor(xy));
     let last = vec2<i32>(textureDimensions(map)) - vec2<i32>(1);
     let fraction = fract(xy);
-    let a = textureLoad(map, base, 0).xy;
-    let b = textureLoad(map, min(base + vec2<i32>(1, 0), last), 0).xy;
-    let c = textureLoad(map, min(base + vec2<i32>(0, 1), last), 0).xy;
-    let d = textureLoad(map, min(base + vec2<i32>(1, 1), last), 0).xy;
+    let a = load_map(map, base, height);
+    let b = load_map(map, min(base + vec2<i32>(1, 0), last), height);
+    let c = load_map(map, min(base + vec2<i32>(0, 1), last), height);
+    let d = load_map(map, min(base + vec2<i32>(1, 1), last), height);
     return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
 }
 
 fn height_at(eye: vec3<f32>, ray: vec3<f32>, distance: f32) -> vec2<f32> {
     let point = geographic(eye + ray * distance);
-    let height = sample_map(terrain, coordinates(point, 28u));
+    let height = sample_map(terrain, coordinates(point, 28u), true);
     return vec2<f32>(point.z - height.x, height.y);
 }
 
@@ -90,7 +99,7 @@ fn render(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let distance = 0.5 * (low + high);
     let point = geographic(eye + ray * distance);
-    let color = sample_map(imagery, coordinates(point, 24u));
+    let color = sample_map(imagery, coordinates(point, 24u), false);
     if color.y <= 0.9999 { return; }
     output[index] = vec2<u32>(u32(round(color.x * 255.0)), bitcast<u32>(distance));
 }

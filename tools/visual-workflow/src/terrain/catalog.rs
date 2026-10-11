@@ -66,7 +66,7 @@ impl Catalog {
         let dem_count = count(dem_layout)?;
         if image_count
             .saturating_mul(2)
-            .saturating_add(dem_count.saturating_mul(8))
+            .saturating_add(dem_count.saturating_mul(4))
             > config.scene_bytes
         {
             return Err(Error::Input("catalog exceeds scene memory limit; reduce imagery tile pixels or use a smaller catalog".into()));
@@ -131,9 +131,10 @@ impl Catalog {
     }
 }
 fn count(layout: AtlasLayout) -> Result<usize, Error> {
-    if layout.size.iter().any(|n| *n > 8192) {
+    if layout.size.iter().any(|n| *n > 16384) {
         return Err(Error::Input(
-            "atlas exceeds 8192 pixels; reduce imagery tile pixels or use a smaller catalog".into(),
+            "atlas exceeds 16384 pixels; reduce imagery tile pixels or use a smaller catalog"
+                .into(),
         ));
     }
     Ok(layout.size[0] as usize * layout.size[1] as usize)
