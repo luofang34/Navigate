@@ -1,11 +1,11 @@
-//! The published navigation solution.
+//! The published Earth navigation solution in WGS84 and local NED.
 
 use crate::composition::SourceComposition;
 use crate::integrity::IntegrityAssessment;
 use crate::kinematics::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 use crate::stamp::SolutionStamp;
 
-/// One published ownship navigation solution.
+/// One published ownship navigation solution for Earth.
 ///
 /// Everything a consumer needs travels together: state, covariance,
 /// integrity, provenance, and the stamp that makes staleness the
