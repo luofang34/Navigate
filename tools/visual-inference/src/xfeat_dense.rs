@@ -71,10 +71,27 @@ pub(crate) fn decode(
     image: &GrayImage,
     limit: usize,
 ) -> Result<Features, InferenceError> {
+    decode_in_place(
+        &mut descriptors.to_vec(),
+        logits,
+        reliability,
+        input,
+        image,
+        limit,
+    )
+}
+
+pub(crate) fn decode_in_place(
+    descriptors: &mut [f32],
+    logits: &[f32],
+    reliability: &[f32],
+    input: &preprocessing::InputImage,
+    image: &GrayImage,
+    limit: usize,
+) -> Result<Features, InferenceError> {
     let heatmap = heatmap(logits);
     let mut candidates = peaks(&heatmap, reliability);
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
-    let mut descriptors = descriptors.to_vec();
     for cell in 0..CELLS {
         let norm = (0..64)
             .map(|c| descriptors[c * CELLS + cell].powi(2))
@@ -92,13 +109,9 @@ pub(crate) fn decode(
         if !preprocessing::inside(pixel, image) {
             continue;
         }
-        let point = grid_point(x, y);
-        let descriptor: Vec<_> = descriptors
-            .as_chunks::<CELLS>()
-            .0
-            .iter()
-            .map(|channel| bicubic(channel, point))
-            .collect();
+        let stencil = Bicubic::new(grid_point(x, y));
+        let descriptor: [f32; 64] =
+            std::array::from_fn(|c| stencil.sample(&descriptors[c * CELLS..(c + 1) * CELLS]));
         result.push(pixel, model, score, &descriptor)?;
         if result.pixels.len() == limit {
             break;
@@ -113,13 +126,12 @@ fn heatmap(logits: &[f32]) -> Vec<f32> {
         let max = (0..65)
             .map(|c| logits[c * CELLS + cell])
             .fold(f32::NEG_INFINITY, f32::max);
-        let sum: f32 = (0..65)
-            .map(|c| (logits[c * CELLS + cell] - max).exp())
-            .sum();
-        for c in 0..64 {
+        let weights: [f32; 65] = std::array::from_fn(|c| (logits[c * CELLS + cell] - max).exp());
+        let sum: f32 = weights.iter().sum();
+        for (c, weight) in weights.iter().enumerate().take(64) {
             let x = (cell % (WIDTH / 8)) * 8 + c % 8;
             let y = (cell / (WIDTH / 8)) * 8 + c / 8;
-            heatmap[y * WIDTH + x] = (logits[c * CELLS + cell] - max).exp() / sum;
+            heatmap[y * WIDTH + x] = weight / sum;
         }
     }
     heatmap
@@ -183,18 +195,32 @@ fn cubic(t: f32) -> f32 {
         0.0
     }
 }
-fn bicubic(data: &[f32], p: [f32; 2]) -> f32 {
-    let mut result = 0.0;
-    let x = p[0].floor() as i32;
-    let y = p[1].floor() as i32;
-    for dy in -1..=2 {
-        for dx in -1..=2 {
-            result += sample(data, x + dx, y + dy)
-                * cubic(p[0] - (x + dx) as f32)
-                * cubic(p[1] - (y + dy) as f32);
+struct Bicubic {
+    x: i32,
+    y: i32,
+    x_weights: [f32; 4],
+    y_weights: [f32; 4],
+}
+impl Bicubic {
+    fn new(point: [f32; 2]) -> Self {
+        let x = point[0].floor() as i32;
+        let y = point[1].floor() as i32;
+        Self {
+            x,
+            y,
+            x_weights: std::array::from_fn(|i| cubic(point[0] - (x + i as i32 - 1) as f32)),
+            y_weights: std::array::from_fn(|i| cubic(point[1] - (y + i as i32 - 1) as f32)),
         }
     }
-    result
+    fn sample(&self, data: &[f32]) -> f32 {
+        let mut result = 0.0;
+        for (dy, wy) in self.y_weights.iter().enumerate() {
+            for (dx, wx) in self.x_weights.iter().enumerate() {
+                result += sample(data, self.x + dx as i32 - 1, self.y + dy as i32 - 1) * wx * wy;
+            }
+        }
+        result
+    }
 }
 #[cfg(test)]
 mod tests;

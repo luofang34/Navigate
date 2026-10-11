@@ -32,22 +32,23 @@ fn main() -> Result<(), Error> {
         .get_one::<PathBuf>("output")
         .ok_or(Error::Invalid("output path"))?;
     let count = args.get_one::<usize>("features").copied();
-    let dense = args
+    let recipe = args
         .get_one::<String>("recipe")
-        .is_some_and(|s| s == "xfeat-dense");
+        .map(String::as_str)
+        .unwrap_or("lighterglue");
     let compact = args
         .get_one::<String>("output-kind")
         .is_some_and(|s| s == "compact");
-    prepare_blocking(input, output, count, compact, dense)
+    prepare_blocking(input, output, count, compact, recipe)
 }
 fn command() -> Command {
     Command::new("navigate-model")
         .about("Prepare supported feature extraction and matching graphs")
-        .arg(
-            Arg::new("recipe")
-                .long("recipe")
-                .value_parser(["lighterglue", "xfeat-dense"]),
-        )
+        .arg(Arg::new("recipe").long("recipe").value_parser([
+            "lighterglue",
+            "xfeat-dense",
+            "xfeat-gray",
+        ]))
         .arg(
             Arg::new("input")
                 .required(true)
@@ -77,7 +78,7 @@ fn prepare_blocking(
     output: &Path,
     count: Option<usize>,
     compact: bool,
-    dense: bool,
+    recipe: &str,
 ) -> Result<(), Error> {
     let mut bytes = Vec::new();
     File::open(input)
@@ -86,13 +87,13 @@ fn prepare_blocking(
             path: input.into(),
             source,
         })?;
-    let prepared = if dense {
+    let prepared = if recipe != "lighterglue" {
         if count.is_some() || !compact {
             return Err(Error::Invalid(
-                "xfeat-dense does not accept features or probability outputs",
+                "XFeat does not accept features or probability outputs",
             ));
         }
-        xfeat::prepare(&bytes)?
+        xfeat::prepare_channels(&bytes, if recipe == "xfeat-gray" { 1 } else { 3 })?
     } else {
         recipe::prepare(
             &bytes,
@@ -109,7 +110,7 @@ fn prepare_blocking(
             path: output.into(),
             source,
         })?;
-    tracing::info!(path=%output.display(),?count,compact,dense,bytes=prepared.len(),"Saved prepared model");
+    tracing::info!(path=%output.display(),?count,compact,recipe,bytes=prepared.len(),"Saved prepared model");
     Ok(())
 }
 

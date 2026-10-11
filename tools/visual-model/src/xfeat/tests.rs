@@ -56,3 +56,19 @@ fn patch_folding_preserves_weights_and_avoids_expanded_patch_input() {
     assert_eq!(conv.output, ["keypoint_logits"]);
     assert_eq!(model.output.len(), 3);
 }
+
+#[test]
+fn grayscale_replicates_on_device_and_keeps_mean_order() {
+    let mut model = GraphProto {
+        input: vec![graph::value("images", 1, &[1, 3, 600, 800])],
+        node: vec![graph::node("ReduceMean", &["images"], "mean")],
+        ..Default::default()
+    };
+    grayscale(&mut model).unwrap();
+    assert_eq!(model.input[0], graph::value("images", 1, &[1, 1, 600, 800]));
+    assert_eq!(model.node[0].op_type, "Concat");
+    assert_eq!(model.node[0].input, ["images", "images", "images"]);
+    assert_eq!(model.node[0].attribute[0].i, 1);
+    assert_eq!(model.node[1].op_type, "ReduceMean");
+    assert_eq!(model.node[1].input, ["navigate_rgb"]);
+}

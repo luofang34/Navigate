@@ -24,7 +24,12 @@ const OUTPUTS: [(&str, &str, i64); 3] = [
     ),
 ];
 
+#[cfg(test)]
 pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    prepare_channels(bytes, 3)
+}
+
+pub fn prepare_channels(bytes: &[u8], channels: i64) -> Result<Vec<u8>, Error> {
     if bytes.len() > 64 * 1024 * 1024 {
         return Err(Error::Invalid("model size"));
     }
@@ -37,10 +42,27 @@ pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     }
     let mut model = ModelProto::decode(bytes)?;
     transform(model.graph.as_mut().ok_or(Error::Invalid("model graph"))?)?;
+    if channels == 1 {
+        grayscale(model.graph.as_mut().ok_or(Error::Invalid("model graph"))?)?;
+    }
     for (key, value) in [
         ("navigate.source_sha256", INPUT_SHA256),
-        ("navigate.recipe", "xfeat-dense-conv-v1"),
-        ("navigate.input", "float32/1x3x600x800"),
+        (
+            "navigate.recipe",
+            if channels == 1 {
+                "xfeat-gray-conv-v1"
+            } else {
+                "xfeat-dense-conv-v1"
+            },
+        ),
+        (
+            "navigate.input",
+            if channels == 1 {
+                "float32/1x1x600x800"
+            } else {
+                "float32/1x3x600x800"
+            },
+        ),
     ] {
         model.metadata_props.push(StringStringEntryProto {
             key: key.into(),
@@ -103,3 +125,23 @@ fn fold_patches(model: &mut GraphProto) -> Result<(), Error> {
 mod execution_tests;
 #[cfg(test)]
 mod tests;
+
+fn grayscale(model: &mut GraphProto) -> Result<(), Error> {
+    let input = model
+        .input
+        .first_mut()
+        .ok_or(Error::Invalid("XFeat input"))?;
+    input.r#type = graph::value("images", 1, &[1, 1, 600, 800]).r#type;
+    for node in &mut model.node {
+        for input in &mut node.input {
+            if input == "images" {
+                *input = "navigate_rgb".into();
+            }
+        }
+    }
+    // Keep the channel mean's floating-point order while transferring grayscale only.
+    let mut replicate = graph::node("Concat", &["images", "images", "images"], "navigate_rgb");
+    replicate.attribute.push(graph::integer("axis", 1));
+    model.node.insert(0, replicate);
+    Ok(())
+}

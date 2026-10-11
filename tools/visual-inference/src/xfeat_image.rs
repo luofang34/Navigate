@@ -10,8 +10,9 @@ pub(crate) fn extract(
     image: &GrayImage,
     limit: usize,
 ) -> Result<Features, InferenceError> {
-    let input = preprocessing::prepare(image, 800, 600, 3)?;
-    let tensor = TensorRef::from_array_view(([1, 3, 600, 800], input.data.as_slice()))
+    let channels = input_channels(session)?;
+    let input = preprocessing::prepare(image, 800, 600, channels)?;
+    let tensor = TensorRef::from_array_view(([1, channels, 600, 800], input.data.as_slice()))
         .map_err(|e| runtime("build dense image input", e))?;
     let output = session
         .run(ort::inputs!["images" => tensor])
@@ -37,4 +38,26 @@ pub(crate) fn extract(
         image,
         limit,
     )
+}
+
+fn input_channels(session: &Session) -> Result<usize, InferenceError> {
+    let [input] = session.inputs() else {
+        return Err(InferenceError::Invalid(
+            "dense graph requires one image input".into(),
+        ));
+    };
+    let ort::value::ValueType::Tensor { ty, shape, .. } = input.dtype() else {
+        return Err(InferenceError::Invalid(
+            "dense input is not a tensor".into(),
+        ));
+    };
+    if input.name() != "images" || *ty != ort::value::TensorElementType::Float32 {
+        return Err(InferenceError::Invalid("dense image name or type".into()));
+    }
+    match shape.as_ref() {
+        [1, channels @ (1 | 3), 600, 800] => Ok(*channels as usize),
+        _ => Err(InferenceError::Invalid(
+            "dense image shape must be 1x{1,3}x600x800".into(),
+        )),
+    }
 }

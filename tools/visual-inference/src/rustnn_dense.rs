@@ -20,6 +20,7 @@ const OUTPUTS: [(&str, usize); 3] = [
 pub(crate) struct DenseGraph {
     graph: MLGraph<'static>,
     input: MLTensor,
+    channels: usize,
     outputs: Vec<(MLTensor, Vec<f32>)>,
     context: MLContext<'static>,
     pub digest: String,
@@ -46,6 +47,7 @@ impl DenseGraph {
                 path: path.to_owned(),
                 source: Box::new(source),
             })?;
+        let channels = input_channels(&data)?;
         let mut digest = Sha256::new();
         // Hash the loaded topology and every resolved weight, including external files.
         digest.update(
@@ -78,7 +80,10 @@ impl DenseGraph {
         let graph = context
             .rustnn_build_graph(data)
             .map_err(|e| failure("build dense graph", e))?;
-        let descriptor = MLTensorDescriptor::new(MLOperandDataType::Float32, vec![1, 3, 600, 800]);
+        let descriptor = MLTensorDescriptor::new(
+            MLOperandDataType::Float32,
+            vec![1, channels as u64, 600, 800],
+        );
         let input = context
             .create_tensor(&descriptor.to_writable())
             .map_err(|e| failure("create input", e))?;
@@ -96,6 +101,7 @@ impl DenseGraph {
         Ok(Self {
             graph,
             input,
+            channels,
             outputs,
             context,
             digest: format!("{:x}", digest.finalize()),
@@ -104,7 +110,7 @@ impl DenseGraph {
     }
 
     pub fn extract(&mut self, image: &GrayImage, limit: usize) -> Result<Features, InferenceError> {
-        let input = preprocessing::prepare(image, 800, 600, 3)?;
+        let input = preprocessing::prepare(image, 800, 600, self.channels)?;
         self.context
             .write_tensor(&self.input, &input.data)
             .map_err(|e| failure("write image", e))?;
@@ -125,13 +131,32 @@ impl DenseGraph {
                 return Err(InferenceError::Invalid("non-finite rustnn output".into()));
             }
         }
-        xfeat_dense::decode(
-            &self.outputs[0].1,
-            &self.outputs[1].1,
-            &self.outputs[2].1,
-            &input,
-            image,
-            limit,
-        )
+        let [(_, descriptors), (_, logits), (_, reliability)] = self.outputs.as_mut_slice() else {
+            return Err(InferenceError::Invalid("dense output buffers".into()));
+        };
+        xfeat_dense::decode_in_place(descriptors, logits, reliability, &input, image, limit)
+    }
+}
+
+fn input_channels(data: &rustnn::graph::GraphInfo) -> Result<usize, InferenceError> {
+    let [id] = data.input_operands.as_slice() else {
+        return Err(InferenceError::Invalid(
+            "dense graph requires one image input".into(),
+        ));
+    };
+    let operand = data
+        .operand(*id)
+        .ok_or_else(|| InferenceError::Invalid("missing images operand".into()))?;
+    let shape = operand.descriptor.static_shape();
+    if operand.name.as_deref() != Some("images")
+        || operand.descriptor.data_type != rustnn::graph::DataType::Float32
+    {
+        return Err(InferenceError::Invalid("dense image name or type".into()));
+    }
+    match shape.as_deref() {
+        Some([1, channels @ (1 | 3), 600, 800]) => Ok(*channels as usize),
+        _ => Err(InferenceError::Invalid(
+            "dense image shape must be 1x{1,3}x600x800".into(),
+        )),
     }
 }

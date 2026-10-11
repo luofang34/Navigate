@@ -50,6 +50,11 @@ with 64, 65, and 1 channels respectively. It retains image normalization and
 resizing, removes sparse point selection, and folds the 8 × 8 patch expansion
 into a strided convolution without changing learned weight values.
 
+Use `--recipe xfeat-gray` for grayscale input with shape 1 × 1 × 600 × 800.
+This recipe repeats the channel inside the graph. It retains the channel mean
+operation and its floating-point order. The host transfers one channel.
+The model digest changes, so build new feature packets for this graph.
+
 For ORT, set the workflow's `detector` to this file and `graph` to `dense_image`.
 Feature selection remains in the workflow, so this recipe does not accept a
 `--features` setting. For rustnn, build and validate the WebNN representation with
