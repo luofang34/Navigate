@@ -65,3 +65,24 @@ pub fn compact(graph: &mut p::GraphProto, count: i64) {
         value("row_scores", 1, &[1, count]),
     ];
 }
+
+/// Retain the topologically sorted dependencies of every declared output.
+pub fn prune(graph: &mut p::GraphProto) {
+    let mut needed: std::collections::BTreeSet<_> =
+        graph.output.iter().map(|v| v.name.clone()).collect();
+    let mut keep = std::collections::BTreeSet::new();
+    for (index, node) in graph.node.iter().enumerate().rev() {
+        if node.output.iter().any(|o| needed.contains(o)) {
+            keep.insert(index);
+            needed.extend(node.input.iter().cloned());
+        }
+    }
+    graph.node = std::mem::take(&mut graph.node)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, node)| keep.contains(&i).then_some(node))
+        .collect();
+    graph
+        .initializer
+        .retain(|tensor| needed.contains(&tensor.name));
+}

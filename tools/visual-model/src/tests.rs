@@ -11,4 +11,15 @@ fn command_requires_explicit_model_files_and_feature_budget() {
             .try_get_matches_from(["navigate-model", "in.onnx", "out.onnx", "--features", "512"])
             .is_ok()
     );
+    assert!(
+        super::command()
+            .try_get_matches_from([
+                "navigate-model",
+                "in.onnx",
+                "out.onnx",
+                "--recipe",
+                "xfeat-dense"
+            ])
+            .is_ok()
+    );
 }

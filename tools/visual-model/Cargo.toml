@@ -15,5 +15,8 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-22", "load-dynamic"] }
+
 [lints]
 workspace = true

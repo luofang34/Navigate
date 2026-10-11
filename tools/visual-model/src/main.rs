@@ -2,6 +2,7 @@
 mod error;
 mod graph;
 mod recipe;
+mod xfeat;
 use clap::{Arg, Command, value_parser};
 use error::Error;
 use std::{
@@ -30,17 +31,23 @@ fn main() -> Result<(), Error> {
     let output = args
         .get_one::<PathBuf>("output")
         .ok_or(Error::Invalid("output path"))?;
-    let count = *args
-        .get_one::<usize>("features")
-        .ok_or(Error::Invalid("feature count"))?;
+    let count = args.get_one::<usize>("features").copied();
+    let dense = args
+        .get_one::<String>("recipe")
+        .is_some_and(|s| s == "xfeat-dense");
     let compact = args
         .get_one::<String>("output-kind")
         .is_some_and(|s| s == "compact");
-    prepare_blocking(input, output, count, compact)
+    prepare_blocking(input, output, count, compact, dense)
 }
 fn command() -> Command {
     Command::new("navigate-model")
-        .about("Prepare the supported LighterGlue export for fixed feature counts")
+        .about("Prepare supported feature extraction and matching graphs")
+        .arg(
+            Arg::new("recipe")
+                .long("recipe")
+                .value_parser(["lighterglue", "xfeat-dense"]),
+        )
         .arg(
             Arg::new("input")
                 .required(true)
@@ -54,7 +61,8 @@ fn command() -> Command {
         .arg(
             Arg::new("features")
                 .long("features")
-                .required(true)
+                .required_if_eq("recipe", "lighterglue")
+                .required_unless_present("recipe")
                 .value_parser(value_parser!(usize)),
         )
         .arg(
@@ -64,7 +72,13 @@ fn command() -> Command {
                 .value_parser(["compact", "probability"]),
         )
 }
-fn prepare_blocking(input: &Path, output: &Path, count: usize, compact: bool) -> Result<(), Error> {
+fn prepare_blocking(
+    input: &Path,
+    output: &Path,
+    count: Option<usize>,
+    compact: bool,
+    dense: bool,
+) -> Result<(), Error> {
     let mut bytes = Vec::new();
     File::open(input)
         .and_then(|f| f.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes))
@@ -72,7 +86,20 @@ fn prepare_blocking(input: &Path, output: &Path, count: usize, compact: bool) ->
             path: input.into(),
             source,
         })?;
-    let prepared = recipe::prepare(&bytes, count, compact)?;
+    let prepared = if dense {
+        if count.is_some() || !compact {
+            return Err(Error::Invalid(
+                "xfeat-dense does not accept features or probability outputs",
+            ));
+        }
+        xfeat::prepare(&bytes)?
+    } else {
+        recipe::prepare(
+            &bytes,
+            count.ok_or(Error::Invalid("feature count"))?,
+            compact,
+        )?
+    };
     File::options()
         .write(true)
         .create_new(true)
@@ -82,7 +109,7 @@ fn prepare_blocking(input: &Path, output: &Path, count: usize, compact: bool) ->
             path: output.into(),
             source,
         })?;
-    tracing::info!(path=%output.display(),count,compact,bytes=prepared.len(),"Saved prepared matcher");
+    tracing::info!(path=%output.display(),?count,compact,dense,bytes=prepared.len(),"Saved prepared model");
     Ok(())
 }
 

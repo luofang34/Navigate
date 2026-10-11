@@ -1,7 +1,6 @@
 use crate::{Error, graph};
 use prost::Message;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto, StringStringEntryProto, TensorProto};
 
 const INPUT_SHA256: &str = "170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca";
@@ -78,29 +77,11 @@ fn transform(model: &mut GraphProto, count: i64, compact: bool) -> Result<(), Er
     });
     model.output = vec![graph::value("assignment", 1, &[1, count, count])];
     model.value_info.clear();
-    prune(model);
+    graph::prune(model);
     if compact {
         graph::compact(model, count);
     }
     Ok(())
-}
-fn prune(graph: &mut GraphProto) {
-    let mut needed = BTreeSet::from(["assignment".to_owned()]);
-    let mut keep = BTreeSet::new();
-    for (index, node) in graph.node.iter().enumerate().rev() {
-        if node.output.iter().any(|o| needed.contains(o)) {
-            keep.insert(index);
-            needed.extend(node.input.iter().cloned());
-        }
-    }
-    graph.node = std::mem::take(&mut graph.node)
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, node)| keep.contains(&i).then_some(node))
-        .collect();
-    graph
-        .initializer
-        .retain(|tensor| needed.contains(&tensor.name));
 }
 
 #[cfg(test)]
