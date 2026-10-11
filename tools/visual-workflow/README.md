@@ -22,7 +22,11 @@ result/bin/navigate-workflow locate config.json job.json result.json
 ```
 
 The Nix package contains the program. Runtime libraries, models, and reference
-packets are separate inputs. The rustnn feature uses the Cargo command below.
+packets are separate inputs. On macOS, build the rustnn Core ML variant with
+`nix build .#rustnn`; it installs the same `navigate-workflow` command and accepts
+`engine: "rustnn"` configurations. The flake supplies the required Rust compiler
+and protocol-buffer compiler. `nix flake check` builds and tests the programs
+available on the current system.
 
 For the rustnn Core ML adapter, use macOS and Rust 1.97 or later:
 
@@ -30,8 +34,12 @@ For the rustnn Core ML adapter, use macOS and Rust 1.97 or later:
 cargo build --locked --release -p navigate-workflow --features rustnn-coreml
 ```
 
-Supply an ONNX Runtime dynamic library with API 22 or later. Supply model files
-separately. The program does not download weights. Keep their licenses with them.
+Supply an ONNX Runtime dynamic library with API 22 or later. The pinned runtime
+can be obtained with `nix build .#runtime --no-link --print-out-paths`. Set the
+configuration's `runtime` path to that output's `lib/libonnxruntime.dylib` on macOS
+or `lib/libonnxruntime.so` on Linux. It does not require a Python environment.
+Supply model files separately. The program does not download weights. Keep their
+licenses with them.
 
 ## Execution settings
 

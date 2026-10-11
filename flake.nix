@@ -1,7 +1,7 @@
 {
   description = "Navigate native visual workflow";
 
-  inputs.nixpkgs.url = "https://releases.nixos.org/nixpkgs/nixpkgs-26.11pre1027958.c4013e501c04/nixexprs.tar.xz";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/e72e4f299401a3689d4b3d5fc6496b11db7064eb";
 
   outputs = { self, nixpkgs }:
     let
@@ -34,6 +34,12 @@
             cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" ];
             meta.mainProgram = "navigate-workflow";
           };
+          rustnn = workflow.overrideAttrs (old: {
+            pname = "navigate-workflow-rustnn";
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.protobuf ];
+            cargoBuildFlags = old.cargoBuildFlags ++ [ "--features" "navigate-workflow/rustnn-coreml" ];
+            cargoTestFlags = old.cargoTestFlags ++ [ "--features" "navigate-workflow/rustnn-coreml" ];
+          });
           model = workflow.overrideAttrs (old: {
             pname = "navigate-model";
             nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.protobuf ];
@@ -44,7 +50,10 @@
         in {
           default = workflow;
           inherit workflow model;
-        });
+          runtime = pkgs.onnxruntime;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin { inherit rustnn; });
+      checks = eachSystem (system:
+        builtins.removeAttrs self.packages.${system} [ "default" "runtime" ]);
       apps = eachSystem (system: {
         default = {
           type = "app";
