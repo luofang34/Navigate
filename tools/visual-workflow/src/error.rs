@@ -35,4 +35,6 @@ pub enum Error {
     Workflow(#[from] navigate_visual_workflow::WorkflowError),
     #[error(transparent)]
     Recording(#[from] navigate_recording::Error),
+    #[error(transparent)]
+    Render(#[from] navigate_visual_render::RenderError),
 }

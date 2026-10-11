@@ -11,6 +11,24 @@ pub fn command() -> Command {
     Command::new("navigate-workflow")
         .subcommand_required(true)
         .subcommand(
+            Command::new("render")
+                .about("Render terrain references and save a reusable localization job")
+                .arg(path("job"))
+                .arg(path("output"))
+                .arg(
+                    Arg::new("iterations")
+                        .long("iterations")
+                        .default_value("1")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(
+                    Arg::new("pixels")
+                        .long("pixels")
+                        .default_value("2000000")
+                        .value_parser(value_parser!(usize)),
+                ),
+        )
+        .subcommand(
             Command::new("pack")
                 .about("Build one offline reference feature packet")
                 .arg(path("config"))

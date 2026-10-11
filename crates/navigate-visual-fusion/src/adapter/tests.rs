@@ -78,6 +78,29 @@ fn zero_or_missing_budget_terms_are_refused() {
 }
 
 #[test]
+fn curved_frame_covariance_is_expressed_in_the_camera_location_ned_axes() {
+    let mut estimate = estimate(1, 1000, "sphere", 0.0);
+    estimate.frame = LocalFrame::spherical_enu(46.5, 7.5).unwrap();
+    estimate.pose.position = estimate.frame.local([47.0, 8.0, 900.0]).unwrap();
+    let rotation = estimate
+        .frame
+        .local_rotation([47.0, 8.0])
+        .unwrap()
+        .to_rotation_matrix()
+        .into_inner();
+    let local =
+        rotation * Matrix3::from_diagonal(&Vector3::new(4.0, 9.0, 16.0)) * rotation.transpose();
+    estimate
+        .geometry_covariance
+        .fixed_view_mut::<3, 3>(0, 0)
+        .copy_from(&local);
+    let actual = ned_covariance(&estimate, &budget()).unwrap();
+    let (n, e, d) = actual.diagonal();
+    assert!((n - e - 10.0).abs() < 1e-8);
+    assert!((d - e - 24.0).abs() < 1e-8);
+}
+
+#[test]
 fn fix_axes_move_to_ned_and_carry_the_budget() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     let fix = source

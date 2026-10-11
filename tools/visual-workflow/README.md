@@ -120,8 +120,10 @@ A localization job supplies camera calibration and immutable reference evidence:
 Replace all digest placeholders with lowercase SHA-256 digests. Job paths are
 relative to the job file. Depth is row-major, little-endian `f32`, in metres
 along the camera optical axis. Zero means no surface. Its size must match the
-image. Poses use Navigate's anchor Mercator frame and `[x,y,z,w]` quaternions.
-Keep rendering coordinates and camera calibration in that same frame.
+image. Poses use `[x,y,z,w]` quaternions. `coordinate_frame` defaults to
+`anchor_mercator`. Use `spherical_enu` for Cartesian east, north, up axes at
+the anchor on the mean-radius sphere. Its Cartesian z is not geographic altitude
+away from the anchor. Keep rendering coordinates and camera poses in one frame.
 
 Set `features` to `null` to extract each reference at startup. LoFTR requires
 this setting and cannot consume XFeat packets.
@@ -130,6 +132,44 @@ this setting and cannot consume XFeat packets.
 target/release/navigate-workflow locate config.json job.json result.json --iterations 10
 ```
 
+To render references from an installed `photo-reference-catalog`, omit `image`,
+`depth`, `depth_sha256`, and `features` from each generated reference. Keep its
+`id` and `pose`. Add this job field:
+
+```json
+"render_scene": {
+  "catalog": "map/catalog.json",
+  "catalog_sha256": "SHA256_OF_CATALOG_FILE",
+  "imagery_tile_pixels": 128,
+  "scene_bytes": 268435456,
+  "far_m": 40000,
+  "steps": 100,
+  "refinements": 12
+}
+```
+
+Set `map_sha256` to the catalog digest and the anchor to the midpoint of its
+bounding box. The loader verifies each tile's size and digest. Imagery and
+Terrarium elevation tiles must be 256 × 256. `imagery_tile_pixels` is a power
+of two from 1 through 256; a lower value reduces imagery detail and memory.
+Each assembled grid must fit 8192 pixels per side and the scene byte limit.
+Missing coverage produces zero depth. Rays must observe an above-ground sample
+before crossing terrain; coarse depth steps can miss narrow terrain features.
+
+`locate` uploads the scene once and generates references in memory. To save
+references for a separate deployment or feature-packet preparation stage:
+
+```sh
+target/release/navigate-workflow render job.json prepared --iterations 10
+target/release/navigate-workflow locate config.json prepared/job.json result.json
+```
+
+The output directory must not exist. It contains a reusable job, reference PNGs,
+little-endian depth files, and render measurements. `render` needs a hardware
+GPU but no inference runtime or model. Both paths use wgpu with explicit scene
+and view limits. Camera positions must stay within 100 km of the local origin.
+The renderer reads image and depth back to host memory for the inference adapter.
+
 Output files must not exist. A geometric rejection is a valid result. Input,
 backend, and resource failures return an error. Results keep every candidate's
 acceptance decision; the caller must resolve competing accepted hypotheses.
@@ -137,7 +177,10 @@ acceptance decision; the caller must resolve competing accepted hypotheses.
 Each iteration measures resident query extraction, matching, and pose verification.
 Model loading and reference preparation have separate measurements. Image decoding
 is outside iteration timing. These times exclude reference rendering, retrieval,
-and camera acquisition. Host reference budgets exclude model weights, backend
+and camera acquisition. The `render` result records rendering and readback costs
+separately. Scene texture limits exclude host loading buffers and driver overhead;
+upload staging can require additional memory of the same order as the scene.
+Host reference budgets exclude model weights, backend
 workspaces, and allocator overhead. They are not process memory limits.
 
 `adapter_tensor_io` is null when counters are unavailable. rustnn counters include

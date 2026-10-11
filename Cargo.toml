@@ -14,6 +14,7 @@ members = [
     "tools/visual-workflow",
     "crates/navigate-visual",
     "crates/navigate-visual-workflow",
+    "crates/navigate-visual-render",
     "crates/navigate-visual-fusion",
     "crates/navigate-visual-session",
     "crates/navigate-data",

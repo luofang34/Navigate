@@ -21,13 +21,14 @@ pub fn locate_blocking(
     let started = Instant::now();
     let mut references = Vec::new();
     let mut resident = 0_usize;
+    let mut source = job.references_blocking(root, config.limits.image_pixels)?;
     for entry in &job.references {
         if entry.features.is_some() {
             return Err(Error::Input(
                 "image-pair matching cannot consume XFeat packets".into(),
             ));
         }
-        let view = job.reference_blocking(entry, root, config.limits.image_pixels)?;
+        let view = job.reference_blocking(entry, root, config.limits.image_pixels, &mut source)?;
         resident = resident
             .saturating_add(view.image.as_raw().len())
             .saturating_add(view.depth_m.len().saturating_mul(4));
@@ -50,7 +51,7 @@ pub fn locate_blocking(
     assets::write_json_blocking(
         output,
         &json!({"backend":identity,"model_load_ms":load_ms,
-        "reference_prepare_ms":prepare_ms,"reference_resident_bytes":resident,
+        "reference_prepare_ms":prepare_ms,"reference_resident_bytes":resident,"render":run::render_report(&source),
         "reference_ids":job.references.iter().map(|r|r.id.as_str()).collect::<Vec<_>>(),"observation_sha256":frame.evidence_sha256(),
         "scope":"Image-pair matching and shared pose verification. No independent feature extraction stage.","iterations":reports}),
     )?;

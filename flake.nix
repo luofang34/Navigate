@@ -31,7 +31,7 @@
               };
             };
             cargoBuildFlags = [ "-p" "navigate-workflow" ];
-            cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" ];
+            cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" ];
             meta.mainProgram = "navigate-workflow";
           };
         in {

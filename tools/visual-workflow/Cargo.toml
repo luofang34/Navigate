@@ -12,6 +12,8 @@ rustnn-coreml = ["navigate-visual-onnx/rustnn-coreml"]
 [dependencies]
 navigate-visual = { path = "../../crates/navigate-visual" }
 navigate-visual-workflow = { path = "../../crates/navigate-visual-workflow" }
+navigate-visual-render = { path = "../../crates/navigate-visual-render" }
+pollster = "0.3"
 navigate-recording = { path = "../../crates/navigate-recording" }
 navigate-visual-onnx = { package = "visual-inference-probe", path = "../visual-inference" }
 image = { workspace = true, features = ["png", "jpeg"] }
@@ -25,3 +27,6 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -5,7 +5,9 @@ mod config;
 mod error;
 mod job;
 mod pair;
+mod render;
 mod run;
+mod terrain;
 
 use error::Error;
 use std::path::PathBuf;
@@ -14,7 +16,22 @@ fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    let matches = cli::command().try_get_matches()?;
+    let matches = match cli::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            return error.print().map_err(|source| Error::Io {
+                operation: "write CLI help",
+                path: "stdout".into(),
+                source,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
     let (name, args) = matches
         .subcommand()
         .ok_or_else(|| Error::Input("missing command".into()))?;
@@ -23,6 +40,18 @@ fn main() -> Result<(), Error> {
             .cloned()
             .ok_or_else(|| Error::Input(format!("missing {name}")))
     };
+    if name == "render" {
+        return render::run_blocking(
+            &path("job")?,
+            &path("output")?,
+            *args
+                .get_one::<usize>("iterations")
+                .ok_or_else(|| Error::Input("missing iterations".into()))?,
+            *args
+                .get_one::<usize>("pixels")
+                .ok_or_else(|| Error::Input("missing pixels".into()))?,
+        );
+    }
     let config_path = path("config")?;
     let config: config::Config = assets::read_json_blocking(&config_path)?;
     let root = config_path

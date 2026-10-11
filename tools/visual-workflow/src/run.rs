@@ -68,8 +68,10 @@ pub fn locate_blocking(
     let started = Instant::now();
     let mut references = Vec::new();
     let mut resident = 0_usize;
+    let mut source = job.references_blocking(job_root, config.limits.image_pixels)?;
     for entry in &job.references {
-        let view = job.reference_blocking(entry, job_root, config.limits.image_pixels)?;
+        let view =
+            job.reference_blocking(entry, job_root, config.limits.image_pixels, &mut source)?;
         let reference = if let Some(path) = &entry.features {
             let bytes = assets::read_blocking(&job_root.join(path), 2 * 1024 * 1024)?;
             workflow.import_reference(view, XFeatFeatures::decode(&bytes, config.keypoints)?)?
@@ -94,11 +96,18 @@ pub fn locate_blocking(
         )?));
     }
     let result = json!({"backend":identity,"model_load_ms":load_ms,"reference_prepare_ms":prepare_ms,"reference_resident_bytes":resident,
-        "reference_ids":job.references.iter().map(|r|r.id.as_str()).collect::<Vec<_>>(),"observation_sha256":frame.evidence_sha256(),
+        "render":render_report(&source),"reference_ids":job.references.iter().map(|r|r.id.as_str()).collect::<Vec<_>>(),"observation_sha256":frame.evidence_sha256(),
         "scope":"Each iteration includes one query extraction, candidate matching, and pose verification. Model load, image decode, and reference preparation are separate.","iterations":reports,"adapter_tensor_io":workflow.backend().tensor_statistics()});
     assets::write_json_blocking(output, &result)?;
     tracing::info!(path=%output.display(),iterations,"Saved localization results");
     Ok(())
+}
+pub(crate) fn render_report(source: &crate::job::References) -> Value {
+    let identity = source.identity();
+    json!({"backend":identity.as_ref().map(|i|&i.revision),"style_sha256":identity.as_ref().map(|i|&i.style_sha256),
+        "resident_texture_bytes":source.texture_bytes(),"render_ms":source.render_ms,
+        "readback_bytes_per_view":source.readback_bytes(),"gpu_output_and_readback_bytes":source.readback_bytes()*2,
+        "scope":"Render timings include dispatch, image/depth readback and host materialization; exclude scene load. Texture memory excludes host atlas staging and driver overhead."})
 }
 pub(crate) fn report(report: FrameReport) -> Value {
     let candidates:Vec<_>=report.candidates.into_iter().map(|candidate| {

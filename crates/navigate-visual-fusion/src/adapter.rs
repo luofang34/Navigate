@@ -176,7 +176,14 @@ fn ned_covariance(
         .geometry_covariance
         .fixed_view::<3, 3>(0, 0)
         .into_owned();
-    let axes = Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0);
+    let [lat, lon, _] = estimate.frame.geodetic(estimate.pose.position);
+    let rotation = estimate
+        .frame
+        .local_rotation([lat, lon])
+        .map_err(|_| VisualFusionError::ImplausiblePosition)?
+        .to_rotation_matrix()
+        .into_inner();
+    let axes = Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0) * rotation.transpose();
     let geometric = axes * enu * axes.transpose();
     if (geometric - geometric.transpose()).norm() > 1e-9
         || !geometric.iter().all(|v| v.is_finite())
