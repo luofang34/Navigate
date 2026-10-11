@@ -273,9 +273,16 @@ An experiment uses one fixed reference from a localization job. It accepts up to
   "refresh_interval": 5,
   "query_focal_scale": 1.0,
   "retain_valid_track": true,
+  "tracking_backend": "wgpu",
   "max_map_track_disagreement_m": null
 }
 ```
+
+The Nix workflow packages include GPU tracking. For Cargo builds, use
+`--features gpu` to select `tracking_backend: "wgpu"`. The GPU device and
+tracking kernel stay loaded across frames. A missing GPU returns an error. Use
+`"cpu"` for the CPU comparison; an omitted field selects CPU. This choice does
+not change the neural inference backend. Results record the active tracker.
 
 Run folds 0 through 4 separately. Each fold excludes fixed 64-pixel map cells
 from fitting and tracking. A four-pixel cell border is excluded. The score uses
@@ -298,6 +305,7 @@ new independent geographic evidence. `accepted` means geometric acceptance only.
 
 `setup_ms` includes reference preparation and model loading. `pipeline_ms` includes
 image decoding, inference or tracking, geometry, and track-state updates. It
-excludes result writing and test scoring. The first inference can include backend
-startup work. Acquisition, global retrieval, and map download are outside this
+excludes result writing and test scoring. `stage_ms` separates tracking, geometry,
+and map matching; `frame_loading_ms` records image loading and validation. The
+first inference can include backend startup work. Acquisition, global retrieval, and map download are outside this
 local experiment. Report rejected frames and startup costs with timing results.

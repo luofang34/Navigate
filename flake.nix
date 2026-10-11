@@ -30,8 +30,8 @@
                 "webnn-onnx-utils-0.1.1" = "sha256-3Z6+Jnk+64ATWd0m92oJ8eudIWwwJ+/oxW5Ky+2jmsI=";
               };
             };
-            cargoBuildFlags = [ "-p" "navigate-workflow" ];
-            cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" ];
+            cargoBuildFlags = [ "-p" "navigate-workflow" "--features" "navigate-workflow/gpu" ];
+            cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" "--features" "navigate-workflow/gpu" ];
             meta.mainProgram = "navigate-workflow";
           };
           rustnn = workflow.overrideAttrs (old: {

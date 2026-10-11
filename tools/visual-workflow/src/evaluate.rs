@@ -2,6 +2,7 @@
 mod backend;
 mod metrics;
 mod temporal;
+mod tracker;
 
 use crate::{
     Error, assets,
@@ -17,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
 use temporal::Tracks;
+use tracker::{Tracker, TrackerBackend};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,9 +39,18 @@ struct Experiment {
     #[serde(default)]
     retain_valid_track: bool,
     #[serde(default)]
+    tracking_backend: TrackerBackend,
+    #[serde(default)]
     max_map_track_disagreement_m: Option<f64>,
 }
+#[derive(Default, serde::Serialize)]
+struct StageTimings {
+    tracking_ms: f64,
+    geometry_ms: f64,
+    map_matching_ms: f64,
+}
 struct Outcome {
+    timings: StageTimings,
     decision: Result<Estimate, Error>,
     pairs: Vec<PixelMatch>,
     matches: Option<Vec<PixelMatch>>,
@@ -51,6 +62,7 @@ struct Outcome {
 }
 struct Runner {
     matcher: Matcher,
+    tracker: Tracker,
     verifier: PoseVerifier,
     tracks: Option<Tracks>,
     reference: ReferenceView,
@@ -85,9 +97,11 @@ pub fn run_blocking(
         &mut source,
     )?;
     let matcher = Matcher::new_blocking(config.load_blocking(root)?, &reference.image)?;
+    let tracker = Tracker::new_blocking(experiment.tracking_backend)?;
     let setup_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mut runner = Runner {
         matcher,
+        tracker,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         tracks: None,
         reference,
@@ -229,6 +243,7 @@ impl Runner {
     }
     fn process_blocking(&mut self, frame: &Frame) -> Result<Outcome, Error> {
         let mut result = Outcome {
+            timings: StageTimings::default(),
             decision: Err(Error::Input("map initialization required".into())),
             pairs: Vec::new(),
             matches: None,
@@ -248,8 +263,12 @@ impl Runner {
             && tracks.eligible(frame, limit)
         {
             result.tracking_attempted = true;
-            result.pairs = tracks.propagate_blocking(frame)?;
+            let start = Instant::now();
+            result.pairs = tracks.propagate_blocking(frame, self.tracker.backend.as_mut())?;
+            result.timings.tracking_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = Instant::now();
             result.decision = self.fit(frame, &result.pairs);
+            result.timings.geometry_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
         let scheduled = self
             .tracks
@@ -258,12 +277,20 @@ impl Runner {
         if result.decision.is_ok() && !scheduled {
             return Ok(result);
         }
+        self.refresh_blocking(frame, &mut result)?;
+        Ok(result)
+    }
+    fn refresh_blocking(&mut self, frame: &Frame, result: &mut Outcome) -> Result<(), Error> {
         result.map_attempted = true;
+        let start = Instant::now();
         let matches = self
             .matcher
             .matches_blocking(&self.reference.image, &frame.image)?;
+        result.timings.map_matching_ms = start.elapsed().as_secs_f64() * 1000.0;
         let pairs = self.training(&matches);
+        let start = Instant::now();
         let decision = self.fit(frame, &pairs);
+        result.timings.geometry_ms += start.elapsed().as_secs_f64() * 1000.0;
         let (replace, disagreement) = select_map(
             &result.decision,
             &decision,
@@ -277,13 +304,15 @@ impl Runner {
             result.pairs = pairs;
         }
         result.matches = Some(matches);
-        Ok(result)
+        Ok(())
     }
     fn frame_blocking(&mut self, index: usize, root: &Path, pixels: usize) -> Result<Value, Error> {
         let start = Instant::now();
         let frame = self.load_frame_blocking(index, root, pixels)?;
         self.reference.validate_camera(&self.reference_camera)?;
+        let frame_loading_ms = start.elapsed().as_secs_f64() * 1000.0;
         let Outcome {
+            timings,
             decision,
             pairs,
             matches,
@@ -298,10 +327,11 @@ impl Runner {
         let withheld = self.controls_blocking(index, &frame, matches)?;
         let mut record = json!({"index":index,"capture_time_ns":frame.stamp.capture_time_ns,
             "observation_sha256":frame.evidence_sha256(),"pipeline_ms":pipeline_ms,
+            "stage_ms":timings,"frame_loading_ms":frame_loading_ms,
             "tracking_attempted":tracking_attempted,"map_refreshed":refreshed,"map_attempted":map_attempted,
             "map_rejection":map_rejection,"map_track_disagreement_m":disagreement_m,
             "evidence_kind":if decision.is_err() {"rejected"} else if refreshed {"map_match"} else {"propagated_map_matches"},
-            "tracking_backend":"cpu-pyramidal-lk-v1",
+            "tracking_backend":self.tracker.identity,
             "controls":withheld.iter().map(|p|[p.reference.x,p.reference.y,p.query.x,p.query.y]).collect::<Vec<_>>(),
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});

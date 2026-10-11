@@ -1,9 +1,7 @@
 //! Carry fixed map correspondences without adding independent map evidence.
 use super::metrics;
 use crate::Error;
-use navigate_visual::{
-    CameraModel, Estimate, Frame, PixelMatch, PointTracker, PyramidalMatcher, ReferenceView,
-};
+use navigate_visual::{CameraModel, Estimate, Frame, PixelMatch, PointTracker, ReferenceView};
 
 pub(super) struct Tracks {
     previous: Frame,
@@ -20,10 +18,13 @@ impl Tracks {
             && frame.stamp.capture_time_ns > self.previous.stamp.capture_time_ns
             && frame.stamp.capture_time_ns - self.previous.stamp.capture_time_ns <= 200_000_000
     }
-    pub fn propagate_blocking(&self, frame: &Frame) -> Result<Vec<PixelMatch>, Error> {
+    pub fn propagate_blocking(
+        &self,
+        frame: &Frame,
+        tracker: &mut dyn PointTracker,
+    ) -> Result<Vec<PixelMatch>, Error> {
         let points: Vec<_> = self.pairs.iter().map(|p| p.query).collect();
-        let tracked =
-            PyramidalMatcher.track_points_blocking(&self.previous.image, &frame.image, &points)?;
+        let tracked = tracker.track_points_blocking(&self.previous.image, &frame.image, &points)?;
         Ok(self
             .pairs
             .iter()

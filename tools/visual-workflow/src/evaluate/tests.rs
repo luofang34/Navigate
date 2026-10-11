@@ -47,7 +47,10 @@ fn a_real_tracked_shift_preserves_map_points_and_acceptance() {
     };
     assert!(tracks.eligible(&second, 5));
     assert!(!tracks.eligible(&second, 1));
-    let tracked = tracks.propagate_blocking(&second).unwrap();
+    let mut tracker = Tracker::new_blocking(TrackerBackend::Cpu).unwrap();
+    let tracked = tracks
+        .propagate_blocking(&second, tracker.backend.as_mut())
+        .unwrap();
     assert!(tracked.len() >= 20);
     assert!(
         tracked
