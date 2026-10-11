@@ -21,6 +21,7 @@ fn budget() -> VisualErrorBudget {
         map_horizontal_m: 3.0,
         map_vertical_m: 5.0,
         calibration_m: 1.0,
+        geometry_model_m: 2.0,
         vertical_datum: VerticalDatum::Orthometric {
             geoid_separation_m: 48.0,
         },
@@ -118,9 +119,9 @@ fn fix_axes_move_to_ned_and_carry_the_budget() {
     };
     let (n, e, d) = covariance.diagonal();
     // North takes the frame's north variance (9), east the east variance (4).
-    assert!((n - (2.0 * 9.0 + 192.0)).abs() < 1e-9);
-    assert!((e - (2.0 * 4.0 + 192.0)).abs() < 1e-9);
-    assert!((d - (2.0 * 16.0 + 192.0)).abs() < 1e-9);
+    assert!((n - (2.0 * 9.0 + 344.0)).abs() < 1e-9);
+    assert!((e - (2.0 * 4.0 + 344.0)).abs() < 1e-9);
+    assert!((d - (2.0 * 16.0 + 344.0)).abs() < 1e-9);
     assert!((position.altitude_m - 948.0).abs() < 1e-9);
     assert!((position.latitude_rad.to_degrees() - 47.0).abs() < 1e-9);
     assert!(
@@ -328,4 +329,28 @@ fn session_labels_refuse_shared_map_cells_and_never_grant_independence() {
             "{label:?}"
         );
     }
+}
+
+#[test]
+fn geometry_model_budget_is_required_even_at_the_frame_anchor() {
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut b = budget();
+        b.geometry_model_m = invalid;
+        assert_eq!(
+            VisualFixSource::new(identity(), b).err(),
+            Some(VisualFusionError::InvalidBudget {
+                field: "geometry_model_m"
+            })
+        );
+    }
+    let mut e = estimate(1, 1, "geometry", 0.0);
+    e.frame = LocalFrame::spherical_enu(75.0, 0.0).unwrap();
+    e.pose.position = Vector3::new(0.0, 0.0, 30_000.0);
+    assert!(e.frame.model_error_m(e.pose.position) < 1e-6);
+    let first = ned_covariance(&e, &budget()).unwrap();
+    let mut larger = budget();
+    larger.geometry_model_m = 20.0;
+    let second = ned_covariance(&e, &larger).unwrap();
+    assert!(second.diagonal().0 > first.diagonal().0 + 1000.0);
+    assert!(second.diagonal().2 > first.diagonal().2 + 1000.0);
 }

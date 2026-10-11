@@ -15,9 +15,11 @@ pub enum VerticalDatum {
     },
 }
 
-/// One-sigma error terms that the host declares for a map, camera, and datum.
+/// Root-mean-square error allowances declared by the host for a map, camera, and datum.
 ///
-/// Every term must be positive. Unknown error is not zero error.
+/// Each term must include bias as well as random scatter. These values are not
+/// measured or validated by the adapter. Every term must be positive.
+/// Unknown error is not zero error.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VisualErrorBudget {
     /// Horizontal registration error of the map imagery in metres.
@@ -26,6 +28,11 @@ pub struct VisualErrorBudget {
     pub map_vertical_m: f64,
     /// Position error from camera calibration and mounting in metres.
     pub calibration_m: f64,
+    /// Position error from the geometry model used to solve the pose, in metres.
+    /// The host must assess the effect of the full map point set and viewing geometry.
+    /// A coordinate difference at the camera or a map point is not a pose error bound.
+    /// Coherent model errors must not shrink with the number of matched points.
+    pub geometry_model_m: f64,
     /// Vertical reference of the map altitudes.
     pub vertical_datum: VerticalDatum,
     /// Error of the vertical datum conversion in metres.
@@ -38,6 +45,7 @@ impl VisualErrorBudget {
             ("map_horizontal_m", self.map_horizontal_m),
             ("map_vertical_m", self.map_vertical_m),
             ("calibration_m", self.calibration_m),
+            ("geometry_model_m", self.geometry_model_m),
             ("vertical_datum_m", self.vertical_datum_m),
         ];
         for (field, value) in terms {
@@ -55,12 +63,17 @@ impl VisualErrorBudget {
         Ok(())
     }
 
-    /// Horizontal and vertical variances in square metres, with the frame-model error.
+    /// Horizontal and vertical variances in square metres, with the point-coordinate displacement.
     pub(crate) fn variances_m2(&self, model_error_m: f64) -> (f64, f64) {
-        let horizontal = (self.map_horizontal_m + self.calibration_m + model_error_m).powi(2);
-        let vertical =
-            (self.map_vertical_m + self.calibration_m + self.vertical_datum_m + model_error_m)
+        let horizontal =
+            (self.map_horizontal_m + self.calibration_m + self.geometry_model_m + model_error_m)
                 .powi(2);
+        let vertical = (self.map_vertical_m
+            + self.calibration_m
+            + self.geometry_model_m
+            + self.vertical_datum_m
+            + model_error_m)
+            .powi(2);
         (horizontal, vertical)
     }
 

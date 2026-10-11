@@ -167,7 +167,11 @@ impl LocalFrame {
         [ax + position.x / scale, ay - position.y / scale]
     }
 
-    /// Frame-model error in metres at a position, compared with a curved Earth.
+    /// Coordinate-model displacement in metres at a position, compared with a curved Earth.
+    ///
+    /// This is not a bound on the error of a pose fitted to map points. Distortion
+    /// across the point set can change a fitted pose while this value is near zero.
+    /// A pose error budget must assess the point set and viewing geometry separately.
     ///
     /// Mercator frames bound curvature drop and horizontal scale drift. Spherical
     /// frames report the displacement from WGS84 for the same geographic position
