@@ -45,6 +45,7 @@ pub fn run_blocking(
         let view = job.reference_blocking(entry, root, max_pixels, &mut source)?;
         let mut saved = save_blocking(output, index, &view)?;
         saved["id"] = json!(entry.id);
+        saved["camera"] = json!(entry.camera.as_ref().unwrap_or(&job.camera));
         saved["pose"] = json!(navigate_recording::Pose::from(view.pose));
         references.push(saved);
     }

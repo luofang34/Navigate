@@ -143,6 +143,13 @@ image. Poses use `[x,y,z,w]` quaternions. `coordinate_frame` defaults to
 `anchor_mercator`. Use `spherical_enu` for Cartesian east, north, up axes at
 the anchor on the mean-radius sphere. Its Cartesian z is not geographic altitude
 away from the anchor. Keep rendering coordinates and camera poses in one frame.
+A file reference can include its own `camera` with the same fields as the job
+camera. Use this for a different image size or focal length. If omitted, the
+reference uses the job camera. Generated references use the job camera and
+reject a reference camera override. Reference depth uses the reference camera;
+pose fitting and query errors use the query camera. A photo anchor supplies
+conditional map geometry. Keep its source history outside the feature packet;
+do not use the query or its derived poses as an independent anchor.
 
 Set `features` to `null` to extract each reference at startup. LoFTR requires
 this setting and cannot consume XFeat packets.

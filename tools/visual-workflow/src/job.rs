@@ -38,6 +38,7 @@ pub struct Reference {
     pub depth_sha256: Option<String>,
     pub pose: Pose,
     pub features: Option<PathBuf>,
+    pub camera: Option<Camera>,
 }
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +76,15 @@ impl Job {
         })
     }
     pub fn references_blocking(&self, root: &Path, max_pixels: usize) -> Result<References, Error> {
+        if self
+            .references
+            .iter()
+            .any(|r| r.image.is_none() && r.camera.is_some())
+        {
+            return Err(Error::Input(
+                "generated references use the job camera".into(),
+            ));
+        }
         let needed = self.references.iter().any(|r| r.image.is_none());
         let renderer = if needed {
             let config = self
@@ -129,7 +139,11 @@ impl Job {
         source: &mut References,
     ) -> Result<ReferenceView, Error> {
         let Some(input) = &entry.image else {
-            if entry.depth.is_some() || entry.depth_sha256.is_some() || entry.features.is_some() {
+            if entry.depth.is_some()
+                || entry.depth_sha256.is_some()
+                || entry.features.is_some()
+                || entry.camera.is_some()
+            {
                 return Err(Error::Input(
                     "generated references cannot bind file depth or cached image features".into(),
                 ));
@@ -169,7 +183,7 @@ impl Job {
             .iter()
             .map(|b| f32::from_le_bytes(*b))
             .collect();
-        Ok(ReferenceView {
+        let view = ReferenceView {
             map: MapRevision {
                 release_id: self.map_release.clone(),
                 manifest_sha256: self.map_sha256.clone(),
@@ -178,6 +192,8 @@ impl Job {
             pose: entry.pose.camera()?,
             image,
             depth_m,
-        })
+        };
+        view.validate_camera(&entry.camera.as_ref().unwrap_or(&self.camera).model())?;
+        Ok(view)
     }
 }

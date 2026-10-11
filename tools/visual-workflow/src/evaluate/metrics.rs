@@ -27,24 +27,25 @@ pub(super) fn calibrated(pair: PixelMatch, camera: &CameraModel, scale: f64) -> 
 pub(super) fn residual(
     pair: PixelMatch,
     camera: &CameraModel,
-    reference: &ReferenceView,
+    reference: (&ReferenceView, &CameraModel),
     pose: &CameraPose,
 ) -> Option<f64> {
+    let (reference, reference_camera) = reference;
     let p = pair.reference;
     if !p.iter().chain(pair.query.iter()).all(|v| v.is_finite())
         || p.x < 0.0
         || p.y < 0.0
-        || p.x >= f64::from(camera.width - 1)
-        || p.y >= f64::from(camera.height - 1)
+        || p.x >= f64::from(reference_camera.width - 1)
+        || p.y >= f64::from(reference_camera.height - 1)
     {
         return None;
     }
-    let index = p.y.round() as usize * camera.width as usize + p.x.round() as usize;
+    let index = p.y.round() as usize * reference_camera.width as usize + p.x.round() as usize;
     let depth = f64::from(*reference.depth_m.get(index)?);
     if !depth.is_finite() || depth <= 0.0 {
         return None;
     }
-    let world = camera.unproject(&reference.pose, p, depth);
+    let world = reference_camera.unproject(&reference.pose, p, depth);
     Some(
         camera
             .project(pose, world)
@@ -55,7 +56,7 @@ pub(super) fn residual(
 pub(super) fn score(
     pairs: &[PixelMatch],
     camera: &CameraModel,
-    reference: &ReferenceView,
+    reference: (&ReferenceView, &CameraModel),
     pose: &CameraPose,
     scale: f64,
 ) -> Value {

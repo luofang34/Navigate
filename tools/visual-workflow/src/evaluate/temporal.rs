@@ -1,7 +1,9 @@
 //! Carry fixed map correspondences without adding independent map evidence.
 use super::metrics;
 use crate::Error;
-use navigate_visual::{Estimate, Frame, PixelMatch, PointTracker, PyramidalMatcher, ReferenceView};
+use navigate_visual::{
+    CameraModel, Estimate, Frame, PixelMatch, PointTracker, PyramidalMatcher, ReferenceView,
+};
 
 pub(super) struct Tracks {
     previous: Frame,
@@ -37,7 +39,7 @@ impl Tracks {
     pub fn update(
         previous: Frame,
         pairs: Vec<PixelMatch>,
-        reference: &ReferenceView,
+        reference: (&ReferenceView, &CameraModel),
         estimate: &Estimate,
         scale: f64,
         old: Option<&Self>,

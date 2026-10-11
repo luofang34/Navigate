@@ -66,18 +66,18 @@ fn heldout_errors_include_bad_matches_and_wrong_poses() {
             query: Vector2::new(x, 60.0),
         })
         .collect();
-    let correct = score(&pairs, &camera, &reference, &pose, 1.0);
+    let correct = score(&pairs, &camera, (&reference, &camera), &pose, 1.0);
     assert_eq!(correct["within_2_5_px"], 4);
     let wrong = CameraPose {
         position: Vector3::new(10.0, 0.0, 0.0),
         ..pose
     };
-    let result = score(&pairs, &camera, &reference, &wrong, 1.0);
+    let result = score(&pairs, &camera, (&reference, &camera), &wrong, 1.0);
     assert_eq!(result["within_2_5_px"], 0);
     assert!((result["median_px"].as_f64().unwrap() - 10.0).abs() < 1e-10);
     let mut contaminated = pairs;
     contaminated[0].query.x += 50.0;
-    let result = score(&contaminated, &camera, &reference, &pose, 1.0);
+    let result = score(&contaminated, &camera, (&reference, &camera), &pose, 1.0);
     assert_eq!(result["valid_depth"], 4);
     assert_eq!(result["within_2_5_px"], 3);
     assert_eq!(result["p90_px"], 50.0);
@@ -92,4 +92,45 @@ fn camera() -> CameraModel {
         cx: 64.0,
         cy: 64.0,
     }
+}
+
+#[test]
+fn reference_camera_controls_depth_index_and_world_rays() {
+    let camera = camera();
+    let reference_camera = CameraModel {
+        width: 256,
+        height: 128,
+        fx: 200.0,
+        cx: 128.0,
+        ..camera
+    };
+    let pose = CameraPose {
+        position: Vector3::zeros(),
+        orientation: UnitQuaternion::identity(),
+    };
+    let mut reference = ReferenceView {
+        map: MapRevision {
+            release_id: "test".into(),
+            manifest_sha256: "a".repeat(64),
+        },
+        frame: LocalFrame::anchor_mercator(35.0, -115.0).unwrap(),
+        pose,
+        image: image::GrayImage::new(256, 128),
+        depth_m: vec![0.0; 256 * 128],
+    };
+    reference.depth_m[60 * 256 + 180] = 100.0;
+    let pair = PixelMatch {
+        reference: Vector2::new(180.0, 60.0),
+        query: Vector2::new(90.0, 60.0),
+    };
+    let correct = score(
+        &[pair],
+        &camera,
+        (&reference, &reference_camera),
+        &pose,
+        1.0,
+    );
+    assert_eq!(correct["within_2_5_px"], 1);
+    let wrong = score(&[pair], &camera, (&reference, &camera), &pose, 1.0);
+    assert_eq!(wrong["valid_depth"], 0);
 }

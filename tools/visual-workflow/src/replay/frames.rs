@@ -53,7 +53,7 @@ impl<'a> Frames<'a> {
         let keys = job
             .references
             .iter()
-            .map(|r| digest(&json!([context, r])))
+            .map(|r| reference_key(&job, root, r))
             .collect::<Result<Vec<_>, _>>()?;
         let mut selected = Vec::new();
         let mut hits = 0_usize;
@@ -113,9 +113,32 @@ impl<'a> Frames<'a> {
         } else {
             self.workflow.prepare_reference_blocking(view)?
         };
+        let prepared =
+            prepared.with_camera(entry.camera.as_ref().unwrap_or(&job.camera).model())?;
         let bytes = prepared.resident_bytes();
         self.cache.insert(key.into(), prepared, bytes, protected)
     }
+}
+fn reference_key(job: &Job, root: &Path, entry: &crate::job::Reference) -> Result<String, Error> {
+    if entry.image.is_none() {
+        return digest(&json!([context_key(job, root)?, entry]));
+    }
+    digest(&json!([
+        job.anchor_lat_lon,
+        job.coordinate_frame,
+        job.map_release,
+        job.map_sha256,
+        entry.id,
+        entry.pose,
+        entry.camera.as_ref().unwrap_or(&job.camera),
+        entry
+            .image
+            .as_ref()
+            .map(|image| (root.join(&image.path), &image.sha256)),
+        entry.depth.as_ref().map(|path| root.join(path)),
+        entry.depth_sha256,
+        entry.features.as_ref().map(|path| root.join(path))
+    ]))
 }
 fn context_key(job: &Job, root: &Path) -> Result<String, Error> {
     digest(&json!([
@@ -135,3 +158,6 @@ fn digest(value: &Value) -> Result<String, Error> {
     })?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
+
+#[cfg(test)]
+mod tests;

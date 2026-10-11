@@ -37,15 +37,21 @@ pub fn locate_blocking(
         }
         references.push(view);
     }
+    let cameras: Vec<_> = job
+        .references
+        .iter()
+        .map(|r| r.camera.as_ref().unwrap_or(&job.camera).model())
+        .collect();
+    let calibrated: Vec<_> = references.iter().zip(&cameras).collect();
     let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut workflow =
         PairLocalizer::new(matcher, LocalizerConfig::default(), config.limits.model())?;
     let mut reports = Vec::with_capacity(iterations);
     for _ in 0..iterations {
-        reports.push(run::report(workflow.estimate_blocking(
+        reports.push(run::report(workflow.estimate_calibrated_blocking(
             &frame,
             &prior,
-            &references,
+            &calibrated,
         )?));
     }
     assets::write_json_blocking(

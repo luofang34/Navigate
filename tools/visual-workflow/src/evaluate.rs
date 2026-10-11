@@ -10,7 +10,9 @@ use crate::{
 };
 use backend::Matcher;
 use navigate_recording::Pose;
-use navigate_visual::{Estimate, Frame, LocalizerConfig, PixelMatch, PoseVerifier, ReferenceView};
+use navigate_visual::{
+    CameraModel, Estimate, Frame, LocalizerConfig, PixelMatch, PoseVerifier, ReferenceView,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
@@ -52,6 +54,7 @@ struct Runner {
     verifier: PoseVerifier,
     tracks: Option<Tracks>,
     reference: ReferenceView,
+    reference_camera: CameraModel,
     job: Job,
     experiment: Experiment,
 }
@@ -88,6 +91,11 @@ pub fn run_blocking(
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         tracks: None,
         reference,
+        reference_camera: job.references[0]
+            .camera
+            .as_ref()
+            .unwrap_or(&job.camera)
+            .model(),
         job,
         experiment,
     };
@@ -146,9 +154,10 @@ impl Runner {
             .iter()
             .map(|p| metrics::calibrated(*p, &frame.camera, self.experiment.query_focal_scale))
             .collect();
-        Ok(self.verifier.verify(
+        Ok(self.verifier.verify_calibrated_reference(
             frame,
             &self.reference,
+            &self.reference_camera,
             &self.job.prior()?,
             &calibrated,
             self.matcher.identity(),
@@ -274,7 +283,7 @@ impl Runner {
     fn frame_blocking(&mut self, index: usize, root: &Path, pixels: usize) -> Result<Value, Error> {
         let start = Instant::now();
         let frame = self.load_frame_blocking(index, root, pixels)?;
-        self.reference.validate(&frame)?;
+        self.reference.validate_camera(&self.reference_camera)?;
         let Outcome {
             decision,
             pairs,
@@ -305,7 +314,7 @@ impl Runner {
                 record["heldout"] = metrics::score(
                     &withheld,
                     &frame.camera,
-                    &self.reference,
+                    (&self.reference, &self.reference_camera),
                     &estimate.pose,
                     self.experiment.query_focal_scale,
                 );
@@ -313,7 +322,7 @@ impl Runner {
                 self.tracks = Some(Tracks::update(
                     frame,
                     pairs,
-                    &self.reference,
+                    (&self.reference, &self.reference_camera),
                     &estimate,
                     self.experiment.query_focal_scale,
                     self.tracks.as_ref(),

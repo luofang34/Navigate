@@ -93,3 +93,24 @@ fn backend_failure_is_not_a_geometry_rejection() {
     ));
     assert_eq!(workflow.matcher.calls, 1);
 }
+
+#[test]
+fn separate_camera_is_validated_before_pair_inference() {
+    let mut workflow = workflow(limits());
+    let (mut frame, prior) = query();
+    let camera = frame.camera;
+    frame.camera.width = 120;
+    frame.image = GrayImage::new(120, 80);
+    let view = reference();
+    assert!(
+        workflow
+            .estimate_calibrated_blocking(&frame, &prior, &[(&view, &frame.camera)])
+            .is_err()
+    );
+    assert_eq!(workflow.matcher.calls, 0);
+    let report = workflow
+        .estimate_calibrated_blocking(&frame, &prior, &[(&view, &camera)])
+        .unwrap();
+    assert_eq!(workflow.matcher.calls, 1);
+    assert!(report.candidates[0].decision.is_err());
+}

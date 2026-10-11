@@ -78,6 +78,8 @@ pub fn locate_blocking(
         } else {
             workflow.prepare_reference_blocking(view)?
         };
+        let reference =
+            reference.with_camera(entry.camera.as_ref().unwrap_or(&job.camera).model())?;
         resident = resident.saturating_add(reference.resident_bytes());
         if resident > config.limits.reference_bytes {
             return Err(Error::Input(

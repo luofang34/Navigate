@@ -2,7 +2,8 @@
 
 use crate::{FeatureBackend, WorkflowError};
 use navigate_visual::{
-    Estimate, Frame, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView, VisualError,
+    CameraModel, Estimate, Frame, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView,
+    VisualError,
 };
 use std::time::{Duration, Instant};
 
@@ -42,9 +43,20 @@ impl ResourceLimits {
 pub struct PreparedReference<F> {
     view: ReferenceView,
     features: F,
+    camera: Option<CameraModel>,
     resident_bytes: usize,
 }
 impl<F> PreparedReference<F> {
+    /// Bind the camera used to produce the reference pixels and depth.
+    /// This does not change or copy image and feature storage.
+    ///
+    /// # Errors
+    /// Rejects invalid calibration or reference geometry.
+    pub fn with_camera(mut self, camera: CameraModel) -> Result<Self, WorkflowError> {
+        self.view.validate_camera(&camera)?;
+        self.camera = Some(camera);
+        Ok(self)
+    }
     /// Reference geometry and image pixels.
     pub fn view(&self) -> &ReferenceView {
         &self.view
@@ -165,6 +177,7 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
         Ok(PreparedReference {
             view,
             features,
+            camera: None,
             resident_bytes: bytes,
         })
     }
@@ -221,7 +234,9 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
             .fold(0_usize, |total, r| total.saturating_add(r.resident_bytes));
         check("reference bytes", bytes, self.limits.reference_bytes)?;
         for reference in references {
-            reference.view.validate(frame)?;
+            reference
+                .view
+                .validate_camera(reference.camera.as_ref().unwrap_or(&frame.camera))?;
         }
         if references.is_empty() {
             return Ok(FrameReport {
@@ -296,9 +311,10 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
                     continue;
                 }
                 let start = Instant::now();
-                let decision = self.verifier.verify(
+                let decision = self.verifier.verify_calibrated_reference(
                     frame,
                     &candidate.view,
+                    candidate.camera.as_ref().unwrap_or(&frame.camera),
                     prior,
                     &matches,
                     self.backend.identity(),

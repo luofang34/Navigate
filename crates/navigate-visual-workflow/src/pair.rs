@@ -1,7 +1,8 @@
 //! Image-pair models use the same bounds and geometric acceptance policy.
 use crate::{CandidateReport, FrameReport, ResourceLimits, StageTimes, WorkflowError};
 use navigate_visual::{
-    Frame, ImageMatcher, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView, VisualError,
+    CameraModel, Frame, ImageMatcher, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView,
+    VisualError,
 };
 use std::time::{Duration, Instant};
 
@@ -37,7 +38,64 @@ impl<M: ImageMatcher> PairLocalizer<M> {
         prior: &PosePrior,
         references: &[ReferenceView],
     ) -> Result<FrameReport, WorkflowError> {
+        let calibrated: Vec<_> = references.iter().map(|r| (r, &frame.camera)).collect();
+        self.estimate_calibrated_blocking(frame, prior, &calibrated)
+    }
+    /// Evaluate references with separate camera calibration and no image copies.
+    ///
+    /// # Errors
+    /// Rejects invalid input, exceeded limits, and matcher failures.
+    pub fn estimate_calibrated_blocking(
+        &mut self,
+        frame: &Frame,
+        prior: &PosePrior,
+        references: &[(&ReferenceView, &CameraModel)],
+    ) -> Result<FrameReport, WorkflowError> {
         let started = Instant::now();
+        self.validate(frame, prior, references)?;
+        let mut candidates = Vec::with_capacity(references.len());
+        for (index, (reference, camera)) in references.iter().enumerate() {
+            let start = Instant::now();
+            let matches = self
+                .matcher
+                .match_images_blocking(&reference.image, &frame.image)
+                .map_err(|source| WorkflowError::Backend {
+                    stage: "match image pair",
+                    source,
+                })?;
+            let matching = start.elapsed();
+            let start = Instant::now();
+            let decision = self.verifier.verify_calibrated_reference(
+                frame,
+                reference,
+                camera,
+                prior,
+                &matches,
+                self.matcher.identity(),
+            );
+            candidates.push(CandidateReport {
+                matching_reused_from: None,
+                reference_index: index,
+                matches: matches.len(),
+                decision,
+                times: StageTimes {
+                    matching,
+                    geometry: start.elapsed(),
+                },
+            });
+        }
+        Ok(FrameReport {
+            extraction: Duration::ZERO,
+            total: started.elapsed(),
+            candidates,
+        })
+    }
+    fn validate(
+        &self,
+        frame: &Frame,
+        prior: &PosePrior,
+        references: &[(&ReferenceView, &CameraModel)],
+    ) -> Result<(), WorkflowError> {
         frame.camera.validate()?;
         prior.validate()?;
         if frame.image.dimensions() != (frame.camera.width, frame.camera.height) {
@@ -57,8 +115,8 @@ impl<M: ImageMatcher> PairLocalizer<M> {
             self.limits.candidates,
         )?;
         let mut bytes = 0_usize;
-        for view in references {
-            view.validate(frame)?;
+        for (view, camera) in references {
+            view.validate_camera(camera)?;
             super::localizer::check(
                 "image pixels",
                 view.image.as_raw().len(),
@@ -69,37 +127,7 @@ impl<M: ImageMatcher> PairLocalizer<M> {
                 .saturating_add(view.depth_m.len().saturating_mul(4));
         }
         super::localizer::check("reference bytes", bytes, self.limits.reference_bytes)?;
-        let mut candidates = Vec::with_capacity(references.len());
-        for (index, reference) in references.iter().enumerate() {
-            let start = Instant::now();
-            let matches = self
-                .matcher
-                .match_images_blocking(&reference.image, &frame.image)
-                .map_err(|source| WorkflowError::Backend {
-                    stage: "match image pair",
-                    source,
-                })?;
-            let matching = start.elapsed();
-            let start = Instant::now();
-            let decision =
-                self.verifier
-                    .verify(frame, reference, prior, &matches, self.matcher.identity());
-            candidates.push(CandidateReport {
-                matching_reused_from: None,
-                reference_index: index,
-                matches: matches.len(),
-                decision,
-                times: StageTimes {
-                    matching,
-                    geometry: start.elapsed(),
-                },
-            });
-        }
-        Ok(FrameReport {
-            extraction: Duration::ZERO,
-            total: started.elapsed(),
-            candidates,
-        })
+        Ok(())
     }
 }
 
