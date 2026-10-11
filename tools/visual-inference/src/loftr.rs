@@ -12,7 +12,8 @@ use std::path::Path;
 ///
 /// The export takes grayscale `image0` and `image1` tensors and returns
 /// `keypoints0`, `keypoints1`, and `confidence`. Scores stay inside this adapter.
-/// The shared geometry verifier decides whether a camera pose is acceptable.
+/// Each image has its own resize transform. Output pixels refer to that source image.
+/// The shared geometry verifier must use each camera's calibration.
 pub struct LoFtrMatcher {
     session: Session,
     identity: String,
@@ -117,12 +118,6 @@ impl ImageMatcher for LoFtrMatcher {
         reference: &GrayImage,
         query: &GrayImage,
     ) -> Result<Vec<PixelMatch>, VisualError> {
-        if reference.dimensions() != query.dimensions() {
-            return Err(VisualError::Dimensions {
-                reference: reference.dimensions(),
-                query: query.dimensions(),
-            });
-        }
         if [reference, query].iter().any(|image| {
             let min = image.as_raw().iter().copied().min().unwrap_or(0);
             let max = image.as_raw().iter().copied().max().unwrap_or(0);
@@ -148,12 +143,6 @@ impl ImageMatcher for LoFtrMatcher {
     ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
         if !self.quarter_turns || attempt >= 3 {
             return Ok(None);
-        }
-        if reference.dimensions() != query.dimensions() {
-            return Err(VisualError::Dimensions {
-                reference: reference.dimensions(),
-                query: query.dimensions(),
-            });
         }
         orientations::match_blocking(reference, query, attempt, |a, b| self.pairs_blocking(a, b))
             .map_err(|source| VisualError::Backend {

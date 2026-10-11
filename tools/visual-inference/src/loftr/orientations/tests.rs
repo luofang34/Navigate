@@ -3,7 +3,7 @@ use image::Luma;
 
 #[test]
 fn rotated_non_square_pixels_return_to_the_original_query_grid() -> Result<(), InferenceError> {
-    let reference = GrayImage::from_pixel(6, 4, Luma([7]));
+    let reference = GrayImage::from_pixel(8, 3, Luma([7]));
     let mut query = GrayImage::new(6, 4);
     query.put_pixel(2, 1, Luma([99]));
     let mut dimensions = Vec::new();

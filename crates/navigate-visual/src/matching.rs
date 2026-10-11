@@ -20,7 +20,10 @@ pub struct PixelMatch {
 pub trait ImageMatcher {
     /// Stable backend and model identity for reports and derived caches.
     fn identity(&self) -> &str;
-    /// Match two undistorted grayscale images with the same intrinsics.
+    /// Match two undistorted grayscale images in their source pixel coordinates.
+    ///
+    /// A backend can require equal image sizes. The host must keep each camera's
+    /// calibration and use the corresponding geometry verification method.
     ///
     /// The call may wait for an accelerator. Backends must report their actual
     /// identity; they must not silently substitute a different implementation.
