@@ -7,8 +7,12 @@
 use crate::CameraModel;
 use std::collections::BTreeSet;
 mod bundle;
+mod calibrated;
+pub use calibrated::refine_calibrated_local_scene;
 mod error;
 pub(crate) mod pose;
+mod regularized;
+pub use regularized::{ScenePointPrior, refine_regularized_local_scene};
 mod scale;
 mod types;
 mod validation;
@@ -38,7 +42,13 @@ pub fn refine_local_scene(
     scene: &mut LocalScene,
     max_iterations: usize,
 ) -> Result<SceneRefinement, LocalSceneError> {
-    refine(camera, scene, max_iterations, None)
+    refine(
+        &vec![*camera; scene.cameras.len()],
+        scene,
+        max_iterations,
+        None,
+        &[],
+    )
 }
 
 /// Refine one local scene under an arbitrary coordinate origin and scale.
@@ -59,16 +69,24 @@ pub fn refine_local_scene_with_gauge(
     gauge: SceneCoordinateGauge,
     max_iterations: usize,
 ) -> Result<SceneRefinement, LocalSceneError> {
-    refine(camera, scene, max_iterations, Some(gauge))
+    refine(
+        &vec![*camera; scene.cameras.len()],
+        scene,
+        max_iterations,
+        Some(gauge),
+        &[],
+    )
 }
 
 fn refine(
-    camera: &CameraModel,
+    calibrations: &[CameraModel],
     scene: &mut LocalScene,
     max_iterations: usize,
     gauge: Option<SceneCoordinateGauge>,
+    priors: &[ScenePointPrior],
 ) -> Result<SceneRefinement, LocalSceneError> {
-    validation::validate(camera, scene, max_iterations, gauge)?;
+    validation::validate(calibrations, scene, max_iterations, gauge)?;
+    let priors = regularized::validate(scene, priors)?;
     let mut poses = scene
         .cameras
         .iter()
@@ -85,6 +103,7 @@ fn refine(
         .iter()
         .map(|p| bundle::Landmark {
             world: p.position,
+            prior: priors.get(&p.feature_id).copied(),
             observations: p
                 .observations
                 .iter()
@@ -96,7 +115,7 @@ fn refine(
         })
         .collect::<Vec<_>>();
     let result = bundle::refine(
-        camera,
+        calibrations,
         &mut poses,
         &mut points,
         &fixed,

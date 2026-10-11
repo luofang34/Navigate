@@ -51,7 +51,6 @@
 //!     Err(VisualError::InsufficientMatches { .. })));
 //! # Ok::<(), VisualError>(())
 //! ```
-
 mod camera;
 mod candidates;
 pub mod controller;
@@ -72,7 +71,6 @@ mod reference;
 mod retrieval;
 mod sampling;
 mod search;
-
 pub use camera::{CameraModel, CameraPose, PosePrior};
 pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
@@ -87,8 +85,9 @@ pub use gpu::GpuPyramidalMatcher;
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use local_scene::{
     LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,
-    SceneCoordinateGauge, ScenePointObservation, SceneRefinement, refine_local_scene,
-    refine_local_scene_with_gauge,
+    SceneCoordinateGauge, ScenePointObservation, ScenePointPrior, SceneRefinement,
+    refine_calibrated_local_scene, refine_local_scene, refine_local_scene_with_gauge,
+    refine_regularized_local_scene,
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};

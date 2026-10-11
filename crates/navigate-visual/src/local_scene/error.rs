@@ -4,12 +4,22 @@ use thiserror::Error;
 /// A local scene cannot be refined under its declared conditions.
 #[derive(Debug, Error)]
 pub enum LocalSceneError {
-    /// The common calibration is invalid.
-    #[error("invalid local scene camera calibration")]
+    /// A scene camera calibration is invalid.
+    #[error("invalid local scene camera {index} calibration")]
     Camera {
+        /// Index of the scene camera.
+        index: usize,
         /// Camera validation failure.
         #[source]
         source: VisualError,
+    },
+    /// Each scene camera must have exactly one calibration.
+    #[error("local scene has {cameras} cameras and {calibrations} calibrations")]
+    CalibrationCount {
+        /// Number of scene cameras.
+        cameras: usize,
+        /// Number of supplied calibrations.
+        calibrations: usize,
     },
     /// The requested problem exceeds this solver's allocation or iteration limits.
     #[error(

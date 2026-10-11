@@ -3,14 +3,22 @@ use super::{LocalScene, LocalSceneError, SceneCoordinateGauge};
 use crate::CameraModel;
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) fn validate(
-    camera: &CameraModel,
+    calibrations: &[CameraModel],
     scene: &LocalScene,
     iterations: usize,
     coordinate_gauge: Option<SceneCoordinateGauge>,
 ) -> Result<(), LocalSceneError> {
-    camera
-        .validate()
-        .map_err(|source| LocalSceneError::Camera { source })?;
+    if calibrations.len() != scene.cameras.len() {
+        return Err(LocalSceneError::CalibrationCount {
+            cameras: scene.cameras.len(),
+            calibrations: calibrations.len(),
+        });
+    }
+    for (index, calibration) in calibrations.iter().enumerate() {
+        calibration
+            .validate()
+            .map_err(|source| LocalSceneError::Camera { index, source })?;
+    }
     let free = scene.cameras.iter().filter(|c| !c.fixed).count();
     if free > if coordinate_gauge.is_some() { 128 } else { 96 }
         || scene.points.is_empty()
@@ -24,7 +32,7 @@ pub(super) fn validate(
         });
     }
     cameras(scene)?;
-    points(camera, scene)?;
+    points(calibrations, scene)?;
     if let Some(value) = coordinate_gauge {
         super::scale::validate(scene, value)?;
     }
@@ -59,7 +67,7 @@ fn cameras(scene: &LocalScene) -> Result<(), LocalSceneError> {
     }
     Ok(())
 }
-fn points(camera: &CameraModel, scene: &LocalScene) -> Result<(), LocalSceneError> {
+fn points(calibrations: &[CameraModel], scene: &LocalScene) -> Result<(), LocalSceneError> {
     let mut identities = BTreeSet::new();
     for point in &scene.points {
         let fail = |reason| LocalSceneError::Point {
@@ -79,6 +87,7 @@ fn points(camera: &CameraModel, scene: &LocalScene) -> Result<(), LocalSceneErro
             {
                 return Err(fail("missing or repeated camera observation"));
             }
+            let camera = &calibrations[observation.camera_index];
             let p = observation.pixel;
             if !(0.0..f64::from(camera.width)).contains(&p.x)
                 || !(0.0..f64::from(camera.height)).contains(&p.y)

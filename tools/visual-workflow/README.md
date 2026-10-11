@@ -309,3 +309,26 @@ excludes result writing and test scoring. `stage_ms` separates tracking, geometr
 and map matching; `frame_loading_ms` records image loading and validation. The
 first inference can include backend startup work. Acquisition, global retrieval, and map download are outside this
 local experiment. Report rejected frames and startup costs with timing results.
+
+## Offline scene refinement
+
+Use `navigate-workflow refine-scene scene.json refined.json` to refine initialized
+poses and points. This command does not load a neural model or accept a navigation fix.
+The input has `cameras`, `points`, `iterations` (1 through 100), and `coordinate_gauge`.
+Each camera has `observation_sha256`, `camera`, `pose`, and `fixed`. Camera and pose
+fields use the localization job formats. Each point has a unique integer `feature_id`,
+a three-coordinate `position`, and `observations` with `camera_index` and `pixel`.
+All positions must use the same coordinate frame. Each camera keeps its own pixel
+size and intrinsics. Intrinsics stay fixed during refinement.
+A point can have a `position_prior` with a three-coordinate `position` and positive
+`scale` in scene units. This adds a squared distance penalty. Keep the prior center
+from its source when you refine the scene again. The scale is a tuning parameter,
+not a calibrated uncertainty. Position priors require a null `coordinate_gauge`.
+
+Set `coordinate_gauge` to null when each connected component has an observed baseline
+between fixed cameras. Otherwise, use `[origin_camera, scale_camera]` to define an
+arbitrary coordinate origin and scale. Only the origin camera is fixed in this mode.
+The output retains the input observations and includes the source file digest, fitted
+scene, objective costs, and solve time. Fixed poses and source points remain estimates.
+Keep test observations outside the input graph. A lower fitting cost does not establish
+geographic accuracy or independent confidence.

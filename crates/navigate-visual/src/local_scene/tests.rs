@@ -1,6 +1,6 @@
 use super::*;
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
-fn camera() -> CameraModel {
+pub(super) fn camera() -> CameraModel {
     CameraModel {
         width: 960,
         height: 544,
@@ -10,7 +10,7 @@ fn camera() -> CameraModel {
         cy: 271.5,
     }
 }
-fn fixture() -> LocalScene {
+pub(super) fn fixture() -> LocalScene {
     let cameras = (0..6)
         .map(|i| {
             let r = UnitQuaternion::from_euler_angles(
@@ -59,7 +59,7 @@ fn fixture() -> LocalScene {
         .collect();
     LocalScene { cameras, points }
 }
-fn perturb(scene: &mut LocalScene) {
+pub(super) fn perturb(scene: &mut LocalScene) {
     for c in scene.cameras.iter_mut().filter(|c| !c.fixed) {
         c.pose.position += Vector3::new(0.025, -0.018, 0.01);
         c.pose.orientation *= UnitQuaternion::from_euler_angles(0.004, -0.006, 0.009);
@@ -316,6 +316,7 @@ fn scale_normalization_keeps_projections_and_origin_pose() {
         .iter()
         .map(|p| bundle::Landmark {
             world: origin + (p.position - origin) * 3.0,
+            prior: None,
             observations: Vec::new(),
         })
         .collect();

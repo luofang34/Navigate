@@ -11,6 +11,12 @@ pub fn command() -> Command {
     Command::new("navigate-workflow")
         .subcommand_required(true)
         .subcommand(
+            Command::new("refine-scene")
+                .about("Refine conditional poses and points with per-camera calibrations")
+                .arg(path("input"))
+                .arg(path("output")),
+        )
+        .subcommand(
             Command::new("evaluate")
                 .about("Compare local pipelines with fixed spatial holdouts")
                 .arg(path("config"))

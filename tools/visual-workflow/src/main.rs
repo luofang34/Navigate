@@ -9,6 +9,7 @@ mod pair;
 mod render;
 mod replay;
 mod run;
+mod scene;
 mod terrain;
 
 use error::Error;
@@ -42,6 +43,9 @@ fn main() -> Result<(), Error> {
             .cloned()
             .ok_or_else(|| Error::Input(format!("missing {name}")))
     };
+    if name == "refine-scene" {
+        return scene::run_blocking(&path("input")?, &path("output")?);
+    }
     if name == "render" {
         return render::run_blocking(
             &path("job")?,

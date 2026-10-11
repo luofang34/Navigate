@@ -25,6 +25,12 @@ pub enum Error {
     },
     #[error("invalid workflow input: {0}")]
     Input(String),
+    #[error("refine scene {path}: {source}")]
+    Scene {
+        path: PathBuf,
+        #[source]
+        source: navigate_visual::LocalSceneError,
+    },
     #[error(transparent)]
     Cli(#[from] clap::Error),
     #[error(transparent)]
