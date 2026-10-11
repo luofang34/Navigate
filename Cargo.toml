@@ -9,6 +9,8 @@ members = [
     "crates/navigate-guidance",
     "crates/navigate-egpws",
     "tools/navrun",
+    "crates/navigate-recording",
+    "tools/recording-worker",
     "crates/navigate-visual",
     "crates/navigate-visual-fusion",
     "crates/navigate-visual-session",

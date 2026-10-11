@@ -60,6 +60,9 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-data` | Read interface for immutable navigation data on native and web hosts |
 | `navigate-data-fs` | File system implementation of the `navigate-data` read interface |
 | `navigate-imagery` | Coverage plans and content-addressed imagery packages |
+| `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
+| `tools/recording-worker` | JSON Lines worker for image matching and recording processing |
+| `tools/visual-pipeline` | Photo and video preprocessing, pose search, validation, and recording export |
 | `tools/navrun` | Deterministic scripted scenario runner exercising fusion → plan → guidance end to end |
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
@@ -80,6 +83,9 @@ states from other bodies as WGS84 positions to enter that filter.
 The [visual positioning tool](tools/visual-bench/README.md) runs image and video
 matching in the browser. Its Rust service provides optional imagery downloads.
 The tool is separate from the navigation core.
+
+Use the [visual recording pipeline](tools/visual-pipeline/README.md) to process
+photo datasets and export camera views for Sokoly.
 
 Build the visual API documentation with `cargo doc -p navigate-visual --open`.
 Run `cargo run --manifest-path tools/visual-bench/Cargo.toml -- --help` for
