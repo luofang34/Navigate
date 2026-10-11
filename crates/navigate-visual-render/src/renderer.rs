@@ -144,6 +144,11 @@ fn validate(
     limits: RenderLimits,
 ) -> Result<usize, RenderError> {
     camera.validate()?;
+    if matches!(scene.frame, LocalFrame::Wgs84Enu { .. }) {
+        return Err(RenderError::Invalid(
+            "WGS84 frames require ellipsoid terrain rays",
+        ));
+    }
     let [lat, lon] = scene.frame.anchor();
     scene.frame.local([lat, lon, 0.0])?;
     let image = scene.imagery.validate()?;

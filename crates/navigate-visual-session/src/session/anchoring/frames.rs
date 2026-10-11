@@ -14,7 +14,8 @@ impl VisualSession {
             return Ok(());
         }
         let (rotation, covariance) = match (anchor.local_frame, frame) {
-            (LocalFrame::SphericalEnu { .. }, LocalFrame::SphericalEnu { .. }) => {
+            (LocalFrame::SphericalEnu { .. }, LocalFrame::SphericalEnu { .. })
+            | (LocalFrame::Wgs84Enu { .. }, LocalFrame::Wgs84Enu { .. }) => {
                 let rotation =
                     frame
                         .local_rotation(anchor.local_frame.anchor())

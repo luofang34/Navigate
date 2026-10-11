@@ -9,8 +9,8 @@ use nalgebra::{UnitQuaternion, Vector3};
 #[test]
 fn point_displacement_does_not_bound_a_geometrically_accepted_pose() {
     for (latitude, height, minimum_bias) in [(50.0, 6000.0, 10.0), (75.0, 30_000.0, 100.0)] {
-        let sphere = fit(latitude, height, true);
-        let control = fit(latitude, height, false);
+        let sphere = fit(latitude, height, true, false);
+        let control = fit(latitude, height, false, false);
         assert_eq!(sphere.quality.inliers, 99);
         assert!(sphere.quality.reprojection_rms_px < 0.5);
         assert!((sphere.pose.position.z - height).abs() > minimum_bias);
@@ -19,7 +19,7 @@ fn point_displacement_does_not_bound_a_geometrically_accepted_pose() {
     }
 }
 #[cfg(test)]
-fn fit(latitude: f64, height: f64, sphere: bool) -> Estimate {
+fn fit(latitude: f64, height: f64, sphere: bool, corrected: bool) -> Estimate {
     let camera = CameraModel {
         width: 1280,
         height: 960,
@@ -73,22 +73,54 @@ fn fit(latitude: f64, height: f64, sphere: bool) -> Estimate {
             query: camera.project(&truth, oracle).unwrap(),
         });
     }
-    PoseVerifier::new(LocalizerConfig::default())
-        .unwrap()
-        .verify_calibrated_reference(
-            &frame,
-            &reference,
-            &camera,
-            &PosePrior {
-                pose: seed,
-                position_radius_m: 1000.0,
-                attitude_radius_rad: 0.3,
-            },
-            &pairs,
-            "physical-model-control",
-        )
+    let verifier = PoseVerifier::new(LocalizerConfig::default()).unwrap();
+    let prior = PosePrior {
+        pose: seed,
+        position_radius_m: 1000.0,
+        attitude_radius_rad: 0.3,
+    };
+    if corrected {
+        let source =
+            crate::EllipsoidHeightReference::from_ellipsoid_heights(&reference, &camera).unwrap();
+        check_corrected(&verifier, &frame, &source, &prior, &pairs)
+    } else {
+        verifier
+            .verify_calibrated_reference(
+                &frame,
+                &reference,
+                &camera,
+                &prior,
+                &pairs,
+                "physical-model-control",
+            )
+            .unwrap()
+    }
+}
+#[cfg(test)]
+fn check_corrected(
+    verifier: &PoseVerifier,
+    frame: &Frame,
+    source: &crate::EllipsoidHeightReference<'_>,
+    prior: &PosePrior,
+    pairs: &[PixelMatch],
+) -> Estimate {
+    let outside = PosePrior {
+        pose: CameraPose {
+            position: prior.pose.position + Vector3::new(2000.0, 0.0, 0.0),
+            ..prior.pose
+        },
+        position_radius_m: 1.0,
+        ..*prior
+    };
+    assert!(matches!(
+        verifier.verify_wgs84_reference(frame, source, &outside, pairs, "physical-model-control"),
+        Err(crate::VisualError::OutsidePrior { .. })
+    ));
+    verifier
+        .verify_wgs84_reference(frame, source, prior, pairs, "physical-model-control")
         .unwrap()
 }
+
 #[cfg(test)]
 fn locations(latitude: f64, height: f64) -> Vec<[f64; 3]> {
     let a = 6_378_137.0;
@@ -130,4 +162,24 @@ fn ellipsoid_enu(anchor_latitude: f64, geographic: [f64; 3]) -> Vector3<f64> {
         -s * delta.x + c * delta.z,
         c * delta.x + s * delta.z,
     )
+}
+
+#[test]
+fn sphere_depth_to_ellipsoid_fit_removes_physical_bias_without_losing_support() {
+    for (latitude, height) in [(50.0, 6000.0), (75.0, 30_000.0)] {
+        let sphere = fit(latitude, height, true, false);
+        let fixed = fit(latitude, height, true, true);
+        assert!(matches!(fixed.frame, LocalFrame::Wgs84Enu { .. }));
+        assert!((fixed.pose.position - Vector3::new(0.0, 0.0, height)).norm() < 0.01);
+        assert!((fixed.frame.geodetic(fixed.pose.position)[2] - height).abs() < 0.01);
+        assert_eq!(fixed.quality.inliers, sphere.quality.inliers);
+        assert_eq!(
+            fixed.quality.spatial_support,
+            sphere.quality.spatial_support
+        );
+        assert_eq!(fixed.quality.occupied_cells, sphere.quality.occupied_cells);
+        assert_eq!(fixed.map, sphere.map);
+        assert_eq!(fixed.observation_sha256, sphere.observation_sha256);
+        assert!(fixed.geometry_covariance.cholesky().is_some());
+    }
 }

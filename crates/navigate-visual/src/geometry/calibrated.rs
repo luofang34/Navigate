@@ -37,7 +37,10 @@ impl PoseVerifier {
                 field: "calibrated reference observation",
             });
         }
-        let points = correspondences(frame, reference, reference_camera, matches);
+        let points = observations(frame, reference, reference_camera, matches)
+            .into_iter()
+            .map(|(point, _)| point)
+            .collect();
         let (pose, inliers, depth_matches) =
             self.fit_points(frame, reference.pose, prior, points, Motion::Free)?;
         let support = FitSupport::calibrated(
@@ -62,12 +65,12 @@ impl PoseVerifier {
     }
 }
 
-fn correspondences(
+pub(super) fn observations(
     frame: &Frame,
     reference: &ReferenceView,
     camera: &CameraModel,
     matches: &[PixelMatch],
-) -> Vec<Correspondence> {
+) -> Vec<(Correspondence, Vector2<f64>)> {
     let mut reference_pixels = BTreeSet::new();
     let mut query_pixels = BTreeSet::new();
     matches
@@ -89,10 +92,13 @@ fn correspondences(
             }
             reference_pixels.insert((x, y));
             query_pixels.insert(query_key);
-            Some(Correspondence {
-                world: camera.unproject(&reference.pose, pair.reference, depth),
-                pixel: pair.query,
-            })
+            Some((
+                Correspondence {
+                    world: camera.unproject(&reference.pose, pair.reference, depth),
+                    pixel: pair.query,
+                },
+                pair.reference,
+            ))
         })
         .collect()
 }

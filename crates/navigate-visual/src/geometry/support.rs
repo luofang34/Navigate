@@ -22,6 +22,15 @@ pub(super) fn separated_projected(
     points: &[Correspondence],
     minimum_distance: f64,
 ) -> (Vec<Correspondence>, usize) {
+    separated_pixels(size, |point| project(point.world), points, minimum_distance)
+}
+
+pub(super) fn separated_pixels(
+    size: [u32; 2],
+    project: impl Fn(&Correspondence) -> Option<Vector2<f64>>,
+    points: &[Correspondence],
+    minimum_distance: f64,
+) -> (Vec<Correspondence>, usize) {
     let mut ordered: Vec<_> = points.iter().collect();
     ordered.sort_by(|a, b| {
         a.pixel
@@ -37,7 +46,7 @@ pub(super) fn separated_projected(
     let mut cells = [false; 12];
     let radius_squared = minimum_distance * minimum_distance;
     for point in ordered {
-        let Some(pixel) = project(point.world) else {
+        let Some(pixel) = project(point) else {
             continue;
         };
         if selected

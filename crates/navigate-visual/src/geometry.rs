@@ -6,6 +6,8 @@ use crate::{
 };
 use nalgebra::{SMatrix, Vector2};
 mod calibrated;
+mod ellipsoid;
+pub use ellipsoid::EllipsoidHeightReference;
 mod orthographic;
 mod refinement;
 mod support;

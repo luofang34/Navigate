@@ -268,3 +268,14 @@ fn hardware_small_geographic_offsets_preserve_image_sample_positions() {
         );
     }
 }
+
+#[test]
+fn ellipsoid_frames_cannot_use_spherical_or_flat_terrain_rays() {
+    let scene = scene(LocalFrame::wgs84_enu(0.0, 0.0).unwrap());
+    assert!(matches!(
+        validate(&scene, camera(), limits()),
+        Err(RenderError::Invalid(
+            "WGS84 frames require ellipsoid terrain rays"
+        ))
+    ));
+}

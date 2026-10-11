@@ -1,9 +1,9 @@
 //! Synthetic physical-model controls through the public geometric acceptance path.
 use image::GrayImage;
-use nalgebra::{UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Matrix3, UnitQuaternion, Vector2, Vector3};
 use navigate_visual::{
-    CameraModel, CameraPose, Frame, FrameStamp, LocalFrame, LocalizerConfig, MapRevision,
-    PixelMatch, PosePrior, PoseVerifier, ReferenceView,
+    CameraModel, CameraPose, EllipsoidHeightReference, Frame, FrameStamp, LocalFrame,
+    LocalizerConfig, MapRevision, PixelMatch, PosePrior, PoseVerifier, ReferenceView,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -46,9 +46,55 @@ struct Case {
     id: String,
     anchor_deg: [f64; 2],
     height_m: f64,
-    eye_to_world_rotation: String,
+    eye_to_world_rotation: Orientation,
     true_camera_enu_m: [f64; 3],
     points: Vec<Point>,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Orientation {
+    Named(String),
+    Matrix([[f64; 3]; 3]),
+}
+impl Orientation {
+    fn rotation(&self) -> Result<UnitQuaternion<f64>, Error> {
+        match self {
+            Self::Named(name)
+                if name
+                    == "identity in Navigate right/up/back convention (camera looks along -Z)" =>
+            {
+                Ok(UnitQuaternion::identity())
+            }
+            Self::Named(_) => Err(Error::Input("fixture orientation must be identity")),
+            Self::Matrix(rows) => {
+                let matrix = Matrix3::from_fn(|i, j| rows[i][j]);
+                if !matrix.iter().all(|v| v.is_finite())
+                    || (matrix.transpose() * matrix - Matrix3::identity()).norm() > 1e-10
+                    || (matrix.determinant() - 1.0).abs() > 1e-10
+                {
+                    return Err(Error::Input(
+                        "fixture rotation must be orthonormal and proper",
+                    ));
+                }
+                Ok(UnitQuaternion::from_matrix(&matrix))
+            }
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq)]
+enum Geometry {
+    Sphere,
+    Control,
+    Corrected,
+}
+impl Geometry {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Sphere => "sphere",
+            Self::Control => "wgs84_xyz_solver_control",
+            Self::Corrected => "sphere_depth_wgs84_fit",
+        }
+    }
 }
 #[derive(Deserialize)]
 struct Point {
@@ -90,22 +136,18 @@ fn main() -> Result<(), Error> {
     }
     let mut rows = Vec::new();
     for case in data.cases {
-        for sphere in [true, false] {
-            rows.push(run_case(&case, camera, sphere)?);
+        for geometry in [Geometry::Sphere, Geometry::Control, Geometry::Corrected] {
+            rows.push(run_case(&case, camera, geometry)?);
         }
     }
     let report = json!({"fixture_sha256":format!("{:x}",Sha256::digest(bytes)),"cases":rows,
-        "scope":"Synthetic WGS84 image observations, supplied independently of the Rust fitter. Sphere map points use LocalFrame::local. Both point sets use verify_calibrated_reference with default acceptance. Reference depth is f32; its reconstruction error is recorded. WGS84 XYZ is a solver control only: the ReferenceView frame tag is not used to convert its pose or claim a supported ellipsoidal deployment frame. No image matching, real-flight accuracy, or covariance coverage claim."});
+        "scope":"Synthetic independently supplied WGS84 pixels, default acceptance, f32 optical reference depths. Corrected fit transforms the same sphere reference points and retains source pixels. Physical position errors are compared in WGS84, not by subtracting coordinates from different models. No image matching or real-flight accuracy claim. Geometry-only probe: no renderer depth or slant-range envelope claim."});
     write_blocking(&output, &report)?;
     tracing::info!(path=%output.display(),"Saved geometric model probe");
     Ok(())
 }
-fn run_case(case: &Case, camera: CameraModel, sphere: bool) -> Result<Value, Error> {
-    if case.eye_to_world_rotation
-        != "identity in Navigate right/up/back convention (camera looks along -Z)"
-    {
-        return Err(Error::Input("fixture orientation must be identity"));
-    }
+fn run_case(case: &Case, camera: CameraModel, geometry: Geometry) -> Result<Value, Error> {
+    let orientation = case.eye_to_world_rotation.rotation()?;
     if case.points.len() < 20
         || case.points.len() > 4096
         || !case.height_m.is_finite()
@@ -116,13 +158,62 @@ fn run_case(case: &Case, camera: CameraModel, sphere: bool) -> Result<Value, Err
     let frame_model = LocalFrame::spherical_enu(case.anchor_deg[0], case.anchor_deg[1])?;
     let truth = CameraPose {
         position: case.true_camera_enu_m.into(),
-        orientation: UnitQuaternion::identity(),
+        orientation,
     };
     truth.validate()?;
-    let seed = CameraPose {
+    let wgs84 = LocalFrame::wgs84_enu(case.anchor_deg[0], case.anchor_deg[1])?;
+    let mut seed = CameraPose {
         position: truth.position + Vector3::new(37.0, -23.0, 41.0),
-        orientation: UnitQuaternion::from_euler_angles(0.015, -0.012, 0.008),
+        orientation: truth.orientation * UnitQuaternion::from_euler_angles(0.015, -0.012, 0.008),
     };
+    let physical_prior = PosePrior {
+        pose: seed,
+        position_radius_m: 1000.0,
+        attitude_radius_rad: 0.3,
+    };
+    if geometry != Geometry::Control {
+        seed.position = frame_model.local(wgs84.geodetic(seed.position))?;
+    }
+    let (frame, mut reference) = scene(camera, frame_model, seed);
+    let (pairs, sphere_fixture_delta, depth_roundtrip, max_map_displacement) =
+        fill_reference(case, camera, geometry != Geometry::Control, &mut reference)?;
+    let prior = PosePrior {
+        pose: seed,
+        position_radius_m: 1000.0,
+        attitude_radius_rad: 0.3,
+    };
+    let verifier = PoseVerifier::new(LocalizerConfig::default())?;
+    let start = Instant::now();
+    let result = if geometry == Geometry::Corrected {
+        let source = EllipsoidHeightReference::from_ellipsoid_heights(&reference, &camera)?;
+        verifier.verify_wgs84_reference(
+            &frame,
+            &source,
+            &physical_prior,
+            &pairs,
+            "synthetic-oracle",
+        )
+    } else {
+        verifier.verify_calibrated_reference(
+            &frame,
+            &reference,
+            &camera,
+            &prior,
+            &pairs,
+            "synthetic-oracle",
+        )
+    };
+    report(
+        case,
+        geometry,
+        truth,
+        frame_model,
+        result,
+        start.elapsed().as_secs_f64() * 1000.0,
+        [sphere_fixture_delta, depth_roundtrip, max_map_displacement],
+    )
+}
+fn scene(camera: CameraModel, frame_model: LocalFrame, seed: CameraPose) -> (Frame, ReferenceView) {
     let frame = Frame {
         camera,
         stamp: FrameStamp {
@@ -131,7 +222,7 @@ fn run_case(case: &Case, camera: CameraModel, sphere: bool) -> Result<Value, Err
         },
         image: GrayImage::new(camera.width, camera.height),
     };
-    let mut reference = ReferenceView {
+    let reference = ReferenceView {
         frame: frame_model,
         pose: seed,
         map: MapRevision {
@@ -141,29 +232,37 @@ fn run_case(case: &Case, camera: CameraModel, sphere: bool) -> Result<Value, Err
         image: frame.image.clone(),
         depth_m: vec![0.0; (camera.width * camera.height) as usize],
     };
-    let (pairs, sphere_fixture_delta, depth_roundtrip, max_map_displacement) =
-        fill_reference(case, camera, sphere, &mut reference)?;
-    let prior = PosePrior {
-        pose: seed,
-        position_radius_m: 1000.0,
-        attitude_radius_rad: 0.3,
-    };
-    let verifier = PoseVerifier::new(LocalizerConfig::default())?;
-    let start = Instant::now();
-    let result = verifier.verify_calibrated_reference(
-        &frame,
-        &reference,
-        &camera,
-        &prior,
-        &pairs,
-        "synthetic-oracle",
-    );
-    let mut row = json!({"case":case.id,"height_m":case.height_m,"anchor_deg":case.anchor_deg,"geometry":if sphere {"sphere"} else {"wgs84_xyz_solver_control"},"accepted":result.is_ok(),"solve_ms":start.elapsed().as_secs_f64()*1000.0,"sphere_fixture_max_difference_m":sphere_fixture_delta,"reference_depth_max_roundtrip_error_m":depth_roundtrip,"max_map_point_displacement_m":max_map_displacement});
+    (frame, reference)
+}
+
+fn report(
+    case: &Case,
+    geometry: Geometry,
+    truth: CameraPose,
+    frame_model: LocalFrame,
+    result: Result<navigate_visual::Estimate, navigate_visual::VisualError>,
+    solve_ms: f64,
+    diagnostics: [f64; 3],
+) -> Result<Value, Error> {
+    let [sphere_fixture_delta, depth_roundtrip, max_map_displacement] = diagnostics;
+    let wgs84 = LocalFrame::wgs84_enu(case.anchor_deg[0], case.anchor_deg[1])?;
+    let mut row = json!({"case":case.id,"height_m":case.height_m,"anchor_deg":case.anchor_deg,"geometry":geometry.name(),"accepted":result.is_ok(),"solve_ms":solve_ms,"sphere_fixture_max_difference_m":sphere_fixture_delta,"reference_depth_max_roundtrip_error_m":depth_roundtrip,"max_map_point_displacement_m":max_map_displacement});
     match result {
         Ok(e) => {
             row["position"] = json!([e.pose.position.x, e.pose.position.y, e.pose.position.z]);
-            row["position_error_m"] = json!((e.pose.position - truth.position).norm());
-            row["height_error_m"] = json!(e.pose.position.z - truth.position.z);
+            let physical_position = if geometry == Geometry::Sphere {
+                wgs84.local(frame_model.geodetic(e.pose.position))?
+            } else {
+                e.pose.position
+            };
+            row["position_error_m"] = json!((physical_position - truth.position).norm());
+            row["height_error_m"] = json!(wgs84.geodetic(physical_position)[2] - case.height_m);
+            row["orientation_error_rad"] = json!(e.pose.orientation.angle_to(&truth.orientation));
+            row["physical_wgs84_enu_m"] = json!([
+                physical_position.x,
+                physical_position.y,
+                physical_position.z
+            ]);
             row["rms_px"] = json!(e.quality.reprojection_rms_px);
             row["inliers"] = json!(e.quality.inliers);
             row["spatial_support"] = json!(e.quality.spatial_support);
@@ -174,7 +273,7 @@ fn run_case(case: &Case, camera: CameraModel, sphere: bool) -> Result<Value, Err
                 e.geometry_covariance[(1, 1)],
                 e.geometry_covariance[(2, 2)]
             ]);
-            if sphere {
+            if geometry == Geometry::Sphere {
                 row["camera_point_model_error_m"] =
                     json!(frame_model.model_error_m(e.pose.position));
             }

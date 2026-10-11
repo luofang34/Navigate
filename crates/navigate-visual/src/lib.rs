@@ -75,9 +75,9 @@ pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
 pub use geometry::{
-    CandidateEvaluation, PlaneMotion, PlaneMotionConfig, PlaneSolution, PoseVerifier,
-    RefinementSeed, SurfaceTrackUpdate, SurfaceTracks, TrackingMotion, TrackingProposal,
-    TrackingReference, plane_motion,
+    CandidateEvaluation, EllipsoidHeightReference, PlaneMotion, PlaneMotionConfig, PlaneSolution,
+    PoseVerifier, RefinementSeed, SurfaceTrackUpdate, SurfaceTracks, TrackingMotion,
+    TrackingProposal, TrackingReference, plane_motion,
 };
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;

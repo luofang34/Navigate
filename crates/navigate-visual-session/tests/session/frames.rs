@@ -6,20 +6,25 @@ use navigate_visual_session::{AnchorDecision, MapPose, Pose};
 
 #[test]
 fn spherical_anchor_transport_preserves_attitude_and_position_rotation_covariance() {
-    let a = solve(None);
-    let b = solve(Some(LocalFrame::spherical_enu(48.0, 12.0).unwrap()));
+    let a = solve(None, false);
+    let b = solve(Some(LocalFrame::spherical_enu(48.0, 12.0).unwrap()), false);
     assert!((a.0.translation.vector - b.0.translation.vector).norm() < 1e-6);
     assert!(a.0.rotation.angle_to(&b.0.rotation) < 1e-9);
     assert!((a.1 - b.1).abs() < 1e-6);
 }
 
 #[cfg(test)]
-fn solve(other: Option<LocalFrame>) -> (Pose, f64) {
+fn solve(other: Option<LocalFrame>, ellipsoid: bool) -> (Pose, f64) {
     let mut flight = Flight::standard();
     for i in 0..12 {
         flight.fly_to(nadir(Vector3::new(f64::from(i) * 6.0, 0.0, 100.0), 0.0));
     }
-    let base = LocalFrame::spherical_enu(47.0, 11.0).unwrap();
+    let base = if ellipsoid {
+        LocalFrame::wgs84_enu(47.0, 11.0)
+    } else {
+        LocalFrame::spherical_enu(47.0, 11.0)
+    }
+    .unwrap();
     let (first, last) = (flight.truth[0].0, flight.truth[11].0);
     let mut initial = anchor(&flight, &first, Vector3::zeros());
     initial.local_frame = base;
@@ -74,4 +79,13 @@ fn mixed_flat_and_curved_frames_are_refused_without_changing_the_session() {
     assert_eq!(flight.session.usage(), usage);
     assert_eq!(flight.session.revision(), revision);
     assert_eq!(flight.session.pose_at(&last).unwrap(), before);
+}
+
+#[test]
+fn ellipsoid_anchor_transport_preserves_pose_and_covariance() {
+    let a = solve(None, true);
+    let b = solve(Some(LocalFrame::wgs84_enu(48.0, 12.0).unwrap()), true);
+    assert!((a.0.translation.vector - b.0.translation.vector).norm() < 1e-6);
+    assert!(a.0.rotation.angle_to(&b.0.rotation) < 1e-9);
+    assert!((a.1 - b.1).abs() < 1e-6);
 }

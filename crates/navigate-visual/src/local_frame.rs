@@ -1,6 +1,7 @@
 //! The declared local frame shared by a reference render and the poses solved in it.
 
 use nalgebra::{UnitQuaternion, Vector3};
+mod ellipsoid;
 mod spherical;
 
 use crate::VisualError;
@@ -20,6 +21,15 @@ const MAX_LATITUDE_DEG: f64 = 85.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LocalFrame {
+    /// Cartesian WGS84 east, north, up axes at zero ellipsoid height.
+    ///
+    /// All heights are ellipsoid heights. This frame does not convert a vertical datum.
+    Wgs84Enu {
+        /// Anchor latitude in degrees.
+        anchor_lat_deg: f64,
+        /// Anchor longitude in degrees.
+        anchor_lon_deg: f64,
+    },
     /// East, north, up axes at an anchor on the mean-radius sphere.
     ///
     /// The origin is at zero map altitude. Position z is a Cartesian coordinate,
@@ -44,6 +54,21 @@ pub enum LocalFrame {
 }
 
 impl LocalFrame {
+    /// Declare WGS84 axes with an origin at zero ellipsoid height.
+    ///
+    /// This map path keeps the tile latitude limit. The limit is not an ellipsoid limit.
+    ///
+    /// # Errors
+    /// Rejects invalid anchors and anchors outside the tile latitude limit.
+    pub fn wgs84_enu(anchor_lat_deg: f64, anchor_lon_deg: f64) -> Result<Self, VisualError> {
+        let frame = Self::Wgs84Enu {
+            anchor_lat_deg,
+            anchor_lon_deg,
+        };
+        frame.validate()?;
+        Ok(frame)
+    }
+
     /// Declare an anchor Mercator frame.
     ///
     /// # Errors
@@ -73,7 +98,11 @@ impl LocalFrame {
     /// Geographic anchor in latitude, longitude order, in degrees.
     pub fn anchor(&self) -> [f64; 2] {
         match *self {
-            Self::AnchorMercator {
+            Self::Wgs84Enu {
+                anchor_lat_deg,
+                anchor_lon_deg,
+            }
+            | Self::AnchorMercator {
                 anchor_lat_deg,
                 anchor_lon_deg,
             }
@@ -109,7 +138,7 @@ impl LocalFrame {
         }
         Ok(match self {
             Self::AnchorMercator { .. } => UnitQuaternion::identity(),
-            Self::SphericalEnu { .. } => UnitQuaternion::from_matrix(
+            Self::SphericalEnu { .. } | Self::Wgs84Enu { .. } => UnitQuaternion::from_matrix(
                 &(spherical::basis(self.anchor()).transpose() * spherical::basis([lat, lon])),
             ),
         })
@@ -119,12 +148,16 @@ impl LocalFrame {
     ///
     /// # Errors
     /// Rejects non-finite values and positions outside the Mercator latitude limit.
+    /// WGS84 conversion must preserve height and surface direction within one millimetre.
     pub fn local(&self, [lat, lon, alt]: [f64; 3]) -> Result<Vector3<f64>, VisualError> {
         self.validate()?;
         if !geodetic_in_range(lat, lon) || !alt.is_finite() {
             return Err(VisualError::Invalid {
                 field: "geographic position",
             });
+        }
+        if matches!(self, Self::Wgs84Enu { .. }) {
+            return ellipsoid::local(self.anchor(), [lat, lon, alt]);
         }
         if matches!(self, Self::SphericalEnu { .. }) {
             if alt <= -MERCATOR_SPHERE_RADIUS_M {
@@ -142,6 +175,9 @@ impl LocalFrame {
 
     /// Convert a frame position into latitude, longitude (degrees) and altitude (metres).
     pub fn geodetic(&self, position: Vector3<f64>) -> [f64; 3] {
+        if matches!(self, Self::Wgs84Enu { .. }) {
+            return ellipsoid::geodetic(self.anchor(), position);
+        }
         if matches!(self, Self::SphericalEnu { .. }) {
             return spherical::geodetic(self.anchor(), position);
         }
@@ -158,7 +194,7 @@ impl LocalFrame {
 
     /// Unit Web Mercator coordinates of a frame position, as MapLibre addresses tiles.
     pub fn mercator_xy(&self, position: Vector3<f64>) -> [f64; 2] {
-        if matches!(self, Self::SphericalEnu { .. }) {
+        if matches!(self, Self::SphericalEnu { .. } | Self::Wgs84Enu { .. }) {
             let [lat, lon, _] = self.geodetic(position);
             return mercator_xy(lat, lon);
         }
@@ -173,10 +209,14 @@ impl LocalFrame {
     /// across the point set can change a fitted pose while this value is near zero.
     /// A pose error budget must assess the point set and viewing geometry separately.
     ///
-    /// Mercator frames bound curvature drop and horizontal scale drift. Spherical
+    /// Mercator frames bound curvature drop and horizontal scale drift.
+    /// WGS84 frames have no coordinate-model displacement. Spherical
     /// frames report the displacement from WGS84 for the same geographic position
     /// and numeric altitude. Datum and terrain errors require separate budgets.
     pub fn model_error_m(&self, position: Vector3<f64>) -> f64 {
+        if matches!(self, Self::Wgs84Enu { .. }) {
+            return 0.0;
+        }
         if matches!(self, Self::SphericalEnu { .. }) {
             return spherical::ellipsoid_displacement(self.anchor(), position);
         }

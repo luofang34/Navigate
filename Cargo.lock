@@ -2385,6 +2385,8 @@ dependencies = [
  "kornia-algebra",
  "lambda-twist",
  "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-geodesy",
  "pollster",
  "sha2",
  "thiserror 2.0.19",

@@ -6,7 +6,7 @@ use navigate_contract::{
     SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{Observation, ObservationValue};
-use navigate_visual::{Estimate, MapRevision};
+use navigate_visual::{Estimate, LocalFrame, MapRevision};
 use std::collections::HashSet;
 
 use crate::{VisualErrorBudget, VisualFusionError};
@@ -107,6 +107,11 @@ impl VisualFixSource {
             return Err(VisualFusionError::UnknownCorrelation);
         }
         self.check_order(estimate)?;
+        if matches!(estimate.frame, LocalFrame::Wgs84Enu { .. })
+            && self.budget.vertical_datum != crate::VerticalDatum::Wgs84Ellipsoid
+        {
+            return Err(VisualFusionError::FrameDatumMismatch);
+        }
         let position = estimate.pose.position;
         let [lat, lon, alt] = estimate.frame.geodetic(position);
         let geodetic = GeodeticPosition::new(

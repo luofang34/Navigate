@@ -354,3 +354,29 @@ fn geometry_model_budget_is_required_even_at_the_frame_anchor() {
     assert!(second.diagonal().0 > first.diagonal().0 + 1000.0);
     assert!(second.diagonal().2 > first.diagonal().2 + 1000.0);
 }
+
+#[test]
+fn ellipsoid_fixes_cannot_apply_a_second_geoid_offset_or_consume_refused_evidence() {
+    let mut e = estimate(1, 100, "a", 0.0);
+    e.frame = LocalFrame::wgs84_enu(47.0, 11.0).unwrap();
+    e.pose.position = e.frame.local([47.01, 11.02, 1548.0]).unwrap();
+    let mut source = VisualFixSource::new(identity(), budget()).unwrap();
+    assert_eq!(
+        source.convert(&e, EvidenceIndependence::ValidatedIndependent),
+        Err(VisualFusionError::FrameDatumMismatch)
+    );
+    assert!(source.last.is_none());
+    assert!(source.admitted.is_empty());
+    source.budget.vertical_datum = VerticalDatum::Wgs84Ellipsoid;
+    let fix = source
+        .convert(&e, EvidenceIndependence::ValidatedIndependent)
+        .unwrap();
+    match fix.observation.value {
+        ObservationValue::PositionFix { position, .. } => {
+            assert!((position.altitude_m - 1548.0).abs() < 1e-6);
+            assert!((position.latitude_rad.to_degrees() - 47.01).abs() < 1e-10);
+            assert!((position.longitude_rad.to_degrees() - 11.02).abs() < 1e-10);
+        }
+        _ => panic!("expected position fix"),
+    }
+}

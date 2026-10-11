@@ -100,3 +100,32 @@ fn spherical_coordinates_recover_the_frozen_photo_altitude() {
     assert!((actual[1] - expected[1]).abs() < 1e-10);
     assert!((actual[2] - expected[2]).abs() < 1e-6);
 }
+
+#[test]
+fn wgs84_frame_preserves_ellipsoid_positions_and_physical_axes() {
+    let frame = LocalFrame::wgs84_enu(75.0, 179.9).unwrap();
+    for location in [[75.2, -179.8, 30_000.0], [74.8, 179.5, -400.0]] {
+        let world = frame.local(location).unwrap();
+        let recovered = frame.geodetic(world);
+        assert!((recovered[0] - location[0]).abs() < 1e-10);
+        assert!((recovered[1] - location[1]).abs() < 1e-10);
+        assert!((recovered[2] - location[2]).abs() < 1e-6);
+        let up = frame
+            .local([location[0], location[1], location[2] + 10.0])
+            .unwrap();
+        let rotation = frame.local_rotation([location[0], location[1]]).unwrap();
+        assert!((up - world - rotation * Vector3::new(0.0, 0.0, 10.0)).norm() < 1e-6);
+        assert_eq!(frame.model_error_m(world), 0.0);
+        assert!((frame.mercator_xy(world)[0] - (location[1] + 180.0) / 360.0).abs() < 1e-10);
+    }
+    for height in [-12_000.0, -500.0, 400_000.0, 2_000_000.0, 36_000_000.0] {
+        let point = frame.local([75.2, -179.8, height]).unwrap();
+        assert!((frame.geodetic(point)[2] - height).abs() < 1e-6);
+    }
+    assert!(
+        LocalFrame::wgs84_enu(0.0, 0.0)
+            .unwrap()
+            .local([0.0, 0.0, -6_378_137.0])
+            .is_err()
+    );
+}
