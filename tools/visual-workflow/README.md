@@ -89,7 +89,8 @@ Use `matcher: null` for LoFTR. Its optional `refinement_patches: true` setting
 runs the full view and four crops. Budget all five inference calls.
 
 For rustnn, set `engine` to `rustnn`, `graph` to `dense_image`, and `detector`
-to the `.webnn` graph. Keep its external weights beside it. The graph must return
+to the `.webnn` graph produced by the flake's `converter` package; see
+[model preparation](../visual-model/README.md). Keep its external weights beside it. The graph must return
 `dense_descriptors`, `keypoint_logits`, and `reliability`, with shapes
 `[1,64,72,100]`, `[1,65,72,100]`, and `[1,1,72,100]`. Matching still uses ORT.
 The extraction provider selects the Core ML compute-unit preference. ORT thread,

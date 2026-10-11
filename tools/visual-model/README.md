@@ -52,10 +52,24 @@ into a strided convolution without changing learned weight values.
 
 For ORT, set the workflow's `detector` to this file and `graph` to `dense_image`.
 Feature selection remains in the workflow, so this recipe does not accept a
-`--features` setting. For rustnn, use the Rust `onnx2webnn` converter to lower
-this ONNX file with `--optimize --output --validate`. Supply the resulting
-`.webnn` file and its adjacent `.safetensors` weights to the workflow. The
-converter requires its own inference runtime for validation.
+`--features` setting. For rustnn, build and validate the WebNN representation with
+the pinned Rust converter:
+
+```sh
+O2W_CACHE_DIR="$PWD/prepared" nix run .#converter -- convert \
+  --input "$PWD/xfeat-dense.onnx" --optimize --output --validate
+```
+
+The converter package supplies its ONNX Runtime library. It compares the exported
+WebNN graph with ONNX execution on fixed test inputs. The flake and the converter
+lockfile fix the sources, dependencies, and compatibility patches. The converter
+is a separate offline tool. The flight program does not depend on it.
+
+Use the emitted `.webnn` file under `prepared/webnn` as the workflow's `detector`.
+Keep its adjacent `.safetensors` weights when copying it to another machine.
+The emitted filenames depend on the source path. Conversion validation checks
+CPU numerical equivalence; validate actual image features and geometry on the
+chosen deployment backend as well.
 
 The numerical regression test loads the original model and compares its dense
 intermediates with the prepared model through ORT. Set `NAVIGATE_TEST_ORT` to

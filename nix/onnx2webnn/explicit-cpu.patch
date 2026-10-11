@@ -1,0 +1,13 @@
+--- a/src/backends/ort.rs
++++ b/src/backends/ort.rs
+@@ -112,6 +112,10 @@
+         let mut builder = Session::builder()
+             .map_err(|e| GraphError::OnnxRuntimeFailed {
+                 reason: format!("session builder failed: {e}"),
++            })?
++            .with_auto_device(ort::session::builder::AutoDevicePolicy::Default)
++            .map_err(|e| GraphError::OnnxRuntimeFailed {
++                reason: format!("set explicit CPU device policy failed: {e}"),
+             })?
+             .with_optimization_level(GraphOptimizationLevel::Disable)
+             .map_err(|e| GraphError::OnnxRuntimeFailed {

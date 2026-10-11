@@ -51,6 +51,7 @@
           default = workflow;
           inherit workflow model;
           runtime = pkgs.onnxruntime;
+          converter = import ./nix/onnx2webnn/package.nix { inherit pkgs; };
         } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin { inherit rustnn; });
       checks = eachSystem (system:
         builtins.removeAttrs self.packages.${system} [ "default" "runtime" ]);
