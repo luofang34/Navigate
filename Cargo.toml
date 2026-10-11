@@ -26,6 +26,7 @@ exclude = [
     "tools/imagery-provider",
     "tools/visual-bench",
     "tools/visual-inference",
+    "tools/visual-correlation",
     "tools/visual-service",
 ]
 

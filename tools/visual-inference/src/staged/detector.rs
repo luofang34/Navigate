@@ -38,6 +38,27 @@ impl Detector {
 
 #[cfg(all(feature = "rustnn-coreml", target_os = "macos"))]
 impl XFeatStages {
+    /// Extract the raw dense descriptor grid for a correlation experiment.
+    ///
+    /// The output is host-owned f32 in CHW order, with shape [64, 72, 100].
+    /// Values are before per-cell normalization. This runs the encoder and reads
+    /// all three graph outputs. It copies the descriptor output into a new vector.
+    /// Correlation requires an explicit feature mask.
+    ///
+    /// # Errors
+    /// Rejects an ORT detector or a failed dense graph execution.
+    pub fn extract_dense_grid_blocking(
+        &mut self,
+        image: &GrayImage,
+    ) -> Result<Vec<f32>, InferenceError> {
+        match &mut self.detector {
+            Detector::Rustnn(graph) => graph.grid_blocking(image),
+            Detector::Ort(_) => Err(InferenceError::Invalid(
+                "dense grid export requires a rustnn graph".into(),
+            )),
+        }
+    }
+
     /// Load a rustnn dense image graph and an optional ORT matcher.
     ///
     /// The graph must expose fixed 800 by 600 grayscale or RGB input and dense XFeat maps.

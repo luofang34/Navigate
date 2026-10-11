@@ -110,6 +110,22 @@ impl DenseGraph {
     }
 
     pub fn extract(&mut self, image: &GrayImage, limit: usize) -> Result<Features, InferenceError> {
+        let input = self.run_blocking(image)?;
+        let [(_, descriptors), (_, logits), (_, reliability)] = self.outputs.as_mut_slice() else {
+            return Err(InferenceError::Invalid("dense output buffers".into()));
+        };
+        xfeat_dense::decode_in_place(descriptors, logits, reliability, &input, image, limit)
+    }
+
+    pub fn grid_blocking(&mut self, image: &GrayImage) -> Result<Vec<f32>, InferenceError> {
+        self.run_blocking(image)?;
+        Ok(self.outputs[0].1.clone())
+    }
+
+    fn run_blocking(
+        &mut self,
+        image: &GrayImage,
+    ) -> Result<preprocessing::InputImage, InferenceError> {
         let input = preprocessing::prepare(image, 800, 600, self.channels)?;
         self.context
             .write_tensor(&self.input, &input.data)
@@ -131,10 +147,7 @@ impl DenseGraph {
                 return Err(InferenceError::Invalid("non-finite rustnn output".into()));
             }
         }
-        let [(_, descriptors), (_, logits), (_, reliability)] = self.outputs.as_mut_slice() else {
-            return Err(InferenceError::Invalid("dense output buffers".into()));
-        };
-        xfeat_dense::decode_in_place(descriptors, logits, reliability, &input, image, limit)
+        Ok(input)
     }
 }
 
