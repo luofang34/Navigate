@@ -36,6 +36,9 @@ fn main() -> Result<(), Error> {
         }
         Err(error) => return Err(error.into()),
     };
+    dispatch_blocking(matches)
+}
+fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
     let (name, args) = matches
         .subcommand()
         .ok_or_else(|| Error::Input("missing command".into()))?;
@@ -67,6 +70,17 @@ fn main() -> Result<(), Error> {
     let root = config_path
         .parent()
         .ok_or_else(|| Error::Input("config path has no parent".into()))?;
+    if name == "cascade-surface" {
+        return surface::cascade::run_blocking(
+            &config_path,
+            &path("fallback")?,
+            &path("job")?,
+            &path("output")?,
+            *args
+                .get_one::<usize>("iterations")
+                .ok_or_else(|| Error::Input("missing iterations".into()))?,
+        );
+    }
     match name {
         "probe-surface" => {
             surface::probe::run_blocking(&config, &path("manifest")?, &path("output")?)

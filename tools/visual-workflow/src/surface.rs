@@ -1,13 +1,14 @@
 //! Image matching and verified geometry on a fixed orthographic surface.
+pub mod cascade;
 mod job;
 mod matching;
 pub mod prepare;
 pub mod probe;
+mod report;
 
 use crate::{Error, assets, config::Config};
-use navigate_recording::Pose;
 use navigate_visual::{LocalizerConfig, PoseVerifier};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{path::Path, time::Instant};
 
 pub fn run_blocking(
@@ -40,38 +41,15 @@ pub fn run_blocking(
         let (extraction_ms, candidates) = matcher.matches_blocking(&frame.image, config)?;
         let mut records = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let solve = Instant::now();
-            let decision = verifier.verify_orthographic(
+            records.push(report::verify(
+                &verifier,
                 &frame,
                 &reference,
                 &prior,
-                &candidate.pairs,
+                candidate,
                 matcher.identity(),
-            );
-            let geometry_ms = solve.elapsed().as_secs_f64() * 1000.0;
-            let mut report = json!({"reference_quarter_turns":candidate.rotation,
-                "matching_ms":candidate.matching_ms,"geometry_ms":geometry_ms,
-                "matches":candidate.pairs.len(),"accepted":decision.is_ok()});
-            if settings.record_matches {
-                report["correspondences"] = json!(
-                    candidate
-                        .pairs
-                        .iter()
-                        .map(|p| [p.reference.x, p.reference.y, p.query.x, p.query.y])
-                        .collect::<Vec<_>>()
-                );
-            }
-            match decision {
-                Ok(estimate) => {
-                    report["pose"] = json!(Pose::from(estimate.pose));
-                    report["quality"] = json!({"inliers":estimate.quality.inliers,
-                        "spatial_support":estimate.quality.spatial_support,
-                        "occupied_cells":estimate.quality.occupied_cells,
-                        "rms_px":estimate.quality.reprojection_rms_px});
-                }
-                Err(error) => report["rejection"] = Value::String(error.to_string()),
-            }
-            records.push(report);
+                settings.record_matches,
+            ));
         }
         reports.push(
             json!({"query_extraction_ms":extraction_ms,"candidates":records,

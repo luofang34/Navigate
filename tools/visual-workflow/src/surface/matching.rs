@@ -34,7 +34,17 @@ impl Matcher {
         surface_bytes: usize,
     ) -> Result<Self, Error> {
         validate_rotations(rotations, config.limits.candidates)?;
-        let mut backend = config.load_blocking(root)?;
+        let backend = config.load_blocking(root)?;
+        Self::from_backend_blocking(config, image, rotations, surface_bytes, backend)
+    }
+    pub fn from_backend_blocking(
+        config: &Config,
+        image: &GrayImage,
+        rotations: &[u8],
+        surface_bytes: usize,
+        mut backend: Backend,
+    ) -> Result<Self, Error> {
+        validate_rotations(rotations, config.limits.candidates)?;
         let mut references = Vec::with_capacity(rotations.len());
         let mut resident_bytes = surface_bytes;
         for &rotation in rotations {
@@ -72,6 +82,32 @@ impl Matcher {
             references,
             original_size: image.dimensions(),
             resident_bytes,
+        })
+    }
+    pub fn match_pair_blocking(
+        &mut self,
+        rotation: u8,
+        query: &GrayImage,
+    ) -> Result<Matches, Error> {
+        let reference = self
+            .references
+            .iter()
+            .find(|r| r.rotation == rotation)
+            .ok_or_else(|| Error::Input("missing requested surface orientation".into()))?;
+        let Backend::Pair(backend) = &mut self.backend else {
+            return Err(Error::Input(
+                "routed fallback requires a pair matcher".into(),
+            ));
+        };
+        let started = Instant::now();
+        let mut pairs = backend.match_images_blocking(&reference.image, query)?;
+        for pair in &mut pairs {
+            restore(pair, rotation, self.original_size);
+        }
+        Ok(Matches {
+            rotation,
+            pairs,
+            matching_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
     }
     pub fn identity(&self) -> &str {

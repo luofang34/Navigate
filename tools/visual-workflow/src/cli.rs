@@ -51,6 +51,7 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
+        .subcommand(cascade_command())
         .subcommand(render_command())
         .subcommand(
             Command::new("pack")
@@ -98,3 +99,18 @@ fn render_command() -> Command {
 }
 #[cfg(test)]
 mod tests;
+
+fn cascade_command() -> Command {
+    Command::new("cascade-surface")
+        .about("Test sparse-first matching with ranked pair-matcher fallback")
+        .arg(path("config"))
+        .arg(path("fallback"))
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("iterations")
+                .long("iterations")
+                .default_value("1")
+                .value_parser(value_parser!(usize)),
+        )
+}

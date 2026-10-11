@@ -95,13 +95,15 @@ pub enum Backend {
 
 impl Config {
     pub fn load_blocking(&self, root: &Path) -> Result<Backend, Error> {
+        Runtime::new_blocking(self, root)?.load_blocking(self, root)
+    }
+    fn load_initialized_blocking(&self, root: &Path) -> Result<Backend, Error> {
         if self.keypoints > self.limits.features_per_image || self.limits.image_pixels > 8192 * 8192
         {
             return Err(Error::Input(
                 "feature or image limit is incompatible with the configured model".into(),
             ));
         }
-        navigate_visual_onnx::initialize_blocking(&root.join(&self.runtime))?;
         if matches!(self.engine, Engine::Rustnn) {
             return self.rustnn_blocking(root);
         }
@@ -182,4 +184,34 @@ impl Config {
             "build with rustnn-coreml on macOS for this engine".into(),
         ))
     }
+}
+
+/// One explicit runtime identity shared by the host's model loaders.
+/// ORT owns the process-wide environment; this value prevents a second loader
+/// from selecting a different native library inside the same pipeline.
+pub struct Runtime {
+    library: PathBuf,
+}
+impl Runtime {
+    pub fn new_blocking(config: &Config, root: &Path) -> Result<Self, Error> {
+        let library = runtime_path_blocking(&root.join(&config.runtime))?;
+        navigate_visual_onnx::initialize_blocking(&library)?;
+        Ok(Self { library })
+    }
+    pub fn load_blocking(&self, config: &Config, root: &Path) -> Result<Backend, Error> {
+        let library = runtime_path_blocking(&root.join(&config.runtime))?;
+        if library != self.library {
+            return Err(Error::Input(
+                "model loaders must share the initialized runtime library".into(),
+            ));
+        }
+        config.load_initialized_blocking(root)
+    }
+}
+fn runtime_path_blocking(path: &Path) -> Result<PathBuf, Error> {
+    std::fs::canonicalize(path).map_err(|source| Error::Io {
+        operation: "resolve runtime library",
+        path: path.into(),
+        source,
+    })
 }
