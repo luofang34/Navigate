@@ -6,6 +6,7 @@ use crate::{
 };
 use nalgebra::{SMatrix, Vector2};
 mod calibrated;
+mod orthographic;
 mod refinement;
 mod support;
 use refinement::FitSupport;

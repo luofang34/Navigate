@@ -8,6 +8,20 @@ pub(super) fn separated(
     points: &[Correspondence],
     minimum_distance: f64,
 ) -> (Vec<Correspondence>, usize) {
+    separated_projected(
+        [camera.width, camera.height],
+        |world| camera.project(reference, world),
+        points,
+        minimum_distance,
+    )
+}
+
+pub(super) fn separated_projected(
+    size: [u32; 2],
+    project: impl Fn(nalgebra::Vector3<f64>) -> Option<Vector2<f64>>,
+    points: &[Correspondence],
+    minimum_distance: f64,
+) -> (Vec<Correspondence>, usize) {
     let mut ordered: Vec<_> = points.iter().collect();
     ordered.sort_by(|a, b| {
         a.pixel
@@ -23,7 +37,7 @@ pub(super) fn separated(
     let mut cells = [false; 12];
     let radius_squared = minimum_distance * minimum_distance;
     for point in ordered {
-        let Some(pixel) = camera.project(reference, point.world) else {
+        let Some(pixel) = project(point.world) else {
             continue;
         };
         if selected
@@ -35,8 +49,8 @@ pub(super) fn separated(
         {
             continue;
         }
-        let x = (pixel.x * 4.0 / f64::from(camera.width)).clamp(0.0, 3.0) as usize;
-        let y = (pixel.y * 3.0 / f64::from(camera.height)).clamp(0.0, 2.0) as usize;
+        let x = (pixel.x * 4.0 / f64::from(size[0])).clamp(0.0, 3.0) as usize;
+        let y = (pixel.y * 3.0 / f64::from(size[1])).clamp(0.0, 2.0) as usize;
         cells[y * 4 + x] = true;
         reference_pixels.push(pixel);
         selected.push(point.clone());

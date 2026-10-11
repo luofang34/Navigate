@@ -2450,6 +2450,7 @@ dependencies = [
  "navigate-visual",
  "navigate-visual-render",
  "navigate-visual-workflow",
+ "npyz",
  "pollster",
  "serde",
  "serde_json",

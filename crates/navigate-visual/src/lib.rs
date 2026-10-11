@@ -11,14 +11,12 @@
 //! It must not be used as a navigation integrity bound.
 //!
 //! # Features
-//!
 //! The default build uses CPU matching. The optional `gpu` feature exposes
 //! `GpuPyramidalMatcher` for hardware compute shaders. Build its documentation
 //! with `cargo doc -p navigate-visual --features gpu --open`. Backend selection
 //! is explicit. The GPU backend does not silently fall back to CPU matching.
 //!
 //! # Example
-//!
 //! A blank image must produce a rejection, even with a valid prior and depth.
 //!
 //! ```
@@ -63,6 +61,7 @@ mod local_frame;
 mod local_scene;
 mod localizer;
 mod matching;
+mod orthographic;
 pub mod place_retrieval;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
@@ -91,6 +90,7 @@ pub use local_scene::{
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
+pub use orthographic::{OrthographicEstimate, OrthographicReference, RasterGeometry};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{
     GroundCorrespondence, RetrievalProposal, nadir_similarity_proposal, planar_proposal,

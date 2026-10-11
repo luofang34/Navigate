@@ -3,13 +3,27 @@ use clap::{Arg, Command, value_parser};
 use std::path::PathBuf;
 
 pub fn command() -> Command {
-    let path = |name: &'static str| {
-        Arg::new(name)
-            .required(true)
-            .value_parser(value_parser!(PathBuf))
-    };
     Command::new("navigate-workflow")
         .subcommand_required(true)
+        .subcommand(
+            Command::new("prepare-surface")
+                .about("Prepare image, calibration, and surface arrays without query pose truth")
+                .arg(path("input"))
+                .arg(path("output")),
+        )
+        .subcommand(
+            Command::new("locate-surface")
+                .about("Localize against an orthographic surface in local metric coordinates")
+                .arg(path("config"))
+                .arg(path("job"))
+                .arg(path("output"))
+                .arg(
+                    Arg::new("iterations")
+                        .long("iterations")
+                        .default_value("1")
+                        .value_parser(value_parser!(usize)),
+                ),
+        )
         .subcommand(
             Command::new("refine-scene")
                 .about("Refine conditional poses and points with per-camera calibrations")
@@ -30,24 +44,7 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
-        .subcommand(
-            Command::new("render")
-                .about("Render terrain references and save a reusable localization job")
-                .arg(path("job"))
-                .arg(path("output"))
-                .arg(
-                    Arg::new("iterations")
-                        .long("iterations")
-                        .default_value("1")
-                        .value_parser(value_parser!(usize)),
-                )
-                .arg(
-                    Arg::new("pixels")
-                        .long("pixels")
-                        .default_value("2000000")
-                        .value_parser(value_parser!(usize)),
-                ),
-        )
+        .subcommand(render_command())
         .subcommand(
             Command::new("pack")
                 .about("Build one offline reference feature packet")
@@ -67,6 +64,29 @@ pub fn command() -> Command {
                         .default_value("1")
                         .value_parser(value_parser!(usize)),
                 ),
+        )
+}
+fn path(name: &'static str) -> Arg {
+    Arg::new(name)
+        .required(true)
+        .value_parser(value_parser!(PathBuf))
+}
+fn render_command() -> Command {
+    Command::new("render")
+        .about("Render terrain references and save a reusable localization job")
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("iterations")
+                .long("iterations")
+                .default_value("1")
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("pixels")
+                .long("pixels")
+                .default_value("2000000")
+                .value_parser(value_parser!(usize)),
         )
 }
 #[cfg(test)]

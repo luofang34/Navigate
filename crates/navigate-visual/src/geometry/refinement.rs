@@ -45,6 +45,14 @@ impl FitSupport {
         let inliers = points.len();
         let (points, reference_cells) =
             support::separated(reference_camera, reference, points, separation);
+        Self::from_separated(camera, points, inliers, reference_cells)
+    }
+    pub fn from_separated(
+        camera: &CameraModel,
+        points: Vec<Correspondence>,
+        inliers: usize,
+        reference_cells: usize,
+    ) -> Self {
         let mut cells = [false; 12];
         for point in &points {
             let x = (point.pixel.x * 4.0 / f64::from(camera.width)).clamp(0.0, 3.0) as usize;

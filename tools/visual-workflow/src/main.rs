@@ -10,6 +10,7 @@ mod render;
 mod replay;
 mod run;
 mod scene;
+mod surface;
 mod terrain;
 
 use error::Error;
@@ -43,6 +44,9 @@ fn main() -> Result<(), Error> {
             .cloned()
             .ok_or_else(|| Error::Input(format!("missing {name}")))
     };
+    if name == "prepare-surface" {
+        return surface::prepare::run_blocking(&path("input")?, &path("output")?);
+    }
     if name == "refine-scene" {
         return scene::run_blocking(&path("input")?, &path("output")?);
     }
@@ -67,7 +71,11 @@ fn main() -> Result<(), Error> {
         "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),
-        "locate" => run::locate_blocking(
+        "locate" | "locate-surface" => (if name == "locate" {
+            run::locate_blocking
+        } else {
+            surface::run_blocking
+        })(
             &config,
             root,
             &path("job")?,

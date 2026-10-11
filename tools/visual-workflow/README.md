@@ -158,6 +158,42 @@ this setting and cannot consume XFeat packets.
 target/release/navigate-workflow locate config.json job.json result.json --iterations 10
 ```
 
+For an orthographic map, use a separate surface job:
+
+```sh
+target/release/navigate-workflow prepare-surface arrays surface
+target/release/navigate-workflow locate-surface config.json surface/job.json surface/result.json --iterations 3
+```
+
+`prepare-surface` reads four row-major numeric NPY files from `arrays`:
+
+- `image_query.npy` and `image_dop.npy`: RGB bytes with shape `[height,width,3]`.
+- `intrinsics.npy`: a float32, unskewed pinhole matrix with shape `[3,3]`.
+- `dsm.npy`: float32 map coordinates with shape `[height,width,3]`.
+
+The digital surface model (`dsm`) must match the reference image dimensions.
+Its first two coordinates must form one affine horizontal grid, in metres.
+Its third coordinate is height in the same frame. Non-finite heights have no
+surface evidence. Negative heights are valid. Camera calibration applies to
+the query image. Preparation reads no query pose or query point map.
+Keep independent evaluation data outside these inputs.
+
+The output directory must not exist. It receives images, a height file, and a
+job with file digests. The job uses a map-centre seed 100 metres above the
+highest finite surface. Its broad pose bounds are experiment settings.
+Set `prior`, `position_radius_m`, and `attitude_radius_rad` for the deployment.
+The surface result is a local metric pose. It has no geographic registration.
+
+`reference_quarter_turns` lists unique clockwise quarter turns from 0 through 3.
+Preparation selects all four. An omitted field selects only 0. Each orientation
+counts against the candidate and reference memory limits. Sparse matching keeps
+reference features in memory and shares one query extraction across orientations.
+LoFTR runs each image pair. Results retain all candidates without choosing a
+navigation fix. Geometry uses reference pixels in the original map grid.
+Set `record_matches` to true to save correspondences for separate evaluation.
+Reported iteration times exclude file loading and model/reference setup.
+Reference byte counts exclude model memory and temporary inference allocations.
+
 Use `replay` to process observations in time order. It keeps the models in memory.
 A reference cache keeps prepared references for reuse. The cache removes the
 least recently used references when it reaches a limit. Use an XFeat feature-stage
