@@ -2,6 +2,7 @@
 use crate::{InferenceError, features::Features, native_runtime::runtime};
 use navigate_visual::PixelMatch;
 use ort::{session::Session, value::TensorRef};
+mod compact;
 
 pub(crate) fn match_features(
     session: &mut Session,
@@ -53,9 +54,23 @@ pub(crate) fn match_prepared(
     let output = session
         .run(inputs)
         .map_err(|e| runtime("run LighterGlue", e))?;
+    if output.get("row_indices").is_some() {
+        return compact::decode(&output, &a.pixels, &b.pixels);
+    }
+    let probability = output.get("assignment").is_some();
+    if probability && output.get("log_assignment").is_some() {
+        return Err(InferenceError::Invalid(
+            "ambiguous LighterGlue score contract".into(),
+        ));
+    }
+    let name = if probability {
+        "assignment"
+    } else {
+        "log_assignment"
+    };
     let (shape, scores) = output
-        .get("log_assignment")
-        .ok_or_else(|| InferenceError::Invalid("missing LighterGlue log_assignment".into()))?
+        .get(name)
+        .ok_or_else(|| InferenceError::Invalid("missing LighterGlue assignment output".into()))?
         .try_extract_tensor::<f32>()
         .map_err(|e| runtime("decode LighterGlue scores", e))?;
     if shape.as_ref() != [1, a.pixels.len() as i64, b.pixels.len() as i64] {
@@ -63,15 +78,20 @@ pub(crate) fn match_prepared(
             "invalid LighterGlue assignment shape".into(),
         ));
     }
-    assignment_pairs(scores, &a.pixels, &b.pixels)
+    assignment_pairs(scores, &a.pixels, &b.pixels, probability)
 }
 
 fn assignment_pairs(
     scores: &[f32],
     a: &[[f64; 2]],
     b: &[[f64; 2]],
+    probability: bool,
 ) -> Result<Vec<PixelMatch>, InferenceError> {
-    if scores.len() != a.len().saturating_mul(b.len()) || scores.iter().any(|s| !s.is_finite()) {
+    if scores.len() != a.len().saturating_mul(b.len())
+        || scores
+            .iter()
+            .any(|s| !s.is_finite() || (probability && !(0.0..=1.0).contains(s)))
+    {
         return Err(InferenceError::Invalid(format!(
             "invalid LighterGlue assignment values: {} scores for {} by {} features; {} NaN, {} negative infinity, {} positive infinity",
             scores.len(),
@@ -95,12 +115,11 @@ fn assignment_pairs(
             }
         }
     }
+    let threshold = if probability { 0.1 } else { 0.1_f32.ln() };
     Ok(rows
         .into_iter()
         .enumerate()
-        .filter(|(i, (j, score))| {
-            *score > 0.1_f32.ln() && columns.get(*j).is_some_and(|c| c.0 == *i)
-        })
+        .filter(|(i, (j, score))| *score > threshold && columns.get(*j).is_some_and(|c| c.0 == *i))
         .map(|(i, (j, _))| PixelMatch {
             reference: a[i].into(),
             query: b[j].into(),
@@ -108,5 +127,7 @@ fn assignment_pairs(
         .collect())
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod device_tests;
 #[cfg(test)]
 mod tests;

@@ -2333,6 +2333,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-model"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "prost",
+ "sha2",
+ "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
+ "webnn-onnx-utils",
+]
+
+[[package]]
 name = "navigate-recording"
 version = "0.1.0"
 dependencies = [

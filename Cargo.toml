@@ -12,6 +12,7 @@ members = [
     "crates/navigate-recording",
     "tools/recording-worker",
     "tools/visual-workflow",
+    "tools/visual-model",
     "crates/navigate-visual",
     "crates/navigate-visual-workflow",
     "crates/navigate-visual-render",

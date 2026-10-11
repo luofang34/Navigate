@@ -1,0 +1,19 @@
+[package]
+name = "navigate-model"
+description = "Reproducible inference graph preparation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+webnn-onnx-utils = { git = "https://github.com/rustnn/webnn-onnx-utils", branch = "main" }
+prost = "0.12"
+sha2 = "0.10"
+clap = "4"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

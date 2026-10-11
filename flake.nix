@@ -34,9 +34,16 @@
             cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" ];
             meta.mainProgram = "navigate-workflow";
           };
+          model = workflow.overrideAttrs (old: {
+            pname = "navigate-model";
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.protobuf ];
+            cargoBuildFlags = [ "-p" "navigate-model" ];
+            cargoTestFlags = [ "-p" "navigate-model" ];
+            meta.mainProgram = "navigate-model";
+          });
         in {
           default = workflow;
-          inherit workflow;
+          inherit workflow model;
         });
       apps = eachSystem (system: {
         default = {

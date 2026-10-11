@@ -71,6 +71,12 @@ The graph contracts are:
 | `dense_image` | XFeat `images`, RGB, 800 × 600 | Dense maps with preprocessing in the graph |
 | `loftr` | LoFTR `image0` and `image1`, grayscale, 640 × 480 | Matched coordinates |
 
+The matcher accepts the original `log_assignment` output, an `assignment`
+probability matrix, or compact `row_indices`, `column_indices`, and `row_scores`
+outputs. Use [model preparation](../visual-model/README.md) to build a supported
+fixed-size matcher with compact outputs. Its feature count must match both inputs;
+changing the feature budget requires the corresponding prepared model.
+
 Use `matcher: null` for LoFTR. Its optional `refinement_patches: true` setting
 runs the full view and four crops. Budget all five inference calls.
 
