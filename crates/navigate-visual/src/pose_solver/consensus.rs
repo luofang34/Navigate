@@ -16,7 +16,7 @@ pub(super) fn initialize(
     let mut best = initial;
     let mut support = inliers(camera, points, &best, threshold);
     let mut seed = 0x7812_531a_u64;
-    let mut budget = 4096;
+    let mut budget = trial_budget(support.len(), points.len());
     let mut trial = 0_usize;
     while trial < budget && support.len() < points.len() {
         trial = trial.wrapping_add(1);
@@ -40,10 +40,7 @@ pub(super) fn initialize(
         }
         best = pose;
         support = inliers(camera, points, &best, threshold);
-        // The sampling budget bounds work. It is not an accuracy probability.
-        let fraction = support.len() as f64 / points.len() as f64;
-        budget = budget.min((0.001_f64.ln() / (1.0 - fraction.powi(4)).ln()).ceil() as usize);
-        budget = budget.max(64);
+        budget = budget.min(trial_budget(support.len(), points.len()));
     }
     if support.len() >= 6 {
         let selected: Vec<_> = support.iter().map(|&i| points[i].clone()).collect();
@@ -54,6 +51,16 @@ pub(super) fn initialize(
         }
     }
     best
+}
+
+fn trial_budget(support: usize, count: usize) -> usize {
+    // A useful initial pose must bound work even if no sampled pose improves it.
+    // This is a work limit, not an accuracy probability.
+    if support == 0 {
+        return 4096;
+    }
+    let fraction = support as f64 / count as f64;
+    ((0.001_f64.ln() / (-fraction.powi(4)).ln_1p()).ceil() as usize).clamp(64, 4096)
 }
 
 struct Projection<'a> {

@@ -175,10 +175,15 @@ fn repeated_matches_do_not_inflate_evidence() {
     let repeated = matches[..8].iter().copied().cycle().take(160).collect();
     let mut localizer =
         Localizer::new(KnownMatches(repeated), LocalizerConfig::default()).expect("valid config");
-    assert!(matches!(
-        localizer.estimate_blocking(&frame, &reference, &prior),
-        Err(VisualError::InsufficientMatches { found: 8, .. })
-    ));
+    let result = localizer.estimate_blocking(&frame, &reference, &prior);
+    assert!(
+        matches!(
+            result,
+            Err(VisualError::InsufficientMatches { found: 8, .. })
+        ),
+        "{:?}",
+        result.err()
+    );
 }
 
 #[test]

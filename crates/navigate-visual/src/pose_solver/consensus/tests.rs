@@ -142,3 +142,14 @@ fn full_consensus(
     }
     best
 }
+
+#[test]
+fn useful_initial_support_bounds_trials_without_requiring_a_better_hypothesis() {
+    assert_eq!(trial_budget(0, 100), 4096);
+    assert_eq!(trial_budget(100, 100), 64);
+    assert!(trial_budget(50, 100) < 128);
+    let (camera, pose, points) = fixture();
+    let fitted = initialize(&camera, &points, pose, 2.5, Motion::Free);
+    assert!((fitted.position - pose.position).norm() < 1e-8);
+    assert!(fitted.orientation.angle_to(&pose.orientation) < 1e-10);
+}
