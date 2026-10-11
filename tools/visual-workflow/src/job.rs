@@ -4,10 +4,10 @@ use navigate_recording::{Camera, Pose};
 use navigate_visual::{Frame, FrameStamp, LocalFrame, MapRevision, PosePrior, ReferenceView};
 use navigate_visual::{ReferenceRenderer, RendererIdentity};
 use navigate_visual_render::GpuRenderer;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Job {
     pub query: Image,
@@ -23,13 +23,13 @@ pub struct Job {
     pub map_sha256: String,
     pub references: Vec<Reference>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Image {
     pub path: PathBuf,
     pub sha256: String,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reference {
     pub id: String,
@@ -39,13 +39,14 @@ pub struct Reference {
     pub pose: Pose,
     pub features: Option<PathBuf>,
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordinateFrame {
     #[default]
     AnchorMercator,
     SphericalEnu,
 }
+#[derive(Default)]
 pub struct References {
     renderer: Option<GpuRenderer>,
     pub render_ms: Vec<f64>,

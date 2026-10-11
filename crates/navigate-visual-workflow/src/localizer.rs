@@ -180,6 +180,25 @@ impl<B: FeatureBackend> FeatureLocalizer<B> {
         prior: &PosePrior,
         references: &[PreparedReference<B::Features>],
     ) -> Result<FrameReport, WorkflowError> {
+        check(
+            "reference candidates",
+            references.len(),
+            self.limits.candidates,
+        )?;
+        let selected: Vec<_> = references.iter().collect();
+        self.estimate_selected_blocking(frame, prior, &selected)
+    }
+
+    /// Estimate against borrowed resident references without copying feature storage.
+    ///
+    /// # Errors
+    /// Applies the same input, resource, and backend checks as [`Self::estimate_blocking`].
+    pub fn estimate_selected_blocking(
+        &mut self,
+        frame: &Frame,
+        prior: &PosePrior,
+        references: &[&PreparedReference<B::Features>],
+    ) -> Result<FrameReport, WorkflowError> {
         let started = Instant::now();
         self.check_image(&frame.image)?;
         frame.camera.validate()?;

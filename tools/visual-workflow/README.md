@@ -146,6 +146,39 @@ this setting and cannot consume XFeat packets.
 target/release/navigate-workflow locate config.json job.json result.json --iterations 10
 ```
 
+Use `replay` to process observations in time order. It keeps the models in memory.
+A reference cache keeps prepared references for reuse. The cache removes the
+least recently used references when it reaches a limit. Use an XFeat feature-stage
+configuration. Create a JSONL manifest with one record per observation:
+
+```jsonl
+{"job":"frames/first.json","capture_time_ns":1000000000}
+{"job":"frames/second.json","capture_time_ns":1100000000}
+```
+
+```sh
+target/release/navigate-workflow replay config.json observations.jsonl results.jsonl
+```
+
+Job paths are relative to the manifest; timestamps must strictly increase. Each
+record is limited to 16 KiB. The result file is written and flushed incrementally,
+with `start`, `frame`, and `end` records. A malformed record or failed frame is
+reported and processing continues. A failed frame has no pose. Failure to read
+the manifest or write results stops the run. Geometry rejections remain valid
+processed results, separate from frame failures.
+
+The reference cache must stay within `candidates` and `reference_bytes`.
+It keeps validated reference data. The cache key includes the reference data,
+pose, map, calibration, and rendering settings. Change the declared digests when
+you replace input data. The program does not read cached files again for each
+frame. It keeps only one terrain renderer. It creates the renderer when a
+reference needs rendering.
+
+Per-frame `elapsed_ms` includes job loading, image loading, reference preparation,
+inference, and geometry. The `start` record measures backend initialization.
+These times exclude result serialization and writing. Replay does not calculate
+a trajectory. It does not use its own estimates as new independent priors.
+
 To render references from an installed `photo-reference-catalog`, omit `image`,
 `depth`, `depth_sha256`, and `features` from each generated reference. Keep its
 `id` and `pose`. Add this job field:

@@ -6,6 +6,7 @@ mod error;
 mod job;
 mod pair;
 mod render;
+mod replay;
 mod run;
 mod terrain;
 
@@ -58,6 +59,7 @@ fn main() -> Result<(), Error> {
         .parent()
         .ok_or_else(|| Error::Input("config path has no parent".into()))?;
     match name {
+        "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),
         "locate" => run::locate_blocking(
             &config,

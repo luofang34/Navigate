@@ -11,6 +11,13 @@ pub fn command() -> Command {
     Command::new("navigate-workflow")
         .subcommand_required(true)
         .subcommand(
+            Command::new("replay")
+                .about("Process ordered job records while retaining models and bounded references")
+                .arg(path("config"))
+                .arg(path("manifest"))
+                .arg(path("output")),
+        )
+        .subcommand(
             Command::new("render")
                 .about("Render terrain references and save a reusable localization job")
                 .arg(path("job"))

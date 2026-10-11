@@ -5,10 +5,10 @@ mod tiles;
 use crate::{Error, assets};
 use navigate_visual::{CameraModel, LocalFrame, MapRevision};
 use navigate_visual_render::{GpuRenderer, RenderLimits};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SceneConfig {
     pub catalog: PathBuf,

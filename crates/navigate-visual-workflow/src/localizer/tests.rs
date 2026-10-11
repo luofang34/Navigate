@@ -140,3 +140,61 @@ fn no_candidates_does_not_run_extraction() {
     );
     assert_eq!(workflow.backend().extractions, 0);
 }
+
+#[test]
+fn borrowed_references_reuse_features_across_queries() {
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        limits(),
+    )
+    .unwrap();
+    let first = std::sync::Arc::new(workflow.prepare_reference_blocking(reference()).unwrap());
+    let second = std::sync::Arc::new(workflow.prepare_reference_blocking(reference()).unwrap());
+    let (frame, prior) = query();
+    for refs in [
+        [first.as_ref(), second.as_ref()],
+        [second.as_ref(), first.as_ref()],
+    ] {
+        let report = workflow
+            .estimate_selected_blocking(&frame, &prior, &refs)
+            .unwrap();
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| candidate.decision.is_ok())
+        );
+    }
+    assert_eq!(workflow.backend().extractions, 4);
+    assert_eq!(workflow.backend().matches, 4);
+    assert_eq!(std::sync::Arc::strong_count(&first), 1);
+}
+
+#[test]
+fn borrowed_references_enforce_aggregate_memory_before_query_extraction() {
+    let mut config = limits();
+    config.reference_bytes = 100 * 80 * 6;
+    let mut workflow = FeatureLocalizer::new(
+        Backend {
+            extractions: 0,
+            matches: 0,
+        },
+        LocalizerConfig::default(),
+        config,
+    )
+    .unwrap();
+    let prepared = workflow.prepare_reference_blocking(reference()).unwrap();
+    let (frame, prior) = query();
+    assert!(matches!(
+        workflow.estimate_selected_blocking(&frame, &prior, &[&prepared, &prepared]),
+        Err(WorkflowError::ResourceLimit {
+            resource: "reference bytes",
+            ..
+        })
+    ));
+    assert_eq!(workflow.backend().extractions, 1);
+}
