@@ -16,8 +16,21 @@ target/release/navigate-model lighterglue.onnx matcher-2048.onnx --features 2048
 
 The output path must not exist. The supported input has SHA-256
 `170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca`.
-Feature counts must be 32 through 4096. Both input images must supply that exact
-count; this tool does not pad features or change the feature selection policy.
+Feature counts must be 32 through 4096. The `lighterglue` recipe requires that
+exact count from each image. To accept fewer features with a fixed input shape:
+
+```sh
+target/release/navigate-model lighterglue.onnx matcher-masked.onnx \
+  --recipe lighterglue-masked --features 2048
+```
+
+The masked recipe adds `key_bias0` and `key_bias1` float32 inputs with shape
+`[1, 1, capacity]`. `navigate-workflow` supplies zero for valid features and
+`-10000` for padding. It masks keys in each attention layer and both assignment
+normalizations. It removes padded indices from the output. Empty feature sets
+return no matches without inference. Set the workflow feature limit at or below
+the model capacity. Reference packets retain only valid features. Full-capacity
+feature arrays are borrowed; shorter arrays require temporary padded buffers.
 
 The recipe expresses assignment probabilities as the product of two softmax
 terms and two sigmoid terms. It removes logarithms from assignment and expresses

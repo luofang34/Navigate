@@ -3,6 +3,7 @@ use crate::{InferenceError, features::Features, native_runtime::runtime};
 use navigate_visual::PixelMatch;
 use ort::{session::Session, value::TensorRef};
 mod compact;
+mod masked;
 
 pub(crate) fn match_features(
     session: &mut Session,
@@ -32,6 +33,9 @@ pub(crate) fn match_prepared(
 ) -> Result<Vec<PixelMatch>, InferenceError> {
     if a.pixels.is_empty() || b.pixels.is_empty() {
         return Ok(vec![]);
+    }
+    if let Some(capacity) = masked::capacity(session)? {
+        return masked::run(session, [a, b], [pa, pb], capacity);
     }
     let mut inputs = Vec::new();
     for (i, (f, pixels)) in [(a, pa), (b, pb)].into_iter().enumerate() {

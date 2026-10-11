@@ -1,6 +1,7 @@
 //! Offline, hash-bound graph preparation without an inference runtime.
 mod error;
 mod graph;
+mod masked;
 mod recipe;
 mod xfeat;
 use clap::{Arg, Command, value_parser};
@@ -46,6 +47,7 @@ fn command() -> Command {
         .about("Prepare supported feature extraction and matching graphs")
         .arg(Arg::new("recipe").long("recipe").value_parser([
             "lighterglue",
+            "lighterglue-masked",
             "xfeat-dense",
             "xfeat-gray",
         ]))
@@ -63,6 +65,7 @@ fn command() -> Command {
             Arg::new("features")
                 .long("features")
                 .required_if_eq("recipe", "lighterglue")
+                .required_if_eq("recipe", "lighterglue-masked")
                 .required_unless_present("recipe")
                 .value_parser(value_parser!(usize)),
         )
@@ -87,7 +90,13 @@ fn prepare_blocking(
             path: input.into(),
             source,
         })?;
-    let prepared = if recipe != "lighterglue" {
+    let prepared = if recipe == "lighterglue-masked" {
+        masked::prepare(
+            &bytes,
+            count.ok_or(Error::Invalid("feature count"))?,
+            compact,
+        )?
+    } else if recipe != "lighterglue" {
         if count.is_some() || !compact {
             return Err(Error::Invalid(
                 "XFeat does not accept features or probability outputs",

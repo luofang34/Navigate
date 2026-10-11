@@ -6,6 +6,15 @@ pub(super) fn decode(
     a: &[[f64; 2]],
     b: &[[f64; 2]],
 ) -> Result<Vec<PixelMatch>, InferenceError> {
+    decode_bounded(output, a, b, [a.len(), b.len()])
+}
+
+pub(super) fn decode_bounded(
+    output: &SessionOutputs<'_>,
+    a: &[[f64; 2]],
+    b: &[[f64; 2]],
+    capacity: [usize; 2],
+) -> Result<Vec<PixelMatch>, InferenceError> {
     if output.len() != 3 {
         return Err(InferenceError::Invalid(
             "compact matcher requires exactly three outputs".into(),
@@ -22,14 +31,14 @@ pub(super) fn decode(
         }
         Ok(data)
     };
-    let rows = indices("row_indices", a.len())?;
-    let columns = indices("column_indices", b.len())?;
+    let rows = indices("row_indices", capacity[0])?;
+    let columns = indices("column_indices", capacity[1])?;
     let (shape, scores) = output
         .get("row_scores")
         .ok_or_else(|| InferenceError::Invalid("missing row_scores".into()))?
         .try_extract_tensor::<f32>()
         .map_err(|e| runtime("decode row scores", e))?;
-    if shape.as_ref() != [1, a.len() as i64] {
+    if shape.as_ref() != [1, capacity[0] as i64] {
         return Err(InferenceError::Invalid("invalid row_scores shape".into()));
     }
     pairs(rows, columns, scores, a, b)
@@ -42,13 +51,15 @@ fn pairs(
     a: &[[f64; 2]],
     b: &[[f64; 2]],
 ) -> Result<Vec<PixelMatch>, InferenceError> {
-    if rows.len() != a.len()
-        || scores.len() != a.len()
-        || columns.len() != b.len()
-        || rows.iter().any(|i| *i < 0 || *i as u64 >= b.len() as u64)
+    if rows.len() < a.len()
+        || scores.len() != rows.len()
+        || columns.len() < b.len()
+        || rows
+            .iter()
+            .any(|i| *i < 0 || *i as u64 >= columns.len() as u64)
         || columns
             .iter()
-            .any(|i| *i < 0 || *i as u64 >= a.len() as u64)
+            .any(|i| *i < 0 || *i as u64 >= rows.len() as u64)
         || scores
             .iter()
             .any(|s| !s.is_finite() || !(0.0..=1.0).contains(s))
@@ -59,9 +70,12 @@ fn pairs(
     }
     Ok(rows
         .iter()
+        .take(a.len())
         .zip(scores)
         .enumerate()
-        .filter(|(i, (j, s))| **s > 0.1 && columns[**j as usize] == *i as i64)
+        .filter(|(i, (j, s))| {
+            **s > 0.1 && (**j as usize) < b.len() && columns[**j as usize] == *i as i64
+        })
         .map(|(i, (j, _))| PixelMatch {
             reference: a[i].into(),
             query: b[*j as usize].into(),

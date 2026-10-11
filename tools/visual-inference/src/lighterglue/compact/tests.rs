@@ -16,3 +16,14 @@ fn compact_output_retains_mutuality_threshold_and_index_validation() -> Result<(
     assert!(pairs(&[0, 0], &[0, 1, 2], &[0.8, 0.7], &a, &b).is_err());
     Ok(())
 }
+
+#[test]
+fn padding_never_produces_correspondences() -> Result<(), InferenceError> {
+    let a = [[2.0, 4.0]];
+    let b = [[20.0, 40.0], [60.0, 80.0]];
+    let result = pairs(&[1, 0, 2], &[1, 0, 2], &[0.8, 0.9, 0.9], &a, &b)?;
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].query.x, 60.0);
+    assert!(pairs(&[2, 0, 1], &[1, 2, 0], &[0.9; 3], &a, &b)?.is_empty());
+    Ok(())
+}

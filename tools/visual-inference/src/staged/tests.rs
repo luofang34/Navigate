@@ -53,3 +53,6 @@ fn equivalence_checks_feature_payload_not_only_image_and_encoder() {
     second.features.pixels[0][0] += 1.0;
     assert!(original != second);
 }
+
+#[cfg(target_os = "macos")]
+mod masked;
