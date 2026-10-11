@@ -2445,6 +2445,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "image",
+ "nalgebra 0.34.2",
  "navigate-recording",
  "navigate-visual",
  "navigate-visual-render",

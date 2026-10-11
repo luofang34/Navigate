@@ -241,3 +241,56 @@ workspaces, and allocator overhead. They are not process memory limits.
 reference extraction and all iterations. Zero dispatch-copy counters do not mean
 zero host transfers or zero driver-internal copies. Use the host read/write counts
 and process memory measurements with the timing results.
+
+## Pipeline evaluation
+
+Use `evaluate` to compare local map matching with temporal point tracking:
+
+```sh
+navigate-workflow evaluate config.json experiment.json results.json
+```
+
+An experiment uses one fixed reference from a localization job. It accepts up to
+1000 frames. Frame times must increase. Paths are relative to the experiment.
+
+```json
+{
+  "job": "job.json",
+  "frames": [
+    {
+      "image": {"path": "frame.png", "sha256": "SHA256_OF_FRAME_FILE"},
+      "capture_time_ns": 0
+    }
+  ],
+  "fold": 0,
+  "refresh_interval": 5,
+  "query_focal_scale": 1.0,
+  "retain_valid_track": true,
+  "max_map_track_disagreement_m": null
+}
+```
+
+Run folds 0 through 4 separately. Each fold excludes fixed 64-pixel map cells
+from fitting and tracking. A four-pixel cell border is excluded. The score uses
+all test matches with valid depth, without removing pose outliers. Optional frame
+`controls` contain `[reference_x, reference_y, query_x, query_y]` arrays. Copy the
+output controls into another experiment to use the same test pairs. Controls
+never enter fitting. They still share map and matcher errors; they are not truth.
+
+Set `fold` to null for a coverage and timing run with all matches. This mode has
+no test score. `query_focal_scale` changes query rays only; map geometry stays
+fixed. Compare several scales to measure sensitivity to calibration.
+
+A refresh interval of 1 requests map matching for every frame. Larger intervals
+permit tracking between map requests. Tracking stops across a gap above 200 ms.
+With `retain_valid_track`, a rejected map result does not remove a valid track.
+A finite `max_map_track_disagreement_m` also prevents a conflicting map result
+from replacing the track. This bound is an experiment input, not a measured
+uncertainty. Results record the conflict. Propagated map points do not provide
+new independent geographic evidence. `accepted` means geometric acceptance only.
+
+`setup_ms` includes reference preparation and model loading. `pipeline_ms` includes
+image decoding, inference or tracking, geometry, and track-state updates. It
+excludes result writing and test scoring. The first inference can include backend
+startup work. Acquisition, global retrieval, and map download are outside this
+local experiment. Report rejected frames and startup costs with timing results.

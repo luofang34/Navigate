@@ -11,6 +11,13 @@ pub fn command() -> Command {
     Command::new("navigate-workflow")
         .subcommand_required(true)
         .subcommand(
+            Command::new("evaluate")
+                .about("Compare local pipelines with fixed spatial holdouts")
+                .arg(path("config"))
+                .arg(path("manifest"))
+                .arg(path("output")),
+        )
+        .subcommand(
             Command::new("replay")
                 .about("Process ordered job records while retaining models and bounded references")
                 .arg(path("config"))

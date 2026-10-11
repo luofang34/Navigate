@@ -3,6 +3,7 @@ mod assets;
 mod cli;
 mod config;
 mod error;
+mod evaluate;
 mod job;
 mod pair;
 mod render;
@@ -59,6 +60,7 @@ fn main() -> Result<(), Error> {
         .parent()
         .ok_or_else(|| Error::Input("config path has no parent".into()))?;
     match name {
+        "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),
         "locate" => run::locate_blocking(
