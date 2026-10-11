@@ -1,6 +1,6 @@
 # Model preparation
 
-This Rust program prepares supported XFeat and LighterGlue ONNX exports.
+This Rust program prepares supported XFeat, LighterGlue, and LoFTR ONNX exports.
 It retains the weights and source metadata. It records the source digest and recipe in the output model. Keep the upstream model license with the
 output. The input digest is checked before a named graph rewrite can run.
 
@@ -97,3 +97,27 @@ the runtime library, `NAVIGATE_XFEAT_MODEL` to the source model, and
 ```sh
 cargo test --release -p navigate-model dense_recipe_matches_original_model_intermediates -- --ignored
 ```
+
+## Split LoFTR execution
+
+```sh
+target/release/navigate-model loftr.onnx coarse.onnx --recipe loftr-coarse
+target/release/navigate-model loftr.onnx fine.onnx --recipe loftr-fine --batch 256
+```
+
+These recipes require source SHA-256
+`49901002e682c650dcc1cd596d4effa980f12ffcc383746b77651ac89ed88559`.
+The coarse graph emits match coordinates, confidence, and two local feature arrays.
+Each feature array has shape `[matches, 25, 128]`. The fine graph accepts two
+`[batch, 25, 128]` float32 arrays and returns `[batch, 2]` query offsets in model pixels.
+The batch must be 1 through 1024. Weights and attention operations stay unchanged.
+Each fine attention calculation uses one patch pair. Padding does not add matches.
+
+Set the workflow `graph` to `loftr_split`, `detector` to the coarse graph, and
+`matcher` to the fine graph. `extraction` controls coarse execution; `matching`
+controls fine execution. The adapter checks the source digest and stage metadata.
+Use `matching.allow_cpu_fallback: false` to require full fine-graph placement on
+the selected provider. The coarse graph can still require CPU operators.
+Keep both sessions resident. Measure startup and steady execution separately.
+The split transfers patch arrays through host memory; it does not provide shared
+device tensors between sessions. Check runtime profiles before making placement claims.

@@ -310,6 +310,12 @@ and map matching; `frame_loading_ms` records image loading and validation. The
 first inference can include backend startup work. Acquisition, global retrieval, and map download are outside this
 local experiment. Report rejected frames and startup costs with timing results.
 
+For split LoFTR execution, set `graph` to `loftr_split`, `detector` to the coarse
+model, and `matcher` to the fixed-batch fine model. `extraction` selects the coarse
+provider and `matching` selects the fine provider. Prepare both models with the
+[model tool](../visual-model/README.md#split-loftr-execution). The runtime pads
+partial batches and retains only valid matches. Keep the sessions resident.
+
 ## Offline scene refinement
 
 Use `navigate-workflow refine-scene scene.json refined.json` to refine initialized

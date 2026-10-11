@@ -1,6 +1,7 @@
 //! Fixed-shape detector-free correspondences behind the Navigate matcher port.
 mod orientations;
 mod patches;
+mod split;
 use crate::{ExecutionConfig, InferenceError, native_runtime, preprocessing};
 use image::GrayImage;
 use navigate_visual::{ImageMatcher, PixelMatch, VisualError};
@@ -16,6 +17,7 @@ use std::path::Path;
 /// The shared geometry verifier must use each camera's calibration.
 pub struct LoFtrMatcher {
     session: Session,
+    fine: Option<split::FineStage>,
     identity: String,
     refinement_patches: bool,
     quarter_turns: bool,
@@ -38,11 +40,40 @@ impl LoFtrMatcher {
         let session = native_runtime::session_blocking(path, execution)?;
         Ok(Self {
             session,
+            fine: None,
             identity,
             refinement_patches: false,
             quarter_turns: false,
         })
     }
+    /// Load coarse patches and a fixed-batch fine graph with separate providers.
+    ///
+    /// Fine attention operates within each patch pair. Padding supplies complete
+    /// batches and does not add matches. Output pixels retain the source grid.
+    /// The host supplies graphs from the same LoFTR export and preparation recipe.
+    ///
+    /// # Errors
+    /// Rejects model files, unsupported fine input shapes, and runtime failures.
+    pub fn load_split_blocking(
+        coarse: &Path,
+        fine: &Path,
+        coarse_execution: &ExecutionConfig,
+        fine_execution: &ExecutionConfig,
+    ) -> Result<Self, InferenceError> {
+        let mut matcher = Self::load_blocking(coarse, coarse_execution)?;
+        let fine = split::FineStage::load_blocking(fine, fine_execution)?;
+        if split::source(&matcher.session, "coarse-patches-v1")? != fine.source {
+            return Err(InferenceError::Invalid(
+                "LoFTR stages have different source digests".into(),
+            ));
+        }
+        matcher
+            .identity
+            .push_str(&format!("/split-v1/{}", fine.identity));
+        matcher.fine = Some(fine);
+        Ok(matcher)
+    }
+
     /// Use a full image and four overlapping crops for each match call.
     ///
     /// This profile uses one resident session and can run five inference calls.
@@ -85,6 +116,9 @@ impl LoFtrMatcher {
             .session
             .run(ort::inputs!["image0"=>first_tensor, "image1"=>second_tensor])
             .map_err(|e| native_runtime::runtime("run LoFTR", e))?;
+        if let Some(fine) = &mut self.fine {
+            return fine.decode(&output, [&a, &b], [first, second]);
+        }
         let read = |name: &str, columns: Option<i64>| -> Result<&[f32], InferenceError> {
             let (shape, data) = output
                 .get(name)

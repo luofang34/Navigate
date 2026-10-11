@@ -28,6 +28,7 @@ pub enum Graph {
     Dense,
     DenseImage,
     Loftr,
+    LoftrSplit,
 }
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,14 +105,26 @@ impl Config {
         if matches!(self.engine, Engine::Rustnn) {
             return self.rustnn_blocking(root);
         }
-        if matches!(self.graph, Graph::Loftr) {
-            if self.matcher.is_some() {
-                return Err(Error::Input(
-                    "LoFTR does not use a separate matcher model".into(),
-                ));
-            }
-            let mut matcher =
-                LoFtrMatcher::load_blocking(&root.join(&self.detector), &self.matching.model())?;
+        if matches!(self.graph, Graph::Loftr | Graph::LoftrSplit) {
+            let mut matcher = if matches!(self.graph, Graph::LoftrSplit) {
+                let fine = self
+                    .matcher
+                    .as_ref()
+                    .ok_or_else(|| Error::Input("split LoFTR requires a fine model".into()))?;
+                LoFtrMatcher::load_split_blocking(
+                    &root.join(&self.detector),
+                    &root.join(fine),
+                    &self.extraction.model(),
+                    &self.matching.model(),
+                )?
+            } else {
+                if self.matcher.is_some() {
+                    return Err(Error::Input(
+                        "LoFTR does not use a separate matcher model".into(),
+                    ));
+                }
+                LoFtrMatcher::load_blocking(&root.join(&self.detector), &self.matching.model())?
+            };
             if self.refinement_patches {
                 matcher = matcher.with_refinement_patches();
             }
@@ -129,7 +142,9 @@ impl Config {
                 Graph::Sparse => XFeatGraph::Sparse,
                 Graph::Dense => XFeatGraph::Dense,
                 Graph::DenseImage => XFeatGraph::DenseImage,
-                Graph::Loftr => return Err(Error::Input("LoFTR must use the pair path".into())),
+                Graph::Loftr | Graph::LoftrSplit => {
+                    return Err(Error::Input("LoFTR must use the pair path".into()));
+                }
             },
             matcher.as_deref(),
             &self.extraction.model(),

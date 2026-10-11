@@ -1,6 +1,7 @@
 //! Offline, hash-bound graph preparation without an inference runtime.
 mod error;
 mod graph;
+mod loftr;
 mod masked;
 mod recipe;
 mod xfeat;
@@ -33,6 +34,7 @@ fn main() -> Result<(), Error> {
         .get_one::<PathBuf>("output")
         .ok_or(Error::Invalid("output path"))?;
     let count = args.get_one::<usize>("features").copied();
+    let batch = args.get_one::<usize>("batch").copied();
     let recipe = args
         .get_one::<String>("recipe")
         .map(String::as_str)
@@ -40,7 +42,7 @@ fn main() -> Result<(), Error> {
     let compact = args
         .get_one::<String>("output-kind")
         .is_some_and(|s| s == "compact");
-    prepare_blocking(input, output, count, compact, recipe)
+    prepare_blocking(input, output, count, compact, recipe, batch)
 }
 fn command() -> Command {
     Command::new("navigate-model")
@@ -50,6 +52,8 @@ fn command() -> Command {
             "lighterglue-masked",
             "xfeat-dense",
             "xfeat-gray",
+            "loftr-coarse",
+            "loftr-fine",
         ]))
         .arg(
             Arg::new("input")
@@ -70,6 +74,12 @@ fn command() -> Command {
                 .value_parser(value_parser!(usize)),
         )
         .arg(
+            Arg::new("batch")
+                .long("batch")
+                .required_if_eq("recipe", "loftr-fine")
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
             Arg::new("output-kind")
                 .long("output-kind")
                 .default_value("compact")
@@ -82,6 +92,7 @@ fn prepare_blocking(
     count: Option<usize>,
     compact: bool,
     recipe: &str,
+    batch: Option<usize>,
 ) -> Result<(), Error> {
     let mut bytes = Vec::new();
     File::open(input)
@@ -90,7 +101,17 @@ fn prepare_blocking(
             path: input.into(),
             source,
         })?;
-    let prepared = if recipe == "lighterglue-masked" {
+    if batch.is_some() && recipe != "loftr-fine" {
+        return Err(Error::Invalid("batch requires loftr-fine"));
+    }
+    let prepared = if recipe.starts_with("loftr-") {
+        if count.is_some() || !compact {
+            return Err(Error::Invalid(
+                "LoFTR does not accept feature budgets or probability outputs",
+            ));
+        }
+        loftr::prepare(&bytes, batch)?
+    } else if recipe == "lighterglue-masked" {
         masked::prepare(
             &bytes,
             count.ok_or(Error::Invalid("feature count"))?,
