@@ -105,3 +105,7 @@ fn inside(pixel: Vector2<f64>, camera: &CameraModel) -> bool {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "calibrated/physical/tests.rs"]
+mod physical_tests;
