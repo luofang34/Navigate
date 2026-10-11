@@ -68,6 +68,9 @@ fn main() -> Result<(), Error> {
         .parent()
         .ok_or_else(|| Error::Input("config path has no parent".into()))?;
     match name {
+        "probe-surface" => {
+            surface::probe::run_blocking(&config, &path("manifest")?, &path("output")?)
+        }
         "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),

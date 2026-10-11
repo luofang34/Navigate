@@ -2,6 +2,7 @@
 mod job;
 mod matching;
 pub mod prepare;
+pub mod probe;
 
 use crate::{Error, assets, config::Config};
 use navigate_recording::Pose;

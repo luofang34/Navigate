@@ -44,6 +44,13 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
+        .subcommand(
+            Command::new("probe-surface")
+                .about("Recheck frozen image matches with an alternative registered height surface")
+                .arg(path("config"))
+                .arg(path("manifest"))
+                .arg(path("output")),
+        )
         .subcommand(render_command())
         .subcommand(
             Command::new("pack")
