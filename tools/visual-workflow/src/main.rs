@@ -5,6 +5,7 @@ mod config;
 mod error;
 mod evaluate;
 mod job;
+mod motion_probe;
 mod pair;
 mod render;
 mod replay;
@@ -47,6 +48,14 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             .cloned()
             .ok_or_else(|| Error::Input(format!("missing {name}")))
     };
+    if name == "probe-motion" {
+        #[cfg(feature = "gpu")]
+        return motion_probe::run_blocking(&path("manifest")?, &path("output")?);
+        #[cfg(not(feature = "gpu"))]
+        return Err(Error::Input(
+            "motion probe requires the gpu build feature".into(),
+        ));
+    }
     if name == "prepare-surface" {
         return surface::prepare::run_blocking(&path("input")?, &path("output")?);
     }

@@ -52,6 +52,7 @@ pub fn command() -> Command {
                 .arg(path("output")),
         )
         .subcommand(cascade_command())
+        .subcommand(motion_command())
         .subcommand(render_command())
         .subcommand(
             Command::new("pack")
@@ -113,4 +114,11 @@ fn cascade_command() -> Command {
                 .default_value("1")
                 .value_parser(value_parser!(usize)),
         )
+}
+
+fn motion_command() -> Command {
+    Command::new("probe-motion")
+        .about("Check frozen poses against image-only temporal correspondences")
+        .arg(path("manifest"))
+        .arg(path("output"))
 }
