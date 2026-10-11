@@ -6,7 +6,17 @@ use std::path::Path;
 
 pub(super) fn read_blocking<T: Deserialize>(path: &Path) -> Result<(Vec<u64>, Vec<T>), Error> {
     let bytes = assets::read_blocking(path, 64 * 1024 * 1024)?;
-    let file = NpyFile::new(bytes.as_slice()).map_err(|source| Error::Io {
+    let file = header(&bytes, path)?;
+    let shape = file.shape().to_vec();
+    let values = file.into_vec::<T>().map_err(|source| Error::Io {
+        operation: "decode array values",
+        path: path.into(),
+        source,
+    })?;
+    Ok((shape, values))
+}
+fn header<'a>(bytes: &'a [u8], path: &Path) -> Result<NpyFile<&'a [u8]>, Error> {
+    let file = NpyFile::new(bytes).map_err(|source| Error::Io {
         operation: "decode array header",
         path: path.into(),
         source,
@@ -17,9 +27,31 @@ pub(super) fn read_blocking<T: Deserialize>(path: &Path) -> Result<(Vec<u64>, Ve
             path.display()
         )));
     }
+    Ok(file)
+}
+
+pub(super) fn float_blocking(path: &Path) -> Result<(Vec<u64>, Vec<f64>), Error> {
+    let bytes = assets::read_blocking(path, 64 * 1024 * 1024)?;
+    let file = header(&bytes, path)?;
     let shape = file.shape().to_vec();
-    let values = file.into_vec::<T>().map_err(|source| Error::Io {
-        operation: "decode array values",
+    let values = match file.dtype() {
+        npyz::DType::Plain(t) if t.type_char() == npyz::TypeChar::Float && t.size_field() == 4 => {
+            file.into_vec::<f32>()
+                .map(|values| values.into_iter().map(f64::from).collect())
+        }
+        npyz::DType::Plain(t) if t.type_char() == npyz::TypeChar::Float && t.size_field() == 8 => {
+            file.into_vec::<f64>()
+        }
+        dtype => {
+            return Err(Error::Input(format!(
+                "{} needs f32 or f64, found {}",
+                path.display(),
+                dtype.descr()
+            )));
+        }
+    }
+    .map_err(|source| Error::Io {
+        operation: "decode floating array",
         path: path.into(),
         source,
     })?;

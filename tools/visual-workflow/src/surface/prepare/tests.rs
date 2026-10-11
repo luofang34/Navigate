@@ -85,3 +85,45 @@ fn warped_grid_and_oversized_array_header_are_rejected() {
     write_array(&path, "<f4", "(1000000000,)", &[]);
     assert!(arrays::read_blocking::<f32>(&path).is_err());
 }
+
+#[test]
+fn double_precision_grid_preserves_small_steps_at_large_origins() {
+    let root = tempfile::tempdir().unwrap();
+    inputs(root.path(), false);
+    let mut surface = Vec::new();
+    for y in 0..32 {
+        for x in 0..32 {
+            surface.extend([
+                6_000_000.123_f64 + f64::from(x) * 0.18151,
+                -4_000_000.789 - f64::from(y) * 0.18152,
+                12.25,
+            ]);
+        }
+    }
+    let path = root.path().join("dsm.npy");
+    write_array(
+        &path,
+        ">f8",
+        "(32, 32, 3)",
+        &surface
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let (grid, heights) = surface_blocking(&path, (32, 32)).unwrap();
+    assert!((grid.origin.x - 6_000_000.123).abs() < 1e-9);
+    assert!((grid.column.x - 0.18151).abs() < 1e-9);
+    assert!((grid.row.y + 0.18152).abs() < 1e-9);
+    assert_eq!(heights, vec![12.25; 1024]);
+    surface[2] = f64::MAX;
+    write_array(
+        &path,
+        "<f8",
+        "(32, 32, 3)",
+        &surface
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    assert!(surface_blocking(&path, (32, 32)).is_err());
+}

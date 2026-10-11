@@ -75,7 +75,7 @@ pub fn run_blocking(input: &Path, output: &Path) -> Result<(), Error> {
     Ok(())
 }
 fn calibration_blocking(path: &Path, size: (u32, u32)) -> Result<Camera, Error> {
-    let (shape, values) = arrays::read_blocking::<f32>(path)?;
+    let (shape, values) = arrays::float_blocking(path)?;
     if shape != [3, 3]
         || values.len() != 9
         || !values.iter().all(|v| v.is_finite())
@@ -91,14 +91,14 @@ fn calibration_blocking(path: &Path, size: (u32, u32)) -> Result<Camera, Error> 
     }
     let camera = Camera {
         size: [size.0, size.1],
-        focal: [f64::from(values[0]), f64::from(values[4])],
-        principal: [f64::from(values[2]), f64::from(values[5])],
+        focal: [values[0], values[4]],
+        principal: [values[2], values[5]],
     };
     camera.model().validate()?;
     Ok(camera)
 }
 fn surface_blocking(path: &Path, size: (u32, u32)) -> Result<(RasterGeometry, Vec<f32>), Error> {
-    let (shape, values) = arrays::read_blocking::<f32>(path)?;
+    let (shape, values) = arrays::float_blocking(path)?;
     let (width, height) = size;
     if shape != [u64::from(height), u64::from(width), 3]
         || values.len() != width as usize * height as usize * 3
@@ -109,7 +109,7 @@ fn surface_blocking(path: &Path, size: (u32, u32)) -> Result<(RasterGeometry, Ve
     }
     let xy = |x: usize, y: usize| {
         let i = (y * width as usize + x) * 3;
-        Vector2::new(f64::from(values[i]), f64::from(values[i + 1]))
+        Vector2::new(values[i], values[i + 1])
     };
     let origin = xy(0, 0);
     let geometry = RasterGeometry {
@@ -124,13 +124,19 @@ fn surface_blocking(path: &Path, size: (u32, u32)) -> Result<(RasterGeometry, Ve
             + geometry.column * (i % width as usize) as f64
             + geometry.row * (i / width as usize) as f64;
         if !point[..2].iter().all(|v| v.is_finite())
-            || (Vector2::new(f64::from(point[0]), f64::from(point[1])) - expected).norm() > 0.001
+            || (Vector2::new(point[0], point[1]) - expected).norm() > 0.001
         {
             return Err(Error::Input(format!(
                 "surface pixel {i} is not on one affine grid within 1 mm"
             )));
         }
-        heights.push(point[2]);
+        let height = point[2] as f32;
+        if point[2].is_finite() && !height.is_finite() {
+            return Err(Error::Input(format!(
+                "surface pixel {i} height exceeds f32 storage"
+            )));
+        }
+        heights.push(height);
     }
     Ok((geometry, heights))
 }
