@@ -41,16 +41,22 @@ fn centered_patch(reverse: bool, level: u32, p: vec2<f32>) -> array<f32,81> {
 
 fn coarse_seed(reverse: bool, level: u32, p: vec2<f32>, initial: vec2<f32>) -> vec3<f32> {
     if !inside(level,p) { return vec3<f32>(0.0); }
-    var source_values = centered_patch(reverse,level,p);
     var best = vec3<f32>(0.0);
     var best_error = 1e30;
     for (var y=-8; y<=8; y++) {
         for (var x=-8; x<=8; x++) {
             let q = initial+vec2<f32>(f32(x),f32(y));
             if !inside(level,q) { continue; }
-            var values = centered_patch(!reverse,level,q);
-            var error = 0.0;
-            for (var i=0u; i<81u; i++) { error += (source_values[i]-values[i])*(source_values[i]-values[i]); }
+            // Scalar moments avoid retaining an array for every candidate patch.
+            var sum = 0.0;
+            var squared = 0.0;
+            for (var i=0u; i<81u; i++) {
+                let offset = vec2<f32>(f32(i%9u)-4.0,f32(i/9u)-4.0);
+                let difference = sample(reverse,level,p+offset)-sample(!reverse,level,q+offset);
+                sum += difference;
+                squared += difference*difference;
+            }
+            let error = squared-sum*sum/81.0;
             if error < best_error { best_error = error; best = vec3<f32>(q,1.0); }
         }
     }
