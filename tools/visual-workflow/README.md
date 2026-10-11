@@ -343,6 +343,14 @@ the supplied query images. Results include the effective `query_camera`.
 Keep source calibration tied to the actual capture mode. A shared image size or
 camera model does not establish equal photo and video fields of view.
 
+Each frame can include `position_check` with `source`, `latitude_longitude`,
+`reported_horizontal_error_m`, and `associated_capture_time_ns`.
+Use `null` when the source does not report horizontal error.
+The result records horizontal separation and the capture time difference.
+This check does not change fitting, candidate selection, or acceptance.
+The program does not verify source accuracy or independence from map preparation
+and priors. It does not compare altitude. Keep this check separate from truth labels.
+
 A refresh interval of 1 requests map matching for every frame. Larger intervals
 permit tracking between map requests. Tracking stops across a gap above 200 ms.
 With `retain_valid_track`, a rejected map result does not remove a valid track.

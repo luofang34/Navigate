@@ -114,3 +114,49 @@ fn assert_gap(tracks: &Tracks, second: Frame) {
     };
     assert!(!tracks.eligible(&delayed, 5));
 }
+
+#[test]
+fn external_position_scoring_uses_the_verified_geographic_pose() {
+    let (camera, reference) = fixture();
+    let frame = Frame {
+        camera,
+        image: reference.image.clone(),
+        stamp: FrameStamp {
+            sequence: 1,
+            capture_time_ns: 150,
+        },
+    };
+    let pairs: Vec<_> = (32..300)
+        .step_by(48)
+        .flat_map(|x| {
+            (32..220).step_by(44).map(move |y| {
+                let p = nalgebra::Vector2::new(f64::from(x), f64::from(y));
+                PixelMatch {
+                    reference: p,
+                    query: p,
+                }
+            })
+        })
+        .collect();
+    let prior = PosePrior {
+        pose: reference.pose,
+        position_radius_m: 100.0,
+        attitude_radius_rad: 0.5,
+    };
+    let estimate = PoseVerifier::new(LocalizerConfig::default())
+        .unwrap()
+        .verify(&frame, &reference, &prior, &pairs, "test")
+        .unwrap();
+    let mut check = position::PositionCheck {
+        source: "synthetic external position".into(),
+        latitude_longitude: [35.0, -115.0],
+        reported_horizontal_error_m: Some(5.0),
+        associated_capture_time_ns: 100,
+    };
+    let output = check.compare(frame.stamp.capture_time_ns, Some(&estimate));
+    assert!(output["horizontal_disagreement_m"].as_f64().unwrap() < 0.01);
+    assert_eq!(output["capture_time_difference_ns"], 50);
+    check.latitude_longitude = [36.0, -115.0];
+    let output = check.compare(frame.stamp.capture_time_ns, Some(&estimate));
+    assert!(output["horizontal_disagreement_m"].as_f64().unwrap() > 100_000.0);
+}

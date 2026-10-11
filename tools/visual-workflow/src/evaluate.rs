@@ -1,6 +1,7 @@
 //! Compare map matching with bounded temporal reuse on spatially withheld evidence.
 mod backend;
 mod metrics;
+mod position;
 mod temporal;
 mod tracker;
 
@@ -27,6 +28,7 @@ struct Sample {
     capture_time_ns: u64,
     #[serde(default)]
     controls: Option<Vec<[f64; 4]>>,
+    position_check: Option<position::PositionCheck>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,6 +159,10 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
         .max_map_track_disagreement_m
         .is_some_and(|v| !v.is_finite() || v <= 0.0)
         || invalid_controls
+        || experiment
+            .frames
+            .iter()
+            .any(|s| s.position_check.as_ref().is_some_and(|p| !p.valid()))
         || experiment.frames.is_empty()
         || experiment.frames.len() > 1000
         || experiment.fold.is_some_and(|fold| fold >= 5)
@@ -344,6 +350,10 @@ impl Runner {
             "controls":withheld.iter().map(|p|[p.reference.x,p.reference.y,p.query.x,p.query.y]).collect::<Vec<_>>(),
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});
+        if let Some(check) = &self.experiment.frames[index].position_check {
+            record["position_check"] =
+                check.compare(frame.stamp.capture_time_ns, decision.as_ref().ok());
+        }
         match decision {
             Ok(estimate) => {
                 record["pose"] = json!(Pose::from(estimate.pose));
