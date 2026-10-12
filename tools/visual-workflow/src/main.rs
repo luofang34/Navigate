@@ -19,9 +19,6 @@ use error::Error;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .init();
     let matches = match cli::command().try_get_matches() {
         Ok(matches) => matches,
         Err(error)
@@ -38,6 +35,7 @@ fn main() -> Result<(), Error> {
         }
         Err(error) => return Err(error.into()),
     };
+    initialize_logging(matches.get_flag("gpu-timings"));
     dispatch_blocking(matches)
 }
 fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
@@ -182,4 +180,26 @@ fn acquisition_options(args: &clap::ArgMatches) -> Result<surface::journey::Opti
             .get_one::<PathBuf>("reference-feature-catalog")
             .cloned(),
     })
+}
+
+fn initialize_logging(gpu_timings: bool) {
+    if !gpu_timings {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .init();
+        return;
+    }
+    use tracing_subscriber::prelude::*;
+    let filter = tracing_subscriber::filter::filter_fn(move |metadata| {
+        *metadata.level() <= tracing::Level::INFO
+            || (gpu_timings && metadata.target() == "navigate_visual::gpu::timings")
+    })
+    .with_max_level_hint(tracing_subscriber::filter::LevelFilter::DEBUG);
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(filter),
+        )
+        .init();
 }

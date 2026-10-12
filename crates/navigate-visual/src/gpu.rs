@@ -1,6 +1,7 @@
 //! GPU patch alignment with CPU image preparation and geometric validation.
 
 mod dispatch;
+mod profile;
 mod runtime;
 
 use crate::{ImageMatcher, PixelMatch, PointTracker, VisualError, matching::pyramid};
@@ -80,6 +81,7 @@ impl PointTracker for GpuPyramidalMatcher {
         if points.is_empty() {
             return Ok(Vec::new());
         }
+        let mut profile = profile::Profile::new();
         let aligned = self
             .compute
             .align_blocking(
@@ -87,8 +89,10 @@ impl PointTracker for GpuPyramidalMatcher {
                 std::slice::from_ref(query),
                 points,
                 Some(initial),
+                &mut profile,
             )
             .map_err(runtime::failure)?;
+        profile.finish("refine");
         Ok(locations(aligned))
     }
     fn features_blocking(&mut self, image: &GrayImage) -> Result<Vec<Vector2<f64>>, VisualError> {
@@ -109,14 +113,21 @@ impl PointTracker for GpuPyramidalMatcher {
         if points.is_empty() {
             return Ok(Vec::new());
         }
-        let source = reference_pyramid_cached(&mut self.previous_pyramid, reference);
+        let mut profile = profile::Profile::new();
+        let total = profile.timer();
+        let source = reference_pyramid_cached(&mut self.previous_pyramid, reference, &mut profile);
+        let preparation = profile.timer();
         let target = pyramid::build(query);
+        profile.record(preparation, "query_pyramid", 0, 0);
         let aligned = self
             .compute
-            .align_blocking(&source, &target, points, None)
+            .align_blocking(&source, &target, points, None, &mut profile)
             .map_err(runtime::failure)?;
         self.previous_pyramid = Some(target);
-        Ok(locations(aligned))
+        let result = locations(aligned);
+        profile.record(total, "track_total", 0, 0);
+        profile.finish("track");
+        Ok(result)
     }
 }
 
@@ -133,12 +144,21 @@ fn locations(aligned: Vec<[f32; 4]>) -> Vec<Option<Vector2<f64>>> {
 fn reference_pyramid_cached(
     previous: &mut Option<Vec<GrayImage>>,
     reference: &GrayImage,
+    profile: &mut profile::Profile,
 ) -> Vec<GrayImage> {
     // Content and dimensions both matter: callers can reuse or mutate image storage.
-    previous
+    let timer = profile.timer();
+    let cached = previous
         .take()
-        .filter(|levels| levels.first() == Some(reference))
-        .unwrap_or_else(|| pyramid::build(reference))
+        .filter(|levels| levels.first() == Some(reference));
+    let stage = if cached.is_some() {
+        "reference_pyramid_hit"
+    } else {
+        "reference_pyramid_miss"
+    };
+    let result = cached.unwrap_or_else(|| pyramid::build(reference));
+    profile.record(timer, stage, 0, 0);
+    result
 }
 
 #[cfg(test)]

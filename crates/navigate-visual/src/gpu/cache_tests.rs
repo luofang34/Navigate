@@ -6,7 +6,8 @@ fn equal_reference_reuses_every_pyramid_buffer() {
     let levels = pyramid::build(&image);
     let buffers: Vec<_> = levels.iter().map(|level| level.as_ptr()).collect();
     let mut cached = Some(levels);
-    let reused = reference_pyramid_cached(&mut cached, &image.clone());
+    let reused =
+        reference_pyramid_cached(&mut cached, &image.clone(), &mut profile::Profile::new());
     assert!(cached.is_none());
     assert_eq!(reused, pyramid::build(&image));
     assert_eq!(
@@ -27,7 +28,8 @@ fn changed_pixels_or_dimensions_rebuild_the_reference_pyramid() {
     assert_eq!(image.as_raw(), reshaped.as_raw());
     for reference in [changed, reshaped] {
         let mut cached = Some(pyramid::build(&image));
-        let rebuilt = reference_pyramid_cached(&mut cached, &reference);
+        let rebuilt =
+            reference_pyramid_cached(&mut cached, &reference, &mut profile::Profile::new());
         assert_eq!(rebuilt, pyramid::build(&reference));
         assert_ne!(rebuilt, pyramid::build(&image));
         assert!(cached.is_none());

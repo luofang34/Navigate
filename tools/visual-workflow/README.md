@@ -259,6 +259,13 @@ exclusions. The probe uses a fixed grid and reports separate even and odd cells.
 It does not change poses or make acceptance decisions. It has no occlusion
 model. This scalar Rust probe tests evidence quality, not GPU performance.
 
+Add `--gpu-timings` to log host-side GPU stages. Timing is off by default.
+One record is written after each alignment. It separates reference and query
+image preparation, packing, buffer initialization,
+submission, completion waits, and readback. Nested totals include their child
+stages. Byte counts are logical buffer payloads, not physical memory traffic.
+Host waits do not measure GPU kernel time. Logging adds measurement overhead.
+
 Use `probe-surface-accumulation config.json sequence-result.json result.json
 --history 5` to test map pairs before a pose is available. The input must be an
 `evaluate-surface` result with matches recorded for all four rotations on every

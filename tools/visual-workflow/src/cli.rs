@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub fn command() -> Command {
     Command::new("navigate-workflow")
+        .arg(gpu_timing_argument())
         .subcommand_required(true)
         .subcommand(
             Command::new("prepare-surface")
@@ -262,4 +263,12 @@ fn acquire_surface_command() -> Command {
                 .long("probe-fine-after-pass")
                 .action(clap::ArgAction::SetTrue),
         )
+}
+
+fn gpu_timing_argument() -> Arg {
+    Arg::new("gpu-timings")
+        .long("gpu-timings")
+        .global(true)
+        .help("Log host GPU stages and logical buffer bytes; changes timing overhead")
+        .action(clap::ArgAction::SetTrue)
 }
