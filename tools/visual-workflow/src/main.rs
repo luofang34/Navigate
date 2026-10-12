@@ -113,9 +113,13 @@ fn configured_blocking(
             &path("output")?,
             acquisition_options(args)?,
         ),
-        "acquire-surface" => {
-            surface::acquire::run_blocking(config, root, &path("job")?, &path("output")?)
-        }
+        "acquire-surface" => surface::acquire::run_blocking(
+            config,
+            root,
+            &path("job")?,
+            &path("output")?,
+            args.get_flag("probe-fine-after-pass"),
+        ),
         "probe-surface-holdout" => {
             surface::holdout::run_blocking(config, &path("manifest")?, &path("output")?)
         }

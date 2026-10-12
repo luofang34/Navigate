@@ -28,6 +28,7 @@ struct Trial<'a> {
     verifier: PoseVerifier,
     record_matches: bool,
     hypothesis_limit: usize,
+    probe_fine_after_pass: bool,
     config: &'a Config,
 }
 pub(super) struct Acquired {
@@ -81,6 +82,7 @@ pub(super) fn search_hypotheses_blocking(
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         record_matches,
         hypothesis_limit,
+        probe_fine_after_pass: false,
         config,
     }
     .run_blocking(engine)
@@ -90,6 +92,7 @@ pub fn run_blocking(
     root: &Path,
     input: &Path,
     output: &Path,
+    probe_fine_after_pass: bool,
 ) -> Result<(), Error> {
     let total = Instant::now();
     let job: SurfaceJob = assets::read_json_blocking(input)?;
@@ -113,6 +116,7 @@ pub fn run_blocking(
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         record_matches: job.record_matches,
         hypothesis_limit: 1,
+        probe_fine_after_pass,
         config,
     };
     let preparation_ms = total.elapsed().as_secs_f64() * 1000.0;
@@ -145,6 +149,12 @@ pub fn run_blocking(
     result["scope"] = json!(
         "Bounded development search: coarse best match count, median crop, then at most nine adjacent 2048px crops. If all fail, examine nine 1024px crops inside the parent with most raw matches. Examine all quarter turns and all proposed crops. Select the first geometry pass by stage, crop order, then rotation; do not rank with truth. A pass is not a unique or independently accurate fix. One query encoding and model load; reference features are released per rotation. Full source raster stays resident. Accounted memory excludes models, runtime tensors, driver buffers, and file decoding peaks. Map input digest binds image, heights, geometry, release, and paths; it is not a portable cache key."
     );
+    if probe_fine_after_pass {
+        result["probe_fine_after_pass"] = json!(true);
+        result["scope"] = json!(
+            "Bounded resolution diagnostic. Keep coarse and2048px local search unchanged. Also examine nine1024px children of the local parent with most raw matches, even if geometry has passed. Preserve the original first-pass selection. Record all fine decisions; do not select by truth. One query encoding and model load, at most76 candidates, original reference budget and geometry gates. A pass is not a unique or independently accurate fix. Reference memory counters exclude models, runtime tensors, driver buffers and loading peaks."
+        );
+    }
     assets::write_json_blocking(output, &result)?;
     tracing::info!(path=%output.display(),"Saved bounded acquisition results");
     Ok(())
@@ -173,7 +183,7 @@ impl Trial<'_> {
         }
         let mut fine = Vec::new();
         let mut parent = None;
-        if first.is_none() {
+        if first.is_none() || self.probe_fine_after_pass {
             let mut count = 0;
             for (area, row) in windows.iter().zip(&local) {
                 let maximum = row["candidates"]
@@ -195,7 +205,9 @@ impl Trial<'_> {
                     started,
                     &mut selected,
                 )?;
-                if let Some((decision, time)) = window_pass(&fine, "fine") {
+                if first.is_none()
+                    && let Some((decision, time)) = window_pass(&fine, "fine")
+                {
                     first = Some(decision);
                     first_fix_ms = Some(time);
                 }

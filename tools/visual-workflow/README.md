@@ -214,6 +214,11 @@ does not establish a correct or unique position. The result includes loading,
 encoding, matching, geometry, and time to the first pass. Memory counts exclude
 model and runtime allocations. The full source map stays in memory.
 
+Use `--probe-fine-after-pass` with `acquire-surface` to test finer map crops
+even when coarse or local geometry passes. This diagnostic keeps the original
+first-pass selection. It records the extra fine candidates within the same
+candidate and memory limits. It does not change the default search policy.
+
 Use `prepare-acquisition config.json surface.json output-directory` to prepare
 map feature packets without query images or poses. Set `matcher` to `null`
 in the preparation config to load only the encoder. This does not change the

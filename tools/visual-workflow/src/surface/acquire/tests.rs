@@ -23,9 +23,13 @@ fn insufficient_search_budget_fails_before_loading_images_or_models() {
             "candidates":76,"reference_bytes":268435456,"query_feature_bytes":4194304}
     }))
     .unwrap();
-    for limit in [0, 4, 75] {
+    for (limit, probe_fine_after_pass) in [0, 4, 75]
+        .into_iter()
+        .flat_map(|limit| [false, true].map(|probe| (limit, probe)))
+    {
         config.limits.candidates = limit;
-        let error = run_blocking(&config, root.path(), &input, &output).unwrap_err();
+        let error =
+            run_blocking(&config, root.path(), &input, &output, probe_fine_after_pass).unwrap_err();
         assert!(
             matches!(error,Error::Input(ref message) if message.contains("budget of at least 76"))
         );
@@ -33,7 +37,7 @@ fn insufficient_search_budget_fails_before_loading_images_or_models() {
     }
     config.limits.candidates = 76;
     assert!(matches!(
-        run_blocking(&config, root.path(), &input, &output),
+        run_blocking(&config, root.path(), &input, &output, false),
         Err(Error::Io { .. })
     ));
 }

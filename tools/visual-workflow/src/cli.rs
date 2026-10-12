@@ -47,13 +47,7 @@ pub fn command() -> Command {
         .subcommands(surface_evaluation_commands())
         .subcommand(acquisition_command())
         .subcommand(prepare_features_command())
-        .subcommand(
-            Command::new("acquire-surface")
-                .about("Search coarse and adjacent map windows with one query encoding")
-                .arg(path("config"))
-                .arg(path("job"))
-                .arg(path("output")),
-        )
+        .subcommand(acquire_surface_command())
         .subcommand(window_command("probe-surface-windows"))
         .subcommand(window_command("probe-surface-scores"))
         .subcommand(cascade_command())
@@ -242,6 +236,19 @@ fn prepare_features_command() -> Command {
         .arg(
             Arg::new("include-fine")
                 .long("include-fine")
+                .action(clap::ArgAction::SetTrue),
+        )
+}
+
+fn acquire_surface_command() -> Command {
+    Command::new("acquire-surface")
+        .about("Search coarse and adjacent map windows with one query encoding")
+        .arg(path("config"))
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("probe-fine-after-pass")
+                .long("probe-fine-after-pass")
                 .action(clap::ArgAction::SetTrue),
         )
 }
