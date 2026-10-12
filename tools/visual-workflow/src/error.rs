@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    Rectification(#[from] navigate_visual::RectificationError),
     #[error("decode feature packet {path}: {source}")]
     CatalogPacket {
         path: PathBuf,

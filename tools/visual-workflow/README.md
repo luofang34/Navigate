@@ -604,3 +604,20 @@ The output retains the input observations and includes the source file digest, f
 scene, objective costs, and solve time. Fixed poses and source points remain estimates.
 Keep test observations outside the input graph. A lower fitting cost does not establish
 geographic accuracy or independent confidence.
+
+
+Use `rectify-image specification.json output-directory --iterations 3` to prepare
+one raw camera image for the pinhole geometry interface. The specification has
+`image` (`path`, `sha256`), `source_camera`, `target_camera`, `distortion`, and
+`max_map_bytes`. Each camera has `size`, `focal`, and `principal` arrays.
+`distortion` uses `[k1, k2, p1, p2, k3]` order. Set the target camera explicitly
+for the required crop and resolution. The map limit cannot exceed 64 MiB.
+The command rejects uncovered pixels. It does not fill borders or change
+geometric acceptance. Use the output image and camera from `rectified.json`
+together for matching, tracking, and pose estimation. The record binds the
+source image and calibration and retains the raw-pixel mapping parameters.
+The reusable Rust `RectificationMap` retains eight bytes per output pixel.
+This command measures CPU rectification separately from navigation.
+Rectified pixel errors are not raw pixel errors. If acceptance is defined in
+raw pixels, map residuals and spatial support back to raw pixels before using
+a pose. Prepared images alone do not validate raw-camera navigation.

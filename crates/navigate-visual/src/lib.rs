@@ -1,24 +1,22 @@
 //! Visual camera positioning from a pose prior and a map reference image.
 //!
-//! Supply an undistorted [`Frame`], a camera [`PosePrior`], and a [`ReferenceView`]
-//! rendered with the frame's intrinsics. [`Localizer`] returns a camera pose or
-//! a rejection. Cross-frame correlation is unspecified. The host owns map data,
-//! camera calibration, coordinate conversion, and navigation fusion.
+//! Supply an undistorted [`Frame`], a [`PosePrior`] and a [`ReferenceView`] rendered
+//! with the frame's intrinsics. [`Localizer`] returns a pose or a rejection.
+//! Cross-frame correlation is unspecified. The host owns maps, calibration,
+//! coordinate conversion and navigation fusion.
 //!
-//! The default matcher needs overlapping views with similar appearance. It
-//! searches near the prior. It does not perform global location retrieval.
+//! The default matcher searches near the prior in overlapping, similar views.
+//! It does not perform global location retrieval.
 //! [`Estimate::geometry_covariance`] excludes map and calibration errors.
 //! It must not be used as a navigation integrity bound.
 //!
 //! # Features
-//! The default build uses CPU matching. The optional `gpu` feature exposes
-//! `GpuPyramidalMatcher` for hardware compute shaders. Build its documentation
-//! with `cargo doc -p navigate-visual --features gpu --open`. Backend selection
-//! is explicit. The GPU backend does not silently fall back to CPU matching.
+//! The default build uses CPU matching. The `gpu` feature exposes
+//! `GpuPyramidalMatcher`. Build its documentation with
+//! `cargo doc -p navigate-visual --features gpu --open`. Select the backend
+//! explicitly. The GPU backend does not fall back to CPU matching.
 //!
 //! # Example
-//! A blank image must produce a rejection, even with a valid prior and depth.
-//!
 //! ```
 //! use image::GrayImage;
 //! use nalgebra::{UnitQuaternion, Vector3};
@@ -66,6 +64,7 @@ pub mod place_retrieval;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
 pub mod reconstruction;
+mod rectification;
 mod reference;
 mod retrieval;
 mod sampling;
@@ -91,6 +90,7 @@ pub use local_scene::{
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
 pub use orthographic::{OrthographicEstimate, OrthographicReference, RasterGeometry};
+pub use rectification::{RectificationError, RectificationMap};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{
     GroundCorrespondence, RetrievalProposal, nadir_similarity_proposal, planar_proposal,

@@ -54,6 +54,7 @@ pub fn command() -> Command {
         .subcommand(cascade_command())
         .subcommand(motion_command())
         .subcommand(render_command())
+        .subcommand(rectify_command())
         .subcommand(
             Command::new("pack")
                 .about("Build one offline reference feature packet")
@@ -277,4 +278,17 @@ fn gpu_timing_argument() -> Arg {
         .global(true)
         .help("Log host GPU stages and logical buffer bytes; changes timing overhead")
         .action(clap::ArgAction::SetTrue)
+}
+
+fn rectify_command() -> Command {
+    Command::new("rectify-image")
+        .about("Prepare a calibrated pinhole image with bounded reusable pixel mapping")
+        .arg(path("specification"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("iterations")
+                .long("iterations")
+                .default_value("1")
+                .value_parser(value_parser!(usize)),
+        )
 }

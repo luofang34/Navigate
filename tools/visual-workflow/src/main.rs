@@ -1,6 +1,7 @@
 //! Native offline feature packages and bounded visual localization.
 mod anchoring;
 mod assets;
+mod camera_input;
 mod cli;
 mod config;
 mod error;
@@ -50,6 +51,13 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         return Err(Error::Input(
             "motion probe requires the gpu build feature".into(),
         ));
+    }
+    if name == "rectify-image" {
+        return camera_input::run_blocking(
+            &path("specification")?,
+            &path("output")?,
+            count(args, "iterations")?,
+        );
     }
     if name == "prepare-surface" {
         return surface::prepare::run_blocking(&path("input")?, &path("output")?);
