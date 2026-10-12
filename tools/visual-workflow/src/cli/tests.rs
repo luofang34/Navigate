@@ -115,3 +115,32 @@ fn grid_probe_requires_explicit_scale_and_accepts_raw_camera_binding() {
         &std::path::PathBuf::from("camera.json")
     );
 }
+
+#[test]
+fn pyramid_requires_a_complete_explicit_search_budget() {
+    let args = [
+        "navigate-workflow",
+        "probe-acquisition-pyramid",
+        "config",
+        "job",
+        "output",
+        "--side",
+        "1024",
+    ];
+    assert!(super::command().try_get_matches_from(args).is_err());
+    let parsed = super::command()
+        .try_get_matches_from(args.into_iter().chain([
+            "--levels",
+            "3",
+            "--beam",
+            "8",
+            "--rectification",
+            "camera.json",
+        ]))
+        .unwrap();
+    let args = parsed
+        .subcommand_matches("probe-acquisition-pyramid")
+        .unwrap();
+    assert_eq!(args.get_one::<usize>("beam"), Some(&8));
+    assert_eq!(args.get_one::<usize>("levels"), Some(&3));
+}

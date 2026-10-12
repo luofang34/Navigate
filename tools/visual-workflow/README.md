@@ -226,6 +226,16 @@ count or more; the command permits at most 4096 candidates. Use `--rectification
 for raw camera checks. This diagnostic reuses query features and retains all
 geometry decisions. It does not change the default acquisition policy.
 
+Use `probe-acquisition-pyramid config.json job.json result.json --side 1024
+--levels 3 --beam 8` for conditional window search. The first level covers the
+full map. Each later level checks nine half-size windows per retained parent.
+The command ranks parents by raw match count and limits their overlap. It keeps
+one query encoding and the same geometry checks. Add `--rectification` for raw
+camera checks. The search stops at the first passing window; it can miss a fix
+when a useful parent is removed. There is no automatic exhaustive fallback.
+The declared candidate limit must cover the first grid plus `36 * beam` for
+each later level. This bound must not exceed 4096.
+
 Use `prepare-acquisition config.json surface.json output-directory` to prepare
 map feature packets without query images or poses. Set `matcher` to `null`
 in the preparation config to load only the encoder. This does not change the

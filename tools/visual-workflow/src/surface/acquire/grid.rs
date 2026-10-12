@@ -1,7 +1,11 @@
 //! Fixed map coverage separates window search failures from geometry failures.
 use super::*;
 
-fn windows(size: (u32, u32), side: u32, candidate_limit: usize) -> Result<Vec<[u32; 4]>, Error> {
+pub(super) fn windows(
+    size: (u32, u32),
+    side: u32,
+    candidate_limit: usize,
+) -> Result<Vec<[u32; 4]>, Error> {
     if !(32..=8192).contains(&side)
         || !side.is_multiple_of(2)
         || size.0 > 8192
@@ -44,9 +48,32 @@ pub fn run_blocking(
     side: u32,
     rectification_path: Option<&Path>,
 ) -> Result<(), Error> {
+    run_search_blocking(
+        config,
+        root,
+        input,
+        output,
+        Search::Grid(side),
+        rectification_path,
+    )
+}
+
+pub(super) enum Search {
+    Grid(u32),
+    Pyramid(super::pyramid::Options),
+}
+
+pub(super) fn run_search_blocking(
+    config: &Config,
+    root: &Path,
+    input: &Path,
+    output: &Path,
+    search: Search,
+    rectification_path: Option<&Path>,
+) -> Result<(), Error> {
     let total = Instant::now();
     let (job, query, reference, prior) = load_blocking(config, input, rectification_path)?;
-    let windows = windows(reference.image.dimensions(), side, config.limits.candidates)?;
+    let (windows, bound) = search.plan(reference.image.dimensions(), config.limits.candidates)?;
     let Query {
         frame,
         rectification,
@@ -71,18 +98,16 @@ pub fn run_blocking(
         config,
     };
     let preparation_ms = total.elapsed().as_secs_f64() * 1000.;
-    let mut result = search_blocking(&trial, &mut engine, &windows)?;
-    result["job"] = json!(job);
-    result["backend"] = json!(engine.backend.identity());
-    result["grid_side"] = json!(side);
-    result["rectification"] = json!(rectification_report);
-    result["observation_sha256"] = json!(frame.evidence_sha256());
-    result["map_input_sha256"] = json!(hex::encode(Sha256::digest(
-        serde_json::to_vec(&job.reference).map_err(|source| Error::Json {
-            path: input.into(),
-            source
-        })?
-    )));
+    let mut result = search.run_blocking(&trial, &mut engine, windows)?;
+    result["search_candidate_bound"] = json!(bound);
+    bind_result(
+        &mut result,
+        &job,
+        &frame,
+        &engine,
+        input,
+        rectification_report,
+    )?;
     result["loading_ms"] = json!(loading_ms);
     result["model_load_ms"] = json!(model_load_ms);
     result["query_extraction_ms"] = json!(query_extraction_ms);
@@ -99,7 +124,7 @@ pub fn run_blocking(
     result["candidate_limit"] = json!(config.limits.candidates);
     result["elapsed_before_output_ms"] = json!(total.elapsed().as_secs_f64() * 1000.);
     assets::write_json_blocking(output, &result)?;
-    tracing::info!(path=%output.display(), "Saved fixed grid acquisition results");
+    tracing::info!(path=%output.display(), "Saved window search results");
     Ok(())
 }
 
@@ -146,4 +171,55 @@ fn load_blocking(
         config.limits.image_pixels,
     )?;
     Ok((job, query, reference, prior))
+}
+
+fn bind_result(
+    result: &mut Value,
+    job: &SurfaceJob,
+    frame: &Frame,
+    engine: &Engine,
+    input: &Path,
+    rectification_report: Option<Value>,
+) -> Result<(), Error> {
+    result["job"] = json!(job);
+    result["backend"] = json!(engine.backend.identity());
+    result["rectification"] = json!(rectification_report);
+    result["observation_sha256"] = json!(frame.evidence_sha256());
+    result["map_input_sha256"] = json!(hex::encode(Sha256::digest(
+        serde_json::to_vec(&job.reference).map_err(|source| Error::Json {
+            path: input.into(),
+            source
+        })?
+    )));
+    Ok(())
+}
+
+impl Search {
+    fn plan(&self, size: (u32, u32), limit: usize) -> Result<(Vec<[u32; 4]>, usize), Error> {
+        match self {
+            Self::Grid(side) => {
+                let windows = windows(size, *side, limit)?;
+                let bound = windows.len() * 4;
+                Ok((windows, bound))
+            }
+            Self::Pyramid(options) => options.plan(size, limit),
+        }
+    }
+    fn run_blocking(
+        self,
+        trial: &Trial<'_>,
+        engine: &mut Engine,
+        windows: Vec<[u32; 4]>,
+    ) -> Result<Value, Error> {
+        match self {
+            Self::Grid(side) => {
+                let mut result = search_blocking(trial, engine, &windows)?;
+                result["grid_side"] = json!(side);
+                Ok(result)
+            }
+            Self::Pyramid(options) => {
+                super::pyramid::search_blocking(trial, engine, windows, options)
+            }
+        }
+    }
 }

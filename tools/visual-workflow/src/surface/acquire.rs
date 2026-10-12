@@ -2,6 +2,7 @@
 mod cache;
 pub(super) mod engine;
 pub mod grid;
+pub mod pyramid;
 mod selection;
 pub(in crate::surface) mod store;
 use super::{

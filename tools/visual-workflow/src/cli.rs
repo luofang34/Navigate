@@ -50,6 +50,7 @@ pub fn command() -> Command {
         .subcommand(prepare_features_command())
         .subcommand(acquire_surface_command())
         .subcommand(acquisition_grid_command())
+        .subcommand(acquisition_pyramid_command())
         .subcommand(window_command("probe-surface-windows"))
         .subcommand(window_command("probe-surface-scores"))
         .subcommand(cascade_command())
@@ -311,6 +312,37 @@ fn acquisition_grid_command() -> Command {
                 .long("side")
                 .required(true)
                 .value_parser(value_parser!(u32)),
+        )
+        .arg(
+            Arg::new("rectification")
+                .long("rectification")
+                .value_parser(value_parser!(PathBuf)),
+        )
+}
+
+fn acquisition_pyramid_command() -> Command {
+    Command::new("probe-acquisition-pyramid")
+        .about("Retain multiple map regions and refine windows with shared query features")
+        .arg(path("config"))
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("side")
+                .long("side")
+                .required(true)
+                .value_parser(value_parser!(u32)),
+        )
+        .arg(
+            Arg::new("levels")
+                .long("levels")
+                .required(true)
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("beam")
+                .long("beam")
+                .required(true)
+                .value_parser(value_parser!(usize)),
         )
         .arg(
             Arg::new("rectification")

@@ -111,6 +111,7 @@ fn configured_blocking(
             &path("output")?,
             acquisition_options(args)?,
         ),
+        "probe-acquisition-pyramid" => pyramid_blocking(args, config, root),
         "probe-acquisition-grid" => surface::acquire::grid::run_blocking(
             config,
             root,
@@ -234,5 +235,28 @@ fn locate_blocking(
         &path("job")?,
         &path("output")?,
         count(args, "iterations")?,
+    )
+}
+
+fn pyramid_blocking(
+    args: &clap::ArgMatches,
+    config: &config::Config,
+    root: &std::path::Path,
+) -> Result<(), Error> {
+    surface::acquire::pyramid::run_blocking(
+        config,
+        root,
+        &path_argument(args, "job")?,
+        &path_argument(args, "output")?,
+        surface::acquire::pyramid::Options {
+            side: args
+                .get_one::<u32>("side")
+                .copied()
+                .ok_or_else(|| Error::Input("missing pyramid side".into()))?,
+            levels: count(args, "levels")?,
+            beam: count(args, "beam")?,
+        },
+        args.get_one::<PathBuf>("rectification")
+            .map(PathBuf::as_path),
     )
 }
