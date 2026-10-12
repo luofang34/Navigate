@@ -1,4 +1,5 @@
 //! Conditional temporal localization on one fixed orthographic map region.
+mod continuity;
 mod input;
 mod tracks;
 use super::{job::SurfaceJob, matching::Matcher};
@@ -18,6 +19,7 @@ use tracks::Tracks;
 
 type Decision = (OrthographicEstimate, Vec<PixelMatch>);
 struct Runner {
+    continuity: continuity::Continuity,
     matcher: Matcher,
     tracker: Tracker,
     verifier: PoseVerifier,
@@ -50,6 +52,7 @@ pub fn run_blocking(
         raster_bytes,
     )?;
     let mut runner = Runner {
+        continuity: continuity::Continuity::new(initial.camera)?,
         matcher,
         tracker: Tracker::new_blocking(TrackerBackend::Wgpu)?,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
@@ -102,8 +105,9 @@ pub fn run_blocking(
 }
 impl Runner {
     fn process_blocking(&mut self, frame: Frame, config: &Config) -> Result<Value, Error> {
+        let observation = frame.evidence_sha256();
         let mut record = json!({"frame_id":frame.stamp.sequence,"capture_time_ns":frame.stamp.capture_time_ns,
-            "observation_sha256":frame.evidence_sha256(),"tracking_attempted":false,"map_attempted":false,
+            "observation_sha256":observation,"tracking_attempted":false,"map_attempted":false,
             "tracking_ms":0.0,"tracking_geometry_ms":0.0,"map_ms":0.0});
         let mut decision = None;
         if let Some(tracks) = &self.tracks
@@ -145,6 +149,12 @@ impl Runner {
         } else {
             "track"
         });
+        record["motion_continuity"] = self.continuity.step(
+            &frame,
+            &observation,
+            decision.as_ref().map(|(estimate, _)| estimate),
+            refreshed,
+        )?;
         self.tracks = match decision {
             Some((estimate, pairs)) => {
                 record["pose"] = json!(Pose::from(estimate.pose));

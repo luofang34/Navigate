@@ -213,6 +213,9 @@ map points between refreshes. A failed track or a gap above 200 ms requests map
 matching. A scheduled refresh skips tracking; a failed refresh clears the track.
 The result records all map candidates, the selected source, and the original
 map observation for each track. These tracks are conditional map evidence.
+`motion_continuity` contains session odometry. Reacquisition without a verified
+motion step starts a new segment. Do not compute velocity across segment changes.
+The local map pose stays separate; this command submits no geographic map anchors.
 Startup time includes loading and reference preparation. Frame times include
 image decoding. The command does not include coarse region search or map download.
 
