@@ -57,13 +57,17 @@ pub fn run_blocking(
             "total_ms":start.elapsed().as_secs_f64()*1000.0}),
         );
     }
-    assets::write_json_blocking(
-        output,
-        &json!({"backend":matcher.identity(),
+    let mut result = json!({"backend":matcher.identity(),
         "setup_ms":setup_ms,"iterations":reports,"observation_sha256":frame.evidence_sha256(),
         "reference_raster_bytes":raster_bytes,"reference_resident_bytes":matcher.resident_bytes,
-        "scope":"Local metric pose conditional on the supplied orthographic map and calibration. No geographic registration or independent accuracy is asserted. Timings exclude file loading and model/reference setup."}),
-    )?;
+        "scope":"Local metric pose conditional on the supplied orthographic map and calibration. No geographic registration or independent accuracy is asserted. Timings exclude file loading and model/reference setup."});
+    if let Some(window) = settings.reference.window {
+        result["reference_window"] = json!(window);
+        result["reference_coordinate_scope"] = json!(
+            "Correspondences are relative to the cropped raster. Add window x/y for source pixels. Metric pose remains in the original map frame. The full source is loaded before cropping."
+        );
+    }
+    assets::write_json_blocking(output, &result)?;
     tracing::info!(path=%output.display(), "Saved orthographic localization results");
     Ok(())
 }

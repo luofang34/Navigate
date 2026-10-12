@@ -6,6 +6,7 @@ use navigate_visual::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+mod window;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +32,8 @@ pub(super) struct Surface {
     pub row: [f64; 2],
     pub map_release: String,
     pub map_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<[u32; 4]>,
 }
 fn default_rotations() -> Vec<u8> {
     vec![0]
@@ -51,10 +54,34 @@ impl SurfaceJob {
         if query.dimensions() != (self.camera.size[0], self.camera.size[1]) {
             return Err(Error::Input("surface query calibration dimensions".into()));
         }
-        let input = &self.reference;
+        let reference = self.reference.load_blocking(root, config)?;
+        let prior = PosePrior {
+            pose: self.prior.camera()?,
+            position_radius_m: self.position_radius_m,
+            attitude_radius_rad: self.attitude_radius_rad,
+        };
+        prior.validate()?;
+        Ok((
+            Frame {
+                stamp: FrameStamp {
+                    sequence: 0,
+                    capture_time_ns: 0,
+                },
+                camera: self.camera.model(),
+                image: query,
+            },
+            reference,
+            prior,
+        ))
+    }
+}
+
+impl Surface {
+    fn load_blocking(&self, root: &Path, config: &Config) -> Result<OrthographicReference, Error> {
+        let input = self;
         let image = assets::image_verified_blocking(
             &root.join(&input.image.path),
-            pixels,
+            config.limits.image_pixels,
             Some(&input.image.sha256),
         )?;
         let needed = image.as_raw().len().saturating_mul(5);
@@ -91,24 +118,10 @@ impl SurfaceJob {
             },
         };
         reference.validate()?;
-        let prior = PosePrior {
-            pose: self.prior.camera()?,
-            position_radius_m: self.position_radius_m,
-            attitude_radius_rad: self.attitude_radius_rad,
-        };
-        prior.validate()?;
-        Ok((
-            Frame {
-                stamp: FrameStamp {
-                    sequence: 0,
-                    capture_time_ns: 0,
-                },
-                camera: self.camera.model(),
-                image: query,
-            },
-            reference,
-            prior,
-        ))
+        match input.window {
+            Some(window) => window::crop(reference, window, config.limits.reference_bytes),
+            None => Ok(reference),
+        }
     }
 }
 

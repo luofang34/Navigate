@@ -189,10 +189,17 @@ Preparation selects all four. An omitted field selects only 0. Each orientation
 counts against the candidate and reference memory limits. Sparse matching keeps
 reference features in memory and shares one query extraction across orientations.
 LoFTR runs each image pair. Results retain all candidates without choosing a
-navigation fix. Geometry uses reference pixels in the original map grid.
+navigation fix. Without a window, reference pixels use the original map grid.
 Set `record_matches` to true to save correspondences for separate evaluation.
 Reported iteration times exclude file loading and model/reference setup.
 Reference byte counts exclude model memory and temporary inference allocations.
+
+The optional `reference.window` field is `[x, y, width, height]` in source pixels.
+The window must fit the source and be at least 32 by 32 pixels. It keeps the
+source pixel spacing and heights. Result correspondences use window coordinates;
+add `x` and `y` to obtain source coordinates. Metric poses keep the source frame.
+The loader reads the full source before it selects the window. The memory limit
+must contain both the source raster and the window during this operation.
 
 Use `replay` to process observations in time order. It keeps the models in memory.
 A reference cache keeps prepared references for reuse. The cache removes the

@@ -56,6 +56,7 @@ pub fn run_blocking(input: &Path, output: &Path) -> Result<(), Error> {
         row: geometry.row.into(),
         map_release: "unpacked-orthographic-arrays".into(),
         map_sha256: format!("{:x}", hash.finalize()),
+        window: None,
     };
     let job = SurfaceJob {
         query,
