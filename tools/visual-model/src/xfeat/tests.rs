@@ -72,3 +72,15 @@ fn grayscale_replicates_on_device_and_keeps_mean_order() {
     assert_eq!(model.node[1].op_type, "ReduceMean");
     assert_eq!(model.node[1].input, ["navigate_rgb"]);
 }
+
+#[test]
+fn resolution_recipe_rejects_unsupported_channel_combinations() {
+    assert!(matches!(
+        prepare_scaled(b"", 2, false),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        prepare_scaled(b"", 3, true),
+        Err(Error::Invalid(_))
+    ));
+}

@@ -10,10 +10,14 @@ pub(crate) fn extract(
     image: &GrayImage,
     limit: usize,
 ) -> Result<Features, InferenceError> {
-    let channels = input_channels(session)?;
-    let input = preprocessing::prepare(image, 800, 600, channels)?;
-    let tensor = TensorRef::from_array_view(([1, channels, 600, 800], input.data.as_slice()))
-        .map_err(|e| runtime("build dense image input", e))?;
+    let layout = input_layout(session)?;
+    let channels = layout.channels;
+    let input = preprocessing::prepare(image, layout.width, layout.height, channels)?;
+    let tensor = TensorRef::from_array_view((
+        [1, channels, layout.height, layout.width],
+        input.data.as_slice(),
+    ))
+    .map_err(|e| runtime("build dense image input", e))?;
     let output = session
         .run(ort::inputs!["images" => tensor])
         .map_err(|e| runtime("run dense image graph", e))?;
@@ -23,7 +27,15 @@ pub(crate) fn extract(
             .ok_or_else(|| InferenceError::Invalid(format!("missing dense output {name}")))?
             .try_extract_tensor::<f32>()
             .map_err(|e| runtime("read dense image output", e))?;
-        if shape.as_ref() != [1, channels, 72, 100] || values.iter().any(|v| !v.is_finite()) {
+        if shape.as_ref()
+            != [
+                1,
+                channels,
+                layout.grid()[0] as i64,
+                layout.grid()[1] as i64,
+            ]
+            || values.iter().any(|v| !v.is_finite())
+        {
             return Err(InferenceError::Invalid(format!(
                 "invalid dense output {name}"
             )));
@@ -40,7 +52,7 @@ pub(crate) fn extract(
     )
 }
 
-fn input_channels(session: &Session) -> Result<usize, InferenceError> {
+fn input_layout(session: &Session) -> Result<crate::dense_layout::DenseLayout, InferenceError> {
     let [input] = session.inputs() else {
         return Err(InferenceError::Invalid(
             "dense graph requires one image input".into(),
@@ -54,10 +66,5 @@ fn input_channels(session: &Session) -> Result<usize, InferenceError> {
     if input.name() != "images" || *ty != ort::value::TensorElementType::Float32 {
         return Err(InferenceError::Invalid("dense image name or type".into()));
     }
-    match shape.as_ref() {
-        [1, channels @ (1 | 3), 600, 800] => Ok(*channels as usize),
-        _ => Err(InferenceError::Invalid(
-            "dense image shape must be 1x{1,3}x600x800".into(),
-        )),
-    }
+    crate::dense_layout::DenseLayout::from_shape(shape.as_ref())
 }

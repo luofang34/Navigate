@@ -99,3 +99,48 @@ fn grayscale_recipe_matches_repeated_grayscale_activations()
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires NAVIGATE_TEST_ORT and NAVIGATE_XFEAT_MODEL; run alone"]
+fn double_resolution_matches_unfolded_source_intermediates()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = std::env::var_os("NAVIGATE_TEST_ORT").ok_or("set NAVIGATE_TEST_ORT")?;
+    let model = std::env::var_os("NAVIGATE_XFEAT_MODEL").ok_or("set NAVIGATE_XFEAT_MODEL")?;
+    ort::init_from(runtime)?.commit();
+    let bytes = std::fs::read(model)?;
+    let prepared = prepare_scaled(&bytes, 1, true)?;
+    let mut original = ModelProto::decode(bytes.as_slice())?;
+    let graph = original.graph.as_mut().ok_or("model graph")?;
+    graph.input[0] = graph::value("images", 1, &[1, 3, 1200, 1600]);
+    graph.output = OUTPUTS
+        .iter()
+        .map(|(name, _, c)| graph::value(name, 1, &[1, *c, 148, 200]))
+        .collect();
+    let mut old = Session::builder()?
+        .with_intra_threads(4)?
+        .commit_from_memory(&original.encode_to_vec())?;
+    let mut new = Session::builder()?
+        .with_intra_threads(4)?
+        .commit_from_memory(&prepared)?;
+    let values: Vec<f32> = (0..1_920_000).map(|i| (i % 251) as f32 / 250.0).collect();
+    let repeated = values.repeat(3);
+    let expected = old.run(ort::inputs!["images" => TensorRef::from_array_view(([1, 3, 1200, 1600], repeated.as_slice()))?])?;
+    let actual = new.run(ort::inputs!["images" => TensorRef::from_array_view(([1, 1, 1200, 1600], values.as_slice()))?])?;
+    for (source, name, channels) in OUTPUTS {
+        let (left_shape, left) = expected
+            .get(source)
+            .ok_or("source output")?
+            .try_extract_tensor::<f32>()?;
+        let (right_shape, right) = actual
+            .get(name)
+            .ok_or("prepared output")?
+            .try_extract_tensor::<f32>()?;
+        assert_eq!(left_shape.as_ref(), [1, channels, 148, 200]);
+        assert_eq!(left_shape, right_shape);
+        for (a, b) in left.iter().zip(right) {
+            assert!(a.is_finite() && b.is_finite());
+            assert!((a - b).abs() <= 3e-5 + a.abs() * 1e-4, "{name}: {a} != {b}");
+        }
+    }
+    Ok(())
+}

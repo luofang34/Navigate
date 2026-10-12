@@ -1,4 +1,8 @@
 use super::*;
+const GRID: Grid = Grid {
+    width: WIDTH,
+    height: HEIGHT,
+};
 
 #[test]
 fn bicubic_matches_grid_sample_at_interior_and_padded_edges() {
@@ -10,7 +14,7 @@ fn bicubic_matches_grid_sample_at_interior_and_padded_edges() {
         ([10.4, 9.7], 39.397_97),
         ([99.2, 70.8], 281.498_7),
     ] {
-        assert!((Bicubic::new(point).sample(&data) - expected).abs() < 0.02);
+        assert!((Bicubic::new(point, GRID).sample(&data) - expected).abs() < 0.02);
     }
 }
 
@@ -20,12 +24,12 @@ fn peak_selection_rejects_dustbin_and_suppresses_nearby_lower_peak() {
     for cell in 0..CELLS {
         logits[64 * CELLS + cell] = 20.0;
     }
-    assert!(peaks(&heatmap(&logits), &vec![1.0; CELLS]).is_empty());
+    assert!(peaks(&heatmap(&logits, GRID), &vec![1.0; CELLS], GRID).is_empty());
     let mut heat = vec![0.0; WIDTH * HEIGHT];
     heat[100 * WIDTH + 100] = 0.9;
     heat[100 * WIDTH + 101] = 0.8;
     heat[100 * WIDTH + 110] = 0.7;
-    let selected = peaks(&heat, &vec![1.0; CELLS]);
+    let selected = peaks(&heat, &vec![1.0; CELLS], GRID);
     assert_eq!(selected.len(), 2);
     assert_eq!((selected[0].0, selected[0].1), (100, 100));
     assert_eq!((selected[1].0, selected[1].1), (110, 100));
@@ -49,12 +53,12 @@ fn reused_weights_preserve_interpolation_bits_at_edges_and_interior() {
         let mut expected = 0.0;
         for dy in -1..=2 {
             for dx in -1..=2 {
-                expected += sample(&data, x + dx, y + dy)
+                expected += sample(&data, x + dx, y + dy, GRID)
                     * cubic(point[0] - (x + dx) as f32)
                     * cubic(point[1] - (y + dy) as f32);
             }
         }
-        assert_eq!(Bicubic::new(point).sample(&data), expected);
+        assert_eq!(Bicubic::new(point, GRID).sample(&data), expected);
     }
 }
 
@@ -63,7 +67,7 @@ fn cached_softmax_preserves_heatmap_bits() {
     let logits: Vec<_> = (0..65 * CELLS)
         .map(|i| (i as f32 * 0.237).sin() * 20.0)
         .collect();
-    let actual = heatmap(&logits);
+    let actual = heatmap(&logits, GRID);
     for cell in [0, 197, CELLS - 1] {
         let max = (0..65)
             .map(|c| logits[c * CELLS + cell])
@@ -80,4 +84,38 @@ fn cached_softmax_preserves_heatmap_bits() {
             );
         }
     }
+}
+
+#[test]
+fn larger_grid_decodes_to_source_pixels_and_canonical_matcher_coordinates() {
+    let image = GrayImage::new(1600, 1200);
+    let input = preprocessing::prepare(&image, 1600, 1200, 1).unwrap();
+    let grid = Grid {
+        width: 1600,
+        height: 1184,
+    };
+    let cells = grid.cells();
+    let mut logits = vec![-20.0; 65 * cells];
+    logits[64 * cells..].fill(20.0);
+    let cell = 74 * 200 + 100;
+    logits[cell] = 40.0;
+    let mut descriptors = vec![0.0; 64 * cells];
+    descriptors[..cells].fill(1.0);
+    let reliability = vec![1.0; cells];
+    let result =
+        decode_in_place(&mut descriptors, &logits, &reliability, &input, &image, 1).unwrap();
+    assert_eq!(result.pixels, [[800.0, 600.0]]);
+    assert_eq!(result.model_pixels, [400.0, 300.0]);
+    assert_eq!(result.descriptors[0], 1.0);
+    assert!(
+        decode_in_place(
+            &mut descriptors[..64 * CELLS],
+            &logits,
+            &reliability,
+            &input,
+            &image,
+            1
+        )
+        .is_err()
+    );
 }

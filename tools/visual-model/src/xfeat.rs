@@ -30,6 +30,13 @@ pub fn prepare(bytes: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 pub fn prepare_channels(bytes: &[u8], channels: i64) -> Result<Vec<u8>, Error> {
+    prepare_scaled(bytes, channels, false)
+}
+
+pub fn prepare_scaled(bytes: &[u8], channels: i64, double: bool) -> Result<Vec<u8>, Error> {
+    if ![1, 3].contains(&channels) || (double && channels != 1) {
+        return Err(Error::Invalid("XFeat channel and resolution combination"));
+    }
     if bytes.len() > 64 * 1024 * 1024 {
         return Err(Error::Invalid("model size"));
     }
@@ -45,24 +52,32 @@ pub fn prepare_channels(bytes: &[u8], channels: i64) -> Result<Vec<u8>, Error> {
     if channels == 1 {
         grayscale(model.graph.as_mut().ok_or(Error::Invalid("model graph"))?)?;
     }
+    if double {
+        let graph = model.graph.as_mut().ok_or(Error::Invalid("model graph"))?;
+        graph.input[0] = graph::value("images", 1, &[1, channels, 1200, 1600]);
+        graph.output = OUTPUTS
+            .iter()
+            .map(|(_, name, c)| graph::value(name, 1, &[1, *c, 148, 200]))
+            .collect();
+    }
+    let shape = format!(
+        "float32/1x{channels}x{}x{}",
+        if double { 1200 } else { 600 },
+        if double { 1600 } else { 800 }
+    );
     for (key, value) in [
         ("navigate.source_sha256", INPUT_SHA256),
         (
             "navigate.recipe",
-            if channels == 1 {
+            if double {
+                "xfeat-gray-conv-2x-v1"
+            } else if channels == 1 {
                 "xfeat-gray-conv-v1"
             } else {
                 "xfeat-dense-conv-v1"
             },
         ),
-        (
-            "navigate.input",
-            if channels == 1 {
-                "float32/1x1x600x800"
-            } else {
-                "float32/1x3x600x800"
-            },
-        ),
+        ("navigate.input", shape.as_str()),
     ] {
         model.metadata_props.push(StringStringEntryProto {
             key: key.into(),

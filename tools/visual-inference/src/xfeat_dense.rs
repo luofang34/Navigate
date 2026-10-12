@@ -4,7 +4,18 @@ use image::GrayImage;
 use ort::{session::Session, value::Tensor};
 const WIDTH: usize = 800;
 const HEIGHT: usize = 576;
+#[cfg(test)]
 const CELLS: usize = WIDTH * HEIGHT / 64;
+#[derive(Clone, Copy)]
+struct Grid {
+    width: usize,
+    height: usize,
+}
+impl Grid {
+    fn cells(self) -> usize {
+        self.width * self.height / 64
+    }
+}
 
 pub(crate) fn extract(
     session: &mut Session,
@@ -89,29 +100,49 @@ pub(crate) fn decode_in_place(
     image: &GrayImage,
     limit: usize,
 ) -> Result<Features, InferenceError> {
-    let heatmap = heatmap(logits);
-    let mut candidates = peaks(&heatmap, reliability);
+    let grid = Grid {
+        width: input.width / 32 * 32,
+        height: input.height / 32 * 32,
+    };
+    if descriptors.len() != 64 * grid.cells()
+        || logits.len() != 65 * grid.cells()
+        || reliability.len() != grid.cells()
+    {
+        return Err(InferenceError::Invalid(
+            "dense decoder tensor dimensions".into(),
+        ));
+    }
+    let heatmap = heatmap(logits, grid);
+    let mut candidates = peaks(&heatmap, reliability, grid);
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
-    for cell in 0..CELLS {
+    for cell in 0..grid.cells() {
         let norm = (0..64)
-            .map(|c| descriptors[c * CELLS + cell].powi(2))
+            .map(|c| descriptors[c * grid.cells() + cell].powi(2))
             .sum::<f32>()
             .sqrt()
             .max(1e-12);
         for c in 0..64 {
-            descriptors[c * CELLS + cell] /= norm;
+            descriptors[c * grid.cells() + cell] /= norm;
         }
     }
     let mut result = Features::empty(64);
     for (x, y, score) in candidates.into_iter().take(4096) {
-        let model = [x as f32, y as f32 * 600.0 / HEIGHT as f32];
-        let pixel = input.pixel([f64::from(model[0]), f64::from(model[1])]);
+        let prepared = [
+            x as f32,
+            y as f32 * input.height as f32 / grid.height as f32,
+        ];
+        let pixel = input.pixel([f64::from(prepared[0]), f64::from(prepared[1])]);
+        let model = [
+            prepared[0] * (800.0 / input.width as f32),
+            prepared[1] * (600.0 / input.height as f32),
+        ];
         if !preprocessing::inside(pixel, image) {
             continue;
         }
-        let stencil = Bicubic::new(grid_point(x, y));
-        let descriptor: [f32; 64] =
-            std::array::from_fn(|c| stencil.sample(&descriptors[c * CELLS..(c + 1) * CELLS]));
+        let stencil = Bicubic::new(grid_point(x, y, grid), grid);
+        let descriptor: [f32; 64] = std::array::from_fn(|c| {
+            stencil.sample(&descriptors[c * grid.cells()..(c + 1) * grid.cells()])
+        });
         result.push(pixel, model, score, &descriptor)?;
         if result.pixels.len() == limit {
             break;
@@ -120,39 +151,40 @@ pub(crate) fn decode_in_place(
     Ok(result)
 }
 
-fn heatmap(logits: &[f32]) -> Vec<f32> {
-    let mut heatmap = vec![0.0; WIDTH * HEIGHT];
-    for cell in 0..CELLS {
+fn heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
+    let mut heatmap = vec![0.0; grid.width * grid.height];
+    for cell in 0..grid.cells() {
         let max = (0..65)
-            .map(|c| logits[c * CELLS + cell])
+            .map(|c| logits[c * grid.cells() + cell])
             .fold(f32::NEG_INFINITY, f32::max);
-        let weights: [f32; 65] = std::array::from_fn(|c| (logits[c * CELLS + cell] - max).exp());
+        let weights: [f32; 65] =
+            std::array::from_fn(|c| (logits[c * grid.cells() + cell] - max).exp());
         let sum: f32 = weights.iter().sum();
         for (c, weight) in weights.iter().enumerate().take(64) {
-            let x = (cell % (WIDTH / 8)) * 8 + c % 8;
-            let y = (cell / (WIDTH / 8)) * 8 + c / 8;
-            heatmap[y * WIDTH + x] = weight / sum;
+            let x = (cell % (grid.width / 8)) * 8 + c % 8;
+            let y = (cell / (grid.width / 8)) * 8 + c / 8;
+            heatmap[y * grid.width + x] = weight / sum;
         }
     }
     heatmap
 }
 
-fn peaks(heatmap: &[f32], reliability: &[f32]) -> Vec<(usize, usize, f32)> {
+fn peaks(heatmap: &[f32], reliability: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
     let mut peaks = Vec::new();
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let value = heatmap[y * WIDTH + x];
+    for y in 0..grid.height {
+        for x in 0..grid.width {
+            let value = heatmap[y * grid.width + x];
             if value <= 0.05 || (x == 0 && y == 0) {
                 continue;
             }
             let mut maximum = true;
-            for dy in y.saturating_sub(2)..=(y + 2).min(HEIGHT - 1) {
-                for dx in x.saturating_sub(2)..=(x + 2).min(WIDTH - 1) {
-                    maximum &= heatmap[dy * WIDTH + dx] <= value;
+            for dy in y.saturating_sub(2)..=(y + 2).min(grid.height - 1) {
+                for dx in x.saturating_sub(2)..=(x + 2).min(grid.width - 1) {
+                    maximum &= heatmap[dy * grid.width + dx] <= value;
                 }
             }
             if maximum {
-                let score = value * bilinear(reliability, grid_point(x, y));
+                let score = value * bilinear(reliability, grid_point(x, y, grid), grid);
                 if score > 0.0 {
                     peaks.push((x, y, score));
                 }
@@ -162,28 +194,28 @@ fn peaks(heatmap: &[f32], reliability: &[f32]) -> Vec<(usize, usize, f32)> {
     peaks
 }
 
-fn grid_point(x: usize, y: usize) -> [f32; 2] {
+fn grid_point(x: usize, y: usize, grid: Grid) -> [f32; 2] {
     [
-        x as f32 / (WIDTH - 1) as f32 * (WIDTH / 8) as f32 - 0.5,
-        y as f32 / (HEIGHT - 1) as f32 * (HEIGHT / 8) as f32 - 0.5,
+        x as f32 / (grid.width - 1) as f32 * (grid.width / 8) as f32 - 0.5,
+        y as f32 / (grid.height - 1) as f32 * (grid.height / 8) as f32 - 0.5,
     ]
 }
-fn sample(data: &[f32], x: i32, y: i32) -> f32 {
-    if x < 0 || y < 0 || x >= (WIDTH / 8) as i32 || y >= (HEIGHT / 8) as i32 {
+fn sample(data: &[f32], x: i32, y: i32, grid: Grid) -> f32 {
+    if x < 0 || y < 0 || x >= (grid.width / 8) as i32 || y >= (grid.height / 8) as i32 {
         0.0
     } else {
-        data[y as usize * (WIDTH / 8) + x as usize]
+        data[y as usize * (grid.width / 8) + x as usize]
     }
 }
-fn bilinear(data: &[f32], p: [f32; 2]) -> f32 {
+fn bilinear(data: &[f32], p: [f32; 2], grid: Grid) -> f32 {
     let x = p[0].floor() as i32;
     let y = p[1].floor() as i32;
     let fx = p[0] - x as f32;
     let fy = p[1] - y as f32;
-    sample(data, x, y) * (1.0 - fx) * (1.0 - fy)
-        + sample(data, x + 1, y) * fx * (1.0 - fy)
-        + sample(data, x, y + 1) * (1.0 - fx) * fy
-        + sample(data, x + 1, y + 1) * fx * fy
+    sample(data, x, y, grid) * (1.0 - fx) * (1.0 - fy)
+        + sample(data, x + 1, y, grid) * fx * (1.0 - fy)
+        + sample(data, x, y + 1, grid) * (1.0 - fx) * fy
+        + sample(data, x + 1, y + 1, grid) * fx * fy
 }
 fn cubic(t: f32) -> f32 {
     let x = t.abs();
@@ -196,16 +228,18 @@ fn cubic(t: f32) -> f32 {
     }
 }
 struct Bicubic {
+    grid: Grid,
     x: i32,
     y: i32,
     x_weights: [f32; 4],
     y_weights: [f32; 4],
 }
 impl Bicubic {
-    fn new(point: [f32; 2]) -> Self {
+    fn new(point: [f32; 2], grid: Grid) -> Self {
         let x = point[0].floor() as i32;
         let y = point[1].floor() as i32;
         Self {
+            grid,
             x,
             y,
             x_weights: std::array::from_fn(|i| cubic(point[0] - (x + i as i32 - 1) as f32)),
@@ -216,7 +250,13 @@ impl Bicubic {
         let mut result = 0.0;
         for (dy, wy) in self.y_weights.iter().enumerate() {
             for (dx, wx) in self.x_weights.iter().enumerate() {
-                result += sample(data, self.x + dx as i32 - 1, self.y + dy as i32 - 1) * wx * wy;
+                result += sample(
+                    data,
+                    self.x + dx as i32 - 1,
+                    self.y + dy as i32 - 1,
+                    self.grid,
+                ) * wx
+                    * wy;
             }
         }
         result

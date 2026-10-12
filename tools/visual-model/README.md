@@ -68,6 +68,11 @@ This recipe repeats the channel inside the graph. It retains the channel mean
 operation and its floating-point order. The host transfers one channel.
 The model digest changes, so build new feature packets for this graph.
 
+Use `--recipe xfeat-gray-2x` to test 1600 × 1200 input with the same weights.
+The internal image is 1600 × 1184 and the output grid is 200 × 148.
+The dense-image Rust adapters keep matcher coordinates in the 800 × 600 domain.
+Build separate feature packets and measure geometry and resource use before deployment.
+
 For ORT, set the workflow's `detector` to this file and `graph` to `dense_image`.
 Feature selection remains in the workflow, so this recipe does not accept a
 `--features` setting. For rustnn, build and validate the WebNN representation with

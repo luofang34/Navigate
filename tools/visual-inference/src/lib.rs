@@ -7,6 +7,7 @@
 
 mod adapter;
 mod camp;
+mod dense_layout;
 mod diagnostics;
 mod feature_cache;
 mod features;

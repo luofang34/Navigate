@@ -61,7 +61,7 @@ impl XFeatStages {
 
     /// Load a rustnn dense image graph and an optional ORT matcher.
     ///
-    /// The graph must expose fixed 800 by 600 grayscale or RGB input and dense XFeat maps.
+    /// The graph must expose fixed 800 by 600 or 1600 by 1200 grayscale or RGB input and dense XFeat maps.
     /// Core ML chooses kernels inside its graph. No ORT extraction partitions run.
     ///
     /// # Errors

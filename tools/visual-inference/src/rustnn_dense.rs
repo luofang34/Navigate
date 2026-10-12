@@ -20,7 +20,7 @@ const OUTPUTS: [(&str, usize); 3] = [
 pub(crate) struct DenseGraph {
     graph: MLGraph<'static>,
     input: MLTensor,
-    channels: usize,
+    layout: crate::dense_layout::DenseLayout,
     outputs: Vec<(MLTensor, Vec<f32>)>,
     context: MLContext<'static>,
     pub digest: String,
@@ -47,7 +47,7 @@ impl DenseGraph {
                 path: path.to_owned(),
                 source: Box::new(source),
             })?;
-        let channels = input_channels(&data)?;
+        let layout = input_layout(&data)?;
         let mut digest = Sha256::new();
         // Hash the loaded topology and every resolved weight, including external files.
         digest.update(
@@ -82,7 +82,12 @@ impl DenseGraph {
             .map_err(|e| failure("build dense graph", e))?;
         let descriptor = MLTensorDescriptor::new(
             MLOperandDataType::Float32,
-            vec![1, channels as u64, 600, 800],
+            vec![
+                1,
+                layout.channels as u64,
+                layout.height as u64,
+                layout.width as u64,
+            ],
         );
         let input = context
             .create_tensor(&descriptor.to_writable())
@@ -91,17 +96,25 @@ impl DenseGraph {
         for (_, channels) in OUTPUTS {
             let descriptor = MLTensorDescriptor::new(
                 MLOperandDataType::Float32,
-                vec![1, channels as u64, 72, 100],
+                vec![
+                    1,
+                    channels as u64,
+                    layout.grid()[0] as u64,
+                    layout.grid()[1] as u64,
+                ],
             );
             let tensor = context
                 .create_tensor(&descriptor.to_readable())
                 .map_err(|e| failure("create output", e))?;
-            outputs.push((tensor, vec![0.0; channels * 72 * 100]));
+            outputs.push((
+                tensor,
+                vec![0.0; channels * layout.grid()[0] * layout.grid()[1]],
+            ));
         }
         Ok(Self {
             graph,
             input,
-            channels,
+            layout,
             outputs,
             context,
             digest: hex::encode(digest.finalize()),
@@ -118,6 +131,11 @@ impl DenseGraph {
     }
 
     pub fn grid_blocking(&mut self, image: &GrayImage) -> Result<Vec<f32>, InferenceError> {
+        if self.layout.width != 800 || self.layout.height != 600 {
+            return Err(InferenceError::Invalid(
+                "fixed dense-grid export requires 800x600 input".into(),
+            ));
+        }
         self.run_blocking(image)?;
         Ok(self.outputs[0].1.clone())
     }
@@ -126,7 +144,12 @@ impl DenseGraph {
         &mut self,
         image: &GrayImage,
     ) -> Result<preprocessing::InputImage, InferenceError> {
-        let input = preprocessing::prepare(image, 800, 600, self.channels)?;
+        let input = preprocessing::prepare(
+            image,
+            self.layout.width,
+            self.layout.height,
+            self.layout.channels,
+        )?;
         self.context
             .write_tensor(&self.input, &input.data)
             .map_err(|e| failure("write image", e))?;
@@ -151,7 +174,9 @@ impl DenseGraph {
     }
 }
 
-fn input_channels(data: &rustnn::graph::GraphInfo) -> Result<usize, InferenceError> {
+fn input_layout(
+    data: &rustnn::graph::GraphInfo,
+) -> Result<crate::dense_layout::DenseLayout, InferenceError> {
     let [id] = data.input_operands.as_slice() else {
         return Err(InferenceError::Invalid(
             "dense graph requires one image input".into(),
@@ -166,10 +191,8 @@ fn input_channels(data: &rustnn::graph::GraphInfo) -> Result<usize, InferenceErr
     {
         return Err(InferenceError::Invalid("dense image name or type".into()));
     }
-    match shape.as_deref() {
-        Some([1, channels @ (1 | 3), 600, 800]) => Ok(*channels as usize),
-        _ => Err(InferenceError::Invalid(
-            "dense image shape must be 1x{1,3}x600x800".into(),
-        )),
-    }
+    let shape =
+        shape.ok_or_else(|| InferenceError::Invalid("static dense image shape required".into()))?;
+    let shape: Vec<i64> = shape.into_iter().map(i64::from).collect();
+    crate::dense_layout::DenseLayout::from_shape(&shape)
 }

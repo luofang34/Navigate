@@ -52,6 +52,7 @@ fn command() -> Command {
             "lighterglue-masked",
             "xfeat-dense",
             "xfeat-gray",
+            "xfeat-gray-2x",
             "loftr-coarse",
             "loftr-fine",
         ]))
@@ -123,7 +124,11 @@ fn prepare_blocking(
                 "XFeat does not accept features or probability outputs",
             ));
         }
-        xfeat::prepare_channels(&bytes, if recipe == "xfeat-gray" { 1 } else { 3 })?
+        if recipe == "xfeat-gray-2x" {
+            xfeat::prepare_scaled(&bytes, 1, true)?
+        } else {
+            xfeat::prepare_channels(&bytes, if recipe == "xfeat-gray" { 1 } else { 3 })?
+        }
     } else {
         recipe::prepare(
             &bytes,
