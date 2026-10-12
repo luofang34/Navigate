@@ -20,12 +20,15 @@ use nalgebra::Vector2;
 pub struct GpuPyramidalMatcher {
     compute: runtime::Compute,
     identity: String,
+    previous_pyramid: Option<Vec<GrayImage>>,
 }
 
 impl GpuPyramidalMatcher {
     /// Create a hardware compute device and compile the matching kernel.
     ///
     /// Reuse the matcher across frames to retain the device and pipeline.
+    /// The last query pyramid is retained for an exactly equal next reference.
+    /// This uses fewer than twice the query image bytes between calls.
     ///
     /// # Errors
     ///
@@ -36,6 +39,7 @@ impl GpuPyramidalMatcher {
         Ok(Self {
             compute,
             identity: format!("wgpu-pyramidal-lk-v1/{adapter}"),
+            previous_pyramid: None,
         })
     }
 }
@@ -78,12 +82,13 @@ impl PointTracker for GpuPyramidalMatcher {
         if points.is_empty() {
             return Ok(Vec::new());
         }
-        let source = pyramid::build(reference);
+        let source = reference_pyramid_cached(&mut self.previous_pyramid, reference);
         let target = pyramid::build(query);
         let aligned = self
             .compute
             .align_blocking(&source, &target, points)
             .map_err(runtime::failure)?;
+        self.previous_pyramid = Some(target);
         Ok(aligned
             .into_iter()
             .map(|q| {
@@ -93,6 +98,20 @@ impl PointTracker for GpuPyramidalMatcher {
             .collect())
     }
 }
+
+fn reference_pyramid_cached(
+    previous: &mut Option<Vec<GrayImage>>,
+    reference: &GrayImage,
+) -> Vec<GrayImage> {
+    // Content and dimensions both matter: callers can reuse or mutate image storage.
+    previous
+        .take()
+        .filter(|levels| levels.first() == Some(reference))
+        .unwrap_or_else(|| pyramid::build(reference))
+}
+
+#[cfg(test)]
+mod cache_tests;
 
 #[cfg(test)]
 mod tests;
