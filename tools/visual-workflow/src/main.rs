@@ -175,6 +175,7 @@ fn acquisition_options(args: &clap::ArgMatches) -> Result<surface::journey::Opti
     Ok(surface::journey::Options {
         reload_model_on_recovery: args.get_flag("reload-model-on-recovery"),
         reference_cache_mib: count(args, "reference-cache-mib")?,
+        gpu_image_reuse: args.get_flag("gpu-image-reuse"),
         arrival: cli::arrival_options(args)?,
         feature_catalog: args
             .get_one::<PathBuf>("reference-feature-catalog")

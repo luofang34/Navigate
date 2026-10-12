@@ -22,6 +22,8 @@ pub struct GpuPyramidalMatcher {
     compute: runtime::Compute,
     identity: String,
     previous_pyramid: Option<Vec<GrayImage>>,
+    previous_gpu: Option<wgpu::Buffer>,
+    reuse_gpu: bool,
 }
 
 impl GpuPyramidalMatcher {
@@ -41,7 +43,19 @@ impl GpuPyramidalMatcher {
             compute,
             identity: format!("wgpu-pyramidal-lk-v1/{adapter}"),
             previous_pyramid: None,
+            previous_gpu: None,
+            reuse_gpu: false,
         })
+    }
+
+    /// Enable exact-content reuse of the last query GPU image. Disabled by default.
+    ///
+    /// One packed f32 pyramid remains resident between tracking calls. Refinement,
+    /// empty tracking, invalid input and failed alignment discard that buffer.
+    /// This setting does not change matching or geometric acceptance.
+    pub fn set_gpu_image_reuse(&mut self, enabled: bool) {
+        self.previous_gpu = None;
+        self.reuse_gpu = enabled;
     }
 }
 
@@ -72,6 +86,7 @@ impl PointTracker for GpuPyramidalMatcher {
         points: &[Vector2<f64>],
         initial: &[Vector2<f64>],
     ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        self.previous_gpu = None;
         crate::matching::validate_refinement(reference, query, points, initial)?;
         if reference.width() > 4096 || reference.height() > 4096 {
             return Err(VisualError::Invalid {
@@ -89,11 +104,12 @@ impl PointTracker for GpuPyramidalMatcher {
                 std::slice::from_ref(query),
                 points,
                 Some(initial),
+                None,
                 &mut profile,
             )
             .map_err(runtime::failure)?;
         profile.finish("refine");
-        Ok(locations(aligned))
+        Ok(locations(aligned.points))
     }
     fn features_blocking(&mut self, image: &GrayImage) -> Result<Vec<Vector2<f64>>, VisualError> {
         Ok(pyramid::corners(image))
@@ -104,6 +120,7 @@ impl PointTracker for GpuPyramidalMatcher {
         query: &GrayImage,
         points: &[Vector2<f64>],
     ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        let previous_gpu = self.previous_gpu.take();
         crate::matching::validate_points(reference, query, points)?;
         if reference.width() > 4096 || reference.height() > 4096 {
             return Err(VisualError::Invalid {
@@ -115,16 +132,28 @@ impl PointTracker for GpuPyramidalMatcher {
         }
         let mut profile = profile::Profile::new();
         let total = profile.timer();
-        let source = reference_pyramid_cached(&mut self.previous_pyramid, reference, &mut profile);
+        let (source, hit) =
+            reference_pyramid_cached(&mut self.previous_pyramid, reference, &mut profile);
+        let resident = previous_gpu.filter(|_| hit);
         let preparation = profile.timer();
         let target = pyramid::build(query);
         profile.record(preparation, "query_pyramid", 0, 0);
         let aligned = self
             .compute
-            .align_blocking(&source, &target, points, None, &mut profile)
+            .align_blocking(&source, &target, points, None, resident, &mut profile)
             .map_err(runtime::failure)?;
         self.previous_pyramid = Some(target);
-        let result = locations(aligned);
+        let retention = profile.timer();
+        self.previous_gpu = self.reuse_gpu.then_some(aligned.query);
+        profile.record(
+            retention,
+            "query_image_resident",
+            self.previous_gpu
+                .as_ref()
+                .map_or(0, |buffer| buffer.size() as usize),
+            0,
+        );
+        let result = locations(aligned.points);
         profile.record(total, "track_total", 0, 0);
         profile.finish("track");
         Ok(result)
@@ -145,20 +174,21 @@ fn reference_pyramid_cached(
     previous: &mut Option<Vec<GrayImage>>,
     reference: &GrayImage,
     profile: &mut profile::Profile,
-) -> Vec<GrayImage> {
+) -> (Vec<GrayImage>, bool) {
     // Content and dimensions both matter: callers can reuse or mutate image storage.
     let timer = profile.timer();
     let cached = previous
         .take()
         .filter(|levels| levels.first() == Some(reference));
-    let stage = if cached.is_some() {
+    let hit = cached.is_some();
+    let stage = if hit {
         "reference_pyramid_hit"
     } else {
         "reference_pyramid_miss"
     };
     let result = cached.unwrap_or_else(|| pyramid::build(reference));
     profile.record(timer, stage, 0, 0);
-    result
+    (result, hit)
 }
 
 #[cfg(test)]
@@ -169,3 +199,6 @@ mod tests;
 
 #[cfg(test)]
 mod sequence_tests;
+
+#[cfg(test)]
+mod residency_tests;

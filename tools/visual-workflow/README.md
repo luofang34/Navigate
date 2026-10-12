@@ -259,6 +259,12 @@ exclusions. The probe uses a fixed grid and reports separate even and odd cells.
 It does not change poses or make acceptance decisions. It has no occlusion
 model. This scalar Rust probe tests evidence quality, not GPU performance.
 
+Use `evaluate-acquisition --gpu-image-reuse` to retain one packed query image
+on the GPU between tracking calls. Reuse requires equal pixels and dimensions.
+This option is off by default. Refinement, empty tracking and failed calls
+release the retained buffer. At 1920 by 1080 pixels it retains 11,016,000 bytes.
+It does not change the matching algorithm or geometric acceptance.
+
 Add `--gpu-timings` to log host-side GPU stages. Timing is off by default.
 One record is written after each alignment. It separates reference and query
 image preparation, packing, buffer initialization,

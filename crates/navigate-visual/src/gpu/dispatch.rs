@@ -8,6 +8,11 @@ use image::GrayImage;
 use nalgebra::Vector2;
 use wgpu::util::DeviceExt;
 
+pub(super) struct Aligned {
+    pub points: Vec<[f32; 4]>,
+    pub query: wgpu::Buffer,
+}
+
 fn packed(levels: &[GrayImage]) -> Vec<f32> {
     levels
         .iter()
@@ -34,28 +39,15 @@ impl Compute {
         target: &[GrayImage],
         points: &[Vector2<f64>],
         initial: Option<&[Vector2<f64>]>,
+        resident: Option<wgpu::Buffer>,
         profile: &mut Profile,
-    ) -> Result<Vec<[f32; 4]>, GpuError> {
+    ) -> Result<Aligned, GpuError> {
         let total = profile.timer();
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let preparation = profile.timer();
-        let buffers = self.inputs(source, target, points, initial, profile);
+        let buffers = self.inputs(source, target, points, initial, resident, profile);
         profile.record(preparation, "inputs_total", 0, 0);
-        let allocation = profile.timer();
-        let size = (points.len() * 16) as u64;
-        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("matched points"),
-            size,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("matched point readback"),
-            size,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        });
-        profile.record(allocation, "output_buffer_allocation", size as usize * 2, 2);
+        let (output, readback) = self.output_buffers(points.len(), profile);
         let pipeline = if initial.is_some() {
             &self.refinement
         } else {
@@ -84,7 +76,30 @@ impl Compute {
         profile.record(wait, "completion_wait", 0, 0);
         let result = self.read_blocking(readback, profile)?;
         profile.record(total, "align_total", 0, 0);
-        Ok(result)
+        let [_, query, _, _] = buffers;
+        Ok(Aligned {
+            points: result,
+            query,
+        })
+    }
+
+    fn output_buffers(&self, count: usize, profile: &mut Profile) -> (wgpu::Buffer, wgpu::Buffer) {
+        let allocation = profile.timer();
+        let size = (count * 16) as u64;
+        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("matched points"),
+            size,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("matched point readback"),
+            size,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        });
+        profile.record(allocation, "output_buffer_allocation", size as usize * 2, 2);
+        (output, readback)
     }
 
     fn inputs(
@@ -93,6 +108,7 @@ impl Compute {
         target: &[GrayImage],
         points: &[Vector2<f64>],
         initial: Option<&[Vector2<f64>]>,
+        resident: Option<wgpu::Buffer>,
         profile: &mut Profile,
     ) -> [wgpu::Buffer; 4] {
         let coords: Vec<[f32; 2]> = points
@@ -100,7 +116,12 @@ impl Compute {
             .chain(initial.into_iter().flatten())
             .map(|p| [p.x as f32, p.y as f32])
             .collect();
-        let reference = self.image_buffer(source, true, profile);
+        let reference = if let Some(buffer) = resident {
+            profile.record(profile.timer(), "reference_image_reuse", 0, 0);
+            buffer
+        } else {
+            self.image_buffer(source, true, profile)
+        };
         let query = self.image_buffer(target, false, profile);
         let upload = profile.timer();
         let corners = self

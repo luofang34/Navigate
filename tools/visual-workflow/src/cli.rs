@@ -141,6 +141,12 @@ fn acquisition_command() -> Command {
     Command::new("evaluate-acquisition")
         .about("Evaluate bounded search, tracking, and frame arrival policies")
         .arg(
+            Arg::new("gpu-image-reuse")
+                .long("gpu-image-reuse")
+                .help("Retain the previous query GPU image for exact-reference reuse")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("reference-feature-catalog")
                 .long("reference-feature-catalog")
                 .value_parser(value_parser!(PathBuf)),

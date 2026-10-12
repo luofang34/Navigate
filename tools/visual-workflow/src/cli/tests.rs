@@ -27,3 +27,30 @@ fn gpu_timing_is_opt_in_and_global() {
         .unwrap();
     assert!(timed.get_flag("gpu-timings"));
 }
+
+#[test]
+fn gpu_image_reuse_is_opt_in_for_acquisition() {
+    let args = [
+        "navigate-workflow",
+        "evaluate-acquisition",
+        "config.json",
+        "manifest.json",
+        "output.json",
+    ];
+    let normal = super::command().try_get_matches_from(args).unwrap();
+    assert!(
+        !normal
+            .subcommand_matches("evaluate-acquisition")
+            .unwrap()
+            .get_flag("gpu-image-reuse")
+    );
+    let enabled = super::command()
+        .try_get_matches_from(args.into_iter().chain(["--gpu-image-reuse"]))
+        .unwrap();
+    assert!(
+        enabled
+            .subcommand_matches("evaluate-acquisition")
+            .unwrap()
+            .get_flag("gpu-image-reuse")
+    );
+}

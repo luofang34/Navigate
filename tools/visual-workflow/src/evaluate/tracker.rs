@@ -22,19 +22,20 @@ impl Tracker {
                 identity: ImageMatcher::identity(&PyramidalMatcher).into(),
                 backend: Box::new(PyramidalMatcher),
             }),
-            TrackerBackend::Wgpu => Self::gpu_blocking(),
+            TrackerBackend::Wgpu => Self::gpu_blocking(false),
         }
     }
     #[cfg(feature = "gpu")]
-    fn gpu_blocking() -> Result<Self, Error> {
-        let backend = pollster::block_on(navigate_visual::GpuPyramidalMatcher::new())?;
+    pub fn gpu_blocking(reuse: bool) -> Result<Self, Error> {
+        let mut backend = pollster::block_on(navigate_visual::GpuPyramidalMatcher::new())?;
+        backend.set_gpu_image_reuse(reuse);
         Ok(Self {
             identity: ImageMatcher::identity(&backend).into(),
             backend: Box::new(backend),
         })
     }
     #[cfg(not(feature = "gpu"))]
-    fn gpu_blocking() -> Result<Self, Error> {
+    pub fn gpu_blocking(_reuse: bool) -> Result<Self, Error> {
         Err(Error::Input(
             "wgpu tracking requires the gpu build feature".into(),
         ))
