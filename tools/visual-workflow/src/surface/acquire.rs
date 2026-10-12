@@ -22,6 +22,7 @@ use navigate_visual_workflow::FeatureBackend;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Instant};
+pub use store::Coverage;
 
 struct Trial<'a> {
     frame: &'a Frame,
@@ -375,7 +376,7 @@ pub fn prepare_features_blocking(
     root: &Path,
     input: &Path,
     output: &Path,
-    include_fine: bool,
+    coverage: Coverage,
 ) -> Result<(), Error> {
-    store::prepare_blocking(config, root, input, output, include_fine)
+    store::prepare_blocking(config, root, input, output, coverage)
 }

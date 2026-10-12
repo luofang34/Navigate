@@ -102,7 +102,7 @@ fn configured_blocking(
             root,
             &path("surface")?,
             &path("output")?,
-            args.get_flag("include-fine"),
+            cli::feature_coverage(args)?,
         ),
         "evaluate-acquisition" => surface::journey::run_blocking(
             config,
@@ -257,6 +257,8 @@ fn pyramid_blocking(
             beam: count(args, "beam")?,
         },
         args.get_one::<PathBuf>("rectification")
+            .map(PathBuf::as_path),
+        args.get_one::<PathBuf>("reference-feature-catalog")
             .map(PathBuf::as_path),
     )
 }

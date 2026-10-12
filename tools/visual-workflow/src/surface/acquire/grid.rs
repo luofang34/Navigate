@@ -55,6 +55,7 @@ pub fn run_blocking(
         output,
         Search::Grid(side),
         rectification_path,
+        None,
     )
 }
 
@@ -70,6 +71,7 @@ pub(super) fn run_search_blocking(
     output: &Path,
     search: Search,
     rectification_path: Option<&Path>,
+    catalog_path: Option<&Path>,
 ) -> Result<(), Error> {
     let total = Instant::now();
     let (job, query, reference, prior) = load_blocking(config, input, rectification_path)?;
@@ -81,7 +83,7 @@ pub(super) fn run_search_blocking(
     } = query;
     let loading_ms = total.elapsed().as_secs_f64() * 1000.;
     let start = Instant::now();
-    let mut engine = Engine::new(config.load_blocking(root)?)?;
+    let mut engine = engine_blocking(config, root, &job.reference, catalog_path)?;
     let model_load_ms = start.elapsed().as_secs_f64() * 1000.;
     let start = Instant::now();
     engine.query_blocking(&frame.image, config)?;
@@ -122,6 +124,9 @@ pub(super) fn run_search_blocking(
     result["query_feature_bytes"] = json!(engine.query_bytes);
     result["peak_reference_accounted_bytes"] = json!(engine.peak_reference_bytes);
     result["candidate_limit"] = json!(config.limits.candidates);
+    if catalog_path.is_some() {
+        result["reference_feature_catalog"] = engine.catalog_report();
+    }
     result["elapsed_before_output_ms"] = json!(total.elapsed().as_secs_f64() * 1000.);
     assets::write_json_blocking(output, &result)?;
     tracing::info!(path=%output.display(), "Saved window search results");
@@ -222,4 +227,21 @@ impl Search {
             }
         }
     }
+}
+
+fn engine_blocking(
+    config: &Config,
+    root: &Path,
+    surface: &super::super::job::Surface,
+    catalog_path: Option<&Path>,
+) -> Result<Engine, Error> {
+    let mut engine = Engine::new(config.load_blocking(root)?)?;
+    if let Some(path) = catalog_path {
+        let source = super::store::source_namespace(surface);
+        engine.configure_cache(super::engine::CachePolicy { bytes: 0, source });
+        let reader =
+            super::store::reader::Reader::open_blocking(path, source, engine.backend.contract())?;
+        engine.set_catalog(Some(std::sync::Arc::new(reader)))?;
+    }
+    Ok(engine)
 }

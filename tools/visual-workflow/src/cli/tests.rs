@@ -144,3 +144,72 @@ fn pyramid_requires_a_complete_explicit_search_budget() {
     assert_eq!(args.get_one::<usize>("beam"), Some(&8));
     assert_eq!(args.get_one::<usize>("levels"), Some(&3));
 }
+
+#[test]
+fn offline_pyramid_coverage_is_explicit_and_separate_from_acquisition_fine() {
+    let base = [
+        "navigate-workflow",
+        "prepare-acquisition",
+        "config",
+        "surface",
+        "output",
+    ];
+    for suffix in [
+        vec!["--pyramid-side", "1024"],
+        vec!["--pyramid-levels", "2"],
+        vec![
+            "--pyramid-side",
+            "1024",
+            "--pyramid-levels",
+            "2",
+            "--include-fine",
+        ],
+    ] {
+        assert!(
+            super::command()
+                .try_get_matches_from(base.into_iter().chain(suffix))
+                .is_err()
+        );
+    }
+    let parsed = super::command()
+        .try_get_matches_from(base.into_iter().chain([
+            "--pyramid-side",
+            "1024",
+            "--pyramid-levels",
+            "2",
+        ]))
+        .unwrap();
+    let args = parsed.subcommand_matches("prepare-acquisition").unwrap();
+    assert!(matches!(
+        super::feature_coverage(args).unwrap(),
+        crate::surface::acquire::Coverage::Pyramid {
+            side: 1024,
+            levels: 2
+        }
+    ));
+    let parsed = super::command()
+        .try_get_matches_from([
+            "navigate-workflow",
+            "probe-acquisition-pyramid",
+            "config",
+            "job",
+            "output",
+            "--side",
+            "1024",
+            "--levels",
+            "3",
+            "--beam",
+            "8",
+            "--reference-feature-catalog",
+            "catalog.json",
+        ])
+        .unwrap();
+    let args = parsed
+        .subcommand_matches("probe-acquisition-pyramid")
+        .unwrap();
+    assert_eq!(
+        args.get_one::<std::path::PathBuf>("reference-feature-catalog")
+            .unwrap(),
+        &std::path::PathBuf::from("catalog.json")
+    );
+}

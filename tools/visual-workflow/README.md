@@ -247,7 +247,16 @@ rules, including clamped boundary windows. Add `--include-fine` to include all
 fine child windows. Each window has four rotations and its own encoder context.
 The command writes `catalog.json`, checksummed `.navfeat` packets, and preparation
 measurements. Each packet must preserve its feature values through a decode
-round trip. The catalog records coverage and the encoder contract.
+round trip. The catalog binds each packet and the encoder contract.
+To prepare pyramid windows, use `--pyramid-side 1024 --pyramid-levels 2`
+instead of `--include-fine`. This includes all reachable windows in the specified
+levels, independent of the query and runtime beam. The limit is 4096 packets.
+Use fewer offline levels if full coverage exceeds this limit. Preparation
+measurements record the coverage rule. The `include_fine` catalog field applies
+only to the default acquisition coverage.
+Add `--reference-feature-catalog path/to/catalog.json` to
+`probe-acquisition-pyramid` to use these packets. Unprepared levels still use
+online encoding. The search order and geometry checks are unchanged.
 Use `--reference-feature-catalog path/to/catalog.json` with `evaluate-acquisition`
 to load these packets on demand. The index stays resident across model reloads.
 A missing key uses online encoding. A present packet must be readable and must

@@ -44,6 +44,7 @@ pub fn run_blocking(
     output: &Path,
     options: Options,
     rectification_path: Option<&Path>,
+    catalog_path: Option<&Path>,
 ) -> Result<(), Error> {
     grid::run_search_blocking(
         config,
@@ -52,6 +53,7 @@ pub fn run_blocking(
         output,
         grid::Search::Pyramid(options),
         rectification_path,
+        catalog_path,
     )
 }
 
@@ -131,7 +133,7 @@ fn redundant(a: [u32; 4], b: [u32; 4]) -> bool {
     u64::from(w) * u64::from(h) * 3
         > u64::from(a[2]) * u64::from(a[3]) + u64::from(b[2]) * u64::from(b[3])
 }
-fn children(parents: &[[u32; 4]]) -> Vec<[u32; 4]> {
+pub(super) fn children(parents: &[[u32; 4]]) -> Vec<[u32; 4]> {
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     for &[x, y, width, _] in parents {

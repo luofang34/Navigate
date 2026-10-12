@@ -1,5 +1,7 @@
 //! Query-independent map feature packages use the search window rules.
+mod coverage;
 mod packing;
+pub use coverage::Coverage;
 pub(in crate::surface) mod reader;
 use crate::{
     Error, assets,
@@ -75,7 +77,7 @@ pub(super) fn prepare_blocking(
     root: &Path,
     input: &Path,
     output: &Path,
-    fine: bool,
+    coverage: Coverage,
 ) -> Result<(), Error> {
     let started = Instant::now();
     let surface: Surface = assets::read_json_blocking(input)?;
@@ -92,7 +94,7 @@ pub(super) fn prepare_blocking(
         config.limits.image_pixels,
         Some(&surface.image.sha256),
     )?;
-    let windows = windows(image.dimensions(), fine)?;
+    let windows = coverage.windows(image.dimensions())?;
     let Backend::Features(mut backend) = config.load_blocking(root)? else {
         return Err(Error::Input(
             "feature catalog requires an independent encoder".into(),
@@ -103,7 +105,7 @@ pub(super) fn prepare_blocking(
         version: 1,
         source,
         contract: backend.contract(),
-        include_fine: fine,
+        include_fine: matches!(coverage, Coverage::Acquisition { include_fine: true }),
         entries: Vec::new(),
     };
     std::fs::create_dir(output).map_err(|source| Error::Io {
@@ -112,12 +114,37 @@ pub(super) fn prepare_blocking(
         source,
     })?;
     let setup_ms = started.elapsed().as_secs_f64() * 1000.;
+    let (entries, rows) =
+        pack_windows_blocking(config, &image, &mut backend, source, output, &windows)?;
+    catalog.entries = entries;
+    catalog.entries.sort_by_key(|e| e.key);
+    assets::write_json_blocking(&output.join("catalog.json"), &catalog)?;
+    assets::write_json_blocking(
+        &output.join("preparation.json"),
+        &json!({"source":surface,"dimensions":image.dimensions(),"include_fine":catalog.include_fine,"coverage":coverage,"windows":windows.len(),"packets":catalog.entries.len(),"packet_bytes":catalog.entries.iter().map(|e|e.bytes).sum::<usize>(),"setup_ms":setup_ms,"total_ms":started.elapsed().as_secs_f64()*1000.,"entries":rows,
+        "scope":"Window coverage uses map dimensions and fixed search rules without query images or poses. Pyramid coverage includes all reachable windows through the specified level, independent of beam selection. The height digest and map geometry bind the namespace; preparation reads only source image pixels. Each crop retains its own encoder normalization context. Packets preserve descriptor bits and are decoded for exact round-trip verification. Accounted preparation memory includes source/crop/rotation and packet/feature allocations, excluding image decoding peaks, model/runtime scratch, and accumulated report/index metadata. Filesystem cache state is uncontrolled."}),
+    )?;
+    tracing::info!(path=%output.display(),packets=catalog.entries.len(),"Prepared map feature catalog");
+    Ok(())
+}
+#[cfg(test)]
+mod tests;
+
+fn pack_windows_blocking(
+    config: &Config,
+    image: &image::GrayImage,
+    backend: &mut navigate_visual_onnx::XFeatStages,
+    source: [u8; 32],
+    output: &Path,
+    windows: &[Option<[u32; 4]>],
+) -> Result<(Vec<Entry>, Vec<Value>), Error> {
+    let mut entries = Vec::new();
     let mut rows = Vec::<Value>::new();
     let mut keys = BTreeSet::new();
-    for window in &windows {
+    for window in windows {
         let cropped =
-            window.map(|[x, y, w, h]| image::imageops::crop_imm(&image, x, y, w, h).to_image());
-        let view = cropped.as_ref().unwrap_or(&image);
+            window.map(|[x, y, w, h]| image::imageops::crop_imm(image, x, y, w, h).to_image());
+        let view = cropped.as_ref().unwrap_or(image);
         let base = super::cache::fingerprint(source, backend.contract(), view, *window);
         let base_bytes = image.as_raw().len() + cropped.as_ref().map_or(0, |i| i.as_raw().len());
         for rotation in 0..4 {
@@ -134,21 +161,11 @@ pub(super) fn prepare_blocking(
                 feature_limit: config.keypoints,
                 feature_budget: config.limits.features_per_image,
             };
-            let (entry, mut row) = packing::write_blocking(&mut backend, request, output)?;
+            let (entry, mut row) = packing::write_blocking(backend, request, output)?;
             row["window"] = json!(window);
             rows.push(row);
-            catalog.entries.push(entry);
+            entries.push(entry);
         }
     }
-    catalog.entries.sort_by_key(|e| e.key);
-    assets::write_json_blocking(&output.join("catalog.json"), &catalog)?;
-    assets::write_json_blocking(
-        &output.join("preparation.json"),
-        &json!({"source":surface,"dimensions":image.dimensions(),"include_fine":fine,"windows":windows.len(),"packets":catalog.entries.len(),"packet_bytes":catalog.entries.iter().map(|e|e.bytes).sum::<usize>(),"setup_ms":setup_ms,"total_ms":started.elapsed().as_secs_f64()*1000.,"entries":rows,
-        "scope":"All coarse and possible local windows come from map dimensions and fixed search rules, without query images or poses. Optional fine coverage includes every child of those local windows. The height digest and map geometry bind the namespace; preparation reads only source image pixels. Each crop retains its own encoder normalization context. Packets preserve descriptor bits and are decoded for exact round-trip verification. Accounted preparation memory includes source/crop/rotation and packet/feature allocations, excluding image decoding peaks, model/runtime scratch, and accumulated report/index metadata. Filesystem cache state is uncontrolled."}),
-    )?;
-    tracing::info!(path=%output.display(),packets=catalog.entries.len(),"Prepared map feature catalog");
-    Ok(())
+    Ok((entries, rows))
 }
-#[cfg(test)]
-mod tests;

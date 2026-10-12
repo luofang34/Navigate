@@ -251,6 +251,19 @@ fn surface_evaluation_commands() -> [Command; 6] {
 fn prepare_features_command() -> Command {
     Command::new("prepare-acquisition")
         .about("Prepare query-independent coarse and local map feature packets")
+        .arg(
+            Arg::new("pyramid-side")
+                .long("pyramid-side")
+                .requires("pyramid-levels")
+                .conflicts_with("include-fine")
+                .value_parser(value_parser!(u32)),
+        )
+        .arg(
+            Arg::new("pyramid-levels")
+                .long("pyramid-levels")
+                .requires("pyramid-side")
+                .value_parser(value_parser!(usize)),
+        )
         .arg(path("config"))
         .arg(path("surface"))
         .arg(path("output"))
@@ -323,6 +336,11 @@ fn acquisition_grid_command() -> Command {
 fn acquisition_pyramid_command() -> Command {
     Command::new("probe-acquisition-pyramid")
         .about("Retain multiple map regions and refine windows with shared query features")
+        .arg(
+            Arg::new("reference-feature-catalog")
+                .long("reference-feature-catalog")
+                .value_parser(value_parser!(PathBuf)),
+        )
         .arg(path("config"))
         .arg(path("job"))
         .arg(path("output"))
@@ -349,4 +367,21 @@ fn acquisition_pyramid_command() -> Command {
                 .long("rectification")
                 .value_parser(value_parser!(PathBuf)),
         )
+}
+
+pub fn feature_coverage(
+    args: &clap::ArgMatches,
+) -> Result<crate::surface::acquire::Coverage, crate::Error> {
+    use crate::surface::acquire::Coverage;
+    if let Some(&side) = args.get_one::<u32>("pyramid-side") {
+        let levels = args
+            .get_one::<usize>("pyramid-levels")
+            .copied()
+            .ok_or_else(|| crate::Error::Input("missing pyramid levels".into()))?;
+        Ok(Coverage::Pyramid { side, levels })
+    } else {
+        Ok(Coverage::Acquisition {
+            include_fine: args.get_flag("include-fine"),
+        })
+    }
 }
