@@ -100,11 +100,18 @@ impl RectificationMap {
         if !(a > 0.0 && d > 0.0 && a * d - b * b > 0.0) {
             return None;
         }
+        // Keep the affine term exact for equal zero-distortion cameras at image borders.
+        let sx = self.source.fx / self.target.fx;
+        let sy = self.source.fy / self.target.fy;
         let raw = Vector2::new(
-            self.source.fx * (x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x))
-                + self.source.cx,
-            self.source.fy * (y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y)
-                + self.source.cy,
+            pixel.x * sx
+                + (self.source.cx - self.target.cx * sx)
+                + self.source.fx
+                    * (x * (radial - 1.0) + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)),
+            pixel.y * sy
+                + (self.source.cy - self.target.cy * sy)
+                + self.source.fy
+                    * (y * (radial - 1.0) + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y),
         );
         inside(raw, self.source).then_some(raw)
     }

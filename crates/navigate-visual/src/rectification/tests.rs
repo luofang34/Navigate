@@ -146,3 +146,22 @@ fn published_hk_calibration_exposes_a_raw_gate_failure() {
     assert!((raw_error - 2.5648865661).abs() < 1e-9);
     assert!(raw_error > 2.5);
 }
+
+#[test]
+fn zero_distortion_does_not_round_valid_border_pixels_outside() {
+    let c = CameraModel {
+        width: 640,
+        height: 480,
+        fx: 450.0,
+        fy: 460.0,
+        cx: 319.5,
+        cy: 239.5,
+    };
+    let map = RectificationMap::new(c, c, [0.0; 5], 640 * 480 * 8).unwrap();
+    let image = GrayImage::from_fn(640, 480, |x, y| image::Luma([((x + y) % 256) as u8]));
+    assert_eq!(map.rectify(&image).unwrap(), image);
+    assert_eq!(
+        map.raw_pixel(Vector2::new(0.0, 0.0)).unwrap(),
+        Vector2::zeros()
+    );
+}
