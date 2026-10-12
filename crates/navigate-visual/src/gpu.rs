@@ -64,6 +64,33 @@ impl ImageMatcher for GpuPyramidalMatcher {
     }
 }
 impl PointTracker for GpuPyramidalMatcher {
+    fn refine_points_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+        points: &[Vector2<f64>],
+        initial: &[Vector2<f64>],
+    ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        crate::matching::validate_refinement(reference, query, points, initial)?;
+        if reference.width() > 4096 || reference.height() > 4096 {
+            return Err(VisualError::Invalid {
+                field: "GPU image dimensions exceed 4096",
+            });
+        }
+        if points.is_empty() {
+            return Ok(Vec::new());
+        }
+        let aligned = self
+            .compute
+            .align_blocking(
+                std::slice::from_ref(reference),
+                std::slice::from_ref(query),
+                points,
+                Some(initial),
+            )
+            .map_err(runtime::failure)?;
+        Ok(locations(aligned))
+    }
     fn features_blocking(&mut self, image: &GrayImage) -> Result<Vec<Vector2<f64>>, VisualError> {
         Ok(pyramid::corners(image))
     }
@@ -86,17 +113,21 @@ impl PointTracker for GpuPyramidalMatcher {
         let target = pyramid::build(query);
         let aligned = self
             .compute
-            .align_blocking(&source, &target, points)
+            .align_blocking(&source, &target, points, None)
             .map_err(runtime::failure)?;
         self.previous_pyramid = Some(target);
-        Ok(aligned
-            .into_iter()
-            .map(|q| {
-                (q[2] > 0.5 && q[0].is_finite() && q[1].is_finite())
-                    .then_some(Vector2::new(f64::from(q[0]), f64::from(q[1])))
-            })
-            .collect())
+        Ok(locations(aligned))
     }
+}
+
+fn locations(aligned: Vec<[f32; 4]>) -> Vec<Option<Vector2<f64>>> {
+    aligned
+        .into_iter()
+        .map(|q| {
+            (q[2] > 0.5 && q[0].is_finite() && q[1].is_finite())
+                .then_some(Vector2::new(f64::from(q[0]), f64::from(q[1])))
+        })
+        .collect()
 }
 
 fn reference_pyramid_cached(

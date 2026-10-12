@@ -84,7 +84,7 @@ fn patch(image: &GrayImage, p: Vector2<f64>) -> Vec<f64> {
     values
 }
 
-fn align(
+pub(super) fn align(
     source: &GrayImage,
     target: &GrayImage,
     p: Vector2<f64>,

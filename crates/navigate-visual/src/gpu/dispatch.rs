@@ -30,9 +30,10 @@ impl Compute {
         source: &[GrayImage],
         target: &[GrayImage],
         points: &[Vector2<f64>],
+        initial: Option<&[Vector2<f64>]>,
     ) -> Result<Vec<[f32; 4]>, GpuError> {
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let buffers = self.inputs(source, target, points);
+        let buffers = self.inputs(source, target, points, initial);
         let size = (points.len() * 16) as u64;
         let output = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("matched points"),
@@ -46,7 +47,24 @@ impl Compute {
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         });
-        self.dispatch(&buffers, &output, &readback, points.len() as u32);
+        let pipeline = if initial.is_some() {
+            &self.refinement
+        } else {
+            &self.pipeline
+        };
+        let groups = if initial.is_some() {
+            points.len().div_ceil(64)
+        } else {
+            points.len()
+        };
+        self.dispatch(
+            &buffers,
+            &output,
+            &readback,
+            points.len() as u32,
+            pipeline,
+            groups as u32,
+        );
         self.device.poll(wgpu::Maintain::Wait);
         if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
             return Err(error.into());
@@ -59,8 +77,13 @@ impl Compute {
         source: &[GrayImage],
         target: &[GrayImage],
         points: &[Vector2<f64>],
+        initial: Option<&[Vector2<f64>]>,
     ) -> [wgpu::Buffer; 4] {
-        let coords: Vec<[f32; 2]> = points.iter().map(|p| [p.x as f32, p.y as f32]).collect();
+        let coords: Vec<[f32; 2]> = points
+            .iter()
+            .chain(initial.into_iter().flatten())
+            .map(|p| [p.x as f32, p.y as f32])
+            .collect();
         let upload = |label, bytes, usage| {
             self.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -99,6 +122,8 @@ impl Compute {
         output: &wgpu::Buffer,
         readback: &wgpu::Buffer,
         count: u32,
+        pipeline: &wgpu::ComputePipeline,
+        groups: u32,
     ) {
         let buffers: Vec<_> = inputs
             .iter()
@@ -111,7 +136,7 @@ impl Compute {
             .collect();
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("matching inputs"),
-            layout: &self.pipeline.get_bind_group_layout(0),
+            layout: &pipeline.get_bind_group_layout(0),
             entries: &buffers,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -120,9 +145,9 @@ impl Compute {
                 label: Some("visual match"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(count, 1, 1);
+            pass.dispatch_workgroups(groups, 1, 1);
         }
         encoder.copy_buffer_to_buffer(output, 0, readback, 0, u64::from(count) * 16);
         self.queue.submit([encoder.finish()]);

@@ -183,3 +183,19 @@ fn match_points(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocati
         workgroupBarrier();
     }
 }
+
+// A prediction selects the local basin; no coarse search changes its identity.
+@compute @workgroup_size(64)
+fn refine_points(@builtin(global_invocation_id) global: vec3<u32>) {
+    let id = global.x;
+    if id >= params.control.x { return; }
+    matches[id] = vec4<f32>(0.0);
+    let point = corners[id];
+    let initial = corners[id+params.control.x];
+    let forward = align(false,0u,point,initial);
+    if forward.z == 0.0 { return; }
+    let reverse = align(true,0u,forward.xy,point);
+    if reverse.z > 0.0 && distance(reverse.xy,point) <= 1.0 {
+        matches[id] = vec4<f32>(forward,0.0);
+    }
+}

@@ -5,6 +5,7 @@ use image::GrayImage;
 use nalgebra::Vector2;
 
 pub(crate) mod pyramid;
+mod refinement;
 mod tracking;
 
 /// One correspondence between reference and query pixels.
@@ -111,6 +112,25 @@ pub trait PointTracker: ImageMatcher {
         query: &GrayImage,
         points: &[Vector2<f64>],
     ) -> Result<Vec<Option<Vector2<f64>>>, VisualError>;
+    /// Locally refine predicted query locations against fixed reference patches.
+    ///
+    /// Each prediction belongs to the corresponding reference point. This is
+    /// local alignment without a coarse search, and can reject a poor initial
+    /// guess. Output slots preserve input identity; geometry stays with the host.
+    ///
+    /// # Errors
+    /// Returns invalid input, unsupported operation, or execution errors.
+    fn refine_points_blocking(
+        &mut self,
+        _reference: &GrayImage,
+        _query: &GrayImage,
+        _points: &[Vector2<f64>],
+        _initial: &[Vector2<f64>],
+    ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        Err(VisualError::Invalid {
+            field: "local point refinement unsupported by tracker",
+        })
+    }
 }
 
 impl ImageMatcher for PyramidalMatcher {
@@ -132,6 +152,15 @@ impl ImageMatcher for PyramidalMatcher {
     }
 }
 impl PointTracker for PyramidalMatcher {
+    fn refine_points_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+        points: &[Vector2<f64>],
+        initial: &[Vector2<f64>],
+    ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        refinement::run(reference, query, points, initial)
+    }
     fn features_blocking(&mut self, image: &GrayImage) -> Result<Vec<Vector2<f64>>, VisualError> {
         Ok(pyramid::corners(image))
     }
@@ -153,6 +182,21 @@ impl PointTracker for PyramidalMatcher {
             })
             .collect())
     }
+}
+
+pub(crate) fn validate_refinement(
+    reference: &GrayImage,
+    query: &GrayImage,
+    points: &[Vector2<f64>],
+    initial: &[Vector2<f64>],
+) -> Result<(), VisualError> {
+    if points.len() != initial.len() {
+        return Err(VisualError::Invalid {
+            field: "point prediction count",
+        });
+    }
+    validate_points(reference, query, points)?;
+    validate_points(query, reference, initial)
 }
 
 pub(crate) fn validate_points(

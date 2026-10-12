@@ -28,6 +28,7 @@ pub(super) struct Compute {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub pipeline: wgpu::ComputePipeline,
+    pub refinement: wgpu::ComputePipeline,
 }
 
 impl Compute {
@@ -64,14 +65,8 @@ impl Compute {
             label: Some("pyramidal patch matching"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tracking.wgsl").into()),
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("pyramidal patch matching"),
-            layout: None,
-            module: &module,
-            entry_point: "match_points",
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let pipeline = pipeline(&device, &module, "match_points");
+        let refinement = self::pipeline(&device, &module, "refine_points");
         if let Some(error) = device.pop_error_scope().await {
             return Err(error.into());
         }
@@ -80,8 +75,24 @@ impl Compute {
                 device,
                 queue,
                 pipeline,
+                refinement,
             },
             format!("{:?}/{}", info.backend, info.name),
         ))
     }
+}
+
+fn pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    entry: &str,
+) -> wgpu::ComputePipeline {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(entry),
+        layout: None,
+        module,
+        entry_point: entry,
+        compilation_options: Default::default(),
+        cache: None,
+    })
 }
