@@ -49,6 +49,7 @@ pub fn command() -> Command {
         .subcommand(acquisition_command())
         .subcommand(prepare_features_command())
         .subcommand(acquire_surface_command())
+        .subcommand(acquisition_grid_command())
         .subcommand(window_command("probe-surface-windows"))
         .subcommand(window_command("probe-surface-scores"))
         .subcommand(cascade_command())
@@ -296,5 +297,24 @@ fn rectify_command() -> Command {
                 .long("iterations")
                 .default_value("1")
                 .value_parser(value_parser!(usize)),
+        )
+}
+
+fn acquisition_grid_command() -> Command {
+    Command::new("probe-acquisition-grid")
+        .about("Check every fixed overlapping map window with shared query features")
+        .arg(path("config"))
+        .arg(path("job"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("side")
+                .long("side")
+                .required(true)
+                .value_parser(value_parser!(u32)),
+        )
+        .arg(
+            Arg::new("rectification")
+                .long("rectification")
+                .value_parser(value_parser!(PathBuf)),
         )
 }

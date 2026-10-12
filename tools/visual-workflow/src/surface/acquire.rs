@@ -1,6 +1,7 @@
 //! Coarse proposals and local crop search retain all examined geometry decisions.
 mod cache;
 pub(super) mod engine;
+pub mod grid;
 mod selection;
 pub(in crate::surface) mod store;
 use super::{

@@ -89,3 +89,29 @@ fn rectification_is_explicit_and_not_available_for_sequence_tracking() {
             .is_err()
     );
 }
+
+#[test]
+fn grid_probe_requires_explicit_scale_and_accepts_raw_camera_binding() {
+    let args = [
+        "navigate-workflow",
+        "probe-acquisition-grid",
+        "config",
+        "job",
+        "output",
+    ];
+    assert!(super::command().try_get_matches_from(args).is_err());
+    let parsed = super::command()
+        .try_get_matches_from(args.into_iter().chain([
+            "--side",
+            "512",
+            "--rectification",
+            "camera.json",
+        ]))
+        .unwrap();
+    let grid = parsed.subcommand_matches("probe-acquisition-grid").unwrap();
+    assert_eq!(grid.get_one::<u32>("side"), Some(&512));
+    assert_eq!(
+        grid.get_one::<std::path::PathBuf>("rectification").unwrap(),
+        &std::path::PathBuf::from("camera.json")
+    );
+}

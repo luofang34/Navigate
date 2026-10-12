@@ -111,6 +111,17 @@ fn configured_blocking(
             &path("output")?,
             acquisition_options(args)?,
         ),
+        "probe-acquisition-grid" => surface::acquire::grid::run_blocking(
+            config,
+            root,
+            &path("job")?,
+            &path("output")?,
+            args.get_one::<u32>("side")
+                .copied()
+                .ok_or_else(|| Error::Input("missing grid side".into()))?,
+            args.get_one::<PathBuf>("rectification")
+                .map(PathBuf::as_path),
+        ),
         "acquire-surface" => surface::acquire::run_blocking(
             config,
             root,
@@ -149,22 +160,9 @@ fn configured_blocking(
         "replay" => replay::run_blocking(config, root, &path("manifest")?, &path("output")?),
         "pack" => run::pack_blocking(config, root, &path("image")?, &path("output")?),
         "locate" | "locate-surface" | "probe-surface-windows" | "probe-surface-scores" => {
-            (if name == "probe-surface-scores" {
-                surface::windows::run_scored_blocking
-            } else if name == "probe-surface-windows" {
-                surface::windows::run_blocking
-            } else if name == "locate" {
-                run::locate_blocking
-            } else {
-                surface::run_blocking
-            })(
-                config,
-                root,
-                &path("job")?,
-                &path("output")?,
-                count(args, "iterations")?,
-            )
+            locate_blocking(name, args, config, root)
         }
+
         _ => Err(Error::Input(format!("unknown command {name}"))),
     }
 }
@@ -213,4 +211,28 @@ fn initialize_logging(gpu_timings: bool) {
                 .with_filter(filter),
         )
         .init();
+}
+
+fn locate_blocking(
+    name: &str,
+    args: &clap::ArgMatches,
+    config: &config::Config,
+    root: &std::path::Path,
+) -> Result<(), Error> {
+    let path = |name: &str| path_argument(args, name);
+    (if name == "probe-surface-scores" {
+        surface::windows::run_scored_blocking
+    } else if name == "probe-surface-windows" {
+        surface::windows::run_blocking
+    } else if name == "locate" {
+        run::locate_blocking
+    } else {
+        surface::run_blocking
+    })(
+        config,
+        root,
+        &path("job")?,
+        &path("output")?,
+        count(args, "iterations")?,
+    )
 }

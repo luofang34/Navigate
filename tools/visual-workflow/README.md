@@ -219,6 +219,13 @@ even when coarse or local geometry passes. This diagnostic keeps the original
 first-pass selection. It records the extra fine candidates within the same
 candidate and memory limits. It does not change the default search policy.
 
+Use `probe-acquisition-grid config.json job.json result.json --side 512` to
+check fixed overlapping windows across the full map. The step is half the side.
+The grid includes the map edges. Set `limits.candidates` to four times the window
+count or more; the command permits at most 4096 candidates. Use `--rectification`
+for raw camera checks. This diagnostic reuses query features and retains all
+geometry decisions. It does not change the default acquisition policy.
+
 Use `prepare-acquisition config.json surface.json output-directory` to prepare
 map feature packets without query images or poses. Set `matcher` to `null`
 in the preparation config to load only the encoder. This does not change the
