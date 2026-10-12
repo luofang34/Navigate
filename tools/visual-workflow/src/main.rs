@@ -116,6 +116,9 @@ fn configured_blocking(
         "acquire-surface" => {
             surface::acquire::run_blocking(config, root, &path("job")?, &path("output")?)
         }
+        "probe-surface-appearance" => {
+            surface::appearance::run_blocking(config, &path("manifest")?, &path("output")?)
+        }
         "probe-hypotheses" => surface::hypotheses::run_blocking(
             config,
             root,

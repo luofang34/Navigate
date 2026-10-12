@@ -197,8 +197,13 @@ pub fn arrival_options(
     )
 }
 
-fn surface_evaluation_commands() -> [Command; 3] {
+fn surface_evaluation_commands() -> [Command; 4] {
     [
+        Command::new("probe-surface-appearance")
+            .about("Compare frozen poses on shared image patches outside fitted map points")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output")),
         Command::new("probe-hypotheses")
             .about("Track up to four accepted map poses without truth ranking or recovery")
             .arg(path("config"))

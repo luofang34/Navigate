@@ -236,6 +236,14 @@ buffers. Index loading buffers are reported separately as setup memory. Reports
 separate logical file reads, packet decode, and pixel validation from encoding.
 These byte counts do not measure physical storage transfers.
 
+Use `probe-surface-appearance config.json input.json result.json` to compare
+fixed poses on the same image patches. The input contains `job`, `poses`
+(entries with `id` and `pose`), and `excluded_map_pixels` (full-map pixel pairs).
+Supply a full-map job. Supply the map points used for geometric fitting as
+exclusions. The probe uses a fixed grid and reports separate even and odd cells.
+It does not change poses or make acceptance decisions. It has no occlusion
+model. This scalar Rust probe tests evidence quality, not GPU performance.
+
 Use `probe-hypotheses config.json sequence.json result.json --hypotheses 4`
 to test a bounded set of accepted map poses with subsequent images.
 Use a full-map acquisition job and the same sequence format. Omit keyframe
