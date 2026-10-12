@@ -1,6 +1,7 @@
 //! Compare map matching with bounded temporal reuse on spatially withheld evidence.
 mod backend;
 mod focal;
+mod initialization;
 mod metrics;
 mod navigation;
 mod position;
@@ -49,6 +50,8 @@ struct Experiment {
     tracking_backend: TrackerBackend,
     #[serde(default)]
     max_map_track_disagreement_m: Option<f64>,
+    #[serde(default)]
+    initial_match_order: initialization::MatchOrder,
 }
 #[derive(Default, serde::Serialize)]
 struct StageTimings {
@@ -139,9 +142,7 @@ pub fn run_blocking(
     for index in 0..runner.experiment.frames.len() {
         records.push(runner.frame_blocking(index, manifest_root, config.limits.image_pixels)?);
     }
-    assets::write_json_blocking(
-        output,
-        &json!({"backend":runner.matcher.identity(),
+    let mut report = json!({"backend":runner.matcher.identity(),
         "setup_ms":setup_ms,"fold":runner.experiment.fold,
         "holdout_enabled":runner.experiment.fold.is_some(),
         "refresh_interval":runner.experiment.refresh_interval,
@@ -154,8 +155,11 @@ pub fn run_blocking(
         "principal":[runner.query_camera.cx,runner.query_camera.cy]},
         "retain_valid_track":runner.experiment.retain_valid_track,
         "max_map_track_disagreement_m":runner.experiment.max_map_track_disagreement_m,
-        "scope":"Conditional local navigation with an existing map hypothesis. When enabled, spatial holdout is fixed across the sequence. Validation matching is excluded from pipeline_ms. No geographic ground truth or independent confidence is asserted."}),
-    )?;
+        "scope":"Conditional local navigation with an existing map hypothesis. When enabled, spatial holdout is fixed across the sequence. Validation matching is excluded from pipeline_ms. No geographic ground truth or independent confidence is asserted."});
+    if runner.experiment.initial_match_order != initialization::MatchOrder::Original {
+        report["initial_match_order"] = json!(runner.experiment.initial_match_order);
+    }
+    assets::write_json_blocking(output, &report)?;
     tracing::info!(path=%output.display(),frames=runner.experiment.frames.len(),"Saved pipeline evaluation");
     Ok(())
 }
@@ -321,10 +325,13 @@ impl Runner {
     fn refresh_blocking(&mut self, frame: &Frame, result: &mut Outcome) -> Result<(), Error> {
         result.map_attempted = true;
         let start = Instant::now();
-        let matches = self
+        let mut matches = self
             .matcher
             .matches_blocking(&self.reference.image, &frame.image)?;
         result.timings.map_matching_ms = start.elapsed().as_secs_f64() * 1000.0;
+        self.experiment
+            .initial_match_order
+            .apply(frame.stamp.sequence, &mut matches);
         let pairs = self.training(&matches);
         let start = Instant::now();
         let decision = self.fit(frame, &pairs);
