@@ -1,7 +1,7 @@
 //! Bounded reference orientations share one query feature extraction.
 use crate::{
     Error,
-    config::{Backend, Config},
+    config::{Backend, Config, Limits},
 };
 use image::{GrayImage, imageops};
 use navigate_visual::{ImageMatcher, PixelMatch};
@@ -11,8 +11,11 @@ use std::{collections::BTreeSet, path::Path, time::Instant};
 
 struct Reference {
     rotation: u8,
-    image: GrayImage,
-    features: Option<XFeatFeatures>,
+    data: ReferenceData,
+}
+enum ReferenceData {
+    Image(GrayImage),
+    Features(XFeatFeatures),
 }
 pub(super) struct Matcher {
     backend: Backend,
@@ -54,28 +57,23 @@ impl Matcher {
                 ));
             }
             let image = rotate(image, rotation);
-            resident_bytes = resident_bytes.saturating_add(image.as_raw().len());
-            let features = match &mut backend {
+            let data = match &mut backend {
                 Backend::Features(b) => {
-                    let f = b.extract_features_blocking(&image)?;
-                    let metadata = b.validate_features(&f, &image)?;
-                    resident_bytes = resident_bytes.saturating_add(metadata.resident_bytes);
-                    if metadata.count > config.limits.features_per_image
-                        || resident_bytes > config.limits.reference_bytes
-                    {
-                        return Err(Error::Input(
-                            "surface features exceed reference memory limit".into(),
-                        ));
-                    }
-                    Some(f)
+                    let (features, retained) = extract_reference_blocking(
+                        b.as_mut(),
+                        image,
+                        resident_bytes,
+                        &config.limits,
+                    )?;
+                    resident_bytes = retained;
+                    ReferenceData::Features(features)
                 }
-                Backend::Pair(_) => None,
+                Backend::Pair(_) => {
+                    resident_bytes = resident_bytes.saturating_add(image.as_raw().len());
+                    ReferenceData::Image(image)
+                }
             };
-            references.push(Reference {
-                rotation,
-                image,
-                features,
-            });
+            references.push(Reference { rotation, data });
         }
         Ok(Self {
             backend,
@@ -99,8 +97,11 @@ impl Matcher {
                 "routed fallback requires a pair matcher".into(),
             ));
         };
+        let ReferenceData::Image(image) = &reference.data else {
+            return Err(Error::Input("surface feature contract mismatch".into()));
+        };
         let started = Instant::now();
-        let mut pairs = backend.match_images_blocking(&reference.image, query)?;
+        let mut pairs = backend.match_images_blocking(image, query)?;
         for pair in &mut pairs {
             restore(pair, rotation, self.original_size);
         }
@@ -145,10 +146,12 @@ impl Matcher {
         let mut results = Vec::with_capacity(self.references.len());
         for reference in &self.references {
             let start = Instant::now();
-            let mut pairs = match (&mut self.backend, &reference.features, &features) {
-                (Backend::Features(b), Some(r), Some(q)) => b.match_features_blocking(r, q)?,
-                (Backend::Pair(b), None, None) => {
-                    b.match_images_blocking(&reference.image, query)?
+            let mut pairs = match (&mut self.backend, &reference.data, &features) {
+                (Backend::Features(b), ReferenceData::Features(r), Some(q)) => {
+                    b.match_features_blocking(r, q)?
+                }
+                (Backend::Pair(b), ReferenceData::Image(image), None) => {
+                    b.match_images_blocking(image, query)?
                 }
                 _ => return Err(Error::Input("surface feature contract mismatch".into())),
             };
@@ -163,6 +166,26 @@ impl Matcher {
         }
         Ok((extraction_ms, results))
     }
+}
+fn extract_reference_blocking<B: FeatureBackend>(
+    backend: &mut B,
+    image: GrayImage,
+    resident_bytes: usize,
+    limits: &Limits,
+) -> Result<(B::Features, usize), Error> {
+    let features = backend.extract_features_blocking(&image)?;
+    let metadata = backend.validate_features(&features, &image)?;
+    let retained = resident_bytes.saturating_add(metadata.resident_bytes);
+    // The rotated raster overlaps extraction, but the feature handle owns everything
+    // required for matching. Include that overlap without retaining the raster.
+    if metadata.count > limits.features_per_image
+        || retained.saturating_add(image.as_raw().len()) > limits.reference_bytes
+    {
+        return Err(Error::Input(
+            "surface features exceed reference memory limit".into(),
+        ));
+    }
+    Ok((features, retained))
 }
 fn validate_rotations(rotations: &[u8], limit: usize) -> Result<(), Error> {
     let unique: BTreeSet<_> = rotations.iter().copied().collect();
