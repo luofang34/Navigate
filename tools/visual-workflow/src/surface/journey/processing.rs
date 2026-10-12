@@ -93,6 +93,11 @@ impl Runner {
         config: &Config,
         record: &mut Value,
     ) -> Result<Recovery, Error> {
+        let retained = self
+            .state
+            .as_ref()
+            .filter(|_| self.retained_window_recovery)
+            .and_then(|state| retained_window(&state.tracks, frame, state.window));
         self.state = None;
         record["map_attempted"] = json!(true);
         let started = Instant::now();
@@ -101,13 +106,14 @@ impl Runner {
         record["map_query_extraction_ms"] = json!(query_ms);
         record["adapter_tensor_io_before"] = json!(self.models.statistics_before);
         let engine = self.models.engine_mut()?;
-        let acquired = acquire::search_blocking(
+        let acquired = acquire::search_recovery_blocking(
             frame,
             &self.reference,
             &self.prior,
             engine,
             config,
             self.record_matches,
+            retained,
         )?;
         record["acquisition"] = acquired.record;
         let result = if let Some(selected) = acquired.selected {
@@ -194,3 +200,14 @@ impl Runner {
         }
     }
 }
+
+fn retained_window(tracks: &Tracks, frame: &Frame, window: Option<[u32; 4]>) -> Option<[u32; 4]> {
+    // A map refresh can reuse the crop, but cannot bridge a gap or camera change.
+    tracks
+        .eligible(frame, usize::MAX)
+        .then_some(window)
+        .flatten()
+}
+
+#[cfg(test)]
+mod tests;

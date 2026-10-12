@@ -182,6 +182,7 @@ fn count(args: &clap::ArgMatches, name: &str) -> Result<usize, Error> {
 
 fn acquisition_options(args: &clap::ArgMatches) -> Result<surface::journey::Options, Error> {
     Ok(surface::journey::Options {
+        retained_window_recovery: args.get_flag("retained-window-recovery"),
         reload_model_on_recovery: args.get_flag("reload-model-on-recovery"),
         reference_cache_mib: count(args, "reference-cache-mib")?,
         gpu_image_reuse: args.get_flag("gpu-image-reuse"),

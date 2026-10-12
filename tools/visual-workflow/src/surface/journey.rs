@@ -17,6 +17,7 @@ use std::{
     time::Instant,
 };
 pub struct Options {
+    pub retained_window_recovery: bool,
     pub reload_model_on_recovery: bool,
     pub reference_cache_mib: usize,
     pub gpu_image_reuse: bool,
@@ -39,6 +40,7 @@ struct Runner {
     state: Option<Tracking>,
     interval: usize,
     record_matches: bool,
+    retained_window_recovery: bool,
 }
 pub fn run_blocking(
     config: &Config,
@@ -48,6 +50,7 @@ pub fn run_blocking(
     options: Options,
 ) -> Result<(), Error> {
     let Options {
+        retained_window_recovery,
         reload_model_on_recovery,
         reference_cache_mib,
         gpu_image_reuse,
@@ -55,11 +58,11 @@ pub fn run_blocking(
         feature_catalog,
     } = options;
     let total = Instant::now();
-    if reference_cache_mib > 64 {
-        return Err(Error::Input(
-            "reference cache must be at most 64 MiB".into(),
-        ));
-    }
+    validate_limits(
+        reference_cache_mib,
+        retained_window_recovery,
+        config.limits.candidates,
+    )?;
     let spec: Manifest = assets::read_json_blocking(manifest)?;
     spec.validate()?;
     if spec.keyframe_interval.is_some() {
@@ -92,6 +95,7 @@ pub fn run_blocking(
         state: None,
         interval: spec.refresh_interval,
         record_matches: job.record_matches,
+        retained_window_recovery,
     };
     let setup_ms = total.elapsed().as_secs_f64() * 1000.0;
     let (frames, arrivals) = runner.frames_blocking(
@@ -106,8 +110,8 @@ pub fn run_blocking(
         output,
         &json!({"backend":identity,"tracker":runner.tracker.identity,
         "job":job,"refresh_interval":spec.refresh_interval,"setup_ms":setup_ms,"source_loading_ms":loading_ms,"model_load_ms":model_load_ms,
-        "reference_cache_mib":reference_cache_mib,"gpu_image_reuse":gpu_image_reuse,"feature_catalog":feature_catalog,"model_loads":runner.models.loads,"query_encodings":runner.models.queries,"reload_model_on_recovery":reload_model_on_recovery,"source_loads":1,"arrivals":arrivals,"frames":frames,"total_ms":total.elapsed().as_secs_f64()*1000.0,
-        "scope":"One immutable full source map with resident inference models. Each acquisition shares one query encoding across bounded coarse/local/fine search; exact map features can be retained in a bounded cache. The first geometry pass is a conditional hypothesis, not a unique navigation fix. Track only the selected crop's map identities. A gap, failed geometry or scheduled refresh discards that state and searches from the original blind prior. Reacquisition starts a separate motion segment. No inferred motion across gaps, geodetic fusion, or truth input. Full source and at most one crop remain resident; runtime/model memory is separate. The arrival report declares frame admission and clock policy. Offline mode processes every declared frame; timed modes use actual elapsed computation time and retain original capture timestamps. Neither mode establishes live-camera deadline feasibility."}),
+        "retained_window_recovery":retained_window_recovery,"reference_cache_mib":reference_cache_mib,"gpu_image_reuse":gpu_image_reuse,"feature_catalog":feature_catalog,"model_loads":runner.models.loads,"query_encodings":runner.models.queries,"reload_model_on_recovery":reload_model_on_recovery,"source_loads":1,"arrivals":arrivals,"frames":frames,"total_ms":total.elapsed().as_secs_f64()*1000.0,
+        "scope":"One immutable full source map with resident inference models. Each acquisition shares one query encoding across bounded coarse/local/fine search; exact map features can be retained in a bounded cache. The first geometry pass is a conditional hypothesis, not a unique navigation fix. Track only the selected crop's map identities. A gap discards tracking state and searches from the original blind prior. With retained-window recovery enabled and a budget of at least 80 candidates, a continuous recovery first verifies four rotations of the retained crop against the original blind prior. Probe failure runs the complete 76-candidate search with the same query encoding. Neither path changes geometry gates. Reacquisition starts a separate motion segment. No inferred motion across gaps, geodetic fusion, or truth input. Full source and at most one crop remain resident; runtime/model memory is separate. The arrival report declares frame admission and clock policy. Offline mode processes every declared frame; timed modes use actual elapsed computation time and retain original capture timestamps. Neither mode establishes live-camera deadline feasibility."}),
     )?;
     tracing::info!(path=%output.display(),"Saved resident acquisition and tracking sequence");
     Ok(())
@@ -120,3 +124,20 @@ fn cache_policy(job: &SurfaceJob, reference_cache_mib: usize) -> acquire::engine
         source,
     }
 }
+
+fn validate_limits(cache_mib: usize, retained: bool, candidates: usize) -> Result<(), Error> {
+    if cache_mib > 64 {
+        return Err(Error::Input(
+            "reference cache must be at most 64 MiB".into(),
+        ));
+    }
+    if retained && candidates < 80 {
+        return Err(Error::Input(
+            "retained-window recovery requires 80 candidates".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

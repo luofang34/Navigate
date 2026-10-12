@@ -1,5 +1,7 @@
 //! Coarse proposals and local crop search retain all examined geometry decisions.
 mod cache;
+mod recovery;
+pub(super) use recovery::search_recovery_blocking;
 pub(super) mod engine;
 pub mod grid;
 pub mod pyramid;

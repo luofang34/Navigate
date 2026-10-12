@@ -142,6 +142,12 @@ fn window_command(name: &'static str) -> Command {
 
 fn acquisition_command() -> Command {
     Command::new("evaluate-acquisition")
+        .arg(
+            Arg::new("retained-window-recovery")
+                .long("retained-window-recovery")
+                .help("Check the previous map window before full recovery; needs 80 candidates")
+                .action(clap::ArgAction::SetTrue),
+        )
         .about("Evaluate bounded search, tracking, and frame arrival policies")
         .arg(
             Arg::new("gpu-image-reuse")

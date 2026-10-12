@@ -213,3 +213,30 @@ fn offline_pyramid_coverage_is_explicit_and_separate_from_acquisition_fine() {
         &std::path::PathBuf::from("catalog.json")
     );
 }
+
+#[test]
+fn retained_window_recovery_is_opt_in_for_acquisition() {
+    let args = [
+        "navigate-workflow",
+        "evaluate-acquisition",
+        "config.json",
+        "manifest.json",
+        "output.json",
+    ];
+    let normal = super::command().try_get_matches_from(args).unwrap();
+    assert!(
+        !normal
+            .subcommand_matches("evaluate-acquisition")
+            .unwrap()
+            .get_flag("retained-window-recovery")
+    );
+    let enabled = super::command()
+        .try_get_matches_from(args.into_iter().chain(["--retained-window-recovery"]))
+        .unwrap();
+    assert!(
+        enabled
+            .subcommand_matches("evaluate-acquisition")
+            .unwrap()
+            .get_flag("retained-window-recovery")
+    );
+}
