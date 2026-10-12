@@ -7,10 +7,13 @@ use crate::{
 use navigate_visual::Frame;
 use std::{
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
 
+use crate::surface::acquire::store::reader::Reader;
 pub(super) struct Models {
+    catalog: Option<Arc<Reader>>,
     engine: Option<Engine>,
     root: PathBuf,
     runtime: Runtime,
@@ -21,15 +24,38 @@ pub(super) struct Models {
     pub queries: usize,
 }
 impl Models {
-    pub fn new(
+    pub fn load_blocking(
+        config: &Config,
+        root: &Path,
+        reload: bool,
+        policy: CachePolicy,
+        catalog_path: Option<&Path>,
+    ) -> Result<(Self, f64), Error> {
+        let started = Instant::now();
+        let runtime = Runtime::new_blocking(config, root)?;
+        let engine = Engine::new(runtime.load_blocking(config, root)?)?;
+        let model_ms = started.elapsed().as_secs_f64() * 1000.;
+        Ok((
+            Self::new_blocking(engine, runtime, root, reload, policy, catalog_path)?,
+            model_ms,
+        ))
+    }
+    fn new_blocking(
         mut engine: Engine,
         runtime: Runtime,
         root: &Path,
         reload: bool,
         cache_policy: CachePolicy,
-    ) -> Self {
+        catalog_path: Option<&Path>,
+    ) -> Result<Self, Error> {
         engine.configure_cache(cache_policy);
-        Self {
+        let catalog = catalog_path
+            .map(|path| Reader::open_blocking(path, cache_policy.source, engine.backend.contract()))
+            .transpose()?
+            .map(Arc::new);
+        engine.set_catalog(catalog.clone())?;
+        Ok(Self {
+            catalog,
             engine: Some(engine),
             runtime,
             root: root.into(),
@@ -38,7 +64,7 @@ impl Models {
             statistics_before: None,
             loads: 1,
             queries: 0,
-        }
+        })
     }
     pub fn prepare_blocking(
         &mut self,
@@ -55,6 +81,8 @@ impl Models {
             )?);
             let policy = self.cache_policy;
             self.engine_mut()?.configure_cache(policy);
+            let catalog = self.catalog.clone();
+            self.engine_mut()?.set_catalog(catalog)?;
             self.loads = self.loads.wrapping_add(1);
             reload_ms = started.elapsed().as_secs_f64() * 1000.0;
         }

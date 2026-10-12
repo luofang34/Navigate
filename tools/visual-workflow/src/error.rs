@@ -4,6 +4,18 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("decode feature packet {path}: {source}")]
+    CatalogPacket {
+        path: PathBuf,
+        #[source]
+        source: navigate_visual_onnx::InferenceError,
+    },
+    #[error("validate feature image {path}: {source}")]
+    CatalogImage {
+        path: PathBuf,
+        #[source]
+        source: navigate_visual::VisualError,
+    },
     #[error("{operation} {path}: {source}")]
     Io {
         operation: &'static str,

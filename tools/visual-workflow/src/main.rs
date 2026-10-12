@@ -98,9 +98,14 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             root,
             &path("manifest")?,
             &path("output")?,
-            args.get_flag("reload-model-on-recovery"),
-            count(args, "reference-cache-mib")?,
-            cli::arrival_options(args)?,
+            surface::journey::Options {
+                reload_model_on_recovery: args.get_flag("reload-model-on-recovery"),
+                reference_cache_mib: count(args, "reference-cache-mib")?,
+                arrival: cli::arrival_options(args)?,
+                feature_catalog: args
+                    .get_one::<PathBuf>("reference-feature-catalog")
+                    .cloned(),
+            },
         ),
         "acquire-surface" => {
             surface::acquire::run_blocking(&config, root, &path("job")?, &path("output")?)

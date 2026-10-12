@@ -258,6 +258,7 @@ impl Trial<'_> {
             row["reference_preparation_ms"] = json!(prepared.preparation_ms);
             row["reference_source_key_ms"] = json!(if rotation == 0 { source_key_ms } else { 0.0 });
             row["reference_cache_hit"] = json!(prepared.cache_hit);
+            row["reference_packet"] = json!(prepared.import);
             rows.push(row);
         }
         Ok((rows, best))

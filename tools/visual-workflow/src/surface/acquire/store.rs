@@ -1,5 +1,6 @@
 //! Query-independent map feature packages use the search window rules.
 mod packing;
+pub(in crate::surface) mod reader;
 use crate::{
     Error, assets,
     config::{Backend, Config},

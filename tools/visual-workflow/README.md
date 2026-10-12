@@ -225,8 +225,16 @@ rules, including clamped boundary windows. Add `--include-fine` to include all
 fine child windows. Each window has four rotations and its own encoder context.
 The command writes `catalog.json`, checksummed `.navfeat` packets, and preparation
 measurements. Each packet must preserve its feature values through a decode
-round trip. The catalog records coverage and the encoder contract. This command
-prepares files. Catalog loading is not part of `evaluate-acquisition`.
+round trip. The catalog records coverage and the encoder contract.
+Use `--reference-feature-catalog path/to/catalog.json` with `evaluate-acquisition`
+to load these packets on demand. The index stays resident across model reloads.
+A missing key uses online encoding. A present packet must be readable and must
+match its checksum, encoder contract, and rotated source pixels. A failed check
+stops the run. Imported handles use the same bounded memory cache as online
+features. Reference memory counts include the resident index and packet decode
+buffers. Index loading buffers are reported separately as setup memory. Reports
+separate logical file reads, packet decode, and pixel validation from encoding.
+These byte counts do not measure physical storage transfers.
 
 Use `evaluate-acquisition config.json sequence.json result.json` to combine full-map
 search and tracking. Use the same sequence fields as `evaluate-surface`, but

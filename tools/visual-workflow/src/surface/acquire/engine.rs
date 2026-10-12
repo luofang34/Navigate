@@ -1,6 +1,8 @@
 //! Share one model and one validated query feature packet across map windows.
+mod reference;
+use super::store::reader::Reader;
 use super::{
-    super::matching::{Matches, restore, rotate},
+    super::matching::{Matches, restore},
     cache::Cache,
 };
 use crate::{
@@ -10,9 +12,10 @@ use crate::{
 use image::GrayImage;
 use navigate_visual_onnx::{XFeatFeatures, XFeatStages};
 use navigate_visual_workflow::FeatureBackend;
+use reference::{ImportTimes, Reference};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 const ENTRY_RESERVE: usize = 4 * 1024 * 1024;
 #[derive(Clone, Copy)]
@@ -25,6 +28,7 @@ pub(super) struct PreparedMatch {
     pub preparation_ms: f64,
     pub extraction_ms: f64,
     pub cache_hit: bool,
+    pub import: ImportTimes,
 }
 pub(super) struct ReferenceInput<'a> {
     image: &'a GrayImage,
@@ -36,12 +40,16 @@ struct Counts {
     hits: usize,
     rotations: usize,
     key_validations: usize,
+    packet_loads: usize,
+    packet_misses: usize,
+    packet_bytes: usize,
 }
 
 pub(in crate::surface) struct Engine {
     pub backend: Box<XFeatStages>,
     query: Option<XFeatFeatures>,
     cache: Cache<XFeatFeatures>,
+    catalog: Option<Arc<Reader>>,
     namespace: [u8; 32],
     counts: Counts,
     pub query_bytes: usize,
@@ -59,6 +67,7 @@ impl Engine {
             backend,
             query: None,
             cache: Cache::new(0),
+            catalog: None,
             namespace: [0; 32],
             counts: Counts::default(),
             query_bytes: 0,
@@ -69,6 +78,23 @@ impl Engine {
     pub fn configure_cache(&mut self, policy: CachePolicy) {
         self.cache = Cache::new(policy.bytes);
         self.namespace = policy.source;
+    }
+    pub fn set_catalog(&mut self, catalog: Option<Arc<Reader>>) -> Result<(), Error> {
+        if let Some(reader) = &catalog {
+            reader.check(self.namespace, self.backend.contract())?;
+        }
+        self.catalog = catalog;
+        Ok(())
+    }
+    fn index_bytes(&self) -> usize {
+        self.catalog.as_ref().map_or(0, |r| r.resident_bytes())
+    }
+    pub fn catalog_report(&self) -> Value {
+        if let Some(reader) = &self.catalog {
+            json!({"index":reader.report(),"packet_loads":self.counts.packet_loads,"packet_misses":self.counts.packet_misses,"read_bytes":self.counts.packet_bytes})
+        } else {
+            Value::Null
+        }
     }
     pub fn query_blocking(&mut self, query: &GrayImage, config: &Config) -> Result<(), Error> {
         self.query = None;
@@ -89,6 +115,7 @@ impl Engine {
         Ok(())
     }
     pub fn prepare_raster(&mut self, bytes: usize, config: &Config) -> Result<(), Error> {
+        let bytes = bytes.saturating_add(self.index_bytes());
         if bytes > config.limits.reference_bytes {
             return Err(Error::Input("acquisition raster budget".into()));
         }
@@ -98,7 +125,7 @@ impl Engine {
     }
     pub fn cache_report(&self) -> Value {
         json!({"limit_bytes":self.cache.limit,"resident_bytes":self.cache.bytes,"entries":self.cache.len(),
-            "hits":self.counts.hits,"misses":self.reference_encodings,"candidates":self.counts.candidates,
+            "hits":self.counts.hits,"misses":self.reference_encodings+self.counts.packet_loads,"candidates":self.counts.candidates,
             "evictions":self.cache.evictions,"rotations":self.counts.rotations,"source_pixel_key_validations":self.counts.key_validations,
             "source_namespace":format!("{:x}",Sha256::digest(self.namespace)),
             "scope":"Exact host feature handles, keyed by source map identity, encoder contract, crop, rotation and actual grayscale pixels. Hits skip rotation and extraction. Matching still uses its existing tensor adapter. Counts reset for each acquisition; entries persist within one model session lifetime. Metadata for live entries is included; allocator and container spare capacity are excluded."})
@@ -118,13 +145,14 @@ impl Engine {
         }
         self.counts.candidates = self.counts.candidates.wrapping_add(1);
         self.prepare_raster(resident_raster_bytes, config)?;
+        let resident_raster_bytes = resident_raster_bytes.saturating_add(self.index_bytes());
         let start = Instant::now();
         let key = input
             .key
             .map(|base| super::cache::rotation_key(base, rotation));
         let cached = key.as_ref().and_then(|k| self.cache.take_cached(k));
         let hit = cached.is_some();
-        let (features, bytes, extraction_ms) = if let Some((features, bytes)) = cached {
+        let reference = if let Some((features, bytes)) = cached {
             if resident_raster_bytes.saturating_add(bytes) > config.limits.reference_bytes {
                 return Err(Error::Input(
                     "cached reference handle exceeds total budget".into(),
@@ -140,11 +168,34 @@ impl Engine {
             self.peak_reference_bytes = self
                 .peak_reference_bytes
                 .max(resident_raster_bytes + self.cache.bytes + bytes);
-            (features, bytes, 0.0)
+            Reference {
+                features,
+                bytes,
+                extraction_ms: 0.,
+                import: ImportTimes::default(),
+            }
         } else {
-            self.extract_blocking(image, rotation, resident_raster_bytes, config)?
+            self.reference_blocking(image, rotation, key, resident_raster_bytes, config)?
         };
         let preparation_ms = start.elapsed().as_secs_f64() * 1000.0;
+        self.complete_blocking(image, rotation, key, reference, hit, preparation_ms)
+    }
+    fn complete_blocking(
+        &mut self,
+        image: &GrayImage,
+        rotation: u8,
+        key: Option<[u8; 32]>,
+        reference: Reference,
+        hit: bool,
+        preparation_ms: f64,
+    ) -> Result<PreparedMatch, Error> {
+        let Reference {
+            features,
+            bytes,
+            extraction_ms,
+            import,
+        } = reference;
+
         let start = Instant::now();
         let mut pairs = self.backend.match_features_blocking(
             &features,
@@ -168,6 +219,7 @@ impl Engine {
             preparation_ms,
             extraction_ms,
             cache_hit: hit,
+            import,
         })
     }
     pub(super) fn reference_input<'a>(
@@ -175,7 +227,7 @@ impl Engine {
         image: &'a GrayImage,
         window: Option<[u32; 4]>,
     ) -> ReferenceInput<'a> {
-        let key = if self.cache.limit == 0 {
+        let key = if self.cache.limit == 0 && self.catalog.is_none() {
             None
         } else {
             self.counts.key_validations = self.counts.key_validations.wrapping_add(1);
@@ -187,49 +239,5 @@ impl Engine {
             ))
         };
         ReferenceInput { image, key }
-    }
-    fn extract_blocking(
-        &mut self,
-        image: &GrayImage,
-        rotation: u8,
-        raster_bytes: usize,
-        config: &Config,
-    ) -> Result<(XFeatFeatures, usize, f64), Error> {
-        let overlap = raster_bytes.saturating_add(image.as_raw().len());
-        if overlap > config.limits.reference_bytes {
-            return Err(Error::Input("acquisition rotated raster budget".into()));
-        }
-        if self.cache.limit > 0 {
-            // Reserve a bounded host handle before extraction. Runtime scratch is separate.
-            if overlap.saturating_add(ENTRY_RESERVE) > config.limits.reference_bytes {
-                return Err(Error::Input(
-                    "acquisition feature reservation budget".into(),
-                ));
-            }
-            self.cache
-                .trim(config.limits.reference_bytes - overlap - ENTRY_RESERVE);
-        }
-        let started = Instant::now();
-        let rotated = rotate(image, rotation);
-        self.counts.rotations = self.counts.rotations.wrapping_add(1);
-        let features = self.backend.extract_features_blocking(&rotated)?;
-        let info = self.backend.validate_features(&features, &rotated)?;
-        let bytes = if self.cache.limit > 0 {
-            Cache::<XFeatFeatures>::entry_bytes(info.resident_bytes)
-        } else {
-            info.resident_bytes
-        };
-        let peak = overlap
-            .saturating_add(self.cache.bytes)
-            .saturating_add(bytes);
-        if peak > config.limits.reference_bytes
-            || info.count > config.limits.features_per_image
-            || (self.cache.limit > 0 && bytes > ENTRY_RESERVE)
-        {
-            return Err(Error::Input("acquisition reference feature budget".into()));
-        }
-        self.peak_reference_bytes = self.peak_reference_bytes.max(peak);
-        self.reference_encodings = self.reference_encodings.wrapping_add(1);
-        Ok((features, bytes, started.elapsed().as_secs_f64() * 1000.0))
     }
 }

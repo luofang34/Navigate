@@ -146,6 +146,11 @@ fn acquisition_command() -> Command {
     Command::new("evaluate-acquisition")
         .about("Evaluate bounded search, tracking, and frame arrival policies")
         .arg(
+            Arg::new("reference-feature-catalog")
+                .long("reference-feature-catalog")
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
             Arg::new("reference-cache-mib")
                 .long("reference-cache-mib")
                 .default_value("0")

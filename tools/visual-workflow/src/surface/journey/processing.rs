@@ -139,6 +139,7 @@ impl Runner {
         };
         record["reference_encodings"] = json!(engine.reference_encodings);
         record["reference_cache"] = engine.cache_report();
+        record["reference_catalog"] = engine.catalog_report();
         record["adapter_tensor_io_after"] = json!(engine.backend.tensor_statistics());
         record["peak_reference_accounted_bytes"] = json!(engine.peak_reference_bytes);
         record["map_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
