@@ -86,6 +86,13 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         );
     }
     match name {
+        "prepare-acquisition" => surface::acquire::prepare_features_blocking(
+            &config,
+            root,
+            &path("surface")?,
+            &path("output")?,
+            args.get_flag("include-fine"),
+        ),
         "evaluate-acquisition" => surface::journey::run_blocking(
             &config,
             root,

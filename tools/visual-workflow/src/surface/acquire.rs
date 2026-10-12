@@ -2,6 +2,7 @@
 mod cache;
 pub(super) mod engine;
 mod selection;
+pub(in crate::surface) mod store;
 use super::{
     job::{SurfaceJob, window},
     report,
@@ -280,3 +281,13 @@ fn window_pass(windows: &[Value], stage: &str) -> Option<(Value, f64)> {
 
 #[cfg(test)]
 mod tests;
+
+pub fn prepare_features_blocking(
+    config: &Config,
+    root: &Path,
+    input: &Path,
+    output: &Path,
+    include_fine: bool,
+) -> Result<(), Error> {
+    store::prepare_blocking(config, root, input, output, include_fine)
+}

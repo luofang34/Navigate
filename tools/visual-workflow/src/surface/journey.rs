@@ -100,11 +100,7 @@ pub fn run_blocking(
 }
 
 fn cache_policy(job: &SurfaceJob, reference_cache_mib: usize) -> acquire::engine::CachePolicy {
-    let source_identity = json!({"image":job.reference.image.sha256,"heights":job.reference.heights.sha256,
-        "origin":job.reference.origin,"column":job.reference.column,"row":job.reference.row,
-        "map_release":job.reference.map_release,"map_sha256":job.reference.map_sha256});
-    use sha2::{Digest, Sha256};
-    let source: [u8; 32] = Sha256::digest(source_identity.to_string().as_bytes()).into();
+    let source = acquire::store::source_namespace(&job.reference);
     acquire::engine::CachePolicy {
         bytes: reference_cache_mib * 1024 * 1024,
         source,

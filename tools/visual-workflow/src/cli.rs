@@ -46,6 +46,7 @@ pub fn command() -> Command {
         )
         .subcommands(surface_evaluation_commands())
         .subcommand(acquisition_command())
+        .subcommand(prepare_features_command())
         .subcommand(
             Command::new("acquire-surface")
                 .about("Search coarse and adjacent map windows with one query encoding")
@@ -204,4 +205,17 @@ fn surface_evaluation_commands() -> [Command; 2] {
             .arg(path("manifest"))
             .arg(path("output")),
     ]
+}
+
+fn prepare_features_command() -> Command {
+    Command::new("prepare-acquisition")
+        .about("Prepare query-independent coarse and local map feature packets")
+        .arg(path("config"))
+        .arg(path("surface"))
+        .arg(path("output"))
+        .arg(
+            Arg::new("include-fine")
+                .long("include-fine")
+                .action(clap::ArgAction::SetTrue),
+        )
 }

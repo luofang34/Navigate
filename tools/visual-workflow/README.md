@@ -214,6 +214,20 @@ does not establish a correct or unique position. The result includes loading,
 encoding, matching, geometry, and time to the first pass. Memory counts exclude
 model and runtime allocations. The full source map stays in memory.
 
+Use `prepare-acquisition config.json surface.json output-directory` to prepare
+map feature packets without query images or poses. Set `matcher` to `null`
+in the preparation config to load only the encoder. This does not change the
+feature contract. The output directory must not exist. The input uses the
+`reference` fields from a surface job, with no `window`. The command verifies and reads the map image. Height
+bytes are not read; their digest and the map geometry bind the packet namespace.
+Preparation covers the full image and all local windows allowed by the search
+rules, including clamped boundary windows. Add `--include-fine` to include all
+fine child windows. Each window has four rotations and its own encoder context.
+The command writes `catalog.json`, checksummed `.navfeat` packets, and preparation
+measurements. Each packet must preserve its feature values through a decode
+round trip. The catalog records coverage and the encoder contract. This command
+prepares files. Catalog loading is not part of `evaluate-acquisition`.
+
 Use `evaluate-acquisition config.json sequence.json result.json` to combine full-map
 search and tracking. Use the same sequence fields as `evaluate-surface`, but
 supply a full-map job with the acquisition budget. Omit `keyframe_interval`.
