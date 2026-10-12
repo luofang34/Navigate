@@ -66,12 +66,8 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         return render::run_blocking(
             &path("job")?,
             &path("output")?,
-            *args
-                .get_one::<usize>("iterations")
-                .ok_or_else(|| Error::Input("missing iterations".into()))?,
-            *args
-                .get_one::<usize>("pixels")
-                .ok_or_else(|| Error::Input("missing pixels".into()))?,
+            count(args, "iterations")?,
+            count(args, "pixels")?,
         );
     }
     let config_path = path("config")?;
@@ -85,14 +81,15 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             &path("fallback")?,
             &path("job")?,
             &path("output")?,
-            *args
-                .get_one::<usize>("iterations")
-                .ok_or_else(|| Error::Input("missing iterations".into()))?,
+            count(args, "iterations")?,
         );
     }
     match name {
         "probe-surface" => {
             surface::probe::run_blocking(&config, &path("manifest")?, &path("output")?)
+        }
+        "evaluate-surface" => {
+            surface::sequence::run_blocking(&config, root, &path("manifest")?, &path("output")?)
         }
         "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
         "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
@@ -111,11 +108,15 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
                 root,
                 &path("job")?,
                 &path("output")?,
-                *args
-                    .get_one::<usize>("iterations")
-                    .ok_or_else(|| Error::Input("missing iterations".into()))?,
+                count(args, "iterations")?,
             )
         }
         _ => Err(Error::Input(format!("unknown command {name}"))),
     }
+}
+
+fn count(args: &clap::ArgMatches, name: &str) -> Result<usize, Error> {
+    args.get_one::<usize>(name)
+        .copied()
+        .ok_or_else(|| Error::Input(format!("missing {name}")))
 }

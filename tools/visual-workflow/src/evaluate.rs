@@ -6,7 +6,7 @@ mod metrics;
 mod navigation;
 mod position;
 mod temporal;
-mod tracker;
+pub(crate) mod tracker;
 
 use crate::{
     Error, assets,

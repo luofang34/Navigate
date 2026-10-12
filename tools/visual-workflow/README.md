@@ -201,6 +201,21 @@ add `x` and `y` to obtain source coordinates. Metric poses keep the source frame
 The loader reads the full source before it selects the window. The memory limit
 must contain both the source raster and the window during this operation.
 
+Use `evaluate-surface config.json sequence.json result.json` for one fixed map
+region and an ordered image sequence. Its manifest has `job`, `refresh_interval`,
+and `frames`. Each frame has `image` (path and file digest), `frame_id`, and
+`capture_time_ns`. Frame IDs and capture times must increase. Keep evaluation
+truth outside the manifest. The job supplies one camera calibration for all frames.
+
+This command requires the `gpu` build feature and uses wgpu optical flow.
+An interval of 1 matches the map on every frame. Larger intervals track fixed
+map points between refreshes. A failed track or a gap above 200 ms requests map
+matching. A scheduled refresh skips tracking; a failed refresh clears the track.
+The result records all map candidates, the selected source, and the original
+map observation for each track. These tracks are conditional map evidence.
+Startup time includes loading and reference preparation. Frame times include
+image decoding. The command does not include coarse region search or map download.
+
 Use `replay` to process observations in time order. It keeps the models in memory.
 A reference cache keeps prepared references for reuse. The cache removes the
 least recently used references when it reaches a limit. Use an XFeat feature-stage

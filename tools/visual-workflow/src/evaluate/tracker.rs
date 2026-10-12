@@ -5,13 +5,13 @@ use serde::Deserialize;
 
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum TrackerBackend {
+pub(crate) enum TrackerBackend {
     #[default]
     Cpu,
     Wgpu,
 }
 
-pub(super) struct Tracker {
+pub(crate) struct Tracker {
     pub backend: Box<dyn PointTracker>,
     pub identity: String,
 }
