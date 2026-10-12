@@ -236,6 +236,18 @@ buffers. Index loading buffers are reported separately as setup memory. Reports
 separate logical file reads, packet decode, and pixel validation from encoding.
 These byte counts do not measure physical storage transfers.
 
+Use `probe-hypotheses config.json sequence.json result.json --hypotheses 4`
+to test a bounded set of accepted map poses with subsequent images.
+Use a full-map acquisition job and the same sequence format. Omit keyframe
+correction. The limit is 1 to 4 poses. The first frame runs map acquisition.
+Subsequent frames share one tracker batch and use separate geometry checks.
+A failed check or a gap over 200 ms ends that hypothesis. The probe does not
+rank poses, combine measurements, or run recovery. It releases inference models
+after acquisition. It retains one source map and makes one temporary crop at
+a time. Reports include pose disagreement, conditional covariance, timing,
+and host memory counts. Covariance does not include systematic map or camera
+errors. These results do not establish a unique fix.
+
 Use `evaluate-acquisition config.json sequence.json result.json` to combine full-map
 search and tracking. Use the same sequence fields as `evaluate-surface`, but
 supply a full-map job with the acquisition budget. Omit `keyframe_interval`.

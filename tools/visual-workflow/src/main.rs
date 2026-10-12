@@ -85,40 +85,53 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             count(args, "iterations")?,
         );
     }
+    configured_blocking(name, args, &config, root)
+}
+fn configured_blocking(
+    name: &str,
+    args: &clap::ArgMatches,
+    config: &config::Config,
+    root: &std::path::Path,
+) -> Result<(), Error> {
+    let path = |name: &str| {
+        args.get_one::<PathBuf>(name)
+            .cloned()
+            .ok_or_else(|| Error::Input(format!("missing {name}")))
+    };
     match name {
         "prepare-acquisition" => surface::acquire::prepare_features_blocking(
-            &config,
+            config,
             root,
             &path("surface")?,
             &path("output")?,
             args.get_flag("include-fine"),
         ),
         "evaluate-acquisition" => surface::journey::run_blocking(
-            &config,
+            config,
             root,
             &path("manifest")?,
             &path("output")?,
-            surface::journey::Options {
-                reload_model_on_recovery: args.get_flag("reload-model-on-recovery"),
-                reference_cache_mib: count(args, "reference-cache-mib")?,
-                arrival: cli::arrival_options(args)?,
-                feature_catalog: args
-                    .get_one::<PathBuf>("reference-feature-catalog")
-                    .cloned(),
-            },
+            acquisition_options(args)?,
         ),
         "acquire-surface" => {
-            surface::acquire::run_blocking(&config, root, &path("job")?, &path("output")?)
+            surface::acquire::run_blocking(config, root, &path("job")?, &path("output")?)
         }
+        "probe-hypotheses" => surface::hypotheses::run_blocking(
+            config,
+            root,
+            &path("manifest")?,
+            &path("output")?,
+            count(args, "hypotheses")?,
+        ),
         "probe-surface" => {
-            surface::probe::run_blocking(&config, &path("manifest")?, &path("output")?)
+            surface::probe::run_blocking(config, &path("manifest")?, &path("output")?)
         }
         "evaluate-surface" => {
-            surface::sequence::run_blocking(&config, root, &path("manifest")?, &path("output")?)
+            surface::sequence::run_blocking(config, root, &path("manifest")?, &path("output")?)
         }
-        "evaluate" => evaluate::run_blocking(&config, root, &path("manifest")?, &path("output")?),
-        "replay" => replay::run_blocking(&config, root, &path("manifest")?, &path("output")?),
-        "pack" => run::pack_blocking(&config, root, &path("image")?, &path("output")?),
+        "evaluate" => evaluate::run_blocking(config, root, &path("manifest")?, &path("output")?),
+        "replay" => replay::run_blocking(config, root, &path("manifest")?, &path("output")?),
+        "pack" => run::pack_blocking(config, root, &path("image")?, &path("output")?),
         "locate" | "locate-surface" | "probe-surface-windows" | "probe-surface-scores" => {
             (if name == "probe-surface-scores" {
                 surface::windows::run_scored_blocking
@@ -129,7 +142,7 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             } else {
                 surface::run_blocking
             })(
-                &config,
+                config,
                 root,
                 &path("job")?,
                 &path("output")?,
@@ -144,4 +157,15 @@ fn count(args: &clap::ArgMatches, name: &str) -> Result<usize, Error> {
     args.get_one::<usize>(name)
         .copied()
         .ok_or_else(|| Error::Input(format!("missing {name}")))
+}
+
+fn acquisition_options(args: &clap::ArgMatches) -> Result<surface::journey::Options, Error> {
+    Ok(surface::journey::Options {
+        reload_model_on_recovery: args.get_flag("reload-model-on-recovery"),
+        reference_cache_mib: count(args, "reference-cache-mib")?,
+        arrival: cli::arrival_options(args)?,
+        feature_catalog: args
+            .get_one::<PathBuf>("reference-feature-catalog")
+            .cloned(),
+    })
 }

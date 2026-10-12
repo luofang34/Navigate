@@ -27,16 +27,19 @@ struct Trial<'a> {
     prior: &'a PosePrior,
     verifier: PoseVerifier,
     record_matches: bool,
+    hypothesis_limit: usize,
     config: &'a Config,
 }
 pub(super) struct Acquired {
     pub estimate: OrthographicEstimate,
     pub pairs: Vec<PixelMatch>,
     pub window: Option<[u32; 4]>,
+    pub rotation: u8,
 }
 pub(super) struct SearchResult {
     pub record: Value,
     pub selected: Option<Acquired>,
+    pub alternatives: Vec<Acquired>,
 }
 pub(super) fn validate(config: &Config, job: &SurfaceJob) -> Result<(), Error> {
     if job.reference.window.is_some()
@@ -56,6 +59,20 @@ pub(super) fn search_blocking(
     config: &Config,
     record_matches: bool,
 ) -> Result<SearchResult, Error> {
+    search_hypotheses_blocking(frame, reference, prior, engine, config, record_matches, 1)
+}
+pub(super) fn search_hypotheses_blocking(
+    frame: &Frame,
+    reference: &OrthographicReference,
+    prior: &PosePrior,
+    engine: &mut Engine,
+    config: &Config,
+    record_matches: bool,
+    hypothesis_limit: usize,
+) -> Result<SearchResult, Error> {
+    if !(1..=4).contains(&hypothesis_limit) {
+        return Err(Error::Input("hypothesis limit must be 1 through 4".into()));
+    }
     selection::seed(&[], reference.image.dimensions())?;
     Trial {
         frame,
@@ -63,6 +80,7 @@ pub(super) fn search_blocking(
         prior,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         record_matches,
+        hypothesis_limit,
         config,
     }
     .run_blocking(engine)
@@ -94,6 +112,7 @@ pub fn run_blocking(
         prior: &prior,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
         record_matches: job.record_matches,
+        hypothesis_limit: 1,
         config,
     };
     let preparation_ms = total.elapsed().as_secs_f64() * 1000.0;
@@ -134,7 +153,7 @@ impl Trial<'_> {
     fn run_blocking(&self, engine: &mut Engine) -> Result<SearchResult, Error> {
         let started = Instant::now();
         let bytes = self.reference.image.as_raw().len() * 5;
-        let mut selected = None;
+        let mut selected = Vec::new();
         let (coarse, best) =
             self.stage_blocking(engine, self.reference, bytes, &mut selected, None)?;
         let seed = selection::seed(&best, self.reference.image.dimensions())?;
@@ -182,8 +201,10 @@ impl Trial<'_> {
                 }
             }
         }
+        let mut selected = selected.into_iter();
         Ok(SearchResult {
-            selected,
+            selected: selected.next(),
+            alternatives: selected.collect(),
             record: json!({"coarse":coarse,"coarse_ms":coarse_ms,"seed":seed,"windows":local,
             "fine_parent":parent,"fine_windows":fine,"first_pass":first,
             "accepted":first.is_some(),"search_to_first_pass_ms":first_fix_ms,"search_total_ms":started.elapsed().as_secs_f64()*1000.0,
@@ -195,7 +216,7 @@ impl Trial<'_> {
         engine: &mut Engine,
         windows: &[[u32; 4]],
         started: Instant,
-        selected: &mut Option<Acquired>,
+        selected: &mut Vec<Acquired>,
     ) -> Result<Vec<Value>, Error> {
         let mut crops = Vec::new();
         for &area in windows {
@@ -219,7 +240,7 @@ impl Trial<'_> {
         engine: &mut Engine,
         reference: &OrthographicReference,
         bytes: usize,
-        selected: &mut Option<Acquired>,
+        selected: &mut Vec<Acquired>,
         window: Option<[u32; 4]>,
     ) -> Result<(Vec<Value>, Vec<PixelMatch>), Error> {
         let mut rows = Vec::new();
@@ -242,13 +263,14 @@ impl Trial<'_> {
                 engine.backend.identity(),
                 self.record_matches,
             );
-            if selected.is_none()
+            if selected.len() < self.hypothesis_limit
                 && let Ok(estimate) = decision
             {
-                *selected = Some(Acquired {
+                selected.push(Acquired {
                     estimate,
                     pairs: candidate.pairs,
                     window,
+                    rotation,
                 });
             }
             row["reference_extraction_ms"] = json!(prepared.extraction_ms);

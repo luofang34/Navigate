@@ -52,16 +52,7 @@ impl Tracks {
         old: Option<&Self>,
         refreshed: bool,
     ) -> Self {
-        let threshold = LocalizerConfig::default().inlier_threshold_px;
-        let pairs = pairs
-            .into_iter()
-            .filter(|pair| {
-                reference
-                    .world_at(pair.reference)
-                    .and_then(|world| frame.camera.project(&estimate.pose, world))
-                    .is_some_and(|pixel| (pixel - pair.query).norm() <= threshold)
-            })
-            .collect();
+        let pairs = retain_inliers(&frame, reference, estimate, pairs);
         let origin = if refreshed {
             frame.evidence_sha256()
         } else {
@@ -79,6 +70,23 @@ impl Tracks {
             age,
         }
     }
+}
+pub(in crate::surface) fn retain_inliers(
+    frame: &Frame,
+    reference: &OrthographicReference,
+    estimate: &OrthographicEstimate,
+    pairs: Vec<PixelMatch>,
+) -> Vec<PixelMatch> {
+    let threshold = LocalizerConfig::default().inlier_threshold_px;
+    pairs
+        .into_iter()
+        .filter(|pair| {
+            reference
+                .world_at(pair.reference)
+                .and_then(|world| frame.camera.project(&estimate.pose, world))
+                .is_some_and(|pixel| (pixel - pair.query).norm() <= threshold)
+        })
+        .collect()
 }
 #[cfg(test)]
 mod tests;

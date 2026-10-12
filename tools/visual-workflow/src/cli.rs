@@ -197,8 +197,19 @@ pub fn arrival_options(
     )
 }
 
-fn surface_evaluation_commands() -> [Command; 2] {
+fn surface_evaluation_commands() -> [Command; 3] {
     [
+        Command::new("probe-hypotheses")
+            .about("Track up to four accepted map poses without truth ranking or recovery")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output"))
+            .arg(
+                Arg::new("hypotheses")
+                    .long("hypotheses")
+                    .default_value("4")
+                    .value_parser(value_parser!(usize)),
+            ),
         Command::new("probe-surface")
             .about("Recheck frozen image matches with an alternative registered height surface")
             .arg(path("config"))

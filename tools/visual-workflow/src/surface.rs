@@ -1,6 +1,7 @@
 //! Image matching and verified geometry on a fixed orthographic surface.
 pub mod acquire;
 pub mod cascade;
+pub mod hypotheses;
 mod job;
 pub mod journey;
 mod matching;
