@@ -34,7 +34,10 @@ impl PoseVerifier {
                 field: "orthographic observation",
             });
         }
+        prior.validate()?;
         let points = correspondences(frame, reference, matches);
+        // Inlier selection cannot add points. This path does not return refinement seeds.
+        self.require_inliers(points.len())?;
         let (pose, inliers, depth_matches) =
             self.fit_points(frame, prior.pose, prior, points, Motion::Free)?;
         let (points, reference_cells) = support::separated_projected(
@@ -92,3 +95,6 @@ pub(super) fn correspondences(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
