@@ -1,4 +1,5 @@
 //! Native offline feature packages and bounded visual localization.
+mod anchoring;
 mod assets;
 mod cli;
 mod config;

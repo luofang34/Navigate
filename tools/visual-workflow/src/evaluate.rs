@@ -2,6 +2,7 @@
 mod backend;
 mod focal;
 mod initialization;
+mod keyframe;
 mod metrics;
 mod navigation;
 mod position;
@@ -22,7 +23,7 @@ use navigate_visual::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
-use temporal::Tracks;
+use temporal::{Tracks, select_map};
 use tracker::{Tracker, TrackerBackend};
 
 #[derive(Deserialize)]
@@ -55,6 +56,7 @@ struct Experiment {
     initial_match_order: initialization::MatchOrder,
     #[serde(default)]
     tracking_probe_frames: Vec<usize>,
+    keyframe_interval: Option<usize>,
 }
 #[derive(Default, serde::Serialize)]
 struct StageTimings {
@@ -74,8 +76,11 @@ struct Outcome {
     refreshed: bool,
     map_rejection: Option<String>,
     disagreement_m: Option<f64>,
+    tracking_rejection: Option<String>,
+    correction: Option<Value>,
 }
 struct Runner {
+    anchoring: crate::anchoring::Anchoring,
     navigation: Option<navigation::Navigation>,
     matcher: Matcher,
     tracker: Tracker,
@@ -126,6 +131,7 @@ pub fn run_blocking(
         .transpose()?;
     let setup_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mut runner = Runner {
+        anchoring: crate::anchoring::Anchoring::new(experiment.keyframe_interval),
         navigation,
         matcher,
         tracker,
@@ -149,6 +155,7 @@ pub fn run_blocking(
         "setup_ms":setup_ms,"fold":runner.experiment.fold,
         "holdout_enabled":runner.experiment.fold.is_some(),
         "refresh_interval":runner.experiment.refresh_interval,
+        "keyframe_interval":runner.experiment.keyframe_interval,
         "query_focal_scale":runner.experiment.query_focal_scale,"frames":records,
         "query_transform":runner.experiment.query_transform,
         "navigation":runner.experiment.navigation,
@@ -185,6 +192,7 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
             .as_ref()
             .is_some_and(|s| !focal::valid_scales(s))
         || !tracking_probe::valid_frames(&experiment.tracking_probe_frames, experiment.frames.len())
+        || !crate::anchoring::valid_interval(experiment.keyframe_interval)
         || invalid_controls
         || experiment
             .frames
@@ -295,6 +303,8 @@ impl Runner {
             refreshed: false,
             map_rejection: None,
             disagreement_m: None,
+            tracking_rejection: None,
+            correction: None,
         };
         let interval = self.experiment.refresh_interval;
         let limit = if self.experiment.retain_valid_track {
@@ -309,12 +319,11 @@ impl Runner {
             let start = Instant::now();
             result.pairs = tracks.propagate_blocking(frame, self.tracker.backend.as_mut())?;
             result.timings.tracking_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let start = Instant::now();
-            result.decision = self.fit(frame, &result.pairs);
+            self.fit_tracking_blocking(frame, &mut result)?;
+            result.tracking_rejection = result.decision.as_ref().err().map(ToString::to_string);
             if self.navigation.is_some() {
                 result.evidence.tracked = result.decision.as_ref().ok().cloned();
             }
-            result.timings.geometry_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
         let scheduled = self
             .tracks
@@ -413,6 +422,8 @@ impl Runner {
             refreshed,
             map_rejection,
             disagreement_m,
+            tracking_rejection,
+            correction,
         } = outcome;
         let pipeline_ms = start.elapsed().as_secs_f64() * 1000.0;
         let validation_start = Instant::now();
@@ -428,6 +439,7 @@ impl Runner {
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});
         record["focal_probe"] = json!(probe);
+        keyframe::record_decisions(&mut record, tracking_rejection, correction);
         self.record_tracking_probe_blocking(index, &frame, &mut record)?;
         self.position_checks(index, &frame, &decision, navigation, &mut record);
         match decision {
@@ -442,14 +454,17 @@ impl Runner {
                     &estimate.pose,
                 );
                 let update_start = Instant::now();
-                self.tracks = Some(Tracks::update(
+                let tracks = Tracks::update(
                     frame,
                     pairs,
                     (&self.reference, &self.reference_camera),
                     &estimate,
                     self.tracks.as_ref(),
                     refreshed,
-                ));
+                );
+                self.anchoring
+                    .observe(tracks.inputs().0, tracks.inputs().1, refreshed);
+                self.tracks = Some(tracks);
                 let update_ms = update_start.elapsed().as_secs_f64() * 1000.0;
                 record["state_update_ms"] = json!(update_ms);
                 record["pipeline_ms"] = json!(pipeline_ms + update_ms);
@@ -457,6 +472,7 @@ impl Runner {
             Err(error) => {
                 record["rejection"] = json!(error.to_string());
                 self.tracks = None;
+                self.anchoring.clear();
             }
         }
         record["validation_ms"] = json!(
@@ -468,19 +484,5 @@ impl Runner {
     }
 }
 
-fn select_map(
-    track: &Result<Estimate, Error>,
-    map: &Result<Estimate, Error>,
-    limit: Option<f64>,
-) -> (bool, Option<f64>) {
-    let distance = match (track, map) {
-        (Ok(track), Ok(map)) => Some((track.pose.position - map.pose.position).norm()),
-        _ => None,
-    };
-    let conflict = distance
-        .zip(limit)
-        .is_some_and(|(distance, limit)| distance > limit);
-    (track.is_err() || (map.is_ok() && !conflict), distance)
-}
 #[cfg(test)]
 mod tests;

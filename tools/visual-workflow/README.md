@@ -318,6 +318,17 @@ Use `evaluate` to compare local map matching with temporal point tracking:
 navigate-workflow evaluate config.json experiment.json results.json
 ```
 
+Both `evaluate` and `evaluate-surface` accept optional `keyframe_interval`
+(2 through 30 accepted frames; omitted disables correction). Adjacent-frame
+predictions initialize full-resolution alignment to an appearance keyframe.
+Corrections over two pixels or failed patch checks retain the original prediction;
+corrected geometry must pass the unchanged gate or the prediction fit is retained.
+Map refresh replaces the keyframe, and loss clears it. This retains one extra
+grayscale image and reports patch/geometry failures and selection separately.
+`prediction_fit_evaluated` distinguishes skipped prediction fits from successful
+ones. Correction selection refers to the tracking proposal; a scheduled map
+refresh can subsequently replace it. This option does not establish accuracy.
+
 An experiment uses one fixed reference from a localization job. It accepts up to
 1000 frames. Frame times must increase. Paths are relative to the experiment.
 

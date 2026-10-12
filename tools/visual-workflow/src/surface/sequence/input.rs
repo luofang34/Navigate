@@ -9,6 +9,7 @@ pub(super) struct Manifest {
     pub job: PathBuf,
     pub frames: Vec<Sample>,
     pub refresh_interval: usize,
+    pub keyframe_interval: Option<usize>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,13 +22,14 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), Error> {
         if self.frames.is_empty()
             || self.frames.len() > 1000
+            || !crate::anchoring::valid_interval(self.keyframe_interval)
             || !(1..=1000).contains(&self.refresh_interval)
             || self.frames.windows(2).any(|p| {
                 p[1].frame_id <= p[0].frame_id || p[1].capture_time_ns <= p[0].capture_time_ns
             })
         {
             return Err(Error::Input(
-                "surface sequence needs ordered frame IDs/timestamps and bounded refresh interval"
+                "surface sequence needs ordered frame IDs/timestamps and bounded map/keyframe intervals"
                     .into(),
             ));
         }

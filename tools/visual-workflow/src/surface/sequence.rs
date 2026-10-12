@@ -1,6 +1,7 @@
 //! Conditional temporal localization on one fixed orthographic map region.
 mod continuity;
 mod input;
+mod keyframe;
 mod tracks;
 use super::{job::SurfaceJob, matching::Matcher};
 use crate::{
@@ -19,6 +20,7 @@ use tracks::Tracks;
 
 type Decision = (OrthographicEstimate, Vec<PixelMatch>);
 struct Runner {
+    anchoring: crate::anchoring::Anchoring,
     continuity: continuity::Continuity,
     matcher: Matcher,
     tracker: Tracker,
@@ -52,6 +54,7 @@ pub fn run_blocking(
         raster_bytes,
     )?;
     let mut runner = Runner {
+        anchoring: crate::anchoring::Anchoring::new(spec.keyframe_interval),
         continuity: continuity::Continuity::new(initial.camera)?,
         matcher,
         tracker: Tracker::new_blocking(TrackerBackend::Wgpu)?,
@@ -96,7 +99,7 @@ pub fn run_blocking(
             "backend":runner.matcher.identity(), "tracker":runner.tracker.identity,
             "setup_ms":setup_ms, "total_ms":total.elapsed().as_secs_f64()*1000.0,
             "reference_resident_bytes":runner.matcher.resident_bytes,
-            "reference_window":job.reference.window,"job":job,"refresh_interval":spec.refresh_interval,"frames":records,
+            "reference_window":job.reference.window,"job":job,"refresh_interval":spec.refresh_interval,"keyframe_interval":spec.keyframe_interval,"frames":records,
             "scope":"One supplied map region; no global retrieval or navigation fusion. Map pixels and DSM samples stay fixed between anchors. Tracking is conditional evidence. Wgpu LK is explicit; gaps over 200ms require map matching. Scheduled refresh skips tracking; a failed refresh clears the track. All rotations are checked and the accepted candidate with greatest spatial support wins, ties by input order. Setup includes source loading, models and reference encoding. Total includes setup, all frame loading and processing, excludes output writing. Independent truth must be scored separately."
         }),
     )?;
@@ -117,15 +120,7 @@ impl Runner {
             let started = Instant::now();
             let pairs = tracks.propagate_blocking(&frame, self.tracker.backend.as_mut())?;
             record["tracking_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
-            let started = Instant::now();
-            let result = self.verifier.verify_orthographic(
-                &frame,
-                &self.reference,
-                &self.prior,
-                &pairs,
-                &self.tracker.identity,
-            );
-            record["tracking_geometry_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+            let (result, pairs) = self.fit_tracking_blocking(&frame, pairs, &mut record)?;
             match result {
                 Ok(estimate) => decision = Some((estimate, pairs)),
                 Err(error) => record["tracking_rejection"] = json!(error.to_string()),
@@ -168,10 +163,15 @@ impl Runner {
                     refreshed,
                 );
                 record["anchor_observation_sha256"] = json!(tracks.origin);
+                self.anchoring
+                    .observe(&tracks.previous, &tracks.pairs, refreshed);
                 record["retained_tracks"] = json!(tracks.pairs.len());
                 Some(tracks)
             }
-            None => None,
+            None => {
+                self.anchoring.clear();
+                None
+            }
         };
         Ok(record)
     }

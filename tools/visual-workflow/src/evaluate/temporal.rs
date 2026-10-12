@@ -66,3 +66,18 @@ impl Tracks {
         }
     }
 }
+
+pub(super) fn select_map(
+    track: &Result<Estimate, Error>,
+    map: &Result<Estimate, Error>,
+    limit: Option<f64>,
+) -> (bool, Option<f64>) {
+    let distance = match (track, map) {
+        (Ok(track), Ok(map)) => Some((track.pose.position - map.pose.position).norm()),
+        _ => None,
+    };
+    let conflict = distance
+        .zip(limit)
+        .is_some_and(|(distance, limit)| distance > limit);
+    (track.is_err() || (map.is_ok() && !conflict), distance)
+}
