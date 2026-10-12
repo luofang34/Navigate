@@ -1,4 +1,5 @@
 //! Image matching and verified geometry on a fixed orthographic surface.
+pub mod accumulation;
 pub mod acquire;
 pub mod appearance;
 pub mod cascade;

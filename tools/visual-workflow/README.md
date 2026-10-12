@@ -259,6 +259,16 @@ exclusions. The probe uses a fixed grid and reports separate even and odd cells.
 It does not change poses or make acceptance decisions. It has no occlusion
 model. This scalar Rust probe tests evidence quality, not GPU performance.
 
+Use `probe-surface-accumulation config.json sequence-result.json result.json
+--history 5` to test map pairs before a pose is available. The input must be an
+`evaluate-surface` result with matches recorded for all four rotations on every
+frame. Image digests, calibration, frame order, and pixel bounds are checked.
+The probe tracks at most eight frames of pairs with wgpu optical flow. It keeps
+new pairs first and removes pairs within 12 pixels in either image. Use
+`--history 1` as the spatial-filter control. All geometry limits stay fixed.
+The output records source frames and ages. It does not update navigation state.
+Tracked pairs can share map and image errors; they are not independent evidence.
+
 Use `probe-hypotheses config.json sequence.json result.json --hypotheses 4`
 to test a bounded set of accepted map poses with subsequent images.
 Use a full-map acquisition job and the same sequence format. Omit keyframe

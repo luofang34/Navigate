@@ -44,11 +44,7 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
     let (name, args) = matches
         .subcommand()
         .ok_or_else(|| Error::Input("missing command".into()))?;
-    let path = |name: &str| {
-        args.get_one::<PathBuf>(name)
-            .cloned()
-            .ok_or_else(|| Error::Input(format!("missing {name}")))
-    };
+    let path = |name: &str| path_argument(args, name);
     if name == "probe-motion" {
         #[cfg(feature = "gpu")]
         return motion_probe::run_blocking(&path("manifest")?, &path("output")?);
@@ -93,11 +89,7 @@ fn configured_blocking(
     config: &config::Config,
     root: &std::path::Path,
 ) -> Result<(), Error> {
-    let path = |name: &str| {
-        args.get_one::<PathBuf>(name)
-            .cloned()
-            .ok_or_else(|| Error::Input(format!("missing {name}")))
-    };
+    let path = |name: &str| path_argument(args, name);
     match name {
         "prepare-acquisition" => surface::acquire::prepare_features_blocking(
             config,
@@ -119,6 +111,12 @@ fn configured_blocking(
             &path("job")?,
             &path("output")?,
             args.get_flag("probe-fine-after-pass"),
+        ),
+        "probe-surface-accumulation" => surface::accumulation::run_blocking(
+            config,
+            &path("manifest")?,
+            &path("output")?,
+            count(args, "history")?,
         ),
         "probe-surface-holdout" => {
             surface::holdout::run_blocking(config, &path("manifest")?, &path("output")?)
@@ -161,6 +159,12 @@ fn configured_blocking(
         }
         _ => Err(Error::Input(format!("unknown command {name}"))),
     }
+}
+
+fn path_argument(args: &clap::ArgMatches, name: &str) -> Result<PathBuf, Error> {
+    args.get_one::<PathBuf>(name)
+        .cloned()
+        .ok_or_else(|| Error::Input(format!("missing {name}")))
 }
 
 fn count(args: &clap::ArgMatches, name: &str) -> Result<usize, Error> {

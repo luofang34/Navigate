@@ -191,8 +191,19 @@ pub fn arrival_options(
     )
 }
 
-fn surface_evaluation_commands() -> [Command; 5] {
+fn surface_evaluation_commands() -> [Command; 6] {
     [
+        Command::new("probe-surface-accumulation")
+            .about("Propagate bounded frozen map pairs before pose initialization")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output"))
+            .arg(
+                Arg::new("history")
+                    .long("history")
+                    .default_value("5")
+                    .value_parser(value_parser!(usize)),
+            ),
         Command::new("probe-surface-holdout")
             .about("Replay frozen acquisition and test five fixed spatial holdouts")
             .arg(path("config"))
