@@ -90,20 +90,11 @@ impl Surface {
                 "orthographic reference exceeds memory limit".into(),
             ));
         }
-        let bytes = assets::read_blocking(
+        let heights_m = assets::heights_verified_blocking(
             &root.join(&input.heights.path),
-            image.as_raw().len().saturating_mul(4),
+            image.as_raw().len(),
+            &input.heights.sha256,
         )?;
-        assets::verify(&bytes, &input.heights.sha256)?;
-        if bytes.len() != image.as_raw().len() * 4 {
-            return Err(Error::Input("orthographic height dimensions".into()));
-        }
-        let heights_m = bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|v| f32::from_le_bytes([v[0], v[1], v[2], v[3]]))
-            .collect();
         let reference = OrthographicReference {
             map: MapRevision {
                 release_id: input.map_release.clone(),

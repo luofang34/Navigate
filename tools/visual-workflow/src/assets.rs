@@ -1,5 +1,7 @@
 //! Bound file reads and bind evidence to content digests.
 use crate::Error;
+mod heights;
+pub use heights::heights_verified_blocking;
 use image::{GrayImage, ImageReader};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
