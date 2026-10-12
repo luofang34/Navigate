@@ -7,6 +7,7 @@ mod navigation;
 mod position;
 mod temporal;
 pub(crate) mod tracker;
+mod tracking_probe;
 
 use crate::{
     Error, assets,
@@ -52,6 +53,8 @@ struct Experiment {
     max_map_track_disagreement_m: Option<f64>,
     #[serde(default)]
     initial_match_order: initialization::MatchOrder,
+    #[serde(default)]
+    tracking_probe_frames: Vec<usize>,
 }
 #[derive(Default, serde::Serialize)]
 struct StageTimings {
@@ -181,6 +184,7 @@ fn validate(experiment: &Experiment) -> Result<(), Error> {
             .focal_probe_scales
             .as_ref()
             .is_some_and(|s| !focal::valid_scales(s))
+        || !tracking_probe::valid_frames(&experiment.tracking_probe_frames, experiment.frames.len())
         || invalid_controls
         || experiment
             .frames
@@ -424,6 +428,7 @@ impl Runner {
             "frozen_controls":self.experiment.frames[index].controls.is_some(),
             "training_matches":pairs.len(),"heldout_matches":withheld.len(),"accepted":decision.is_ok()});
         record["focal_probe"] = json!(probe);
+        self.record_tracking_probe_blocking(index, &frame, &mut record)?;
         self.position_checks(index, &frame, &decision, navigation, &mut record);
         match decision {
             Ok(estimate) => {

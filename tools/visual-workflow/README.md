@@ -345,6 +345,14 @@ tracking kernel stay loaded across frames. A missing GPU returns an error. Use
 `"cpu"` for the CPU comparison; an omitted field selects CPU. This choice does
 not change the neural inference backend. Results record the active tracker.
 
+For a tracker consistency diagnostic, set `tracking_probe_frames` to at most
+16 increasing, unique frame indices. Each selected frame runs CPU and wgpu on
+the same preceding pixels and ordered point set, recording every output slot
+and both geometry decisions. Neither arm updates the trajectory. Probe time is
+validation time, excluded from `pipeline_ms`; fresh diagnostic devices make
+these timings unsuitable for backend performance comparisons. This requires
+the `gpu` build feature.
+
 Run folds 0 through 4 separately. Each fold excludes fixed 64-pixel map cells
 from fitting and tracking. A four-pixel cell border is excluded. The score uses
 all test matches with valid depth, without removing pose outliers. Optional frame

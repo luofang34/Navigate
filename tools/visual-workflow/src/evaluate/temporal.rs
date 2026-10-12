@@ -9,6 +9,9 @@ pub(super) struct Tracks {
     age: usize,
 }
 impl Tracks {
+    pub fn inputs(&self) -> (&Frame, &[PixelMatch]) {
+        (&self.previous, &self.pairs)
+    }
     pub fn refresh_due(&self, interval: usize) -> bool {
         self.age.is_multiple_of(interval)
     }
