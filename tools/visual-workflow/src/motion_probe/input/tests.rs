@@ -30,7 +30,7 @@ fn verified_result_binds_pixels_calibration_and_timestamp() {
     let bytes = std::fs::read(&path).unwrap();
     let asset = Image {
         path: path.clone(),
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
     };
     let run = Run::load_blocking(&asset, directory.path(), 1).unwrap();
     assert!(run.bind(&spec, 0, &image).is_ok());
@@ -58,7 +58,7 @@ fn frame_pair_cannot_bridge_a_rejected_pose() {
     let bytes = std::fs::read(&path).unwrap();
     let asset = Image {
         path: path.clone(),
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: hex::encode(Sha256::digest(bytes)),
     };
     let run = Run::load_blocking(&asset, directory.path(), 3).unwrap();
     assert_eq!(run.score(0, 2, &[]).unwrap()["available"], false);

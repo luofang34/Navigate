@@ -35,7 +35,7 @@ impl CampRetriever {
             path: model.to_owned(),
             source,
         })?;
-        let digest = format!("{:x}", Sha256::digest(bytes));
+        let digest = hex::encode(Sha256::digest(bytes));
         if !digest.eq_ignore_ascii_case(&index.model_sha256) {
             return Err(InferenceError::Invalid(format!(
                 "CAMP model {digest} does not match index model {}",

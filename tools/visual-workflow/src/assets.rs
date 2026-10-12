@@ -100,7 +100,7 @@ pub fn write_json_blocking(path: &Path, value: &impl Serialize) -> Result<(), Er
     write_blocking(path, &bytes)
 }
 pub fn verify(bytes: &[u8], expected: &str) -> Result<(), Error> {
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = hex::encode(Sha256::digest(bytes));
     if expected != actual {
         return Err(Error::Input(format!(
             "content digest mismatch: expected {expected}, got {actual}"

@@ -76,10 +76,7 @@ fn offline_scene_round_trip_refines_geometry_and_preserves_observations() {
     assert!(report["final_cost"].as_f64().expect("cost") < 1e-5);
     assert_eq!(
         report["source_sha256"],
-        format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(input).expect("source bytes"))
-        )
+        hex::encode(Sha256::digest(std::fs::read(input).expect("source bytes")))
     );
     for (a, b) in source.points.iter().zip(fitted.points) {
         assert_eq!(a.feature_id, b.feature_id);

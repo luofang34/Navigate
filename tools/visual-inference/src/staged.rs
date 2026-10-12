@@ -239,7 +239,7 @@ fn digest_file_blocking(path: &Path) -> Result<String, InferenceError> {
         path: path.into(),
         source,
     })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 #[cfg(test)]
 mod tests;

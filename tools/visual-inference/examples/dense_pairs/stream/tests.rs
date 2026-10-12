@@ -76,11 +76,11 @@ fn two_requests_share_the_matcher_and_keep_pixel_identity() -> Result<(), Box<dy
         assert_eq!(row["backend"], "test-resident-matcher");
         assert_eq!(
             row["reference_image_sha256"],
-            format!("{:x}", Sha256::digest([7; 64]))
+            hex::encode(Sha256::digest([7; 64]))
         );
         assert_eq!(
             row["query_image_sha256"],
-            format!("{:x}", Sha256::digest([19; 64]))
+            hex::encode(Sha256::digest([19; 64]))
         );
         assert_eq!(
             row["pairs"],

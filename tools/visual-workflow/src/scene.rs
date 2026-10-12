@@ -146,7 +146,7 @@ pub fn run_blocking(input: &Path, output: &Path) -> Result<(), Error> {
     assets::write_json_blocking(
         output,
         &json!({
-            "source_sha256":format!("{:x}", Sha256::digest(&bytes)),
+            "source_sha256":hex::encode(Sha256::digest(&bytes)),
             "scene":scene,"initial_cost":result.initial_cost,"final_cost":result.final_cost,
             "steps":result.steps,"solve_ms":solve_ms,
             "scope":"Conditional poses and structure with fixed intrinsics. This does not accept a navigation fix or establish geographic accuracy. Input links and source identities are supplied by the caller."

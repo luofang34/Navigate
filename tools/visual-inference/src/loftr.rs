@@ -33,8 +33,8 @@ impl LoFtrMatcher {
             source,
         })?;
         let identity = format!(
-            "loftr-dual-softmax-640x480/{:x}/ort-requested-{:?}",
-            Sha256::digest(&bytes),
+            "loftr-dual-softmax-640x480/{}/ort-requested-{:?}",
+            hex::encode(Sha256::digest(&bytes)),
             execution.provider
         );
         let session = native_runtime::session_blocking(path, execution)?;

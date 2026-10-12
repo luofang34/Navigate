@@ -34,7 +34,7 @@ pub fn run_blocking(input: &Path, output: &Path) -> Result<(), Error> {
     assets::write_blocking(&output.join("heights.bin"), &bytes)?;
     let heights = Image {
         path: "heights.bin".into(),
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
     };
     let mut hash = Sha256::new();
     hash.update(b"navigate-orthographic-map-v1");
@@ -55,7 +55,7 @@ pub fn run_blocking(input: &Path, output: &Path) -> Result<(), Error> {
         column: geometry.column.into(),
         row: geometry.row.into(),
         map_release: "unpacked-orthographic-arrays".into(),
-        map_sha256: format!("{:x}", hash.finalize()),
+        map_sha256: hex::encode(hash.finalize()),
         window: None,
     };
     let job = SurfaceJob {
@@ -153,7 +153,7 @@ fn save_image_blocking(root: &Path, name: &str, image: DynamicImage) -> Result<I
     assets::write_blocking(&path, bytes.get_ref())?;
     Ok(Image {
         path: name.into(),
-        sha256: format!("{:x}", Sha256::digest(bytes.get_ref())),
+        sha256: hex::encode(Sha256::digest(bytes.get_ref())),
     })
 }
 

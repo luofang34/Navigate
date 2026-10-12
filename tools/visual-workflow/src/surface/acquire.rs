@@ -107,15 +107,12 @@ pub fn run_blocking(
     result["backend"] = json!(engine.backend.identity());
     result["job"] = json!(job);
     result["observation_sha256"] = json!(frame.evidence_sha256());
-    result["map_input_sha256"] = json!(format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&job.reference).map_err(|source| Error::Json {
-                path: input.into(),
-                source
-            })?
-        )
-    ));
+    result["map_input_sha256"] = json!(hex::encode(Sha256::digest(
+        serde_json::to_vec(&job.reference).map_err(|source| Error::Json {
+            path: input.into(),
+            source
+        })?
+    )));
     result["loading_ms"] = json!(loading_ms);
     result["model_load_ms"] = json!(model_load_ms);
     result["query_extraction_ms"] = json!(query_extraction_ms);

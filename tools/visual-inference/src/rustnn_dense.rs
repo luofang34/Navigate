@@ -104,7 +104,7 @@ impl DenseGraph {
             channels,
             outputs,
             context,
-            digest: format!("{:x}", digest.finalize()),
+            digest: hex::encode(digest.finalize()),
             device,
         })
     }

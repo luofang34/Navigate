@@ -140,7 +140,7 @@ fn main() -> Result<(), Error> {
             rows.push(run_case(&case, camera, geometry)?);
         }
     }
-    let report = json!({"fixture_sha256":format!("{:x}",Sha256::digest(bytes)),"cases":rows,
+    let report = json!({"fixture_sha256":hex::encode(Sha256::digest(bytes)),"cases":rows,
         "scope":"Synthetic independently supplied WGS84 pixels, default acceptance, f32 optical reference depths. Corrected fit transforms the same sphere reference points and retains source pixels. Physical position errors are compared in WGS84, not by subtracting coordinates from different models. No image matching or real-flight accuracy claim. Geometry-only probe: no renderer depth or slant-range envelope claim."});
     write_blocking(&output, &report)?;
     tracing::info!(path=%output.display(),"Saved geometric model probe");

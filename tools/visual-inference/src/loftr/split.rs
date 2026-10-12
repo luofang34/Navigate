@@ -53,8 +53,8 @@ impl FineStage {
             batch,
             buffers: [vec![0.0; batch * PATCH], vec![0.0; batch * PATCH]],
             identity: format!(
-                "fine/{:x}/batch{batch}/ort-requested-{:?}",
-                Sha256::digest(bytes),
+                "fine/{}/batch{batch}/ort-requested-{:?}",
+                hex::encode(Sha256::digest(bytes)),
                 execution.provider
             ),
         })

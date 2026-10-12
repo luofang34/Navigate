@@ -23,7 +23,8 @@ navigate-visual-onnx = { package = "visual-inference-probe", path = "../visual-i
 image = { workspace = true, features = ["png", "jpeg"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-sha2 = "0.10"
+sha2 = { version = "0.11", default-features = false }
+hex = "0.4"
 clap = "4"
 nalgebra.workspace = true
 thiserror.workspace = true

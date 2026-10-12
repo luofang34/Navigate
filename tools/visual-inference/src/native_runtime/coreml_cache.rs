@@ -45,7 +45,7 @@ fn cache_key(
         "{:?}/{}/{}/{dimensions:?}/{runtime}",
         config.provider, config.threads, config.cpu_spinning,
     ));
-    format!("{:x}", hash.finalize())
+    hex::encode(hash.finalize())
 }
 
 #[cfg(test)]

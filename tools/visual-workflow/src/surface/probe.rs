@@ -161,7 +161,7 @@ fn remap(
     Ok(OrthographicReference {
         map: MapRevision {
             release_id: "diagnostic-height-remap".into(),
-            manifest_sha256: format!("{:x}", hash.finalize()),
+            manifest_sha256: hex::encode(hash.finalize()),
         },
         image: target.image.clone(),
         heights_m: heights,

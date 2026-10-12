@@ -127,7 +127,7 @@ impl Engine {
         json!({"limit_bytes":self.cache.limit,"resident_bytes":self.cache.bytes,"entries":self.cache.len(),
             "hits":self.counts.hits,"misses":self.reference_encodings+self.counts.packet_loads,"candidates":self.counts.candidates,
             "evictions":self.cache.evictions,"rotations":self.counts.rotations,"source_pixel_key_validations":self.counts.key_validations,
-            "source_namespace":format!("{:x}",Sha256::digest(self.namespace)),
+            "source_namespace":hex::encode(Sha256::digest(self.namespace)),
             "scope":"Exact host feature handles, keyed by source map identity, encoder contract, crop, rotation and actual grayscale pixels. Hits skip rotation and extraction. Matching still uses its existing tensor adapter. Counts reset for each acquisition; entries persist within one model session lifetime. Metadata for live entries is included; allocator and container spare capacity are excluded."})
     }
     pub(super) fn match_blocking(

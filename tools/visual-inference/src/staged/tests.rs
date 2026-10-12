@@ -95,3 +95,12 @@ fn window_selection_preserves_parent_identity_and_all_record_bits() {
         assert!(source.select_window(window).is_err());
     }
 }
+
+#[test]
+fn packet_checksum_and_lowercase_identity_are_stable() {
+    let bytes = feature_packet().encode();
+    assert_eq!(
+        hex::encode(Sha256::digest(bytes)),
+        "f013982ad56e1405b5d8d07e941ba35263d0450482c1395832c802acec414212"
+    );
+}

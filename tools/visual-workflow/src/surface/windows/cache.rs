@@ -70,7 +70,7 @@ pub(super) fn prepare_blocking(
         }
         reports.push(json!({"rotation":rotation,"block_features":features.len(),"block_feature_bytes":features.resident_bytes(),
             "source_to_model":geometry::model_transform(rotated.dimensions()),"block_extraction_ms":block_extraction_ms,"packet_bytes":packet.len(),"packet_roundtrip_ms":packet_roundtrip_ms,
-            "packet_sha256":format!("{:x}",Sha256::digest(&packet)),"windows":window_reports}));
+            "packet_sha256":hex::encode(Sha256::digest(&packet)),"windows":window_reports}));
         blocks.push(Block {
             rotation,
             features,

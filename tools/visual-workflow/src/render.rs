@@ -81,7 +81,7 @@ fn save_blocking(output: &Path, index: usize, view: &ReferenceView) -> Result<Va
     let depth: Vec<u8> = view.depth_m.iter().flat_map(|d| d.to_le_bytes()).collect();
     assets::write_blocking(&output.join(&depth_name), &depth)?;
     Ok(
-        json!({"image":{"path":name,"sha256":format!("{:x}",Sha256::digest(&bytes))},
-        "depth":depth_name,"depth_sha256":format!("{:x}",Sha256::digest(&depth))}),
+        json!({"image":{"path":name,"sha256":hex::encode(Sha256::digest(&bytes))},
+        "depth":depth_name,"depth_sha256":hex::encode(Sha256::digest(&depth))}),
     )
 }

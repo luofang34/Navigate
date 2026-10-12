@@ -204,7 +204,7 @@ fn digest_blocking(path: &std::path::Path) -> Result<String, InferenceError> {
         path: path.to_owned(),
         source,
     })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 fn glue(
     session: &mut Session,

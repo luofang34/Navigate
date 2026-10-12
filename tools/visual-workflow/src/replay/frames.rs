@@ -156,7 +156,7 @@ fn digest(value: &Value) -> Result<String, Error> {
         path: "reference cache key".into(),
         source,
     })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

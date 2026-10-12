@@ -12,7 +12,7 @@ fn tile(root: &Path, kind: &str, rgb: [u8; 3]) -> Tile {
         kind: kind.into(),
         xyz: [14, 8192, 8192],
         path,
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
         bytes: bytes.len(),
     }
 }

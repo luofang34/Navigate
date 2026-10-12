@@ -271,7 +271,7 @@ fn providers_blocking(
                 provider = provider
                     .with_engine_cache(true)
                     .with_engine_cache_path(directory.display())
-                    .with_engine_cache_prefix(format!("{:x}", Sha256::digest(bytes)));
+                    .with_engine_cache_prefix(hex::encode(Sha256::digest(bytes)));
             }
             vec![provider.build().error_on_failure(), cuda()]
         }

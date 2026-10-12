@@ -89,7 +89,7 @@ fn digest(pairs: &[PixelMatch]) -> String {
             digest.update(value.to_le_bytes());
         }
     }
-    format!("{:x}", digest.finalize())
+    hex::encode(digest.finalize())
 }
 
 impl Runner {
