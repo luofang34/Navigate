@@ -3,6 +3,7 @@
 mod dispatch;
 mod profile;
 mod runtime;
+mod upload;
 
 use crate::{ImageMatcher, PixelMatch, PointTracker, VisualError, matching::pyramid};
 use image::GrayImage;

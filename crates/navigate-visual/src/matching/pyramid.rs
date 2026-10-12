@@ -1,9 +1,8 @@
 //! Image pyramids and spatially distributed corner selection.
 
-use image::{
-    GrayImage,
-    imageops::{FilterType, resize},
-};
+use image::GrayImage;
+
+mod reduction;
 use nalgebra::Vector2;
 
 pub(crate) fn build(image: &GrayImage) -> Vec<GrayImage> {
@@ -15,12 +14,7 @@ pub(crate) fn build(image: &GrayImage) -> Vec<GrayImage> {
         if last.width() < 64 || last.height() < 64 {
             break;
         }
-        levels.push(resize(
-            last,
-            last.width() / 2,
-            last.height() / 2,
-            FilterType::Triangle,
-        ));
+        levels.push(reduction::half(last));
     }
     levels
 }

@@ -29,6 +29,7 @@ pub(super) struct Compute {
     pub queue: wgpu::Queue,
     pub pipeline: wgpu::ComputePipeline,
     pub refinement: wgpu::ComputePipeline,
+    pub unpack: wgpu::ComputePipeline,
 }
 
 impl Compute {
@@ -67,6 +68,11 @@ impl Compute {
         });
         let pipeline = pipeline(&device, &module, "match_points");
         let refinement = self::pipeline(&device, &module, "refine_points");
+        let upload_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gray byte expansion"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("upload.wgsl").into()),
+        });
+        let unpack = self::pipeline(&device, &upload_module, "unpack_gray");
         if let Some(error) = device.pop_error_scope().await {
             return Err(error.into());
         }
@@ -76,6 +82,7 @@ impl Compute {
                 queue,
                 pipeline,
                 refinement,
+                unpack,
             },
             format!("{:?}/{}", info.backend, info.name),
         ))

@@ -13,13 +13,6 @@ pub(super) struct Aligned {
     pub query: wgpu::Buffer,
 }
 
-fn packed(levels: &[GrayImage]) -> Vec<f32> {
-    levels
-        .iter()
-        .flat_map(|level| level.as_raw().iter().map(|v| f32::from(*v)))
-        .collect()
-}
-
 fn parameters(levels: &[GrayImage], count: usize) -> [u32; 20] {
     let mut data = [0; 20];
     let mut offset = 0;
@@ -45,7 +38,7 @@ impl Compute {
         let total = profile.timer();
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let preparation = profile.timer();
-        let buffers = self.inputs(source, target, points, initial, resident, profile);
+        let (buffers, encoder) = self.inputs(source, target, points, initial, resident, profile);
         profile.record(preparation, "inputs_total", 0, 0);
         let (output, readback) = self.output_buffers(points.len(), profile);
         let pipeline = if initial.is_some() {
@@ -63,7 +56,7 @@ impl Compute {
             &buffers,
             &output,
             &readback,
-            points.len() as u32,
+            encoder,
             pipeline,
             groups as u32,
         );
@@ -110,7 +103,8 @@ impl Compute {
         initial: Option<&[Vector2<f64>]>,
         resident: Option<wgpu::Buffer>,
         profile: &mut Profile,
-    ) -> [wgpu::Buffer; 4] {
+    ) -> ([wgpu::Buffer; 4], wgpu::CommandEncoder) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
         let coords: Vec<[f32; 2]> = points
             .iter()
             .chain(initial.into_iter().flatten())
@@ -120,9 +114,9 @@ impl Compute {
             profile.record(profile.timer(), "reference_image_reuse", 0, 0);
             buffer
         } else {
-            self.image_buffer(source, true, profile)
+            self.image_buffer(source, true, profile, &mut encoder)
         };
-        let query = self.image_buffer(target, false, profile);
+        let query = self.image_buffer(target, false, profile, &mut encoder);
         let upload = profile.timer();
         let corners = self
             .device
@@ -144,42 +138,7 @@ impl Compute {
             coords.len() * 8 + 80,
             2,
         );
-        [reference, query, corners, dimensions]
-    }
-
-    fn image_buffer(
-        &self,
-        levels: &[GrayImage],
-        reference: bool,
-        profile: &mut Profile,
-    ) -> wgpu::Buffer {
-        let (label, pack_stage, init_stage) = if reference {
-            (
-                "reference pyramid",
-                "reference_image_pack",
-                "reference_image_buffer_init",
-            )
-        } else {
-            (
-                "query pyramid",
-                "query_image_pack",
-                "query_image_buffer_init",
-            )
-        };
-        let packing = profile.timer();
-        let pixels = packed(levels);
-        let bytes = pixels.len() * 4;
-        profile.record(packing, pack_stage, bytes, 0);
-        let upload = profile.timer();
-        let result = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(&pixels),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-        profile.record(upload, init_stage, bytes, 1);
-        result
+        ([reference, query, corners, dimensions], encoder)
     }
 
     fn dispatch(
@@ -187,7 +146,7 @@ impl Compute {
         inputs: &[wgpu::Buffer; 4],
         output: &wgpu::Buffer,
         readback: &wgpu::Buffer,
-        count: u32,
+        mut encoder: wgpu::CommandEncoder,
         pipeline: &wgpu::ComputePipeline,
         groups: u32,
     ) {
@@ -205,7 +164,6 @@ impl Compute {
             layout: &pipeline.get_bind_group_layout(0),
             entries: &buffers,
         });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("visual match"),
@@ -215,7 +173,7 @@ impl Compute {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(groups, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(output, 0, readback, 0, u64::from(count) * 16);
+        encoder.copy_buffer_to_buffer(output, 0, readback, 0, readback.size());
         self.queue.submit([encoder.finish()]);
     }
 
