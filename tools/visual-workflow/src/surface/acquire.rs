@@ -26,6 +26,7 @@ struct Trial<'a> {
     reference: &'a OrthographicReference,
     prior: &'a PosePrior,
     verifier: PoseVerifier,
+    rectification: Option<&'a navigate_visual::RectificationMap>,
     record_matches: bool,
     hypothesis_limit: usize,
     probe_fine_after_pass: bool,
@@ -80,6 +81,7 @@ pub(super) fn search_hypotheses_blocking(
         reference,
         prior,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
+        rectification: None,
         record_matches,
         hypothesis_limit,
         probe_fine_after_pass: false,
@@ -93,6 +95,7 @@ pub fn run_blocking(
     input: &Path,
     output: &Path,
     probe_fine_after_pass: bool,
+    rectification_path: Option<&Path>,
 ) -> Result<(), Error> {
     let total = Instant::now();
     let job: SurfaceJob = assets::read_json_blocking(input)?;
@@ -100,6 +103,17 @@ pub fn run_blocking(
     let started = Instant::now();
     let (frame, reference, prior) =
         job.load_blocking(input.parent().unwrap_or(Path::new(".")), config)?;
+    let Query {
+        frame,
+        rectification,
+        report: rectification_report,
+    } = query_blocking(
+        frame,
+        &job,
+        input,
+        rectification_path,
+        config.limits.image_pixels,
+    )?;
     selection::seed(&[], reference.image.dimensions())?;
     let loading_ms = started.elapsed().as_secs_f64() * 1000.0;
     let started = Instant::now();
@@ -114,6 +128,7 @@ pub fn run_blocking(
         reference: &reference,
         prior: &prior,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
+        rectification: rectification.as_ref(),
         record_matches: job.record_matches,
         hypothesis_limit: 1,
         probe_fine_after_pass,
@@ -121,6 +136,9 @@ pub fn run_blocking(
     };
     let preparation_ms = total.elapsed().as_secs_f64() * 1000.0;
     let mut result = trial.run_blocking(&mut engine)?.record;
+    if let Some(report) = rectification_report {
+        result["rectification"] = report;
+    }
     result["preparation_ms"] = json!(preparation_ms);
     result["elapsed_to_first_pass_ms"] = json!(
         result["search_to_first_pass_ms"]
@@ -146,6 +164,42 @@ pub fn run_blocking(
     result["peak_reference_accounted_bytes"] = json!(engine.peak_reference_bytes);
     result["query_feature_bytes"] = json!(engine.query_bytes);
     result["elapsed_before_output_ms"] = json!(total.elapsed().as_secs_f64() * 1000.0);
+    set_scope(&mut result, probe_fine_after_pass);
+    assets::write_json_blocking(output, &result)?;
+    tracing::info!(path=%output.display(),"Saved bounded acquisition results");
+    Ok(())
+}
+struct Query {
+    frame: Frame,
+    rectification: Option<navigate_visual::RectificationMap>,
+    report: Option<Value>,
+}
+fn query_blocking(
+    frame: Frame,
+    job: &SurfaceJob,
+    input: &Path,
+    rectification_path: Option<&Path>,
+    pixel_limit: usize,
+) -> Result<Query, Error> {
+    let (frame, rectification, rectification_report) = if let Some(path) = rectification_path {
+        let (frame, map, report) = crate::camera_input::prepare_frame_blocking(
+            path,
+            frame,
+            &job.query,
+            input.parent().unwrap_or(Path::new(".")),
+            pixel_limit,
+        )?;
+        (frame, Some(map), Some(report))
+    } else {
+        (frame, None, None)
+    };
+    Ok(Query {
+        frame,
+        rectification,
+        report: rectification_report,
+    })
+}
+fn set_scope(result: &mut Value, probe_fine_after_pass: bool) {
     result["scope"] = json!(
         "Bounded development search: coarse best match count, median crop, then at most nine adjacent 2048px crops. If all fail, examine nine 1024px crops inside the parent with most raw matches. Examine all quarter turns and all proposed crops. Select the first geometry pass by stage, crop order, then rotation; do not rank with truth. A pass is not a unique or independently accurate fix. One query encoding and model load; reference features are released per rotation. Full source raster stays resident. Accounted memory excludes models, runtime tensors, driver buffers, and file decoding peaks. Map input digest binds image, heights, geometry, release, and paths; it is not a portable cache key."
     );
@@ -155,9 +209,6 @@ pub fn run_blocking(
             "Bounded resolution diagnostic. Keep coarse and2048px local search unchanged. Also examine nine1024px children of the local parent with most raw matches, even if geometry has passed. Preserve the original first-pass selection. Record all fine decisions; do not select by truth. One query encoding and model load, at most76 candidates, original reference budget and geometry gates. A pass is not a unique or independently accurate fix. Reference memory counters exclude models, runtime tensors, driver buffers and loading peaks."
         );
     }
-    assets::write_json_blocking(output, &result)?;
-    tracing::info!(path=%output.display(),"Saved bounded acquisition results");
-    Ok(())
 }
 impl Trial<'_> {
     fn run_blocking(&self, engine: &mut Engine) -> Result<SearchResult, Error> {
@@ -266,8 +317,11 @@ impl Trial<'_> {
             if candidate.pairs.len() > best.len() {
                 best = candidate.pairs.clone();
             }
-            let (mut row, decision) = report::verify_with_estimate(
-                &self.verifier,
+            let (mut row, decision) = report::Verification {
+                verifier: &self.verifier,
+                rectification: self.rectification,
+            }
+            .run(
                 self.frame,
                 reference,
                 self.prior,

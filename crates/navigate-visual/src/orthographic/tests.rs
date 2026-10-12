@@ -3,7 +3,7 @@ use crate::{CameraModel, Frame, FrameStamp, LocalizerConfig, PixelMatch, PosePri
 use nalgebra::UnitQuaternion;
 
 #[cfg(test)]
-fn scene() -> (
+pub(crate) fn scene() -> (
     Frame,
     OrthographicReference,
     PosePrior,

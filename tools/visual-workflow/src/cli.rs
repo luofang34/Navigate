@@ -261,6 +261,12 @@ fn prepare_features_command() -> Command {
 
 fn acquire_surface_command() -> Command {
     Command::new("acquire-surface")
+        .arg(
+            Arg::new("rectification")
+                .long("rectification")
+                .value_parser(value_parser!(PathBuf))
+                .help("Bind raw query calibration and require raw pixel geometry checks"),
+        )
         .about("Search coarse and adjacent map windows with one query encoding")
         .arg(path("config"))
         .arg(path("job"))

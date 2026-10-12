@@ -67,3 +67,42 @@ fn invalid_image_binding_or_coverage_creates_no_output() {
         assert!(!out.exists());
     }
 }
+
+#[test]
+fn acquisition_preparation_binds_pixels_calibration_and_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, spec) = fixture_blocking(dir.path());
+    let image: Image = serde_json::from_value(spec["image"].clone()).unwrap();
+    let camera: Camera = serde_json::from_value(spec["source_camera"].clone()).unwrap();
+    let frame = || navigate_visual::Frame {
+        image: assets::image_blocking(&dir.path().join("source.png"), 4096).unwrap(),
+        camera: camera.model(),
+        stamp: navigate_visual::FrameStamp {
+            sequence: 1,
+            capture_time_ns: 7,
+        },
+    };
+    let (prepared, map, report) =
+        prepare_frame_blocking(&path, frame(), &image, dir.path(), 4096).unwrap();
+    assert_eq!(prepared.camera, map.camera());
+    assert_eq!(prepared.image.dimensions(), (32, 32));
+    assert_eq!(report["raw_observation_sha256"], frame().evidence_sha256());
+    assert_eq!(
+        report["rectified_observation_sha256"],
+        prepared.evidence_sha256()
+    );
+    assert_eq!(prepared.stamp, frame().stamp);
+    for invalid in ["hash", "camera", "path", "budget", "pixels"] {
+        let mut changed = spec.clone();
+        match invalid {
+            "hash" => changed["image"]["sha256"] = json!("f".repeat(64)),
+            "camera" => changed["source_camera"]["focal"] = json!([51.0, 50.0]),
+            "path" => changed["image"]["path"] = json!("missing.png"),
+            "budget" => changed["max_map_bytes"] = json!(1),
+            _ => {}
+        }
+        std::fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        let limit = if invalid == "pixels" { 64 } else { 4096 };
+        assert!(prepare_frame_blocking(&path, frame(), &image, dir.path(), limit).is_err());
+    }
+}

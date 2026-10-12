@@ -621,3 +621,15 @@ This command measures CPU rectification separately from navigation.
 Rectified pixel errors are not raw pixel errors. If acceptance is defined in
 raw pixels, map residuals and spatial support back to raw pixels before using
 a pose. Prepared images alone do not validate raw-camera navigation.
+
+Use `acquire-surface config.json job.json result.json --rectification camera.json`
+to check a raw query against an orthographic map. `camera.json` uses the
+`rectify-image` specification. Its source image and camera must match the job.
+The command rectifies the verified raw image in memory. It keeps the pinhole
+candidate checks and adds raw sensor residual, separation, and grid checks.
+Each candidate records `pinhole_candidate_accepted` and `raw_pixel_gate`.
+Only a candidate that passes both checks can enter the selected results.
+The additional check holds the pose fixed. It computes the pinhole covariance
+from the common support subset. This covariance excludes calibration error.
+Map build and warp times are parts of `loading_ms`; do not add them again.
+The option applies only to single-image acquisition. Sequence commands reject it.

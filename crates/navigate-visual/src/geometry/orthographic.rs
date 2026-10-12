@@ -58,7 +58,7 @@ impl PoseVerifier {
     }
 }
 
-fn correspondences(
+pub(super) fn correspondences(
     frame: &Frame,
     reference: &OrthographicReference,
     matches: &[PixelMatch],

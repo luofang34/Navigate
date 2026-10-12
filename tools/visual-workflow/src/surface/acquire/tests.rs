@@ -28,8 +28,15 @@ fn insufficient_search_budget_fails_before_loading_images_or_models() {
         .flat_map(|limit| [false, true].map(|probe| (limit, probe)))
     {
         config.limits.candidates = limit;
-        let error =
-            run_blocking(&config, root.path(), &input, &output, probe_fine_after_pass).unwrap_err();
+        let error = run_blocking(
+            &config,
+            root.path(),
+            &input,
+            &output,
+            probe_fine_after_pass,
+            None,
+        )
+        .unwrap_err();
         assert!(
             matches!(error,Error::Input(ref message) if message.contains("budget of at least 76"))
         );
@@ -37,7 +44,7 @@ fn insufficient_search_budget_fails_before_loading_images_or_models() {
     }
     config.limits.candidates = 76;
     assert!(matches!(
-        run_blocking(&config, root.path(), &input, &output, false),
+        run_blocking(&config, root.path(), &input, &output, false, None),
         Err(Error::Io { .. })
     ));
 }

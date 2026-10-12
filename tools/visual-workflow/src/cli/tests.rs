@@ -54,3 +54,38 @@ fn gpu_image_reuse_is_opt_in_for_acquisition() {
             .get_flag("gpu-image-reuse")
     );
 }
+
+#[test]
+fn rectification_is_explicit_and_not_available_for_sequence_tracking() {
+    let args = super::command()
+        .try_get_matches_from([
+            "navigate-workflow",
+            "acquire-surface",
+            "config",
+            "job",
+            "output",
+            "--rectification",
+            "camera.json",
+        ])
+        .unwrap();
+    assert_eq!(
+        args.subcommand_matches("acquire-surface")
+            .unwrap()
+            .get_one::<std::path::PathBuf>("rectification")
+            .unwrap(),
+        &std::path::PathBuf::from("camera.json")
+    );
+    assert!(
+        super::command()
+            .try_get_matches_from([
+                "navigate-workflow",
+                "evaluate-acquisition",
+                "config",
+                "manifest",
+                "output",
+                "--rectification",
+                "camera.json"
+            ])
+            .is_err()
+    );
+}

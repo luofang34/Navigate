@@ -9,6 +9,7 @@ mod calibrated;
 mod ellipsoid;
 pub use ellipsoid::EllipsoidHeightReference;
 mod orthographic;
+mod raw_pixels;
 mod refinement;
 mod support;
 use refinement::FitSupport;

@@ -76,6 +76,11 @@ impl RectificationMap {
         self.target
     }
 
+    /// Original sensor calibration and dimensions for raw pixel checks.
+    pub fn source_camera(&self) -> CameraModel {
+        self.source
+    }
+
     /// Logical bytes retained for pixel coordinates, excluding the images.
     pub fn map_bytes(&self) -> usize {
         self.pixels.len() * std::mem::size_of::<[f32; 2]>()

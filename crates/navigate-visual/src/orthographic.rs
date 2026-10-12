@@ -128,5 +128,23 @@ pub struct OrthographicEstimate {
     pub backend: String,
 }
 
+/// Additional geometric support measured in original sensor pixels.
+///
+/// Counts use the same inlier and spatial thresholds as pinhole verification.
+/// They are not an independent accuracy or navigation integrity estimate.
+#[derive(Clone, Copy, Debug)]
+pub struct RawPixelQuality {
+    /// Unique correspondences inside both pixel-space reprojection thresholds.
+    pub inliers: usize,
+    /// Correspondences separated in raw, rectified, and reference pixels.
+    pub spatial_support: usize,
+    /// Occupied cells in the raw sensor's four-column, three-row grid.
+    pub query_cells: usize,
+    /// Occupied cells in the reference raster's four-column, three-row grid.
+    pub reference_cells: usize,
+    /// Raw sensor reprojection RMS of the separated support.
+    pub reprojection_rms_px: f64,
+}
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

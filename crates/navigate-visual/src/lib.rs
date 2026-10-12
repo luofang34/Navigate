@@ -6,15 +6,13 @@
 //! coordinate conversion and navigation fusion.
 //!
 //! The default matcher searches near the prior in overlapping, similar views.
-//! It does not perform global location retrieval.
 //! [`Estimate::geometry_covariance`] excludes map and calibration errors.
 //! It must not be used as a navigation integrity bound.
 //!
 //! # Features
 //! The default build uses CPU matching. The `gpu` feature exposes
-//! `GpuPyramidalMatcher`. Build its documentation with
-//! `cargo doc -p navigate-visual --features gpu --open`. Select the backend
-//! explicitly. The GPU backend does not fall back to CPU matching.
+//! `GpuPyramidalMatcher`. Select the backend explicitly. It does not fall back
+//! to CPU matching. Use `cargo doc -p navigate-visual --features gpu --open`.
 //!
 //! # Example
 //! ```
@@ -89,7 +87,9 @@ pub use local_scene::{
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
 pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
-pub use orthographic::{OrthographicEstimate, OrthographicReference, RasterGeometry};
+pub use orthographic::{
+    OrthographicEstimate, OrthographicReference, RasterGeometry, RawPixelQuality,
+};
 pub use rectification::{RectificationError, RectificationMap};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{

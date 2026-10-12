@@ -120,5 +120,64 @@ fn save_blocking(output: &Path, image: GrayImage) -> Result<Image, Error> {
     })
 }
 
+pub fn prepare_frame_blocking(
+    spec_path: &Path,
+    frame: navigate_visual::Frame,
+    image: &Image,
+    image_root: &Path,
+    pixel_limit: usize,
+) -> Result<(navigate_visual::Frame, RectificationMap, serde_json::Value), Error> {
+    let bytes = assets::read_blocking(spec_path, 1024 * 1024)?;
+    let spec: Specification = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+        path: spec_path.into(),
+        source,
+    })?;
+    let path = spec_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(&spec.image.path);
+    let canonical = |path: &Path| {
+        path.canonicalize().map_err(|source| Error::Io {
+            operation: "bind raw query image",
+            path: path.into(),
+            source,
+        })
+    };
+    if spec.image.sha256 != image.sha256
+        || canonical(&path)? != canonical(&image_root.join(&image.path))?
+        || frame.camera != spec.source_camera.model()
+        || spec.max_map_bytes > 64 * 1024 * 1024
+        || u64::from(spec.target_camera.size[0]) * u64::from(spec.target_camera.size[1])
+            > pixel_limit as u64
+    {
+        return Err(Error::Input(
+            "rectification must bind the raw query, calibration and memory limits".into(),
+        ));
+    }
+    let start = Instant::now();
+    let map = RectificationMap::new(
+        frame.camera,
+        spec.target_camera.model(),
+        spec.distortion,
+        spec.max_map_bytes,
+    )?;
+    let map_build_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let raw_identity = frame.evidence_sha256();
+    let start = Instant::now();
+    let rectified = navigate_visual::Frame {
+        camera: map.camera(),
+        image: map.rectify(&frame.image)?,
+        stamp: frame.stamp,
+    };
+    let warp_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let report = json!({"source":spec,"specification_sha256":hex::encode(Sha256::digest(bytes)),
+        "raw_observation_sha256":raw_identity,"rectified_observation_sha256":rectified.evidence_sha256(),
+        "map_bytes":map.map_bytes(),"map_build_ms":map_build_ms,"warp_ms":warp_ms,
+        "timing_scope":"Map build and warp are included in acquisition loading_ms. Do not add these sub-stages to loading_ms again.",
+        "acceptance":"Existing pinhole candidate checks plus raw sensor residual, separation and grid coverage checks. Pose stays fixed in the additional check. The common subset must also pass the pinhole conditioning check. Covariance uses rectified pixel noise and excludes calibration error.",
+        "scope":"Single-image map acquisition only. This calibration is not applied to sequence tracking."});
+    Ok((rectified, map, report))
+}
+
 #[cfg(test)]
 mod tests;

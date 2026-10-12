@@ -117,6 +117,8 @@ fn configured_blocking(
             &path("job")?,
             &path("output")?,
             args.get_flag("probe-fine-after-pass"),
+            args.get_one::<PathBuf>("rectification")
+                .map(PathBuf::as_path),
         ),
         "probe-surface-accumulation" => surface::accumulation::run_blocking(
             config,
