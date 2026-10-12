@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Manifest {
+pub(in crate::surface) struct Manifest {
     pub job: PathBuf,
     pub frames: Vec<Sample>,
     pub refresh_interval: usize,
@@ -13,7 +13,7 @@ pub(super) struct Manifest {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Sample {
+pub(in crate::surface) struct Sample {
     pub image: Image,
     pub frame_id: u64,
     pub capture_time_ns: u64,

@@ -15,7 +15,7 @@ struct Previous {
     pose: CameraPose,
     observation: String,
 }
-pub(super) struct Continuity {
+pub(in crate::surface) struct Continuity {
     session: VisualSession,
     previous: Option<Previous>,
     epoch: ContinuityEpoch,

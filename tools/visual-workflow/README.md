@@ -214,6 +214,20 @@ does not establish a correct or unique position. The result includes loading,
 encoding, matching, geometry, and time to the first pass. Memory counts exclude
 model and runtime allocations. The full source map stays in memory.
 
+Use `evaluate-acquisition config.json sequence.json result.json` to combine full-map
+search and tracking. Use the same sequence fields as `evaluate-surface`, but
+supply a full-map job with the acquisition budget. Omit `keyframe_interval`.
+The selected search estimate and its map pixels initialize tracking directly.
+A failed track, scheduled refresh, or gap over 200 ms starts full-map search
+from the supplied prior. Each new map estimate starts a separate motion segment.
+The process retains the model and source map. It does not cache map features.
+Use `--reload-model-on-recovery` only for a model residency cost comparison.
+This control reloads the model sessions before each acquisition after the first
+one. It keeps one process-wide runtime with the same native library identity.
+It retains the same source map, search order, geometry checks, and tracker.
+Results are conditional pose proposals. They do not establish unique fixes or
+real-time navigation. The replay processes all declared frames without a deadline.
+
 Use `evaluate-surface config.json sequence.json result.json` for one fixed map
 region and an ordered image sequence. Its manifest has `job`, `refresh_interval`,
 and `frames`. Each frame has `image` (path and file digest), `frame_id`, and

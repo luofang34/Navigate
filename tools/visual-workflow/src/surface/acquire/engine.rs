@@ -9,38 +9,43 @@ use navigate_visual_onnx::{XFeatFeatures, XFeatStages};
 use navigate_visual_workflow::FeatureBackend;
 use std::time::Instant;
 
-pub(super) struct Engine {
+pub(in crate::surface) struct Engine {
     pub backend: Box<XFeatStages>,
-    query: XFeatFeatures,
+    query: Option<XFeatFeatures>,
     pub query_bytes: usize,
     pub reference_encodings: usize,
     pub peak_reference_bytes: usize,
 }
 impl Engine {
-    pub fn new_blocking(
-        backend: Backend,
-        query: &GrayImage,
-        config: &Config,
-    ) -> Result<Self, Error> {
-        let Backend::Features(mut backend) = backend else {
+    pub fn new(backend: Backend) -> Result<Self, Error> {
+        let Backend::Features(backend) = backend else {
             return Err(Error::Input(
                 "acquisition requires a feature backend".into(),
             ));
         };
-        let features = backend.extract_features_blocking(query)?;
-        let info = backend.validate_features(&features, query)?;
+        Ok(Self {
+            backend,
+            query: None,
+            query_bytes: 0,
+            reference_encodings: 0,
+            peak_reference_bytes: 0,
+        })
+    }
+    pub fn query_blocking(&mut self, query: &GrayImage, config: &Config) -> Result<(), Error> {
+        self.query = None;
+        self.query_bytes = 0;
+        self.reference_encodings = 0;
+        self.peak_reference_bytes = 0;
+        let features = self.backend.extract_features_blocking(query)?;
+        let info = self.backend.validate_features(&features, query)?;
         if info.count > config.limits.features_per_image
             || info.resident_bytes > config.limits.query_feature_bytes
         {
             return Err(Error::Input("acquisition query feature budget".into()));
         }
-        Ok(Self {
-            backend,
-            query: features,
-            query_bytes: info.resident_bytes,
-            reference_encodings: 0,
-            peak_reference_bytes: 0,
-        })
+        self.query = Some(features);
+        self.query_bytes = info.resident_bytes;
+        Ok(())
     }
     pub fn match_blocking(
         &mut self,
@@ -49,6 +54,11 @@ impl Engine {
         resident_raster_bytes: usize,
         config: &Config,
     ) -> Result<(Matches, f64), Error> {
+        if self.reference_encodings >= config.limits.candidates {
+            return Err(Error::Input(
+                "acquisition candidate budget exhausted".into(),
+            ));
+        }
         let overlap = resident_raster_bytes.saturating_add(image.as_raw().len());
         if overlap > config.limits.reference_bytes {
             return Err(Error::Input("acquisition rotated raster budget".into()));
@@ -66,9 +76,12 @@ impl Engine {
         drop(rotated);
         let extraction_ms = started.elapsed().as_secs_f64() * 1000.0;
         let started = Instant::now();
-        let mut pairs = self
-            .backend
-            .match_features_blocking(&features, &self.query)?;
+        let mut pairs = self.backend.match_features_blocking(
+            &features,
+            self.query
+                .as_ref()
+                .ok_or_else(|| Error::Input("acquisition query is not encoded".into()))?,
+        )?;
         for pair in &mut pairs {
             restore(pair, rotation, image.dimensions());
         }

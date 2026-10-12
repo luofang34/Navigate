@@ -59,6 +59,18 @@ pub fn command() -> Command {
                 .arg(path("output")),
         )
         .subcommand(
+            Command::new("evaluate-acquisition")
+                .about("Evaluate bounded search and temporal tracking with resident models")
+                .arg(
+                    Arg::new("reload-model-on-recovery")
+                        .long("reload-model-on-recovery")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(path("config"))
+                .arg(path("manifest"))
+                .arg(path("output")),
+        )
+        .subcommand(
             Command::new("acquire-surface")
                 .about("Search coarse and adjacent map windows with one query encoding")
                 .arg(path("config"))

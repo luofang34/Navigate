@@ -2,6 +2,7 @@
 pub mod acquire;
 pub mod cascade;
 mod job;
+pub mod journey;
 mod matching;
 pub mod prepare;
 pub mod probe;

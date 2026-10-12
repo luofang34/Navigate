@@ -86,6 +86,13 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         );
     }
     match name {
+        "evaluate-acquisition" => surface::journey::run_blocking(
+            &config,
+            root,
+            &path("manifest")?,
+            &path("output")?,
+            args.get_flag("reload-model-on-recovery"),
+        ),
         "acquire-surface" => {
             surface::acquire::run_blocking(&config, root, &path("job")?, &path("output")?)
         }

@@ -1,5 +1,5 @@
 //! Coarse proposals and local crop search retain all examined geometry decisions.
-mod engine;
+pub(super) mod engine;
 mod selection;
 use super::{
     job::{SurfaceJob, window},
@@ -11,7 +11,8 @@ use crate::{
 };
 use engine::Engine;
 use navigate_visual::{
-    Frame, LocalizerConfig, OrthographicReference, PixelMatch, PosePrior, PoseVerifier,
+    Frame, LocalizerConfig, OrthographicEstimate, OrthographicReference, PixelMatch, PosePrior,
+    PoseVerifier,
 };
 use navigate_visual_workflow::FeatureBackend;
 use serde_json::{Value, json};
@@ -26,6 +27,44 @@ struct Trial<'a> {
     record_matches: bool,
     config: &'a Config,
 }
+pub(super) struct Acquired {
+    pub estimate: OrthographicEstimate,
+    pub pairs: Vec<PixelMatch>,
+    pub window: Option<[u32; 4]>,
+}
+pub(super) struct SearchResult {
+    pub record: Value,
+    pub selected: Option<Acquired>,
+}
+pub(super) fn validate(config: &Config, job: &SurfaceJob) -> Result<(), Error> {
+    if job.reference.window.is_some()
+        || job.reference_quarter_turns != [0, 1, 2, 3]
+        || !matches!(config.graph, Graph::Sparse | Graph::DenseImage)
+        || config.limits.candidates < 76
+    {
+        return Err(Error::Input("acquisition needs a full map, four ordered quarter turns, a candidate budget of at least 76, and sparse or dense-image features".into()));
+    }
+    Ok(())
+}
+pub(super) fn search_blocking(
+    frame: &Frame,
+    reference: &OrthographicReference,
+    prior: &PosePrior,
+    engine: &mut Engine,
+    config: &Config,
+    record_matches: bool,
+) -> Result<SearchResult, Error> {
+    selection::seed(&[], reference.image.dimensions())?;
+    Trial {
+        frame,
+        reference,
+        prior,
+        verifier: PoseVerifier::new(LocalizerConfig::default())?,
+        record_matches,
+        config,
+    }
+    .run_blocking(engine)
+}
 pub fn run_blocking(
     config: &Config,
     root: &Path,
@@ -34,13 +73,7 @@ pub fn run_blocking(
 ) -> Result<(), Error> {
     let total = Instant::now();
     let job: SurfaceJob = assets::read_json_blocking(input)?;
-    if job.reference.window.is_some()
-        || job.reference_quarter_turns != [0, 1, 2, 3]
-        || !matches!(config.graph, Graph::Sparse | Graph::DenseImage)
-        || config.limits.candidates < 76
-    {
-        return Err(Error::Input("acquisition needs a full map, four ordered quarter turns, a candidate budget of at least 76, and sparse or dense-image features".into()));
-    }
+    validate(config, &job)?;
     let started = Instant::now();
     let (frame, reference, prior) =
         job.load_blocking(input.parent().unwrap_or(Path::new(".")), config)?;
@@ -50,7 +83,8 @@ pub fn run_blocking(
     let backend = config.load_blocking(root)?;
     let model_load_ms = started.elapsed().as_secs_f64() * 1000.0;
     let started = Instant::now();
-    let mut engine = Engine::new_blocking(backend, &frame.image, config)?;
+    let mut engine = Engine::new(backend)?;
+    engine.query_blocking(&frame.image, config)?;
     let query_extraction_ms = started.elapsed().as_secs_f64() * 1000.0;
     let trial = Trial {
         frame: &frame,
@@ -61,7 +95,7 @@ pub fn run_blocking(
         config,
     };
     let preparation_ms = total.elapsed().as_secs_f64() * 1000.0;
-    let mut result = trial.run_blocking(&mut engine)?;
+    let mut result = trial.run_blocking(&mut engine)?.record;
     result["preparation_ms"] = json!(preparation_ms);
     result["elapsed_to_first_pass_ms"] = json!(
         result["search_to_first_pass_ms"]
@@ -98,10 +132,12 @@ pub fn run_blocking(
     Ok(())
 }
 impl Trial<'_> {
-    fn run_blocking(&self, engine: &mut Engine) -> Result<Value, Error> {
+    fn run_blocking(&self, engine: &mut Engine) -> Result<SearchResult, Error> {
         let started = Instant::now();
         let bytes = self.reference.image.as_raw().len() * 5;
-        let (coarse, best) = self.stage_blocking(engine, self.reference, bytes)?;
+        let mut selected = None;
+        let (coarse, best) =
+            self.stage_blocking(engine, self.reference, bytes, &mut selected, None)?;
         let seed = selection::seed(&best, self.reference.image.dimensions())?;
         let windows = seed
             .map(|s| selection::neighbors(s, self.reference.image.dimensions()))
@@ -109,7 +145,7 @@ impl Trial<'_> {
         let coarse_ms = started.elapsed().as_secs_f64() * 1000.0;
         let mut first =
             first_pass(&coarse).map(|rotation| json!({"stage":"coarse","rotation":rotation}));
-        let local = self.windows_blocking(engine, &windows, started)?;
+        let local = self.windows_blocking(engine, &windows, started, &mut selected)?;
         let mut first_fix_ms = first.as_ref().map(|_| coarse_ms);
         if first.is_none()
             && let Some((decision, time)) = window_pass(&local, "local")
@@ -135,25 +171,32 @@ impl Trial<'_> {
                 }
             }
             if let Some(area) = parent {
-                fine = self.windows_blocking(engine, &selection::children(area), started)?;
+                fine = self.windows_blocking(
+                    engine,
+                    &selection::children(area),
+                    started,
+                    &mut selected,
+                )?;
                 if let Some((decision, time)) = window_pass(&fine, "fine") {
                     first = Some(decision);
                     first_fix_ms = Some(time);
                 }
             }
         }
-        Ok(
-            json!({"coarse":coarse,"coarse_ms":coarse_ms,"seed":seed,"windows":local,
+        Ok(SearchResult {
+            selected,
+            record: json!({"coarse":coarse,"coarse_ms":coarse_ms,"seed":seed,"windows":local,
             "fine_parent":parent,"fine_windows":fine,"first_pass":first,
             "accepted":first.is_some(),"search_to_first_pass_ms":first_fix_ms,"search_total_ms":started.elapsed().as_secs_f64()*1000.0,
             "first_pass_time_scope":"Search only, after file loading, model loading and query encoding. Includes all four directions through the first accepted window. Exhaustive diagnostic work continues after selection."}),
-        )
+        })
     }
     fn windows_blocking(
         &self,
         engine: &mut Engine,
         windows: &[[u32; 4]],
         started: Instant,
+        selected: &mut Option<Acquired>,
     ) -> Result<Vec<Value>, Error> {
         let mut crops = Vec::new();
         for &area in windows {
@@ -162,7 +205,7 @@ impl Trial<'_> {
                 window::crop_borrowed(self.reference, area, self.config.limits.reference_bytes)?;
             let crop_ms = window_start.elapsed().as_secs_f64() * 1000.0;
             let bytes = (self.reference.image.as_raw().len() + reference.image.as_raw().len()) * 5;
-            let (rows, _) = self.stage_blocking(engine, &reference, bytes)?;
+            let (rows, _) = self.stage_blocking(engine, &reference, bytes, selected, Some(area))?;
             crops.push(json!({"window":area,"crop_ms":crop_ms,"total_ms":window_start.elapsed().as_secs_f64()*1000.0,
                 "search_elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"candidates":rows}));
         }
@@ -173,6 +216,8 @@ impl Trial<'_> {
         engine: &mut Engine,
         reference: &OrthographicReference,
         bytes: usize,
+        selected: &mut Option<Acquired>,
+        window: Option<[u32; 4]>,
     ) -> Result<(Vec<Value>, Vec<PixelMatch>), Error> {
         let mut rows = Vec::new();
         let mut best = Vec::new();
@@ -182,15 +227,24 @@ impl Trial<'_> {
             if candidate.pairs.len() > best.len() {
                 best = candidate.pairs.clone();
             }
-            let mut row = report::verify(
+            let (mut row, decision) = report::verify_with_estimate(
                 &self.verifier,
                 self.frame,
                 reference,
                 self.prior,
-                candidate,
+                &candidate,
                 engine.backend.identity(),
                 self.record_matches,
             );
+            if selected.is_none()
+                && let Ok(estimate) = decision
+            {
+                *selected = Some(Acquired {
+                    estimate,
+                    pairs: candidate.pairs,
+                    window,
+                });
+            }
             row["reference_extraction_ms"] = json!(extraction_ms);
             rows.push(row);
         }

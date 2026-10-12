@@ -4,7 +4,7 @@ use navigate_visual::{
     Frame, LocalizerConfig, OrthographicEstimate, OrthographicReference, PixelMatch, PointTracker,
 };
 
-pub(super) struct Tracks {
+pub(in crate::surface) struct Tracks {
     pub previous: Frame,
     pub origin: String,
     pub pairs: Vec<PixelMatch>,

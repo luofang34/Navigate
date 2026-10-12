@@ -1,8 +1,8 @@
 //! Conditional temporal localization on one fixed orthographic map region.
-mod continuity;
-mod input;
+pub(super) mod continuity;
+pub(super) mod input;
 mod keyframe;
-mod tracks;
+pub(super) mod tracks;
 use super::{job::SurfaceJob, matching::Matcher};
 use crate::{
     Error, assets,
