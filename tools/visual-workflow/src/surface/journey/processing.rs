@@ -3,7 +3,11 @@ use super::{Runner, Tracking};
 use crate::{
     Error,
     config::Config,
-    surface::{acquire, job::window, sequence::tracks::Tracks},
+    surface::{
+        acquire,
+        job::window,
+        sequence::tracks::{MAX_TRACK_GAP_NS, Tracks},
+    },
 };
 use navigate_recording::Pose;
 use navigate_visual::{Frame, OrthographicEstimate, OrthographicReference, PixelMatch};
@@ -178,7 +182,9 @@ impl Runner {
         let Some(state) = &self.state else {
             return "uninitialized_or_lost";
         };
-        if frame.stamp.capture_time_ns - state.tracks.previous.stamp.capture_time_ns > 200_000_000 {
+        if frame.stamp.capture_time_ns - state.tracks.previous.stamp.capture_time_ns
+            > MAX_TRACK_GAP_NS
+        {
             "time_gap"
         } else if state.tracks.age >= self.interval {
             "scheduled"

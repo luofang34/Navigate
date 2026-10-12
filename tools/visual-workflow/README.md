@@ -237,7 +237,26 @@ This control reloads the model sessions before each acquisition after the first
 one. It keeps one process-wide runtime with the same native library identity.
 It retains the same source map, search order, geometry checks, and tracker.
 Results are conditional pose proposals. They do not establish unique fixes or
-real-time navigation. The replay processes all declared frames without a deadline.
+real-time navigation. The default `--arrival-policy offline` processes all declared frames.
+Use `--arrival-policy fifo --queue-capacity 64` to test a bounded first-in,
+first-out queue. The capacity is 1 to 128 records. Overflow removes the oldest
+pending record. Use `--arrival-policy latest` to retain one pending record.
+Use `--arrival-policy catch-up --queue-capacity 128` to retain bounded history.
+This policy selects the latest retained frame within 200 ms of the current
+accepted tracking frame. It discards earlier pending frames. If this history
+is missing, or no accepted frame exists, it selects the latest arrival for
+recovery. The tracker still applies the same time and geometry checks.
+These modes use measured wall time and the declared capture timestamps.
+They do not use stored inference times. The default `--capture-start ready`
+starts capture when the models and map are ready. Use `--capture-start setup`
+to start capture when the workflow starts, before it loads the job and models.
+The first declared capture timestamp is the clock origin. Config-file loading
+occurs before this clock. Image files remain on disk; the selected image is
+verified and decoded within processing time. These queues retain file records,
+not decoded image buffers. The queue drains after the final capture timestamp.
+The report records each drop, queue depth, input age, result age, and drain time.
+A pose retains its original capture timestamp. The test does not extrapolate
+poses or measure live camera costs. Final output serialization is excluded.
 
 Use `evaluate-surface config.json sequence.json result.json` for one fixed map
 region and an ordered image sequence. Its manifest has `job`, `refresh_interval`,

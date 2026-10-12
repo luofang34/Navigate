@@ -44,38 +44,8 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
-        .subcommand(
-            Command::new("probe-surface")
-                .about("Recheck frozen image matches with an alternative registered height surface")
-                .arg(path("config"))
-                .arg(path("manifest"))
-                .arg(path("output")),
-        )
-        .subcommand(
-            Command::new("evaluate-surface")
-                .about("Compare orthographic map matching with fixed-map temporal tracking")
-                .arg(path("config"))
-                .arg(path("manifest"))
-                .arg(path("output")),
-        )
-        .subcommand(
-            Command::new("evaluate-acquisition")
-                .arg(
-                    Arg::new("reference-cache-mib")
-                        .long("reference-cache-mib")
-                        .default_value("0")
-                        .value_parser(value_parser!(usize)),
-                )
-                .about("Evaluate bounded search and temporal tracking with resident models")
-                .arg(
-                    Arg::new("reload-model-on-recovery")
-                        .long("reload-model-on-recovery")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(path("config"))
-                .arg(path("manifest"))
-                .arg(path("output")),
-        )
+        .subcommands(surface_evaluation_commands())
+        .subcommand(acquisition_command())
         .subcommand(
             Command::new("acquire-surface")
                 .about("Search coarse and adjacent map windows with one query encoding")
@@ -169,4 +139,69 @@ fn window_command(name: &'static str) -> Command {
                 .default_value("1")
                 .value_parser(value_parser!(usize)),
         )
+}
+
+fn acquisition_command() -> Command {
+    Command::new("evaluate-acquisition")
+        .about("Evaluate bounded search, tracking, and frame arrival policies")
+        .arg(
+            Arg::new("reference-cache-mib")
+                .long("reference-cache-mib")
+                .default_value("0")
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("reload-model-on-recovery")
+                .long("reload-model-on-recovery")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("arrival-policy")
+                .long("arrival-policy")
+                .default_value("offline")
+                .value_parser(["offline", "fifo", "latest", "catch-up"]),
+        )
+        .arg(
+            Arg::new("queue-capacity")
+                .long("queue-capacity")
+                .default_value("64")
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("capture-start")
+                .long("capture-start")
+                .default_value("ready")
+                .value_parser(["ready", "setup"]),
+        )
+        .arg(path("config"))
+        .arg(path("manifest"))
+        .arg(path("output"))
+}
+pub fn arrival_options(
+    args: &clap::ArgMatches,
+) -> Result<crate::surface::journey::arrival::Options, crate::Error> {
+    crate::surface::journey::arrival::Options::new(
+        args.get_one::<String>("arrival-policy")
+            .map_or("offline", String::as_str),
+        args.get_one::<usize>("queue-capacity")
+            .copied()
+            .unwrap_or(64),
+        args.get_one::<String>("capture-start")
+            .map_or("ready", String::as_str),
+    )
+}
+
+fn surface_evaluation_commands() -> [Command; 2] {
+    [
+        Command::new("probe-surface")
+            .about("Recheck frozen image matches with an alternative registered height surface")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output")),
+        Command::new("evaluate-surface")
+            .about("Compare orthographic map matching with fixed-map temporal tracking")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output")),
+    ]
 }

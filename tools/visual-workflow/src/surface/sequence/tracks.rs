@@ -4,6 +4,8 @@ use navigate_visual::{
     Frame, LocalizerConfig, OrthographicEstimate, OrthographicReference, PixelMatch, PointTracker,
 };
 
+pub(in crate::surface) const MAX_TRACK_GAP_NS: u64 = 200_000_000;
+
 pub(in crate::surface) struct Tracks {
     pub previous: Frame,
     pub origin: String,
@@ -16,7 +18,7 @@ impl Tracks {
             && frame.camera == self.previous.camera
             && frame.stamp.sequence > self.previous.stamp.sequence
             && frame.stamp.capture_time_ns > self.previous.stamp.capture_time_ns
-            && frame.stamp.capture_time_ns - self.previous.stamp.capture_time_ns <= 200_000_000
+            && frame.stamp.capture_time_ns - self.previous.stamp.capture_time_ns <= MAX_TRACK_GAP_NS
     }
     pub fn propagate_blocking(
         &self,
