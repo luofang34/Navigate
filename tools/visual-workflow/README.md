@@ -201,6 +201,19 @@ add `x` and `y` to obtain source coordinates. Metric poses keep the source frame
 The loader reads the full source before it selects the window. The memory limit
 must contain both the source raster and the window during this operation.
 
+Use `acquire-surface config.json job.json result.json` to test bounded map search.
+Supply the full map and quarter turns `[0, 1, 2, 3]`. The map must be at least
+2048 by 2048 pixels. Set `limits.candidates` to at least 76. This is the maximum
+search size, including four rotations per window. Use a sparse or dense-image
+feature backend. This command
+loads the model and query once. It checks a coarse map, then at most nine
+adjacent 2048-pixel windows. If all candidates fail, it checks nine 1024-pixel
+windows inside the parent with most raw matches. It retains every decision.
+The first pass uses search order, not a known query position. A geometry pass
+does not establish a correct or unique position. The result includes loading,
+encoding, matching, geometry, and time to the first pass. Memory counts exclude
+model and runtime allocations. The full source map stays in memory.
+
 Use `evaluate-surface config.json sequence.json result.json` for one fixed map
 region and an ordered image sequence. Its manifest has `job`, `refresh_interval`,
 and `frames`. Each frame has `image` (path and file digest), `frame_id`, and

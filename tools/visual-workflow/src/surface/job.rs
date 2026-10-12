@@ -6,7 +6,7 @@ use navigate_visual::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-mod window;
+pub(super) mod window;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

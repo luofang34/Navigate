@@ -4,6 +4,20 @@ use navigate_visual::OrthographicReference;
 
 pub(super) fn crop(
     source: OrthographicReference,
+    window: [u32; 4],
+    byte_limit: usize,
+) -> Result<OrthographicReference, Error> {
+    if window[2] >= 32
+        && window[3] >= 32
+        && window == [0, 0, source.image.width(), source.image.height()]
+    {
+        return Ok(source);
+    }
+    crop_borrowed(&source, window, byte_limit)
+}
+
+pub(in crate::surface) fn crop_borrowed(
+    source: &OrthographicReference,
     [x, y, width, height]: [u32; 4],
     byte_limit: usize,
 ) -> Result<OrthographicReference, Error> {
@@ -16,9 +30,6 @@ pub(super) fn crop(
         return Err(Error::Input(
             "surface window must fit the source and be at least 32 by 32".into(),
         ));
-    }
-    if [x, y, width, height] == [0, 0, source_width, source_height] {
-        return Ok(source);
     }
     let crop_pixels = width as usize * height as usize;
     if source
@@ -42,7 +53,7 @@ pub(super) fn crop(
     let mut geometry = source.geometry;
     geometry.origin += geometry.column * f64::from(x) + geometry.row * f64::from(y);
     let cropped = OrthographicReference {
-        map: source.map,
+        map: source.map.clone(),
         image,
         heights_m,
         geometry,

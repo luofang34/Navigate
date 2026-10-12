@@ -86,6 +86,9 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
         );
     }
     match name {
+        "acquire-surface" => {
+            surface::acquire::run_blocking(&config, root, &path("job")?, &path("output")?)
+        }
         "probe-surface" => {
             surface::probe::run_blocking(&config, &path("manifest")?, &path("output")?)
         }

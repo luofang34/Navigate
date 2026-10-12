@@ -58,6 +58,13 @@ pub fn command() -> Command {
                 .arg(path("manifest"))
                 .arg(path("output")),
         )
+        .subcommand(
+            Command::new("acquire-surface")
+                .about("Search coarse and adjacent map windows with one query encoding")
+                .arg(path("config"))
+                .arg(path("job"))
+                .arg(path("output")),
+        )
         .subcommand(window_command("probe-surface-windows"))
         .subcommand(window_command("probe-surface-scores"))
         .subcommand(cascade_command())

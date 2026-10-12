@@ -51,3 +51,14 @@ fn invalid_windows_and_overlapping_allocations_are_rejected() {
     assert!(crop(source(), [0, 0, 32, 32], bound).is_ok());
     assert!(crop(source(), [0, 0, 80, 64], 80 * 64 * 5).is_ok());
 }
+
+#[test]
+fn borrowed_crop_has_identical_pixels_heights_and_geometry() {
+    let source = source();
+    let borrowed = crop_borrowed(&source, [13, 17, 48, 32], 40_000).unwrap();
+    let owned = crop(source, [13, 17, 48, 32], 40_000).unwrap();
+    assert_eq!(borrowed.image, owned.image);
+    assert_eq!(borrowed.heights_m, owned.heights_m);
+    assert_eq!(borrowed.geometry.origin, owned.geometry.origin);
+    assert_eq!(borrowed.map, owned.map);
+}
