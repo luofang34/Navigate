@@ -60,6 +60,12 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("evaluate-acquisition")
+                .arg(
+                    Arg::new("reference-cache-mib")
+                        .long("reference-cache-mib")
+                        .default_value("0")
+                        .value_parser(value_parser!(usize)),
+                )
                 .about("Evaluate bounded search and temporal tracking with resident models")
                 .arg(
                     Arg::new("reload-model-on-recovery")

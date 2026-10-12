@@ -95,6 +95,7 @@ impl Runner {
         let (model_ms, query_ms) = self.models.prepare_blocking(frame, config)?;
         record["model_reload_ms"] = json!(model_ms);
         record["map_query_extraction_ms"] = json!(query_ms);
+        record["adapter_tensor_io_before"] = json!(self.models.statistics_before);
         let engine = self.models.engine_mut()?;
         let acquired = acquire::search_blocking(
             frame,
@@ -105,9 +106,14 @@ impl Runner {
             self.record_matches,
         )?;
         record["acquisition"] = acquired.record;
-        record["reference_encodings"] = json!(engine.reference_encodings);
-        record["peak_reference_accounted_bytes"] = json!(engine.peak_reference_bytes);
         let result = if let Some(selected) = acquired.selected {
+            if let Some(area) = selected.window {
+                engine.prepare_raster(
+                    self.reference.image.as_raw().len() * 5
+                        + area[2] as usize * area[3] as usize * 5,
+                    config,
+                )?;
+            }
             let region = selected
                 .window
                 .map(|area| {
@@ -127,6 +133,10 @@ impl Runner {
                 window: None,
             }
         };
+        record["reference_encodings"] = json!(engine.reference_encodings);
+        record["reference_cache"] = engine.cache_report();
+        record["adapter_tensor_io_after"] = json!(engine.backend.tensor_statistics());
+        record["peak_reference_accounted_bytes"] = json!(engine.peak_reference_bytes);
         record["map_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
         Ok(result)
     }

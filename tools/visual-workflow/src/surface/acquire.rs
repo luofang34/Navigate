@@ -1,4 +1,5 @@
 //! Coarse proposals and local crop search retain all examined geometry decisions.
+mod cache;
 pub(super) mod engine;
 mod selection;
 use super::{
@@ -201,6 +202,10 @@ impl Trial<'_> {
         let mut crops = Vec::new();
         for &area in windows {
             let window_start = Instant::now();
+            engine.prepare_raster(
+                self.reference.image.as_raw().len() * 5 + area[2] as usize * area[3] as usize * 5,
+                self.config,
+            )?;
             let reference =
                 window::crop_borrowed(self.reference, area, self.config.limits.reference_bytes)?;
             let crop_ms = window_start.elapsed().as_secs_f64() * 1000.0;
@@ -221,9 +226,12 @@ impl Trial<'_> {
     ) -> Result<(Vec<Value>, Vec<PixelMatch>), Error> {
         let mut rows = Vec::new();
         let mut best = Vec::new();
+        let key_start = Instant::now();
+        let reference_input = engine.reference_input(&reference.image, window);
+        let source_key_ms = key_start.elapsed().as_secs_f64() * 1000.0;
         for rotation in 0..4 {
-            let (candidate, extraction_ms) =
-                engine.match_blocking(&reference.image, rotation, bytes, self.config)?;
+            let prepared = engine.match_blocking(&reference_input, rotation, bytes, self.config)?;
+            let candidate = prepared.candidate;
             if candidate.pairs.len() > best.len() {
                 best = candidate.pairs.clone();
             }
@@ -245,7 +253,10 @@ impl Trial<'_> {
                     window,
                 });
             }
-            row["reference_extraction_ms"] = json!(extraction_ms);
+            row["reference_extraction_ms"] = json!(prepared.extraction_ms);
+            row["reference_preparation_ms"] = json!(prepared.preparation_ms);
+            row["reference_source_key_ms"] = json!(if rotation == 0 { source_key_ms } else { 0.0 });
+            row["reference_cache_hit"] = json!(prepared.cache_hit);
             rows.push(row);
         }
         Ok((rows, best))

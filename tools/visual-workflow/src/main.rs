@@ -92,6 +92,7 @@ fn dispatch_blocking(matches: clap::ArgMatches) -> Result<(), Error> {
             &path("manifest")?,
             &path("output")?,
             args.get_flag("reload-model-on-recovery"),
+            count(args, "reference-cache-mib")?,
         ),
         "acquire-surface" => {
             surface::acquire::run_blocking(&config, root, &path("job")?, &path("output")?)

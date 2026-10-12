@@ -220,7 +220,18 @@ supply a full-map job with the acquisition budget. Omit `keyframe_interval`.
 The selected search estimate and its map pixels initialize tracking directly.
 A failed track, scheduled refresh, or gap over 200 ms starts full-map search
 from the supplied prior. Each new map estimate starts a separate motion segment.
-The process retains the model and source map. It does not cache map features.
+The process retains the model and source map. Use `--reference-cache-mib 32`
+to retain exact crop features in a least-recently-used cache. The default is zero.
+The maximum is 64 MiB. The cache also obeys `limits.reference_bytes`, including
+source pixels, crop pixels, rotated pixels, and feature handles. It reserves
+4 MiB for each new feature handle and rejects larger handles. The budget can
+evict entries before the cache reaches its own limit. A hit checks the input
+pixel digest and reuses the validated host feature handle. Each immutable crop
+shares one pixel digest across its four rotation keys. A hit skips rotation
+and encoding. Matching still uses the backend tensor interface. Reports include
+cache events, retained bytes, peak accounted reference bytes, and adapter
+tensor counters before and after each acquisition. These counters exclude
+model loading and driver-internal work. They reset with the adapter lifecycle.
 Use `--reload-model-on-recovery` only for a model residency cost comparison.
 This control reloads the model sessions before each acquisition after the first
 one. It keeps one process-wide runtime with the same native library identity.

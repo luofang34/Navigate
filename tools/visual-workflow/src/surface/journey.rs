@@ -40,8 +40,14 @@ pub fn run_blocking(
     manifest: &Path,
     output: &Path,
     reload_model_on_recovery: bool,
+    reference_cache_mib: usize,
 ) -> Result<(), Error> {
     let total = Instant::now();
+    if reference_cache_mib > 64 {
+        return Err(Error::Input(
+            "reference cache must be at most 64 MiB".into(),
+        ));
+    }
     let spec: Manifest = assets::read_json_blocking(manifest)?;
     spec.validate()?;
     if spec.keyframe_interval.is_some() {
@@ -60,8 +66,9 @@ pub fn run_blocking(
     let runtime = Runtime::new_blocking(config, root)?;
     let engine = Engine::new(runtime.load_blocking(config, root)?)?;
     let model_load_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let policy = cache_policy(&job, reference_cache_mib);
     let mut runner = Runner {
-        models: models::Models::new(engine, runtime, root, reload_model_on_recovery),
+        models: models::Models::new(engine, runtime, root, reload_model_on_recovery, policy),
         reference,
         prior,
         verifier: PoseVerifier::new(LocalizerConfig::default())?,
@@ -78,11 +85,23 @@ pub fn run_blocking(
         output,
         &json!({"backend":identity,"tracker":runner.tracker.identity,
         "job":job,"refresh_interval":spec.refresh_interval,"setup_ms":setup_ms,"source_loading_ms":loading_ms,"model_load_ms":model_load_ms,
-        "model_loads":runner.models.loads,"query_encodings":runner.models.queries,"reload_model_on_recovery":reload_model_on_recovery,"source_loads":1,"frames":frames,"total_ms":total.elapsed().as_secs_f64()*1000.0,
-        "scope":"One immutable full source map with resident inference models. Each acquisition shares one query encoding across bounded coarse/local/fine search; map features are re-encoded. The first geometry pass is a conditional hypothesis, not a unique navigation fix. Track only the selected crop's map identities. A gap, failed geometry or scheduled refresh discards that state and searches from the original blind prior. Reacquisition starts a separate motion segment. No inferred motion across gaps, geodetic fusion, or truth input. Full source and at most one crop remain resident; runtime/model memory is separate. Offline replay processes every declared frame and does not establish real-time deadline feasibility."}),
+        "reference_cache_mib":reference_cache_mib,"model_loads":runner.models.loads,"query_encodings":runner.models.queries,"reload_model_on_recovery":reload_model_on_recovery,"source_loads":1,"frames":frames,"total_ms":total.elapsed().as_secs_f64()*1000.0,
+        "scope":"One immutable full source map with resident inference models. Each acquisition shares one query encoding across bounded coarse/local/fine search; exact map features can be retained in a bounded cache. The first geometry pass is a conditional hypothesis, not a unique navigation fix. Track only the selected crop's map identities. A gap, failed geometry or scheduled refresh discards that state and searches from the original blind prior. Reacquisition starts a separate motion segment. No inferred motion across gaps, geodetic fusion, or truth input. Full source and at most one crop remain resident; runtime/model memory is separate. Offline replay processes every declared frame and does not establish real-time deadline feasibility."}),
     )?;
     tracing::info!(path=%output.display(),"Saved resident acquisition and tracking sequence");
     Ok(())
+}
+
+fn cache_policy(job: &SurfaceJob, reference_cache_mib: usize) -> acquire::engine::CachePolicy {
+    let source_identity = json!({"image":job.reference.image.sha256,"heights":job.reference.heights.sha256,
+        "origin":job.reference.origin,"column":job.reference.column,"row":job.reference.row,
+        "map_release":job.reference.map_release,"map_sha256":job.reference.map_sha256});
+    use sha2::{Digest, Sha256};
+    let source: [u8; 32] = Sha256::digest(source_identity.to_string().as_bytes()).into();
+    acquire::engine::CachePolicy {
+        bytes: reference_cache_mib * 1024 * 1024,
+        source,
+    }
 }
 
 impl Runner {
