@@ -3,7 +3,7 @@ mod backend;
 mod focal;
 mod initialization;
 mod keyframe;
-mod metrics;
+pub(crate) mod metrics;
 mod navigation;
 mod position;
 mod temporal;

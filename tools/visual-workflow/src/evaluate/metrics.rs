@@ -22,7 +22,7 @@ pub(super) fn prepare_query_camera(
     Ok(camera)
 }
 
-pub(super) fn partition(pair: &PixelMatch, fold: u32) -> Option<bool> {
+pub(crate) fn partition(pair: &PixelMatch, fold: u32) -> Option<bool> {
     let p = pair.reference;
     if !p.iter().all(|v| v.is_finite() && (0.0..8192.0).contains(v)) {
         return None;

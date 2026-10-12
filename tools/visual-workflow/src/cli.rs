@@ -197,8 +197,13 @@ pub fn arrival_options(
     )
 }
 
-fn surface_evaluation_commands() -> [Command; 4] {
+fn surface_evaluation_commands() -> [Command; 5] {
     [
+        Command::new("probe-surface-holdout")
+            .about("Replay frozen acquisition and test five fixed spatial holdouts")
+            .arg(path("config"))
+            .arg(path("manifest"))
+            .arg(path("output")),
         Command::new("probe-surface-appearance")
             .about("Compare frozen poses on shared image patches outside fitted map points")
             .arg(path("config"))

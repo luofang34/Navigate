@@ -2,6 +2,7 @@
 pub mod acquire;
 pub mod appearance;
 pub mod cascade;
+pub mod holdout;
 pub mod hypotheses;
 mod job;
 pub mod journey;

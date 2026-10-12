@@ -236,6 +236,16 @@ buffers. Index loading buffers are reported separately as setup memory. Reports
 separate logical file reads, packet decode, and pixel validation from encoding.
 These byte counts do not measure physical storage transfers.
 
+Use `probe-surface-holdout config.json input.json result.json` to check frozen
+acquisition correspondences. The input contains `job`, `match_result`,
+`sequence_manifest`, and `frame_id`. Each of the first three fields has a `path`
+and a `sha256`. Use an `acquire-surface` result with recorded correspondences.
+The sequence manifest supplies the original capture time. The probe must
+reproduce every recorded decision before it fits five spatial holdouts.
+It uses full-map coordinates for partitioning and crop coordinates for fitting.
+It scores all valid test correspondences. It does not change acceptance gates
+or estimate independent geographic accuracy.
+
 Use `probe-surface-appearance config.json input.json result.json` to compare
 fixed poses on the same image patches. The input contains `job`, `poses`
 (entries with `id` and `pose`), and `excluded_map_pixels` (full-map pixel pairs).
