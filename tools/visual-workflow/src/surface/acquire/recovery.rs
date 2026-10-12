@@ -27,6 +27,7 @@ pub(in crate::surface) fn search_recovery_blocking(
         rectification: None,
         record_matches,
         hypothesis_limit: 1,
+        stop_after_hypotheses: false,
         probe_fine_after_pass: false,
         config,
     };

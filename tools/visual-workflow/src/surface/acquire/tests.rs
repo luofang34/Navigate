@@ -48,3 +48,121 @@ fn insufficient_search_budget_fails_before_loading_images_or_models() {
         Err(Error::Io { .. })
     ));
 }
+
+#[derive(serde::Deserialize)]
+struct SearchFixture {
+    config: std::path::PathBuf,
+    job: std::path::PathBuf,
+    failed_query: crate::job::Image,
+}
+
+#[test]
+#[ignore = "set NAVIGATE_ACQUISITION_FIXTURE to a model, map and image fixture JSON"]
+fn requested_hypotheses_preserve_selection_and_failed_search_coverage() {
+    let path = std::env::var_os("NAVIGATE_ACQUISITION_FIXTURE").unwrap();
+    let fixture: SearchFixture = assets::read_json_blocking(Path::new(&path)).unwrap();
+    let config: Config = assets::read_json_blocking(&fixture.config).unwrap();
+    let job: SurfaceJob = assets::read_json_blocking(&fixture.job).unwrap();
+    validate(&config, &job).unwrap();
+    let (mut frame, reference, prior) = job
+        .load_blocking(fixture.job.parent().unwrap(), &config)
+        .unwrap();
+    let mut engine = Engine::new(
+        config
+            .load_blocking(fixture.config.parent().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    for failed in [false, true] {
+        if failed {
+            frame.image = assets::image_verified_blocking(
+                &fixture.failed_query.path,
+                config.limits.image_pixels,
+                Some(&fixture.failed_query.sha256),
+            )
+            .unwrap();
+        }
+        engine.query_blocking(&frame.image, &config).unwrap();
+        let diagnostic = Trial {
+            frame: &frame,
+            reference: &reference,
+            prior: &prior,
+            verifier: PoseVerifier::new(LocalizerConfig::default()).unwrap(),
+            rectification: None,
+            record_matches: true,
+            hypothesis_limit: 4,
+            stop_after_hypotheses: false,
+            probe_fine_after_pass: false,
+            config: &config,
+        }
+        .run_blocking(&mut engine)
+        .unwrap();
+        let expected: Vec<_> = diagnostic
+            .selected
+            .iter()
+            .chain(&diagnostic.alternatives)
+            .collect();
+        let all_rows = geometry_rows(&diagnostic.record);
+        assert_eq!(expected.len(), if failed { 0 } else { 4 });
+        if failed {
+            assert_eq!(all_rows.len(), 76);
+        }
+        for limit in [1, 2, 4] {
+            engine.query_blocking(&frame.image, &config).unwrap();
+            let actual = search_hypotheses_blocking(
+                &frame,
+                &reference,
+                &prior,
+                &mut engine,
+                &config,
+                true,
+                limit,
+            )
+            .unwrap();
+            let selected: Vec<_> = actual.selected.iter().chain(&actual.alternatives).collect();
+            assert_eq!(selected.len(), expected.len().min(limit));
+            for (a, b) in selected.into_iter().zip(&expected) {
+                assert_selected_equal(a, b);
+            }
+            let rows = geometry_rows(&actual.record);
+            assert_eq!(rows, all_rows[..rows.len()]);
+            if failed {
+                assert_eq!(rows.len(), all_rows.len());
+            } else {
+                assert!(rows.len() < all_rows.len());
+            }
+        }
+    }
+}
+
+fn geometry_rows(record: &Value) -> Vec<Value> {
+    let mut rows = record["coarse"].as_array().unwrap().clone();
+    for field in ["windows", "fine_windows"] {
+        for window in record[field].as_array().unwrap() {
+            rows.extend(window["candidates"].as_array().unwrap().iter().cloned());
+        }
+    }
+    for row in &mut rows {
+        // Compare evidence and geometry; preparation depends on execution history.
+        row.as_object_mut().unwrap().retain(|key, _| {
+            !key.ends_with("_ms") && key != "reference_packet" && key != "reference_cache_hit"
+        });
+    }
+    rows
+}
+
+fn assert_selected_equal(a: &Acquired, b: &Acquired) {
+    assert_eq!(a.window, b.window);
+    assert_eq!(a.rotation, b.rotation);
+    assert_eq!(a.estimate.pose.position, b.estimate.pose.position);
+    assert_eq!(a.estimate.pose.orientation, b.estimate.pose.orientation);
+    assert_eq!(
+        a.estimate.geometry_covariance,
+        b.estimate.geometry_covariance
+    );
+    assert_eq!(a.pairs.len(), b.pairs.len());
+    for (a, b) in a.pairs.iter().zip(&b.pairs) {
+        assert_eq!(a.query, b.query);
+        assert_eq!(a.reference, b.reference);
+    }
+}

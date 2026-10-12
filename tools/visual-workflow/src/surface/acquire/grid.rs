@@ -96,6 +96,7 @@ pub(super) fn run_search_blocking(
         rectification: rectification.as_ref(),
         record_matches: job.record_matches,
         hypothesis_limit: 1,
+        stop_after_hypotheses: false,
         probe_fine_after_pass: false,
         config,
     };

@@ -34,6 +34,7 @@ struct Trial<'a> {
     rectification: Option<&'a navigate_visual::RectificationMap>,
     record_matches: bool,
     hypothesis_limit: usize,
+    stop_after_hypotheses: bool,
     probe_fine_after_pass: bool,
     config: &'a Config,
 }
@@ -89,6 +90,7 @@ pub(super) fn search_hypotheses_blocking(
         rectification: None,
         record_matches,
         hypothesis_limit,
+        stop_after_hypotheses: true,
         probe_fine_after_pass: false,
         config,
     }
@@ -136,6 +138,7 @@ pub fn run_blocking(
         rectification: rectification.as_ref(),
         record_matches: job.record_matches,
         hypothesis_limit: 1,
+        stop_after_hypotheses: false,
         probe_fine_after_pass,
         config,
     };
@@ -276,7 +279,11 @@ impl Trial<'_> {
             record: json!({"coarse":coarse,"coarse_ms":coarse_ms,"seed":seed,"windows":local,
             "fine_parent":parent,"fine_windows":fine,"first_pass":first,
             "accepted":first.is_some(),"search_to_first_pass_ms":first_fix_ms,"search_total_ms":started.elapsed().as_secs_f64()*1000.0,
-            "first_pass_time_scope":"Search only, after file loading, model loading and query encoding. Includes all four directions through the first accepted window. Exhaustive diagnostic work continues after selection."}),
+            "first_pass_time_scope": if self.stop_after_hypotheses {
+                "Search only, after file loading, model loading and query encoding. Includes all four directions through the first accepted window. Stop before the next window when the requested hypothesis count is reached. A pass does not prove uniqueness."
+            } else {
+                "Search only, after file loading, model loading and query encoding. Includes all four directions through the first accepted window. Exhaustive diagnostic work continues after selection."
+            }}),
         })
     }
     fn windows_blocking(
@@ -288,6 +295,9 @@ impl Trial<'_> {
     ) -> Result<Vec<Value>, Error> {
         let mut crops = Vec::new();
         for &area in windows {
+            if self.stop_after_hypotheses && selected.len() >= self.hypothesis_limit {
+                break;
+            }
             let window_start = Instant::now();
             engine.prepare_raster(
                 self.reference.image.as_raw().len() * 5 + area[2] as usize * area[3] as usize * 5,
