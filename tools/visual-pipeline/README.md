@@ -34,6 +34,32 @@ model, runtime library, and acquisition prior. The worker accepts JSON Lines on
 standard input. It writes one result per input line. The `navigate-worker` command
 processes recording evidence. The `match-worker` command computes image matches.
 
+## Airframe segmentation model
+
+`video_masks.py` makes sky, propeller, and ground masks for each video frame.
+It accepts an ADE20K SegFormer model or a model from `segment_finetune.py`.
+The second model has four classes: sky, ground, airframe, and propeller.
+The masks keep only ground pixels for matching. Airframe pixels are excluded.
+
+To make a four-class model, do these steps:
+
+1. Make airframe labels with `airframe_labels.py photos` for a photo test set.
+   Make them with `airframe_labels.py video` for a video. Give point and box
+   prompts in a JSON file. The labels are pseudo-labels. Examine the `--sheet`
+   contact sheet before you use them.
+2. Write a dataset file. It gives each part a `kind` of `video` or `photos`.
+   A video part gives `video`, `masks`, and `airframe`. A photo part gives
+   `testset`, `airframe`, and `held_out_flights`.
+3. Run `segment_finetune.py` with `--train` and `--test`. A photo part name
+   takes a `-train` or `-test` suffix. The test scores show agreement with the
+   pseudo-labels. They do not show true accuracy.
+
+```sh
+uv run --locked --project tools/visual-pipeline --extra photo-matching \
+  python tools/visual-pipeline/segment_finetune.py dataset.json model-out \
+  --base-model /path/to/segformer-b0 --train v1,photos-train --test photos-test --device mps
+```
+
 ## Results and viewer boundary
 
 `navigate-recording` owns the recording input and result types. A result keeps

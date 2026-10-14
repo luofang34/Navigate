@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument('--policy',choices=['occlusions','surfaces','attached-occlusions','airframe-occlusions','airframe-lines'],default='occlusions')
+    parser.add_argument('--airframe-model',type=Path,help='segment_finetune.py model; only its ground class stays valid')
     args = parser.parse_args()
     import torch
     import transformers
@@ -111,6 +112,14 @@ def main():
     if args.policy=='airframe-lines':
         from photo_airframe import LINE_POLICY
         policy.update(version=6,border_support=LINE_POLICY)
+    airframe=None
+    if args.airframe_model:
+        airframe=SegformerForSemanticSegmentation.from_pretrained(
+            args.airframe_model,local_files_only=True,use_safetensors=True).eval()
+        if json.loads((args.airframe_model/'config.json').read_text())['id2label'].get('1')!='ground':
+            raise ValueError('the airframe model requires segment_finetune.py classes')
+        policy.update(airframe_model_sha256=digest(args.airframe_model/'model.safetensors'),
+                      airframe_ground_label=1)
     policy_id=hashlib.sha256(json.dumps(policy,sort_keys=True).encode()).hexdigest()[:16]
     for folder in ['semantic','masks','mask-previews']:
         (root/folder/policy_id).mkdir(exist_ok=True)
@@ -142,6 +151,12 @@ def main():
         confidence_map = cv2.resize(confidence.numpy(), size, interpolation=cv2.INTER_LINEAR)
         source_image = cv2.imread(str(root / entry['image'])) if args.policy=='airframe-lines' else None
         mask = surface_mask(label_map, confidence_map,policy=args.policy,image=source_image)
+        if airframe is not None:
+            with torch.inference_mode():
+                ground=airframe(**inputs).logits.argmax(dim=1)[0].numpy()==policy['airframe_ground_label']
+            ground=cv2.resize(ground.astype(np.uint8)*255,size,interpolation=cv2.INTER_NEAREST)
+            # The same margin as the semantic policy keeps match seeds off airframe edges.
+            mask=np.minimum(mask,cv2.erode(ground,np.ones((13,13),np.uint8)))
         semantic = f"semantic/{policy_id}/{entry['id']}.png"
         entry['valid_mask']=f"masks/{policy_id}/{entry['id']}.png"
         confidence_path=f"semantic/{policy_id}/{entry['id']}-confidence.npy"
