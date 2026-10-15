@@ -55,5 +55,50 @@ class RotationTests(unittest.TestCase):
         np.testing.assert_allclose(eyes[5], [4, 0, 8])
 
 
+
+class RegistrationTests(unittest.TestCase):
+    def test_isolated_registration_failures_and_outliers_take_neighbour_values(self):
+        from video_track import smooth_shifts
+        shifts = [(2., 1.)] * 4 + [None, (40., -30.)] + [(2., 1.)] * 4
+        smooth = smooth_shifts(shifts)
+        self.assertTrue(np.allclose(smooth, [[2., 1.]] * 10))
+
+    def test_correction_moves_a_projected_point_by_the_measured_shift(self):
+        from video_track import corrected
+        f = 800.
+        R = rotation([0, 1, 0], 10)
+        point = R @ np.array([0., 0., -1000.])  # straight ahead of the camera
+        def project(rot):
+            cam = point @ rot
+            return np.array([f * cam[0] / -cam[2], -f * cam[1] / -cam[2]])
+        moved = project(corrected(R, (5., -3.), f)) - project(R)
+        # Turning by the measured shift moves the terrain the opposite way in the image.
+        np.testing.assert_allclose(moved, [-5., 3.], atol=.05)
+
+
+class FocalTests(unittest.TestCase):
+    def test_shared_focal_recovers_the_true_focal_from_anchor_correspondences(self):
+        from video_track import shared_focal
+        rng = np.random.default_rng(2)
+        true_ratio, size = .84, np.array([640, 480])
+        states = {}
+        for frame, heading in [(0, 0), (5, 3), (10, 6)]:
+            R = rotation([0, 1, 0], heading) @ rotation([1, 0, 0], -20)
+            eye = np.array([frame * 2., 0., 1000.])
+            dirs = rays(np.column_stack([rng.uniform(0, 640, 200), rng.uniform(240, 480, 200)]),
+                        np.array([[true_ratio * 640, 0, 319.5], [0, true_ratio * 640, 239.5], [0, 0, 1]]))
+            world = (R @ dirs.T).T
+            depth = -eye[2] / world[:, 2]
+            points = eye + world * depth[:, None]
+            cam = (points - eye) @ R
+            f = true_ratio * 640
+            pixels = np.column_stack([f * cam[:, 0] / -cam[:, 2] + 319.5, -f * cam[:, 1] / -cam[:, 2] + 239.5])
+            # A per-anchor focal that never got refined, as a stopped solve leaves it.
+            K = np.array([[.75 * 640, 0, 319.5], [0, .75 * 640, 239.5], [0, 0, 1]])
+            states[frame] = {'K': K, 'size': size, 'rotation': R, 'eye': eye,
+                             'points': points, 'pixels': pixels, 'inliers': np.ones(200, bool)}
+        self.assertAlmostEqual(shared_focal(states), true_ratio, delta=.01)
+
+
 if __name__ == '__main__':
     unittest.main()

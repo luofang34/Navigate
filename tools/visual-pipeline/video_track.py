@@ -116,3 +116,130 @@ def interpolate_eyes(anchors, count):
     ordered = sorted(anchors)
     frames = np.arange(count)
     return np.stack([np.interp(frames, ordered, [anchors[a][axis] for a in ordered]) for axis in range(3)], axis=1)
+
+
+# OpenCV cameras look along +z with y down; these cameras look along -z with y up.
+FLIP = np.diag([1., -1., -1.])
+
+
+def refit_fixed_focal(state, focal_ratio):
+    """Re-solve one anchor pose with the clip's shared focal length.
+
+    A video lens does not zoom between frames, so per-anchor focal estimates
+    make the overlay breathe. Returns (rotation, eye, rms_px) at the anchor's
+    matching resolution, or None when the anchor kept no inlier evidence.
+    """
+    if 'points' not in state or int(np.sum(state['inliers'])) < 6:
+        return None
+    width, height = (int(v) for v in state['size'])
+    focal = focal_ratio * width
+    K = np.array([[focal, 0, (width - 1) / 2], [0, focal, (height - 1) / 2], [0, 0, 1.]])
+    keep = np.asarray(state['inliers'], bool)
+    points = np.asarray(state['points'], np.float64)[keep]
+    pixels = np.asarray(state['pixels'], np.float64)[keep]
+    rotation_cv = FLIP @ state['rotation'].T
+    rvec = cv2.Rodrigues(rotation_cv)[0]
+    tvec = -rotation_cv @ state['eye']
+    ok, rvec, tvec = cv2.solvePnP(points, pixels, K, None, rvec, tvec, useExtrinsicGuess=True,
+                                  flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:
+        return None
+    rotation_cv = cv2.Rodrigues(rvec)[0]
+    projected = cv2.projectPoints(points, rvec, tvec, K, None)[0].reshape(-1, 2)
+    rms = float(np.sqrt(np.mean(np.sum((projected - pixels) ** 2, axis=1))))
+    return rotation_cv.T @ FLIP, (-rotation_cv.T @ tvec.ravel()), rms
+
+
+def rotation_for_eye(state, eye, focal_ratio):
+    """Best rotation for a fixed eye and focal from the anchor's inlier correspondences; returns (R, rms_px)."""
+    width, height = (int(v) for v in state['size'])
+    focal = focal_ratio * width
+    keep = np.asarray(state['inliers'], bool)
+    points, pixels = np.asarray(state['points'], float)[keep], np.asarray(state['pixels'], float)[keep]
+    K = np.array([[focal, 0, (width - 1) / 2], [0, focal, (height - 1) / 2], [0, 0, 1.]])
+    toward = points - eye
+    R = kabsch(rays(pixels, K), toward / np.linalg.norm(toward, axis=1, keepdims=True))
+    camera = toward @ R
+    projected = np.column_stack([focal * camera[:, 0] / -camera[:, 2] + K[0, 2],
+                                 -focal * camera[:, 1] / -camera[:, 2] + K[1, 2]])
+    return R, float(np.sqrt(np.mean(np.sum((projected - pixels) ** 2, axis=1))))
+
+
+def shared_focal(states, ratios=np.linspace(.6, 1.1, 51)):
+    """Focal length (as a fraction of image width) that best fits every anchor's map correspondences.
+
+    Anchor solves can stop before refining focal, so their individual focal
+    values are not evidence; the reprojection error of all anchors together is.
+    """
+    def total(ratio):
+        fits = [refit_fixed_focal(state, ratio) for state in states.values()]
+        return sum(f[2] ** 2 for f in fits if f is not None)
+    coarse = min(ratios, key=total)
+    step = ratios[1] - ratios[0]
+    return float(min(np.linspace(coarse - step, coarse + step, 21), key=total))
+
+
+def consistent_anchors(states, fps):
+    """One focal, one straight constant-velocity path, and per-anchor rotations that agree with both.
+
+    Near-level views constrain position along the view direction poorly, and
+    each anchor fits its own focal. Free per-anchor solutions therefore jump
+    by tens of metres and several percent of focal between anchors, which
+    the overlay shows as stretching. A few seconds of flight is close to
+    straight and steady, so a line through the anchor positions is a better
+    estimate than any single anchor.
+    """
+    ratio = shared_focal(states)
+    frames = sorted(states)
+    eyes = []
+    for frame in frames:
+        refit = refit_fixed_focal(states[frame], ratio)
+        eyes.append(refit[1] if refit else states[frame]['eye'])
+    times = np.array(frames, float) / fps
+    design = np.column_stack([np.ones_like(times), times])
+    path, *_ = np.linalg.lstsq(design, np.array(eyes), rcond=None)
+    anchors = {}
+    for frame, row in zip(frames, design):
+        eye = row @ path
+        rotation, rms = rotation_for_eye(states[frame], eye, ratio)
+        anchors[frame] = (rotation, eye, rms)
+    return ratio, path, anchors
+
+
+REGISTER_POLICY = {'width': 480, 'highpass_sigma': 6, 'minimum_response': .05, 'window': 9,
+                   'outlier_px': 8., 'minimum_valid_fraction': .05}
+
+
+def residual_shift(video, render, valid, policy=REGISTER_POLICY):
+    """Translation of the rendered terrain against the video frame, in pixels, and the correlation peak."""
+    if valid.mean() < policy['minimum_valid_fraction']:
+        return None
+    weight = valid.astype(np.float32)
+    def detail(image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        return (gray - cv2.GaussianBlur(gray, (0, 0), policy['highpass_sigma'])) * weight
+    window = cv2.createHanningWindow(valid.shape[::-1], cv2.CV_32F)
+    (dx, dy), response = cv2.phaseCorrelate(detail(video), detail(render), window)
+    return (dx, dy) if response >= policy['minimum_response'] else None
+
+
+def smooth_shifts(shifts, policy=REGISTER_POLICY):
+    """Robust running median; registration failures and isolated outliers take their neighbours' value."""
+    count = len(shifts)
+    known = np.array([s if s is not None else (np.nan, np.nan) for s in shifts], float)
+    half = policy['window'] // 2
+    centre = np.array([np.nanmedian(known[max(0, i - half):i + half + 1], axis=0) if
+                       np.isfinite(known[max(0, i - half):i + half + 1]).any() else (0., 0.) for i in range(count)])
+    centre = np.nan_to_num(centre)
+    keep = np.isfinite(known).all(axis=1) & (np.linalg.norm(np.nan_to_num(known) - centre, axis=1) <= policy['outlier_px'])
+    cleaned = np.where(keep[:, None], known, centre)
+    return np.array([np.median(cleaned[max(0, i - half):i + half + 1], axis=0) for i in range(count)])
+
+
+def corrected(rotation, shift, focal):
+    """Turn the camera so that the terrain moves by `shift` pixels in the image (x right, y down)."""
+    pan = np.arctan2(shift[0], focal)
+    tilt = np.arctan2(shift[1], focal)
+    # A rendered feature that sits right of the video feature needs the camera turned right (about +y up axis is left).
+    turn = cv2.Rodrigues(np.array([0., -pan, 0.]))[0] @ cv2.Rodrigues(np.array([-tilt, 0., 0.]))[0]
+    return rotation @ turn
