@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Structural conventions: no mod.rs, bounded file sizes, lib.rs stays a
-# re-export surface, every lib.rs opens with a crate-level doc comment.
+# re-export surface, every lib.rs opens with a crate-level doc comment,
+# and each lockfile resolves one wgpu major version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,5 +31,18 @@ while IFS= read -r f; do
         fail=1
     fi
 done < <(find crates tools -path '*/target' -prune -o -name lib.rs -type f -print 2>/dev/null)
+
+# The reference renderer and the learned matcher share one GPU device only
+# when every crate resolves the same wgpu major version.
+while IFS= read -r f; do
+    majors=$(awk '
+        /^name = / { wgpu = ($0 == "name = \"wgpu\"") }
+        wgpu && /^version = / { split($3, v, "."); gsub(/"/, "", v[1]); print v[1]; wgpu = 0 }
+    ' "$f" | sort -u | tr '\n' ' ')
+    if [ "$(wc -w <<< "$majors")" -gt 1 ]; then
+        echo "FAIL: $f — wgpu resolves to more than one major version: $majors" >&2
+        fail=1
+    fi
+done < <(git ls-files '*Cargo.lock')
 
 exit "$fail"

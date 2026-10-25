@@ -5,15 +5,15 @@ use wgpu::util::DeviceExt;
 pub(super) async fn create(
     dimension: u32,
 ) -> Result<(wgpu::Device, wgpu::Queue, String), RenderError> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         })
-        .await
-        .ok_or(RenderError::Adapter)?;
+        .await?;
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(RenderError::Adapter);
@@ -28,15 +28,13 @@ pub(super) async fn create(
         ..wgpu::Limits::default()
     };
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("terrain reference"),
-                required_features: wgpu::Features::empty(),
-                required_limits,
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
-            },
-            None,
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("terrain reference"),
+            required_features: wgpu::Features::empty(),
+            required_limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            ..Default::default()
+        })
         .await?;
     Ok((
         device,
@@ -66,13 +64,13 @@ pub(super) async fn upload(
                 .iter()
                 .any(|n| *n > maximum.max_texture_dimension_2d)
         })
-        || output_bytes > u64::from(maximum.max_storage_buffer_binding_size)
+        || output_bytes > maximum.max_storage_buffer_binding_size
         || camera.width.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
         || camera.height.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
     {
         return Err(RenderError::Invalid("scene exceeds selected GPU limits"));
     }
-    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let (image_texture, height_texture) = scene_textures(&device, &queue, &scene);
     let (parameters, output, readback) = buffers(&device, output_bytes);
     let layout = layout(&device);
@@ -85,7 +83,7 @@ pub(super) async fn upload(
         &height_texture,
     );
     let pipeline = pipeline(&device, &layout);
-    if let Some(error) = device.pop_error_scope().await {
+    if let Some(error) = scope.pop().await {
         return Err(error.into());
     }
     let style = format!(
@@ -124,12 +122,12 @@ fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::Comp
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("terrain ray marcher"),
         module: &module,
-        entry_point: "render",
+        entry_point: Some("render"),
         layout: Some(
             &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(layout)],
+                immediate_size: 0,
             }),
         ),
         compilation_options: Default::default(),
@@ -161,14 +159,14 @@ fn texture(
         view_formats: &[],
     });
     queue.write_texture(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
         bytes,
-        wgpu::ImageDataLayout {
+        wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(grid.size[0] * stride),
             rows_per_image: Some(grid.size[1]),
