@@ -1,4 +1,5 @@
 //! Offline, hash-bound graph preparation without an inference runtime.
+mod burn_weights;
 mod error;
 mod graph;
 mod loftr;
@@ -55,6 +56,8 @@ fn command() -> Command {
             "xfeat-gray-2x",
             "loftr-coarse",
             "loftr-fine",
+            "loftr-burn-f16",
+            "loftr-burn-f32",
         ]))
         .arg(
             Arg::new("input")
@@ -105,7 +108,14 @@ fn prepare_blocking(
     if batch.is_some() && recipe != "loftr-fine" {
         return Err(Error::Invalid("batch requires loftr-fine"));
     }
-    let prepared = if recipe.starts_with("loftr-") {
+    let prepared = if let Some(dtype) = recipe.strip_prefix("loftr-burn-") {
+        if count.is_some() || batch.is_some() || !compact {
+            return Err(Error::Invalid(
+                "burn weights do not accept budgets, batches or probability outputs",
+            ));
+        }
+        burn_weights::prepare(input, &bytes, dtype == "f16")?
+    } else if recipe.starts_with("loftr-") {
         if count.is_some() || !compact {
             return Err(Error::Invalid(
                 "LoFTR does not accept feature budgets or probability outputs",

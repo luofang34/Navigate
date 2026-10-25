@@ -20,4 +20,14 @@ pub enum Error {
     Decode(#[from] prost::DecodeError),
     #[error(transparent)]
     Cli(#[from] clap::Error),
+    #[error("read PyTorch checkpoint")]
+    Checkpoint(#[source] pytorch_reader::PytorchError),
+    #[error("convert checkpoint tensor {name}")]
+    CheckpointTensor {
+        name: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Weights(#[from] navigate_match::MatchError),
 }
