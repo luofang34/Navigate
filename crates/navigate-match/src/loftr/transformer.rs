@@ -11,6 +11,7 @@ const HEADS: usize = 8;
 /// Linear-attention denominator offset.
 const EPSILON: f64 = 1e-6;
 
+#[derive(Clone)]
 struct EncoderLayer {
     query: Linear,
     key: Linear,
@@ -64,6 +65,7 @@ impl EncoderLayer {
 /// `Kᵀ V · mask` holds every head's `Kᵀ V` on the diagonal. `Q · (Kᵀ V · mask)` then
 /// gives each head's message in its own channels, and `(Q ⊙ ΣK) · mask` gives each
 /// channel the normalizer of its head.
+#[derive(Clone)]
 pub(crate) struct Heads {
     mask: Tensor<3>,
     zeros: Tensor<1>,
@@ -120,6 +122,7 @@ pub(crate) fn linear_attention(
 }
 
 /// Self and cross encoder layers that update two feature sequences together.
+#[derive(Clone)]
 pub(crate) struct Transformer {
     layers: Vec<(EncoderLayer, Kind)>,
     heads: Heads,

@@ -20,6 +20,7 @@ pub(crate) struct Features {
     pub fine: Tensor<4>,
 }
 
+#[derive(Clone)]
 struct Block {
     conv1: Conv,
     conv2: Conv,
@@ -77,6 +78,7 @@ impl Block {
 }
 
 /// Two convolutions with a leaky ReLU between them, as `layer*_outconv2`.
+#[derive(Clone)]
 struct Merge {
     first: Conv,
     second: Conv,
@@ -115,6 +117,7 @@ impl Merge {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Backbone {
     stem: Conv,
     stages: Vec<[Block; 2]>,

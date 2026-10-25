@@ -1,0 +1,48 @@
+[package]
+name = "navigate-locate-web"
+description = "The Navigate locate pipeline as a WebAssembly module for a browser Web Worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+navigate-contract = { path = "../navigate-contract", features = ["serde"] }
+navigate-locate = { path = "../navigate-locate" }
+navigate-match = { path = "../navigate-match", default-features = false, features = ["webgpu"] }
+navigate-visual = { path = "../navigate-visual" }
+burn = { version = "0.22.1", default-features = false, features = ["std", "webgpu"] }
+image = { workspace = true, features = ["jpeg", "png"] }
+serde_json = "1"
+thiserror.workspace = true
+tracing.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["WorkerGlobalScope", "Response", "Performance"] }
+
+# The workspace table with one change: unsafe_code is deny, not forbid. The module
+# must call the linker's __wasm_call_ctors once (see src/start.rs); that FFI call is
+# the only unsafe code, and src/start.rs allows it for that module only.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "forbid"
+
+[lints.clippy]
+unwrap_used = "forbid"
+expect_used = "forbid"
+panic = "forbid"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "forbid"
+exit = "forbid"
+mem_forget = "forbid"
+get_unwrap = "forbid"
+let_underscore_must_use = "forbid"
+let_underscore_future = "forbid"
+await_holding_lock = "forbid"
+disallowed_types = "forbid"
+disallowed_macros = "forbid"

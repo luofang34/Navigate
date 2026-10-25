@@ -18,6 +18,7 @@ const STRIDE: usize = 4;
 const COARSE_WIDTH: usize = 256;
 const FINE_WIDTH: usize = 128;
 
+#[derive(Clone)]
 pub(crate) struct Fine {
     down_proj: Linear,
     merge_feat: Linear,
