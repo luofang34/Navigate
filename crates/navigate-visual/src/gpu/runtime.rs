@@ -7,12 +7,18 @@ use thiserror::Error;
 pub(super) enum GpuError {
     #[error("no hardware compute adapter is available")]
     Adapter,
+    #[error("cannot request a compute adapter")]
+    AdapterRequest(#[from] wgpu::RequestAdapterError),
     #[error("cannot create a compute device")]
     Device(#[from] wgpu::RequestDeviceError),
     #[error("compute shader validation failed")]
     Validation(#[from] wgpu::Error),
+    #[error("cannot wait for submitted GPU work")]
+    Poll(#[from] wgpu::PollError),
     #[error("cannot map GPU match output")]
     Mapping(#[from] wgpu::BufferAsyncError),
+    #[error("cannot access mapped GPU match output")]
+    MappedRange(#[from] wgpu::MapRangeError),
     #[error("GPU readback callback disconnected")]
     Disconnected(#[from] std::sync::mpsc::RecvError),
 }
@@ -36,32 +42,30 @@ impl Compute {
     pub async fn new() -> Result<(Self, String), GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
-            .await
-            .ok_or(GpuError::Adapter)?;
+            .await?;
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
             return Err(GpuError::Adapter);
         }
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("visual matching"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("visual matching"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                ..Default::default()
+            })
             .await?;
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pyramidal patch matching"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tracking.wgsl").into()),
@@ -73,7 +77,7 @@ impl Compute {
             source: wgpu::ShaderSource::Wgsl(include_str!("upload.wgsl").into()),
         });
         let unpack = self::pipeline(&device, &upload_module, "unpack_gray");
-        if let Some(error) = device.pop_error_scope().await {
+        if let Some(error) = scope.pop().await {
             return Err(error.into());
         }
         Ok((
@@ -98,7 +102,7 @@ fn pipeline(
         label: Some(entry),
         layout: None,
         module,
-        entry_point: entry,
+        entry_point: Some(entry),
         compilation_options: Default::default(),
         cache: None,
     })

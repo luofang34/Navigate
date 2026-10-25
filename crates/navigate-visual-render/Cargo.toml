@@ -11,7 +11,7 @@ navigate-visual = { path = "../navigate-visual" }
 nalgebra.workspace = true
 image.workspace = true
 thiserror.workspace = true
-wgpu = "22.1"
+wgpu = "30"
 bytemuck = "1"
 futures-channel = "0.3"
 sha2 = "0.10"
