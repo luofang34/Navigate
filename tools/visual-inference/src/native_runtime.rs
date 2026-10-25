@@ -295,5 +295,5 @@ fn providers_blocking(
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod device_tests;

@@ -1,5 +1,7 @@
 use super::*;
-use crate::{LoFtrMatcher, Provider};
+use crate::LoFtrMatcher;
+#[cfg(target_os = "macos")]
+use crate::Provider;
 use navigate_visual::ImageMatcher;
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -87,7 +89,7 @@ fn strict_coreml_fine_batch_keeps_other_patch_pairs_independent()
     std::fs::remove_file(profile)?;
     Ok(())
 }
-#[cfg(test)]
+#[cfg(target_os = "macos")]
 fn run(fine: &mut FineStage, inputs: &[Vec<f32>; 2]) -> Result<Vec<f32>, InferenceError> {
     let tensor = |i: usize| {
         TensorRef::from_array_view(([fine.batch, 25, 128], inputs[i].as_slice()))
