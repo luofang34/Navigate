@@ -1,7 +1,7 @@
 //! Photo preparation and the response message, independent of the browser.
 use image::{GrayImage, imageops::FilterType};
-use navigate_contract::locate::{LocateRequest, LocateResponse, LocatedCamera};
-use navigate_locate::Outcome;
+use navigate_contract::locate::{LocateRequest, LocateResponse, LocatedCamera, PhotoInfo};
+use navigate_locate::{Outcome, PhotoMetadata};
 use navigate_visual::CameraModel;
 
 /// A photo at its working size, with the calibration at that size.
@@ -52,6 +52,33 @@ pub fn prepare_photo(request: &LocateRequest, photo: &[u8]) -> Result<PreparedPh
             cy: (f64::from(h) - 1.0) / 2.0,
         },
         image,
+    })
+}
+
+/// The size and camera hints of an encoded photo.
+///
+/// # Errors
+///
+/// Returns a reason for a person when the photo cannot be decoded.
+pub fn photo_info(photo: &[u8]) -> Result<PhotoInfo, String> {
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(photo))
+        .with_guessed_format()
+        .map_err(|e| format!("the photo cannot be read: {e}"))?
+        .into_dimensions()
+        .map_err(|e| format!("the photo cannot be read: {e}"))?;
+    let hints = PhotoMetadata::read(photo, [width, height]);
+    Ok(PhotoInfo {
+        width_px: width,
+        height_px: height,
+        focal_px: hints.focal_px,
+        gps_latitude_rad: hints.gps.map(|g| g[0].to_radians()),
+        gps_longitude_rad: hints.gps.map(|g| g[1].to_radians()),
+        gps_altitude_m: hints.gps.map(|g| g[2]),
+        gimbal_heading_rad: hints
+            .gimbal_yaw_deg
+            .map(|y| y.rem_euclid(360.0).to_radians()),
+        gimbal_pitch_rad: hints.gimbal_pitch_deg.map(|p| (-p).to_radians()),
+        relative_altitude_m: hints.relative_altitude_m,
     })
 }
 

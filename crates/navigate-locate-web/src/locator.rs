@@ -1,10 +1,21 @@
 //! The exported locator: weights on the browser's WebGPU device and one call per photo.
-use crate::{request::prepare_photo, response_of, tiles::FetchSource};
+use crate::{photo_info, request::prepare_photo, response_of, tiles::FetchSource};
 use burn::tensor::Device;
 use navigate_contract::locate::{LocateProgress, LocateRequest, LocateResponse, LocateStage};
 use navigate_locate::{LocateRequest as Request, LookAt, Progress, SceneRequest, locate};
 use navigate_match::{Loftr, LoftrMatcher, Weights};
 use wasm_bindgen::prelude::*;
+
+/// The size and camera hints of a photo as JSON `PhotoInfo`, without weights or a GPU.
+///
+/// # Errors
+///
+/// Rejects with a reason when the photo cannot be decoded.
+#[wasm_bindgen]
+pub fn inspect(photo: Vec<u8>) -> Result<String, JsValue> {
+    let info = photo_info(&photo).map_err(|e| JsValue::from_str(&e))?;
+    serde_json::to_string(&info).map_err(|e| JsValue::from_str(&e.to_string()))
+}
 
 /// LoFTR-DS on the browser's WebGPU device.
 #[wasm_bindgen]

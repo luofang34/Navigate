@@ -12,6 +12,31 @@
 /// read wrongly is a new version.
 pub const LOCATE_MESSAGES_VERSION: u32 = 1;
 
+/// Camera hints that the module read from a photo, for the page to show and to
+/// let the user correct. A hint is not evidence: apps can edit or remove metadata.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PhotoInfo {
+    /// Stored image width, pixels.
+    pub width_px: u32,
+    /// Stored image height, pixels.
+    pub height_px: u32,
+    /// Focal length from EXIF, pixels of the stored image.
+    pub focal_px: Option<f64>,
+    /// GPS latitude, radians.
+    pub gps_latitude_rad: Option<f64>,
+    /// GPS longitude, radians.
+    pub gps_longitude_rad: Option<f64>,
+    /// GPS altitude, metres.
+    pub gps_altitude_m: Option<f64>,
+    /// Gimbal compass direction, radians clockwise from north.
+    pub gimbal_heading_rad: Option<f64>,
+    /// Gimbal angle below the horizon, radians.
+    pub gimbal_pitch_rad: Option<f64>,
+    /// Height above the take-off point, metres.
+    pub relative_altitude_m: Option<f64>,
+}
+
 /// Where to look for the camera of one photo.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

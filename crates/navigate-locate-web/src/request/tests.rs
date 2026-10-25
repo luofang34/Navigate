@@ -55,3 +55,11 @@ fn another_version_and_bad_bytes_are_refused() {
             .contains("cannot be read")
     );
 }
+
+#[test]
+fn photo_info_gives_the_stored_size() {
+    let info = photo_info(&jpeg(320, 200)).unwrap();
+    assert_eq!((info.width_px, info.height_px), (320, 200));
+    assert_eq!(info.focal_px, None);
+    assert!(photo_info(b"none").is_err());
+}

@@ -14,6 +14,7 @@ mod error;
 #[cfg(feature = "http")]
 mod http;
 mod locate;
+mod metadata;
 mod scene;
 
 pub use area::{TileGrid, tile_xy};
@@ -22,4 +23,5 @@ pub use error::LocateError;
 #[cfg(feature = "http")]
 pub use http::CachedHttpSource;
 pub use locate::{LocateRequest, Located, Outcome, Progress, locate};
+pub use metadata::PhotoMetadata;
 pub use scene::{SceneRequest, TileKind, TileSource, build as build_scene, height_at};

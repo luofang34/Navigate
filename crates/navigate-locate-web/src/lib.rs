@@ -13,4 +13,4 @@ mod start;
 #[cfg(target_arch = "wasm32")]
 mod tiles;
 
-pub use request::{PreparedPhoto, prepare_photo, response_of};
+pub use request::{PreparedPhoto, photo_info, prepare_photo, response_of};
