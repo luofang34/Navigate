@@ -36,7 +36,7 @@ impl Compute {
         profile: &mut Profile,
     ) -> Result<Aligned, GpuError> {
         let total = profile.timer();
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let preparation = profile.timer();
         let (buffers, encoder) = self.inputs(source, target, points, initial, resident, profile);
         profile.record(preparation, "inputs_total", 0, 0);
@@ -62,8 +62,8 @@ impl Compute {
         );
         profile.record(submission, "encode_submit", 0, 0);
         let wait = profile.timer();
-        self.device.poll(wgpu::Maintain::Wait);
-        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        if let Some(error) = pollster::block_on(scope.pop()) {
             return Err(error.into());
         }
         profile.record(wait, "completion_wait", 0, 0);
@@ -189,11 +189,11 @@ impl Compute {
             .map_async(wgpu::MapMode::Read, move |result| {
                 send.send(result).ok();
             });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
         receive.recv()??;
         profile.record(wait, "map_readback_wait", 0, 0);
         let decoding = profile.timer();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range()?;
         let points = mapped
             .as_chunks::<16>()
             .0

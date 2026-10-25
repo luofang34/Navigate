@@ -30,9 +30,9 @@ impl GpuRenderer {
                 send.send(result).ok();
             });
         #[cfg(not(target_arch = "wasm32"))]
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
         receive.await??;
-        let mapped = self.readback.slice(..).get_mapped_range();
+        let mapped = self.readback.slice(..).get_mapped_range()?;
         let count = (self.camera.width as usize) * (self.camera.height as usize);
         let mut pixels = Vec::with_capacity(count);
         let mut depth = Vec::with_capacity(count);

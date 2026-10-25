@@ -60,6 +60,27 @@ pub trait ImageMatcher {
     }
 }
 
+/// Asynchronous form of [`ImageMatcher`] for hosts where a backend cannot block.
+///
+/// In a browser, a GPU read-back always completes later, so a matcher there cannot
+/// return from a blocking call. The contract is the same as
+/// [`ImageMatcher::match_images_blocking`]: correspondences in source pixels, empty
+/// when no usable evidence exists, and the backend's actual identity.
+pub trait AsyncImageMatcher {
+    /// Stable backend and model identity for reports and derived caches.
+    fn identity(&self) -> &str;
+    /// Match two undistorted grayscale images in their source pixel coordinates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for incompatible images or a backend failure.
+    fn match_images(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+    ) -> impl Future<Output = Result<Vec<PixelMatch>, VisualError>>;
+}
+
 impl<M: ImageMatcher + ?Sized> ImageMatcher for Box<M> {
     fn identity(&self) -> &str {
         (**self).identity()

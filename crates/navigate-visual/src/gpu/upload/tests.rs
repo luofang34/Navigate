@@ -41,9 +41,12 @@ fn expansion_preserves_all_intensities_and_unaligned_levels() {
             .map_async(wgpu::MapMode::Read, move |result| {
                 send.send(result).ok();
             });
-        compute.device.poll(wgpu::Maintain::Wait);
+        compute
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("submitted work completes");
         receive.recv().expect("map event").expect("readback mapped");
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback.slice(..).get_mapped_range().expect("mapped range");
         let actual: Vec<_> = mapped
             .as_chunks::<4>()
             .0

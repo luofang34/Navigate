@@ -5,7 +5,8 @@ use navigate_visual::{
     CameraModel, Estimate, Frame, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView,
     VisualError,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Limits for host-owned images, feature handles, and candidate work.
 /// Model weights and runtime workspaces need a separate backend budget.
