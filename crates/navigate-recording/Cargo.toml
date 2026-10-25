@@ -1,0 +1,23 @@
+[package]
+name = "navigate-recording"
+description = "Recorded camera evidence and visual navigation processing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+navigate-visual = { path = "../navigate-visual" }
+navigate-visual-session = { path = "../navigate-visual-session" }
+navigate-contract.workspace = true
+nalgebra.workspace = true
+image = { workspace = true, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tempfile = "3"
+
+[lints]
+workspace = true
