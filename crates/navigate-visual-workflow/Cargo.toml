@@ -10,9 +10,12 @@ publish.workspace = true
 navigate-visual = { path = "../navigate-visual" }
 image.workspace = true
 thiserror.workspace = true
+# std::time::Instant panics in a browser; web-time is std on native targets.
+web-time = "1"
 
 [dev-dependencies]
 nalgebra.workspace = true
+pollster = "0.3"
 
 [lints]
 workspace = true

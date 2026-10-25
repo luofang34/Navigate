@@ -5554,7 +5554,9 @@ dependencies = [
  "image",
  "nalgebra 0.34.2",
  "navigate-visual",
+ "pollster",
  "thiserror 2.0.19",
+ "web-time",
 ]
 
 [[package]]
