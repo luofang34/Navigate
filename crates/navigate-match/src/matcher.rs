@@ -98,3 +98,22 @@ impl navigate_visual::ImageMatcher for LoftrMatcher {
         })
     }
 }
+
+impl navigate_visual::AsyncImageMatcher for LoftrMatcher {
+    fn identity(&self) -> &str {
+        &self.identity
+    }
+
+    async fn match_images(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+    ) -> Result<Vec<PixelMatch>, navigate_visual::VisualError> {
+        LoftrMatcher::match_images(self, reference, query)
+            .await
+            .map_err(|source| navigate_visual::VisualError::Backend {
+                backend: self.identity.clone(),
+                source: Box::new(source),
+            })
+    }
+}

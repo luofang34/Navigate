@@ -5176,6 +5176,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-locate"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "futures-util",
+ "hex",
+ "image",
+ "nalgebra 0.34.2",
+ "navigate-match",
+ "navigate-visual",
+ "navigate-visual-render",
+ "navigate-visual-workflow",
+ "pollster",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
+ "ureq 3.5.0",
+ "web-time",
+]
+
+[[package]]
 name = "navigate-match"
 version = "0.1.0"
 dependencies = [
@@ -8355,6 +8378,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
  "base64 0.23.1",
+ "flate2",
  "log",
  "percent-encoding",
  "rustls",
