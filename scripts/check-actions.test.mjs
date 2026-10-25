@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {checkActions} from './check-actions.mjs';
 const action=name=>`actions/${name}@${'a'.repeat(40)}`;
 const uses=name=>`- uses: ${action(name)} # pinned`;
@@ -18,4 +19,8 @@ test('rejects mutable references and unknown runtimes',async()=>{
 });
 test('retains metadata download failures',async()=>{
  await assert.rejects(checkActions([uses('pages')],async()=>{throw Error('HTTP 503')}),/HTTP 503/);
+});
+test('Dependabot keeps the pinned actions current',async()=>{
+ const config=await readFile(new URL('../.github/dependabot.yml',import.meta.url),'utf8');
+ assert.match(config,/package-ecosystem:\s*github-actions/);
 });
