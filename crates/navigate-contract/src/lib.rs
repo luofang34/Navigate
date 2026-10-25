@@ -15,6 +15,7 @@ pub mod composition;
 pub mod guidance;
 pub mod integrity;
 pub mod kinematics;
+pub mod locate;
 pub mod plan;
 pub mod solution;
 pub mod stamp;

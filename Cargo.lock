@@ -5100,6 +5100,8 @@ dependencies = [
 name = "navigate-contract"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
 ]
 
@@ -5196,6 +5198,25 @@ dependencies = [
  "tracing-subscriber",
  "ureq 3.5.0",
  "web-time",
+]
+
+[[package]]
+name = "navigate-locate-web"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "image",
+ "js-sys",
+ "navigate-contract",
+ "navigate-locate",
+ "navigate-match",
+ "navigate-visual",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

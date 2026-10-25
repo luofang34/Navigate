@@ -36,6 +36,7 @@ pub struct Correspondence {
 }
 
 /// LoFTR-DS with weights on one burn device.
+#[derive(Clone)]
 pub struct Loftr {
     backbone: Backbone,
     coarse: Transformer,
