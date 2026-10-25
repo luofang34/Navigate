@@ -102,6 +102,9 @@ pub struct LocatedCamera {
     pub pitch_rad: f64,
     /// Rotation about the optical axis, radians.
     pub roll_rad: f64,
+    /// Eye-to-world unit quaternion `[x, y, z, w]`. World axes are east, north and up
+    /// at the camera; eye axes are right, up and back (the view is along −z).
+    pub orientation_xyzw: [f64; 4],
     /// Image width that the pose refers to, pixels.
     pub width_px: u32,
     /// Image height that the pose refers to, pixels.

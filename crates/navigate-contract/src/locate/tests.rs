@@ -10,6 +10,7 @@ fn a_found_response_has_a_stable_json_form() {
             heading_rad: 4.807,
             pitch_rad: 0.686,
             roll_rad: -0.12,
+            orientation_xyzw: [0.29, 0.30, 0.57, 0.71],
             width_px: 1024,
             height_px: 586,
             focal_px: 710.0,

@@ -96,6 +96,10 @@ pub fn response_of(outcome: Outcome, camera: &CameraModel) -> LocateResponse {
                     heading_rad: heading.to_radians(),
                     pitch_rad: pitch.to_radians(),
                     roll_rad: roll.to_radians(),
+                    orientation_xyzw: {
+                        let q = located.estimate.pose.orientation.into_inner();
+                        [q.i, q.j, q.k, q.w]
+                    },
                     width_px: camera.width,
                     height_px: camera.height,
                     focal_px: camera.fx,
