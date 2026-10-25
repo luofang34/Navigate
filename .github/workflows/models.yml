@@ -1,0 +1,58 @@
+# Model parity and golden localization cases. These are slow, so the full gate
+# (ci.sh) does not run them. This workflow runs when model code changes, on a
+# schedule, and on request.
+name: Models
+
+on:
+  pull_request:
+    paths:
+      - "crates/navigate-match/**"
+      - "tools/visual-model/**"
+      - ".github/workflows/models.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/navigate-match/**"
+      - "tools/visual-model/**"
+      - ".github/workflows/models.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned in tools/visual-bench/model-assets/loftr.json and tools/visual-model/src/burn_weights.rs.
+  LOFTR_CHECKPOINT_URL: https://cmp.felk.cvut.cz/~mishkdmy/models/loftr_outdoor.ckpt
+  LOFTR_CHECKPOINT_SHA256: 21f5bec5968178e8bc8b7633441836fe5de4f47d861dd2cd7dc38e271b0479ec
+
+jobs:
+  loftr-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Get the LoFTR checkpoint
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/loftr_outdoor.ckpt" "$LOFTR_CHECKPOINT_URL"
+          echo "$LOFTR_CHECKPOINT_SHA256  $RUNNER_TEMP/loftr_outdoor.ckpt" | sha256sum -c
+
+      - name: Convert the checkpoint to F16 burn weights
+        run: |
+          cargo run --release -p navigate-model -- --recipe loftr-burn-f16 \
+            "$RUNNER_TEMP/loftr_outdoor.ckpt" "$RUNNER_TEMP/loftr-f16.safetensors"
+          sha256sum "$RUNNER_TEMP/loftr-f16.safetensors"
+
+      - name: Compare burn LoFTR with the ONNX Runtime reference
+        env:
+          NAVIGATE_LOFTR_WEIGHTS: ${{ runner.temp }}/loftr-f16.safetensors
+        run: cargo test --release -p navigate-match --test parity -- --ignored
