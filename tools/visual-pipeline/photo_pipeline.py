@@ -21,6 +21,8 @@ def commands(recipe,base,run_id,mode,stage):
                  ('mask',script('photo_masks')+[str(root),'--model',path('segmentation_model')])]
     if recipe.get('mask_policy'):
         preparation[1][1].extend(['--policy',recipe['mask_policy']])
+    if recipe.get('airframe_model'):
+        preparation[1][1].extend(['--airframe-model',path('airframe_model')])
     profile=str((base/recipe['profiles'][mode]).resolve()) if mode in recipe.get('profiles',{}) else str(root/'profiles'/(mode+'.json'))
     catalog=path('reference_catalog')
     prior_actions=[]
