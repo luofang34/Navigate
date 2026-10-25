@@ -102,3 +102,87 @@ fn gpu_tracks_border_points_at_supported_pyramid_levels() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a hardware compute adapter; run explicitly on the target device"]
+fn gpu_coarse_search_handles_large_positive_and_negative_brightness_offsets() {
+    let reference = GrayImage::from_fn(320, 240, |x, y| {
+        let h = (x / 7).wrapping_mul(374761393) ^ (y / 9).wrapping_mul(668265263);
+        image::Luma([40 + ((h ^ (h >> 13)).wrapping_mul(1274126177) % 160) as u8])
+    });
+    let points: Vec<_> = (40..280)
+        .step_by(40)
+        .flat_map(|x| {
+            (40..200)
+                .step_by(40)
+                .map(move |y| Vector2::new(f64::from(x), f64::from(y)))
+        })
+        .collect();
+    let mut gpu = pollster::block_on(GpuPyramidalMatcher::new()).expect("hardware adapter");
+    for offset in [-35_i16, 35] {
+        let query = GrayImage::from_fn(320, 240, |x, y| {
+            if x >= 26 && y >= 11 {
+                image::Luma([(i16::from(reference.get_pixel(x - 26, y - 11)[0]) + offset) as u8])
+            } else {
+                image::Luma([0])
+            }
+        });
+        let locations = gpu
+            .track_points_blocking(&reference, &query, &points)
+            .expect("tracking");
+        let correct = points
+            .iter()
+            .zip(locations)
+            .filter(|(p, q)| q.is_some_and(|q| (q - **p - Vector2::new(26.0, 11.0)).norm() < 0.5))
+            .count();
+        assert!(
+            correct * 10 >= points.len() * 8,
+            "offset {offset}: {correct} accurate tracks"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a hardware compute adapter; run explicitly on the target device"]
+fn gpu_track_slots_do_not_depend_on_batch_size_or_order() {
+    let reference = GrayImage::from_fn(320, 240, |x, y| {
+        let h = (x / 7).wrapping_mul(374761393) ^ (y / 9).wrapping_mul(668265263);
+        image::Luma([40 + ((h ^ (h >> 13)).wrapping_mul(1274126177) % 160) as u8])
+    });
+    let query = GrayImage::from_fn(320, 240, |x, y| {
+        if x >= 2 && y >= 3 {
+            *reference.get_pixel(x - 2, y - 3)
+        } else {
+            image::Luma([0])
+        }
+    });
+    let points: Vec<_> = (20..300)
+        .step_by(11)
+        .flat_map(|x| {
+            (20..220)
+                .step_by(11)
+                .map(move |y| Vector2::new(f64::from(x), f64::from(y)))
+        })
+        .chain([Vector2::new(2.0, 2.0)])
+        .collect();
+    let mut gpu = pollster::block_on(GpuPyramidalMatcher::new()).expect("hardware adapter");
+    let batch = gpu
+        .track_points_blocking(&reference, &query, &points)
+        .expect("full batch");
+    assert_eq!(batch.len(), points.len());
+    assert!(batch.iter().filter(|p| p.is_some()).count() > 100);
+    assert_eq!(batch.last(), Some(&None));
+    let mut reversed = points.clone();
+    reversed.reverse();
+    let mut output = gpu
+        .track_points_blocking(&reference, &query, &reversed)
+        .expect("reversed batch");
+    output.reverse();
+    assert_eq!(output, batch);
+    for count in [1, 63, 64, 65, 257] {
+        let output = gpu
+            .track_points_blocking(&reference, &query, &points[..count])
+            .expect("partial batch");
+        assert_eq!(output, batch[..count]);
+    }
+}

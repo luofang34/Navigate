@@ -185,7 +185,7 @@ fn digest_blocking(path: &Path) -> Result<String, InferenceError> {
         path: path.to_owned(),
         source,
     })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 fn decode(indices: &[i64], a: &Features, b: &Features) -> Result<Vec<PixelMatch>, InferenceError> {
     if indices.len() != a.pixels.len() {

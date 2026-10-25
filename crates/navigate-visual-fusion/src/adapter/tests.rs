@@ -21,6 +21,7 @@ fn budget() -> VisualErrorBudget {
         map_horizontal_m: 3.0,
         map_vertical_m: 5.0,
         calibration_m: 1.0,
+        geometry_model_m: 2.0,
         vertical_datum: VerticalDatum::Orthometric {
             geoid_separation_m: 48.0,
         },
@@ -78,6 +79,29 @@ fn zero_or_missing_budget_terms_are_refused() {
 }
 
 #[test]
+fn curved_frame_covariance_is_expressed_in_the_camera_location_ned_axes() {
+    let mut estimate = estimate(1, 1000, "sphere", 0.0);
+    estimate.frame = LocalFrame::spherical_enu(46.5, 7.5).unwrap();
+    estimate.pose.position = estimate.frame.local([47.0, 8.0, 900.0]).unwrap();
+    let rotation = estimate
+        .frame
+        .local_rotation([47.0, 8.0])
+        .unwrap()
+        .to_rotation_matrix()
+        .into_inner();
+    let local =
+        rotation * Matrix3::from_diagonal(&Vector3::new(4.0, 9.0, 16.0)) * rotation.transpose();
+    estimate
+        .geometry_covariance
+        .fixed_view_mut::<3, 3>(0, 0)
+        .copy_from(&local);
+    let actual = ned_covariance(&estimate, &budget()).unwrap();
+    let (n, e, d) = actual.diagonal();
+    assert!((n - e - 10.0).abs() < 1e-8);
+    assert!((d - e - 24.0).abs() < 1e-8);
+}
+
+#[test]
 fn fix_axes_move_to_ned_and_carry_the_budget() {
     let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
     let fix = source
@@ -95,9 +119,9 @@ fn fix_axes_move_to_ned_and_carry_the_budget() {
     };
     let (n, e, d) = covariance.diagonal();
     // North takes the frame's north variance (9), east the east variance (4).
-    assert!((n - (2.0 * 9.0 + 192.0)).abs() < 1e-9);
-    assert!((e - (2.0 * 4.0 + 192.0)).abs() < 1e-9);
-    assert!((d - (2.0 * 16.0 + 192.0)).abs() < 1e-9);
+    assert!((n - (2.0 * 9.0 + 344.0)).abs() < 1e-9);
+    assert!((e - (2.0 * 4.0 + 344.0)).abs() < 1e-9);
+    assert!((d - (2.0 * 16.0 + 344.0)).abs() < 1e-9);
     assert!((position.altitude_m - 948.0).abs() < 1e-9);
     assert!((position.latitude_rad.to_degrees() - 47.0).abs() < 1e-9);
     assert!(
@@ -304,5 +328,55 @@ fn session_labels_refuse_shared_map_cells_and_never_grant_independence() {
             Some(VisualFusionError::UnknownCorrelation),
             "{label:?}"
         );
+    }
+}
+
+#[test]
+fn geometry_model_budget_is_required_even_at_the_frame_anchor() {
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut b = budget();
+        b.geometry_model_m = invalid;
+        assert_eq!(
+            VisualFixSource::new(identity(), b).err(),
+            Some(VisualFusionError::InvalidBudget {
+                field: "geometry_model_m"
+            })
+        );
+    }
+    let mut e = estimate(1, 1, "geometry", 0.0);
+    e.frame = LocalFrame::spherical_enu(75.0, 0.0).unwrap();
+    e.pose.position = Vector3::new(0.0, 0.0, 30_000.0);
+    assert!(e.frame.model_error_m(e.pose.position) < 1e-6);
+    let first = ned_covariance(&e, &budget()).unwrap();
+    let mut larger = budget();
+    larger.geometry_model_m = 20.0;
+    let second = ned_covariance(&e, &larger).unwrap();
+    assert!(second.diagonal().0 > first.diagonal().0 + 1000.0);
+    assert!(second.diagonal().2 > first.diagonal().2 + 1000.0);
+}
+
+#[test]
+fn ellipsoid_fixes_cannot_apply_a_second_geoid_offset_or_consume_refused_evidence() {
+    let mut e = estimate(1, 100, "a", 0.0);
+    e.frame = LocalFrame::wgs84_enu(47.0, 11.0).unwrap();
+    e.pose.position = e.frame.local([47.01, 11.02, 1548.0]).unwrap();
+    let mut source = VisualFixSource::new(identity(), budget()).unwrap();
+    assert_eq!(
+        source.convert(&e, EvidenceIndependence::ValidatedIndependent),
+        Err(VisualFusionError::FrameDatumMismatch)
+    );
+    assert!(source.last.is_none());
+    assert!(source.admitted.is_empty());
+    source.budget.vertical_datum = VerticalDatum::Wgs84Ellipsoid;
+    let fix = source
+        .convert(&e, EvidenceIndependence::ValidatedIndependent)
+        .unwrap();
+    match fix.observation.value {
+        ObservationValue::PositionFix { position, .. } => {
+            assert!((position.altitude_m - 1548.0).abs() < 1e-6);
+            assert!((position.latitude_rad.to_degrees() - 47.01).abs() < 1e-10);
+            assert!((position.longitude_rad.to_degrees() - 11.02).abs() < 1e-10);
+        }
+        _ => panic!("expected position fix"),
     }
 }

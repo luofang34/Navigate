@@ -11,11 +11,14 @@ reconstruction = ["dep:kornia-3d", "dep:kornia-algebra", "dep:lambda-twist", "de
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
+navigate-contract.workspace = true
+navigate-geodesy.workspace = true
 sha2 = "0.10"
 nalgebra.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 image.workspace = true
-wgpu = { version = "22.1", optional = true }
+wgpu = { version = "30", optional = true }
 bytemuck = { version = "1", optional = true }
 pollster = { version = "0.3", optional = true }
 

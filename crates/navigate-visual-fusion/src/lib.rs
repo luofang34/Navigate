@@ -3,9 +3,10 @@
 //! [`VisualFixSource`] converts a [`navigate_visual::Estimate`] into a
 //! [`navigate_fusion::Observation`] with a `PositionFix` value. The host
 //! supplies the source identity, the clock domain, and a
-//! [`VisualErrorBudget`]. The adapter adds the budget and the frame-model
-//! error to the image-geometry covariance. The adapter does not estimate map,
-//! calibration, or datum errors. A budget of zero is refused.
+//! [`VisualErrorBudget`]. The adapter adds the budget and the point-coordinate
+//! displacement to the image-geometry covariance. The required geometry-model
+//! term covers the fitted-position effect of map distortion. The adapter does not
+//! estimate map, geometry-model, calibration, or datum errors. A budget of zero is refused.
 //!
 //! The fix is the position of the camera optical centre. Attitude is not
 //! transferred, because the filter has no attitude state. The host removes

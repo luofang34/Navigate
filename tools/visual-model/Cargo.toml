@@ -1,0 +1,24 @@
+[package]
+name = "navigate-model"
+description = "Reproducible inference graph preparation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+navigate-match = { path = "../../crates/navigate-match" }
+pytorch-reader = "0.22.1"
+webnn-onnx-utils = { git = "https://github.com/rustnn/webnn-onnx-utils", branch = "main" }
+prost = "0.12"
+sha2 = "0.10"
+clap = "4"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-22", "load-dynamic"] }
+
+[lints]
+workspace = true

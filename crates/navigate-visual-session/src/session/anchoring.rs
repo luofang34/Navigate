@@ -1,4 +1,5 @@
 //! Map-anchor admission: gate, agreement between frames, relocation, and transfer.
+mod frames;
 
 use super::{Anchor, VisualSession};
 use crate::{
@@ -49,7 +50,8 @@ impl VisualSession {
     ///
     /// # Errors
     /// Rejects unknown frames, digest mismatches, repeated evidence, invalid
-    /// error declarations, and frames without odometry inside a tracked run.
+    /// error declarations, mixed flat and curved frame projections, and frames
+    /// without odometry inside a tracked run.
     pub fn submit_anchor(
         &mut self,
         mut anchor: AnchorObservation,
@@ -130,28 +132,6 @@ impl VisualSession {
                 field: "anchor covariance",
             });
         }
-        Ok(())
-    }
-
-    /// Move the anchor pose and its covariance into the session frame.
-    fn to_session_frame(&self, anchor: &mut AnchorObservation) -> Result<(), SessionError> {
-        let frame = self.local_frame.unwrap_or(anchor.local_frame);
-        if frame == anchor.local_frame {
-            return Ok(());
-        }
-        let geodetic = anchor.local_frame.geodetic(anchor.pose.translation.vector);
-        let position = frame
-            .local(geodetic)
-            .map_err(|source| SessionError::Visual {
-                frame: anchor.frame,
-                source,
-            })?;
-        anchor.pose = Pose::from_parts(position.into(), anchor.pose.rotation);
-        anchor.geometry_covariance = crate::anchor::rescaled(
-            &anchor.geometry_covariance,
-            frame.mercator_scale_m() / anchor.local_frame.mercator_scale_m(),
-        );
-        anchor.local_frame = frame;
         Ok(())
     }
 

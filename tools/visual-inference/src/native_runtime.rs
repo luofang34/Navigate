@@ -1,7 +1,10 @@
 //! Explicit native runtime setup and contextual adapter errors.
 mod coreml_cache;
 
-use ort::{ep, session::Session};
+use ort::{
+    ep,
+    session::{Session, builder::AutoDevicePolicy},
+};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -9,6 +12,26 @@ use thiserror::Error;
 /// A native inference adapter could not complete a request.
 #[derive(Debug, Error)]
 pub enum InferenceError {
+    /// The rustnn graph could not load.
+    #[cfg(all(feature = "rustnn-coreml", target_os = "macos"))]
+    #[error("load rustnn graph {path}: {source}")]
+    RustnnGraph {
+        /// Graph path.
+        path: PathBuf,
+        /// Graph loader error.
+        #[source]
+        source: Box<rustnn::error::GraphError>,
+    },
+    /// A rustnn operation failed.
+    #[cfg(all(feature = "rustnn-coreml", target_os = "macos"))]
+    #[error("rustnn {operation}: {source}")]
+    Rustnn {
+        /// Failed operation.
+        operation: &'static str,
+        /// Runtime error.
+        #[source]
+        source: Box<rustnn::error::Error>,
+    },
     /// The host runtime library could not load.
     #[error("load runtime {path}: {source}")]
     Load {
@@ -80,6 +103,11 @@ pub enum Provider {
 pub struct ExecutionConfig {
     /// Requested provider. This is not a claim of exclusive device use.
     pub provider: Provider,
+    /// Allow unsupported graph nodes on the ORT CPU provider.
+    /// Core ML can still use its own CPU kernels when this is false.
+    pub allow_cpu_fallback: bool,
+    /// Optional ORT profile file prefix. It records graph placement and copies.
+    pub profile_prefix: Option<PathBuf>,
     /// ONNX Runtime CPU thread count.
     pub threads: usize,
     /// Let idle ORT CPU threads spin before they block. False leaves CPU time to other tasks.
@@ -101,6 +129,8 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             provider: Provider::Cpu,
+            allow_cpu_fallback: true,
+            profile_prefix: None,
             threads: 4,
             cpu_spinning: false,
             nvidia_device_id: 0,
@@ -154,6 +184,8 @@ pub(crate) fn session_with_dimensions_blocking(
         providers_blocking(path, config, cached.as_ref().map(|c| c.directory.as_path()))?;
     let mut builder = Session::builder()
         .map_err(|e| runtime("create session", e))?
+        .with_auto_device(AutoDevicePolicy::Default)
+        .map_err(|e| runtime("disable automatic provider selection", e))?
         .with_intra_threads(config.threads)
         .map_err(|e| runtime("set CPU threads", e))?
         .with_intra_op_spinning(config.cpu_spinning)
@@ -167,6 +199,16 @@ pub(crate) fn session_with_dimensions_blocking(
                 e,
             )
         })?;
+    if !config.allow_cpu_fallback && !matches!(config.provider, Provider::Cpu) {
+        builder = builder
+            .with_disable_cpu_fallback()
+            .map_err(|e| runtime("disable ORT CPU fallback", e))?;
+    }
+    if let Some(prefix) = &config.profile_prefix {
+        builder = builder
+            .with_profiling(prefix)
+            .map_err(|e| runtime("enable ORT profiling", e))?;
+    }
     for (name, size) in dimensions {
         builder = builder
             .with_dimension_override(name, *size)
@@ -229,7 +271,7 @@ fn providers_blocking(
                 provider = provider
                     .with_engine_cache(true)
                     .with_engine_cache_path(directory.display())
-                    .with_engine_cache_prefix(format!("{:x}", Sha256::digest(bytes)));
+                    .with_engine_cache_prefix(hex::encode(Sha256::digest(bytes)));
             }
             vec![provider.build().error_on_failure(), cuda()]
         }
@@ -252,3 +294,6 @@ fn providers_blocking(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod device_tests;

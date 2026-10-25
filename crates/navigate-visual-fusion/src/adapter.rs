@@ -6,7 +6,7 @@ use navigate_contract::{
     SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{Observation, ObservationValue};
-use navigate_visual::{Estimate, MapRevision};
+use navigate_visual::{Estimate, LocalFrame, MapRevision};
 use std::collections::HashSet;
 
 use crate::{VisualErrorBudget, VisualFusionError};
@@ -107,6 +107,11 @@ impl VisualFixSource {
             return Err(VisualFusionError::UnknownCorrelation);
         }
         self.check_order(estimate)?;
+        if matches!(estimate.frame, LocalFrame::Wgs84Enu { .. })
+            && self.budget.vertical_datum != crate::VerticalDatum::Wgs84Ellipsoid
+        {
+            return Err(VisualFusionError::FrameDatumMismatch);
+        }
         let position = estimate.pose.position;
         let [lat, lon, alt] = estimate.frame.geodetic(position);
         let geodetic = GeodeticPosition::new(
@@ -176,7 +181,14 @@ fn ned_covariance(
         .geometry_covariance
         .fixed_view::<3, 3>(0, 0)
         .into_owned();
-    let axes = Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0);
+    let [lat, lon, _] = estimate.frame.geodetic(estimate.pose.position);
+    let rotation = estimate
+        .frame
+        .local_rotation([lat, lon])
+        .map_err(|_| VisualFusionError::ImplausiblePosition)?
+        .to_rotation_matrix()
+        .into_inner();
+    let axes = Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0) * rotation.transpose();
     let geometric = axes * enu * axes.transpose();
     if (geometric - geometric.transpose()).norm() > 1e-9
         || !geometric.iter().all(|v| v.is_finite())
@@ -188,10 +200,10 @@ fn ned_covariance(
     {
         return Err(VisualFusionError::InvalidCovariance);
     }
-    let model_error_m = estimate.frame.model_error_m(estimate.pose.position);
-    let (horizontal, vertical) = budget.variances_m2(model_error_m);
-    // Cauchy bounds unknown cross-covariance: Cov(X + Y) <= 2(Cov(X) + Cov(Y)).
-    // The trace bounds the largest eigenvalue of the external error covariance.
+    let point_displacement_m = estimate.frame.model_error_m(estimate.pose.position);
+    let (horizontal, vertical) = budget.variances_m2(point_displacement_m);
+    // Cauchy bounds the error second moment without independence, including bias.
+    // The trace bounds the largest eigenvalue of the external error second moment.
     let external_bound = 2.0 * horizontal + vertical;
     let ned = 2.0 * geometric + Matrix3::identity() * (2.0 * external_bound);
     let usable = ned.iter().all(|v| v.is_finite())

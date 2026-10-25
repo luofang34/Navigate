@@ -61,6 +61,25 @@ fn the_prior_moves_with_velocity_and_grows_with_time() -> TestResult {
 }
 
 #[test]
+fn a_curved_frame_rotates_velocity_and_covariance_at_the_camera() -> TestResult {
+    let frame = LocalFrame::spherical_enu(46.5, 7.5)?;
+    let first = search_prior(&solution(50.0), frame, capture(1.0), budget())?;
+    let later = search_prior(&solution(50.0), frame, capture(3.0), budget())?;
+    let latitude =
+        47.0 + (100.0 / (navigate_visual::MERCATOR_SPHERE_RADIUS_M + 900.0)).to_degrees();
+    let expected = frame.local([latitude, 8.0, 900.0])?;
+    assert!((later.center.position - expected).norm() < 0.002);
+    assert!((later.center.position.z - first.center.position.z).abs() > 0.5);
+    let rotation = frame
+        .local_rotation([47.0, 8.0])?
+        .to_rotation_matrix()
+        .into_inner();
+    let recovered = rotation.transpose() * first.position_covariance_m2 * rotation;
+    assert!((recovered - Matrix3::from_diagonal(&Vector3::new(400.0, 100.0, 25.0))).norm() < 1e-8);
+    Ok(())
+}
+
+#[test]
 fn a_foreign_clock_is_refused() -> TestResult {
     let mut c = capture(1.0);
     c.clock = ClockDomainId::new(99);

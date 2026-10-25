@@ -74,7 +74,7 @@ impl CampIndex {
             model_sha256,
             rows,
             descriptors,
-            digest: format!("{:x}", hash.finalize()),
+            digest: hex::encode(hash.finalize()),
         })
     }
 

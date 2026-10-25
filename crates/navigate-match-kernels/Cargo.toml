@@ -1,0 +1,36 @@
+[package]
+name = "navigate-match-kernels"
+description = "CubeCL kernels of the Navigate matchers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cubecl = { version = "0.11.3", default-features = false, features = ["std"] }
+
+# The workspace table, except five lints at `deny`: `#[cube]` expands to
+# `allow(clippy::all)`, and a `forbid` of a lint in that group refuses the allow
+# (E0453); it also generates undocumented launch items, which src/kernels.rs
+# allows for that module only. GPU kernels have no form without that macro. This
+# crate holds only the kernel definitions, so the relaxation does not reach other
+# code.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+unwrap_used = "forbid"
+expect_used = "forbid"
+panic = "forbid"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "forbid"
+exit = "forbid"
+mem_forget = "forbid"
+get_unwrap = "forbid"
+let_underscore_must_use = "forbid"
+let_underscore_future = "deny"
+await_holding_lock = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"

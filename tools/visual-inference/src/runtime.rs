@@ -5,7 +5,7 @@ use ort::{
         self,
         coreml::{ComputeUnits, ModelFormat},
     },
-    session::Session,
+    session::{Session, builder::AutoDevicePolicy},
     value::{DynValue, Tensor},
 };
 use serde::Deserialize;
@@ -76,6 +76,8 @@ pub(super) fn run_blocking(args: &Args) -> Result<(), ProbeError> {
 fn session_blocking(args: &Args) -> Result<Session, ProbeError> {
     let mut builder = Session::builder()
         .map_err(|source| context("create ONNX session", source))?
+        .with_auto_device(AutoDevicePolicy::Default)
+        .map_err(|source| context("disable automatic provider selection", source))?
         .with_intra_threads(args.threads as usize)
         .map_err(|source| context("set CPU threads", source))?
         .with_profiling(args.output.join("profile"))

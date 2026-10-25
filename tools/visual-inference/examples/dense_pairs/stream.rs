@@ -87,8 +87,8 @@ fn match_request_blocking(
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
     Ok(json!({
         "request_id": request.request_id, "backend": matcher.identity(), "elapsed_ms": elapsed_ms,
-        "reference_image_sha256": format!("{:x}", Sha256::digest(reference.as_raw())),
-        "query_image_sha256": format!("{:x}", Sha256::digest(query.as_raw())),
+        "reference_image_sha256": hex::encode(Sha256::digest(reference.as_raw())),
+        "query_image_sha256": hex::encode(Sha256::digest(query.as_raw())),
         "pairs": pairs.iter().map(|p| json!({
             "reference": [p.reference.x, p.reference.y], "query": [p.query.x, p.query.y]
         })).collect::<Vec<_>>()

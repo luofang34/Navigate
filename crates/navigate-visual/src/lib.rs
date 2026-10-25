@@ -1,26 +1,20 @@
 //! Visual camera positioning from a pose prior and a map reference image.
 //!
-//! Supply an undistorted [`Frame`], a camera [`PosePrior`], and a [`ReferenceView`]
-//! rendered with the frame's intrinsics. [`Localizer`] returns a camera pose or
-//! a rejection. Cross-frame correlation is unspecified. The host owns map data,
-//! camera calibration, coordinate conversion, and navigation fusion.
+//! Supply an undistorted [`Frame`], a [`PosePrior`] and a [`ReferenceView`] rendered
+//! with the frame's intrinsics. [`Localizer`] returns a pose or a rejection.
+//! Cross-frame correlation is unspecified. The host owns maps, calibration,
+//! coordinate conversion and navigation fusion.
 //!
-//! The default matcher needs overlapping views with similar appearance. It
-//! searches near the prior. It does not perform global location retrieval.
+//! The default matcher searches near the prior in overlapping, similar views.
 //! [`Estimate::geometry_covariance`] excludes map and calibration errors.
 //! It must not be used as a navigation integrity bound.
 //!
 //! # Features
-//!
-//! The default build uses CPU matching. The optional `gpu` feature exposes
-//! `GpuPyramidalMatcher` for hardware compute shaders. Build its documentation
-//! with `cargo doc -p navigate-visual --features gpu --open`. Backend selection
-//! is explicit. The GPU backend does not silently fall back to CPU matching.
+//! The default build uses CPU matching. The `gpu` feature exposes
+//! `GpuPyramidalMatcher`. Select the backend explicitly. It does not fall back
+//! to CPU matching. Use `cargo doc -p navigate-visual --features gpu --open`.
 //!
 //! # Example
-//!
-//! A blank image must produce a rejection, even with a valid prior and depth.
-//!
 //! ```
 //! use image::GrayImage;
 //! use nalgebra::{UnitQuaternion, Vector3};
@@ -51,7 +45,6 @@
 //!     Err(VisualError::InsufficientMatches { .. })));
 //! # Ok::<(), VisualError>(())
 //! ```
-
 mod camera;
 mod candidates;
 pub mod controller;
@@ -64,34 +57,40 @@ mod local_frame;
 mod local_scene;
 mod localizer;
 mod matching;
+mod orthographic;
 pub mod place_retrieval;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
 pub mod reconstruction;
+mod rectification;
 mod reference;
 mod retrieval;
 mod sampling;
 mod search;
-
 pub use camera::{CameraModel, CameraPose, PosePrior};
 pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;
 pub use frame::{Frame, FrameStamp, MapRevision, ReferenceView};
 pub use geometry::{
-    CandidateEvaluation, PlaneMotion, PlaneMotionConfig, PlaneSolution, PoseVerifier,
-    RefinementSeed, SurfaceTrackUpdate, SurfaceTracks, TrackingMotion, TrackingProposal,
-    TrackingReference, plane_motion,
+    CandidateEvaluation, EllipsoidHeightReference, PlaneMotion, PlaneMotionConfig, PlaneSolution,
+    PoseVerifier, RefinementSeed, SurfaceTrackUpdate, SurfaceTracks, TrackingMotion,
+    TrackingProposal, TrackingReference, plane_motion,
 };
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use local_scene::{
     LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,
-    SceneCoordinateGauge, ScenePointObservation, SceneRefinement, refine_local_scene,
-    refine_local_scene_with_gauge,
+    SceneCoordinateGauge, ScenePointObservation, ScenePointPrior, SceneRefinement,
+    refine_calibrated_local_scene, refine_local_scene, refine_local_scene_with_gauge,
+    refine_regularized_local_scene,
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
-pub use matching::{ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
+pub use matching::{AsyncImageMatcher, ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
+pub use orthographic::{
+    OrthographicEstimate, OrthographicReference, RasterGeometry, RawPixelQuality,
+};
+pub use rectification::{RectificationError, RectificationMap};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{
     GroundCorrespondence, RetrievalProposal, nadir_similarity_proposal, planar_proposal,

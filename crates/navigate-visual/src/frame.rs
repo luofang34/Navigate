@@ -65,7 +65,7 @@ pub struct MapRevision {
 
 /// Reference pixels and visible surface depth from a candidate camera pose.
 ///
-/// Render with the query intrinsics and the declared camera pose. Depth measures
+/// Use the declared reference intrinsics and camera pose. Depth measures
 /// distance along the camera optical axis, not Euclidean range. Convert reversed
 /// GPU depth before construction. Exclude sky, missing terrain, and missing
 /// imagery. The reference and prior must use the same local frame and datum.
@@ -80,14 +80,18 @@ pub struct ReferenceView {
     pub frame: LocalFrame,
     /// Pose of the reference camera in the map's local frame.
     pub pose: CameraPose,
-    /// Reference image in the query camera's calibrated projection.
+    /// Reference image in the declared reference camera projection.
     pub image: GrayImage,
     /// Optical-axis depth in metres, row-major. Zero marks sky or missing data.
     pub depth_m: Vec<f32>,
 }
 
 impl ReferenceView {
-    pub(crate) fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
+    /// Check the reference geometry and its dimensions against a query frame.
+    ///
+    /// # Errors
+    /// Rejects invalid geometry, map identity, or image and depth dimensions.
+    pub fn validate(&self, frame: &Frame) -> Result<(), VisualError> {
         self.validate_camera(&frame.camera)?;
         if frame.image.dimensions() != self.image.dimensions() {
             return Err(VisualError::Dimensions {
@@ -98,7 +102,11 @@ impl ReferenceView {
         Ok(())
     }
 
-    pub(crate) fn validate_camera(&self, camera: &CameraModel) -> Result<(), VisualError> {
+    /// Check the reference against its own camera calibration.
+    ///
+    /// # Errors
+    /// Rejects invalid calibration, geometry, map identity, or dimensions.
+    pub fn validate_camera(&self, camera: &CameraModel) -> Result<(), VisualError> {
         camera.validate()?;
         self.frame.validate()?;
         self.pose.validate()?;

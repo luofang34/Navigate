@@ -47,8 +47,10 @@ pub(crate) fn optimize_motion(
 ) -> Result<CameraPose, VisualError> {
     let mut pose = initial;
     let mut damping = 0.001;
+    let mut equations = normal_equations(camera, points, &pose);
+    let mut current_cost = cost(camera, points, &pose);
     for _ in 0..40 {
-        let (h, b) = normal_equations(camera, points, &pose);
+        let (h, b) = equations;
         let regularized = h + Matrix6::from_diagonal(&h.diagonal().map(|v| damping * v.max(1e-9)));
         let delta = match motion {
             Motion::Free => regularized
@@ -74,12 +76,15 @@ pub(crate) fn optimize_motion(
             return Err(VisualError::DegenerateGeometry);
         }
         let candidate = pose.increment(&delta);
-        if cost(camera, points, &candidate) < cost(camera, points, &pose) {
+        let candidate_cost = cost(camera, points, &candidate);
+        if candidate_cost < current_cost {
             pose = candidate;
             damping = (damping * 0.3).max(1e-8);
             if delta.norm() < 1e-5 {
                 break;
             }
+            current_cost = candidate_cost;
+            equations = normal_equations(camera, points, &pose);
         } else {
             damping *= 10.0;
             if damping > 1e10 {

@@ -1,15 +1,16 @@
 //! Upload prepared images, dispatch matching, and read correspondences.
 
-use super::runtime::{Compute, GpuError};
+use super::{
+    profile::Profile,
+    runtime::{Compute, GpuError},
+};
 use image::GrayImage;
 use nalgebra::Vector2;
 use wgpu::util::DeviceExt;
 
-fn packed(levels: &[GrayImage]) -> Vec<f32> {
-    levels
-        .iter()
-        .flat_map(|level| level.as_raw().iter().map(|v| f32::from(*v)))
-        .collect()
+pub(super) struct Aligned {
+    pub points: Vec<[f32; 4]>,
+    pub query: wgpu::Buffer,
 }
 
 fn parameters(levels: &[GrayImage], count: usize) -> [u32; 20] {
@@ -30,10 +31,54 @@ impl Compute {
         source: &[GrayImage],
         target: &[GrayImage],
         points: &[Vector2<f64>],
-    ) -> Result<Vec<[f32; 4]>, GpuError> {
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let buffers = self.inputs(source, target, points);
-        let size = (points.len() * 16) as u64;
+        initial: Option<&[Vector2<f64>]>,
+        resident: Option<wgpu::Buffer>,
+        profile: &mut Profile,
+    ) -> Result<Aligned, GpuError> {
+        let total = profile.timer();
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let preparation = profile.timer();
+        let (buffers, encoder) = self.inputs(source, target, points, initial, resident, profile);
+        profile.record(preparation, "inputs_total", 0, 0);
+        let (output, readback) = self.output_buffers(points.len(), profile);
+        let pipeline = if initial.is_some() {
+            &self.refinement
+        } else {
+            &self.pipeline
+        };
+        let groups = if initial.is_some() {
+            points.len().div_ceil(64)
+        } else {
+            points.len()
+        };
+        let submission = profile.timer();
+        self.dispatch(
+            &buffers,
+            &output,
+            &readback,
+            encoder,
+            pipeline,
+            groups as u32,
+        );
+        profile.record(submission, "encode_submit", 0, 0);
+        let wait = profile.timer();
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        if let Some(error) = pollster::block_on(scope.pop()) {
+            return Err(error.into());
+        }
+        profile.record(wait, "completion_wait", 0, 0);
+        let result = self.read_blocking(readback, profile)?;
+        profile.record(total, "align_total", 0, 0);
+        let [_, query, _, _] = buffers;
+        Ok(Aligned {
+            points: result,
+            query,
+        })
+    }
+
+    fn output_buffers(&self, count: usize, profile: &mut Profile) -> (wgpu::Buffer, wgpu::Buffer) {
+        let allocation = profile.timer();
+        let size = (count * 16) as u64;
         let output = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("matched points"),
             size,
@@ -46,12 +91,8 @@ impl Compute {
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         });
-        self.dispatch(&buffers, &output, &readback, points.len() as u32);
-        self.device.poll(wgpu::Maintain::Wait);
-        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
-            return Err(error.into());
-        }
-        self.read_blocking(readback)
+        profile.record(allocation, "output_buffer_allocation", size as usize * 2, 2);
+        (output, readback)
     }
 
     fn inputs(
@@ -59,38 +100,45 @@ impl Compute {
         source: &[GrayImage],
         target: &[GrayImage],
         points: &[Vector2<f64>],
-    ) -> [wgpu::Buffer; 4] {
-        let coords: Vec<[f32; 2]> = points.iter().map(|p| [p.x as f32, p.y as f32]).collect();
-        let upload = |label, bytes, usage| {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytes,
-                    usage,
-                })
+        initial: Option<&[Vector2<f64>]>,
+        resident: Option<wgpu::Buffer>,
+        profile: &mut Profile,
+    ) -> ([wgpu::Buffer; 4], wgpu::CommandEncoder) {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let coords: Vec<[f32; 2]> = points
+            .iter()
+            .chain(initial.into_iter().flatten())
+            .map(|p| [p.x as f32, p.y as f32])
+            .collect();
+        let reference = if let Some(buffer) = resident {
+            profile.record(profile.timer(), "reference_image_reuse", 0, 0);
+            buffer
+        } else {
+            self.image_buffer(source, true, profile, &mut encoder)
         };
-        [
-            upload(
-                "reference pyramid",
-                bytemuck::cast_slice(&packed(source)),
-                wgpu::BufferUsages::STORAGE,
-            ),
-            upload(
-                "query pyramid",
-                bytemuck::cast_slice(&packed(target)),
-                wgpu::BufferUsages::STORAGE,
-            ),
-            upload(
-                "reference corners",
-                bytemuck::cast_slice(&coords),
-                wgpu::BufferUsages::STORAGE,
-            ),
-            upload(
-                "pyramid dimensions",
-                bytemuck::cast_slice(&parameters(source, points.len())),
-                wgpu::BufferUsages::UNIFORM,
-            ),
-        ]
+        let query = self.image_buffer(target, false, profile, &mut encoder);
+        let upload = profile.timer();
+        let corners = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("reference corners"),
+                contents: bytemuck::cast_slice(&coords),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let dimensions = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("pyramid dimensions"),
+                contents: bytemuck::cast_slice(&parameters(source, points.len())),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        profile.record(
+            upload,
+            "point_parameter_buffer_init",
+            coords.len() * 8 + 80,
+            2,
+        );
+        ([reference, query, corners, dimensions], encoder)
     }
 
     fn dispatch(
@@ -98,7 +146,9 @@ impl Compute {
         inputs: &[wgpu::Buffer; 4],
         output: &wgpu::Buffer,
         readback: &wgpu::Buffer,
-        count: u32,
+        mut encoder: wgpu::CommandEncoder,
+        pipeline: &wgpu::ComputePipeline,
+        groups: u32,
     ) {
         let buffers: Vec<_> = inputs
             .iter()
@@ -111,33 +161,39 @@ impl Compute {
             .collect();
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("matching inputs"),
-            layout: &self.pipeline.get_bind_group_layout(0),
+            layout: &pipeline.get_bind_group_layout(0),
             entries: &buffers,
         });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("visual match"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
+            pass.dispatch_workgroups(groups, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(output, 0, readback, 0, u64::from(count) * 16);
+        encoder.copy_buffer_to_buffer(output, 0, readback, 0, readback.size());
         self.queue.submit([encoder.finish()]);
     }
 
-    fn read_blocking(&self, buffer: wgpu::Buffer) -> Result<Vec<[f32; 4]>, GpuError> {
+    fn read_blocking(
+        &self,
+        buffer: wgpu::Buffer,
+        profile: &mut Profile,
+    ) -> Result<Vec<[f32; 4]>, GpuError> {
+        let wait = profile.timer();
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 send.send(result).ok();
             });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
         receive.recv()??;
-        let mapped = buffer.slice(..).get_mapped_range();
+        profile.record(wait, "map_readback_wait", 0, 0);
+        let decoding = profile.timer();
+        let mapped = buffer.slice(..).get_mapped_range()?;
         let points = mapped
             .as_chunks::<16>()
             .0
@@ -150,6 +206,7 @@ impl Compute {
             .collect();
         drop(mapped);
         buffer.unmap();
+        profile.record(decoding, "readback_decode", buffer.size() as usize, 0);
         Ok(points)
     }
 }

@@ -2,6 +2,7 @@
 use crate::InferenceError;
 use navigate_visual::PixelMatch;
 
+#[derive(PartialEq)]
 pub(crate) struct Features {
     pub pixels: Vec<[f64; 2]>,
     pub model_pixels: Vec<f32>,

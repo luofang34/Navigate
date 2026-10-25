@@ -123,7 +123,7 @@ fn evaluate_blocking(
     Ok(report)
 }
 fn check_digest(bytes: &[u8], expected: &str) -> Result<(), Error> {
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = hex::encode(Sha256::digest(bytes));
     if actual != expected {
         return Err(format!("evidence digest mismatch: expected {expected}, got {actual}").into());
     }

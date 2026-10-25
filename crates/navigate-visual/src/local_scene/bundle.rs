@@ -1,5 +1,5 @@
 //! Refine conditional camera poses and scene points.
-use super::{SceneCoordinateGauge, pose::Pose};
+use super::{SceneCoordinateGauge, ScenePointPrior, pose::Pose};
 use crate::CameraModel as Camera;
 use nalgebra::{DMatrix, DVector, Vector2};
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
@@ -16,6 +16,7 @@ pub(super) struct Observation {
 #[derive(Clone)]
 pub(super) struct Landmark {
     pub world: Vector3<f64>,
+    pub prior: Option<ScenePointPrior>,
     pub observations: Vec<Observation>,
 }
 struct PointNormal {
@@ -44,7 +45,7 @@ fn projection(camera: &Camera, p: Vector3<f64>) -> SMatrix<f64, 2, 3> {
     ])
 }
 fn accumulate(
-    camera: &Camera,
+    calibrations: &[Camera],
     poses: &[Pose],
     landmarks: &[Landmark],
     indices: &[Option<usize>],
@@ -62,6 +63,7 @@ fn accumulate(
             cross: Vec::new(),
         };
         for observation in &landmark.observations {
+            let camera = &calibrations[observation.frame];
             let pose = poses[observation.frame];
             let Some(pixel) = pose.project(camera, landmark.world) else {
                 continue;
@@ -86,6 +88,11 @@ fn accumulate(
                 normal.rhs[index] += jc.transpose() * error * weight;
                 point.cross.push((index, jc.transpose() * jp * weight));
             }
+        }
+        if let Some(prior) = landmark.prior {
+            let precision = prior.scale.recip().powi(2);
+            point.h += Matrix3::identity() * precision;
+            point.b += (prior.position - landmark.world) * precision;
         }
         normal.points.push(point);
     }
@@ -152,7 +159,7 @@ fn solve(normal: &Normal, damping: f64) -> Option<(Vec<Motion>, Vec<Vector3<f64>
         .all(|v| v.is_finite())
         .then_some((cameras, points))
 }
-fn cost(camera: &Camera, poses: &[Pose], points: &[Landmark]) -> f64 {
+fn cost(calibrations: &[Camera], poses: &[Pose], points: &[Landmark]) -> f64 {
     points
         .iter()
         .map(|point| {
@@ -161,11 +168,14 @@ fn cost(camera: &Camera, poses: &[Pose], points: &[Landmark]) -> f64 {
                 .iter()
                 .map(|observation| {
                     let error = poses[observation.frame]
-                        .project(camera, point.world)
+                        .project(&calibrations[observation.frame], point.world)
                         .map_or(1000.0, |p| (p - observation.pixel).norm().min(1000.0));
                     4.5 * (error * error / 9.0).ln_1p()
                 })
                 .sum::<f64>()
+                + point.prior.map_or(0.0, |prior| {
+                    0.5 * ((point.world - prior.position) / prior.scale).norm_squared()
+                })
         })
         .sum()
 }
@@ -230,7 +240,7 @@ fn gauge_indices(
     (count <= if coordinate_gauge.is_some() { 128 } else { 96 }).then_some((indices, count))
 }
 pub(super) fn refine(
-    camera: &Camera,
+    calibrations: &[Camera],
     poses: &mut [Pose],
     points: &mut [Landmark],
     fixed: &BTreeSet<usize>,
@@ -240,21 +250,19 @@ pub(super) fn refine(
     if !(1..=100).contains(&iterations) {
         return None;
     }
-    if ![camera.fx, camera.fy, camera.cx, camera.cy]
-        .iter()
-        .all(|v| v.is_finite())
-        || camera.fx <= 0.0
-        || camera.fy <= 0.0
-    {
+    if calibrations.len() != poses.len() || calibrations.iter().any(|c| c.validate().is_err()) {
         return None;
     }
     let (indices, count) = gauge_indices(poses, points, fixed, coordinate_gauge)?;
-    let initial_cost = cost(camera, poses, points);
+    let initial_cost = cost(calibrations, poses, points);
+    if !initial_cost.is_finite() {
+        return None;
+    }
     let mut current = initial_cost;
     let mut damping = 0.001;
     let mut steps = 0_usize;
     for _ in 0..iterations {
-        let normal = accumulate(camera, poses, points, &indices, count);
+        let normal = accumulate(calibrations, poses, points, &indices, count);
         let Some((camera_delta, point_delta)) = solve(&normal, damping) else {
             damping *= 10.0;
             if damping > 1e10 {
@@ -274,7 +282,7 @@ pub(super) fn refine(
         if let Some(gauge) = coordinate_gauge {
             super::scale::normalize(poses, &mut next_poses, &mut next_points, gauge)?;
         }
-        let next = cost(camera, &next_poses, &next_points);
+        let next = cost(calibrations, &next_poses, &next_points);
         if next < current {
             poses.copy_from_slice(&next_poses);
             points.clone_from_slice(&next_points);

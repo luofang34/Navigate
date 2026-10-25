@@ -1,0 +1,49 @@
+[package]
+name = "navigate-match"
+description = "Learned image matchers on burn for browsers, native GPUs, and CPUs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["flex"]
+# Runtimes. The burn device that the host supplies selects one of the compiled runtimes.
+flex = ["burn/flex"]
+wgpu = ["burn/wgpu", "gpu"]
+webgpu = ["burn/webgpu", "gpu"]
+metal = ["burn/metal", "gpu"]
+vulkan = ["burn/vulkan", "gpu"]
+cuda = ["burn/cuda", "gpu"]
+# CubeCL kernels for the GPU runtimes; the runtime features enable it.
+gpu = ["dep:burn-cubecl", "dep:cubecl", "dep:navigate-match-kernels"]
+
+[dependencies]
+navigate-visual = { path = "../navigate-visual" }
+burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
+burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
+cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
+navigate-match-kernels = { path = "../navigate-match-kernels", optional = true }
+safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
+half = "2.7.1"
+image.workspace = true
+nalgebra.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.3"
+
+# burn draws random seeds through getrandom; in a browser it must use the JavaScript source.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
+image = { workspace = true, features = ["png"] }
+pollster = "0.3"
+serde_json = "1"
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

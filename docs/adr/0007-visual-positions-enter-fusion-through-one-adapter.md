@@ -35,11 +35,13 @@ change to these crates is a contract change (ADR-0005).
 ### The reference declares its frame
 
 `navigate-visual` defines `LocalFrame`. `ReferenceView` and `Estimate`
-carry a `LocalFrame`. The only frame now is `LocalFrame::AnchorMercator`.
-`LocalFrame` owns the exact conversion to and from latitude, longitude,
-and altitude. It also gives `model_error_m`, which is the curvature drop
-plus the scale drift at a position. The tools use `LocalFrame` and do
-not keep their own copies of the conversion.
+carry a `LocalFrame`. `AnchorMercator` uses a flat map plane.
+`SphericalEnu` includes curvature on a mean-radius sphere. `LocalFrame`
+owns the conversion to and from latitude, longitude, and altitude.
+`model_error_m` gives a coordinate-model difference at one position.
+It does not bound the error of a pose fitted to a set of map points.
+A distorted point set can bias a pose with a small image residual.
+The tools share these coordinate conversions with the renderer.
 
 ### One adapter crate converts an estimate
 
@@ -51,7 +53,10 @@ does not change `navigate-contract` or `navigate-fusion`.
   the clock domain of the capture stream.
 - The host supplies `VisualErrorBudget`. Each term must be finite and
   more than zero. Unknown error is not zero error. The adapter refuses
-  a budget with a zero term.
+  a budget with a zero term. The required `geometry_model_m` term covers
+  position error from the geometry model and viewing geometry. A point-coordinate
+  difference cannot replace this term. More matches do not remove a shared
+  geometry-model error. The allowances include bias as well as random scatter.
 - The host must validate independence from all evidence in the filter state.
   This includes shared map and calibration error. The adapter refuses unknown
   correlation. A large error budget does not establish independence.
@@ -85,10 +90,10 @@ draft until the joint RFC (ADR-0005).
   has validated independence from the state. This adapter does not implement
   correlated fusion. Repeated frame digests are refused across the full source
   lifetime. The host must preserve capture identities when it retries a frame.
-- The flat frame limits the useful range. Far from the anchor, the
-  model error term makes the fix weak. A globe-mode reference with a
-  true local frame is a new `LocalFrame` variant. It does not change the
-  adapter interface.
+- Both map frames are approximations to physical Earth geometry. A host must
+  assess their effect on the fitted pose. A small coordinate difference at the
+  camera does not establish a small position error. The declared budget cannot
+  correct a biased geometry model.
 - Pilotage owns camera calibration and map release identity. The host
   fills `MapRevision` from its package identity, and it fills the
   calibration term from its calibration records.

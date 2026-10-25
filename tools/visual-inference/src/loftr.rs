@@ -1,10 +1,11 @@
 //! Fixed-shape detector-free correspondences behind the Navigate matcher port.
 mod orientations;
 mod patches;
+mod split;
 use crate::{ExecutionConfig, InferenceError, native_runtime, preprocessing};
 use image::GrayImage;
 use navigate_visual::{ImageMatcher, PixelMatch, VisualError};
-use ort::{session::Session, value::Tensor};
+use ort::{session::Session, value::TensorRef};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -12,9 +13,11 @@ use std::path::Path;
 ///
 /// The export takes grayscale `image0` and `image1` tensors and returns
 /// `keypoints0`, `keypoints1`, and `confidence`. Scores stay inside this adapter.
-/// The shared geometry verifier decides whether a camera pose is acceptable.
+/// Each image has its own resize transform. Output pixels refer to that source image.
+/// The shared geometry verifier must use each camera's calibration.
 pub struct LoFtrMatcher {
     session: Session,
+    fine: Option<split::FineStage>,
     identity: String,
     refinement_patches: bool,
     quarter_turns: bool,
@@ -30,18 +33,47 @@ impl LoFtrMatcher {
             source,
         })?;
         let identity = format!(
-            "loftr-dual-softmax-640x480/{:x}/ort-requested-{:?}",
-            Sha256::digest(&bytes),
+            "loftr-dual-softmax-640x480/{}/ort-requested-{:?}",
+            hex::encode(Sha256::digest(&bytes)),
             execution.provider
         );
         let session = native_runtime::session_blocking(path, execution)?;
         Ok(Self {
             session,
+            fine: None,
             identity,
             refinement_patches: false,
             quarter_turns: false,
         })
     }
+    /// Load coarse patches and a fixed-batch fine graph with separate providers.
+    ///
+    /// Fine attention operates within each patch pair. Padding supplies complete
+    /// batches and does not add matches. Output pixels retain the source grid.
+    /// The host supplies graphs from the same LoFTR export and preparation recipe.
+    ///
+    /// # Errors
+    /// Rejects model files, unsupported fine input shapes, and runtime failures.
+    pub fn load_split_blocking(
+        coarse: &Path,
+        fine: &Path,
+        coarse_execution: &ExecutionConfig,
+        fine_execution: &ExecutionConfig,
+    ) -> Result<Self, InferenceError> {
+        let mut matcher = Self::load_blocking(coarse, coarse_execution)?;
+        let fine = split::FineStage::load_blocking(fine, fine_execution)?;
+        if split::source(&matcher.session, "coarse-patches-v1")? != fine.source {
+            return Err(InferenceError::Invalid(
+                "LoFTR stages have different source digests".into(),
+            ));
+        }
+        matcher
+            .identity
+            .push_str(&format!("/split-v1/{}", fine.identity));
+        matcher.fine = Some(fine);
+        Ok(matcher)
+    }
+
     /// Use a full image and four overlapping crops for each match call.
     ///
     /// This profile uses one resident session and can run five inference calls.
@@ -76,14 +108,17 @@ impl LoFtrMatcher {
     ) -> Result<Vec<PixelMatch>, InferenceError> {
         let a = preprocessing::prepare(first, 640, 480, 1)?;
         let b = preprocessing::prepare(second, 640, 480, 1)?;
-        let tensor = |data: &[f32]| {
-            Tensor::from_array(([1, 1, 480, 640], data.to_vec()))
-                .map_err(|e| native_runtime::runtime("build LoFTR input", e))
-        };
+        let first_tensor = TensorRef::from_array_view(([1, 1, 480, 640], a.data.as_slice()))
+            .map_err(|e| native_runtime::runtime("build first LoFTR input", e))?;
+        let second_tensor = TensorRef::from_array_view(([1, 1, 480, 640], b.data.as_slice()))
+            .map_err(|e| native_runtime::runtime("build second LoFTR input", e))?;
         let output = self
             .session
-            .run(ort::inputs!["image0"=>tensor(&a.data)?, "image1"=>tensor(&b.data)?])
+            .run(ort::inputs!["image0"=>first_tensor, "image1"=>second_tensor])
             .map_err(|e| native_runtime::runtime("run LoFTR", e))?;
+        if let Some(fine) = &mut self.fine {
+            return fine.decode(&output, [&a, &b], [first, second]);
+        }
         let read = |name: &str, columns: Option<i64>| -> Result<&[f32], InferenceError> {
             let (shape, data) = output
                 .get(name)
@@ -117,12 +152,6 @@ impl ImageMatcher for LoFtrMatcher {
         reference: &GrayImage,
         query: &GrayImage,
     ) -> Result<Vec<PixelMatch>, VisualError> {
-        if reference.dimensions() != query.dimensions() {
-            return Err(VisualError::Dimensions {
-                reference: reference.dimensions(),
-                query: query.dimensions(),
-            });
-        }
         if [reference, query].iter().any(|image| {
             let min = image.as_raw().iter().copied().min().unwrap_or(0);
             let max = image.as_raw().iter().copied().max().unwrap_or(0);
@@ -148,12 +177,6 @@ impl ImageMatcher for LoFtrMatcher {
     ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
         if !self.quarter_turns || attempt >= 3 {
             return Ok(None);
-        }
-        if reference.dimensions() != query.dimensions() {
-            return Err(VisualError::Dimensions {
-                reference: reference.dimensions(),
-                query: query.dimensions(),
-            });
         }
         orientations::match_blocking(reference, query, attempt, |a, b| self.pairs_blocking(a, b))
             .map_err(|source| VisualError::Backend {

@@ -50,3 +50,82 @@ fn mercator_xy_matches_the_anchor_at_the_origin() {
     assert!((x - (11.4917 + 180.0) / 360.0).abs() < 1e-12);
     assert!(y > 0.0 && y < 0.5);
 }
+
+#[test]
+fn spherical_frame_keeps_curvature_in_cartesian_height() {
+    let frame = LocalFrame::spherical_enu(0.0, 0.0).unwrap();
+    let angle = 0.01_f64;
+    let point = frame.local([0.0, angle.to_degrees(), 0.0]).unwrap();
+    assert!((point.x - MERCATOR_SPHERE_RADIUS_M * angle.sin()).abs() < 1e-6);
+    assert!((point.z - MERCATOR_SPHERE_RADIUS_M * (angle.cos() - 1.0)).abs() < 1e-6);
+    assert!(point.z < -300.0);
+    assert!(frame.geodetic(point)[2].abs() < 1e-6);
+}
+
+#[test]
+fn spherical_positions_and_local_attitudes_round_trip_across_the_date_line() {
+    let frame = LocalFrame::spherical_enu(48.0, 179.9).unwrap();
+    for location in [[48.2, -179.9, 1500.0], [47.7, 179.4, -400.0]] {
+        let point = frame.local(location).unwrap();
+        let recovered = frame.geodetic(point);
+        assert!((recovered[0] - location[0]).abs() < 1e-10);
+        assert!((recovered[1] - location[1]).abs() < 1e-10);
+        assert!((recovered[2] - location[2]).abs() < 1e-6);
+        let rotation = frame.local_rotation([location[0], location[1]]).unwrap();
+        let higher = frame
+            .local([location[0], location[1], location[2] + 10.0])
+            .unwrap();
+        assert!((higher - point - rotation * Vector3::new(0.0, 0.0, 10.0)).norm() < 1e-6);
+        let pixels = frame.mercator_xy(point);
+        assert!((pixels[0] - (location[1] + 180.0) / 360.0).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn spherical_model_error_retains_the_ellipsoid_difference() {
+    let frame = LocalFrame::spherical_enu(0.0, 0.0).unwrap();
+    assert!(frame.model_error_m(Vector3::zeros()) < 1e-6);
+    let point = frame.local([0.0, 0.5, 0.0]).unwrap();
+    let expected = 2.0 * (6_378_137.0 - MERCATOR_SPHERE_RADIUS_M) * (0.25_f64.to_radians()).sin();
+    assert!((frame.model_error_m(point) - expected).abs() < 1e-6);
+}
+
+#[test]
+fn spherical_coordinates_recover_the_frozen_photo_altitude() {
+    let frame = LocalFrame::spherical_enu(41.075, -75.275).unwrap();
+    let position = Vector3::new(-6100.954727028143, 4073.292560812611, 925.9738818901951);
+    let actual = frame.geodetic(position);
+    let expected = [41.111603701005166, -75.34781249167567, 930.1965665966272];
+    assert!((actual[0] - expected[0]).abs() < 1e-10);
+    assert!((actual[1] - expected[1]).abs() < 1e-10);
+    assert!((actual[2] - expected[2]).abs() < 1e-6);
+}
+
+#[test]
+fn wgs84_frame_preserves_ellipsoid_positions_and_physical_axes() {
+    let frame = LocalFrame::wgs84_enu(75.0, 179.9).unwrap();
+    for location in [[75.2, -179.8, 30_000.0], [74.8, 179.5, -400.0]] {
+        let world = frame.local(location).unwrap();
+        let recovered = frame.geodetic(world);
+        assert!((recovered[0] - location[0]).abs() < 1e-10);
+        assert!((recovered[1] - location[1]).abs() < 1e-10);
+        assert!((recovered[2] - location[2]).abs() < 1e-6);
+        let up = frame
+            .local([location[0], location[1], location[2] + 10.0])
+            .unwrap();
+        let rotation = frame.local_rotation([location[0], location[1]]).unwrap();
+        assert!((up - world - rotation * Vector3::new(0.0, 0.0, 10.0)).norm() < 1e-6);
+        assert_eq!(frame.model_error_m(world), 0.0);
+        assert!((frame.mercator_xy(world)[0] - (location[1] + 180.0) / 360.0).abs() < 1e-10);
+    }
+    for height in [-12_000.0, -500.0, 400_000.0, 2_000_000.0, 36_000_000.0] {
+        let point = frame.local([75.2, -179.8, height]).unwrap();
+        assert!((frame.geodetic(point)[2] - height).abs() < 1e-6);
+    }
+    assert!(
+        LocalFrame::wgs84_enu(0.0, 0.0)
+            .unwrap()
+            .local([0.0, 0.0, -6_378_137.0])
+            .is_err()
+    );
+}

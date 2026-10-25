@@ -7,6 +7,8 @@
 
 mod adapter;
 mod camp;
+mod dense_layout;
+mod diagnostics;
 mod feature_cache;
 mod features;
 mod lighterglue;
@@ -14,15 +16,22 @@ mod lightglue;
 mod loftr;
 mod native_runtime;
 mod preprocessing;
+#[cfg(all(feature = "rustnn-coreml", target_os = "macos"))]
+mod rustnn_dense;
 mod selection;
+mod staged;
 mod superpoint;
 mod xfeat;
 mod xfeat_dense;
+mod xfeat_image;
 
 pub use adapter::{MatcherFiles, OnnxMatcher};
 pub use camp::{CampIndex, CampRetriever};
+pub use diagnostics::TensorIoStatistics;
 pub use lightglue::LightGlueMatcher;
 pub use loftr::LoFtrMatcher;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
+
+pub use staged::{ScoredPixelMatch, XFeatFeatures, XFeatGraph, XFeatStages};
 
 pub use selection::{CandidateFailure, MatcherCandidate, MatcherSelection, SelectionError};

@@ -5,6 +5,7 @@ use image::GrayImage;
 use nalgebra::Vector2;
 
 pub(crate) mod pyramid;
+mod refinement;
 mod tracking;
 
 /// One correspondence between reference and query pixels.
@@ -20,7 +21,10 @@ pub struct PixelMatch {
 pub trait ImageMatcher {
     /// Stable backend and model identity for reports and derived caches.
     fn identity(&self) -> &str;
-    /// Match two undistorted grayscale images with the same intrinsics.
+    /// Match two undistorted grayscale images in their source pixel coordinates.
+    ///
+    /// A backend can require equal image sizes. The host must keep each camera's
+    /// calibration and use the corresponding geometry verification method.
     ///
     /// The call may wait for an accelerator. Backends must report their actual
     /// identity; they must not silently substitute a different implementation.
@@ -54,6 +58,27 @@ pub trait ImageMatcher {
     ) -> Result<Option<Vec<PixelMatch>>, VisualError> {
         Ok(None)
     }
+}
+
+/// Asynchronous form of [`ImageMatcher`] for hosts where a backend cannot block.
+///
+/// In a browser, a GPU read-back always completes later, so a matcher there cannot
+/// return from a blocking call. The contract is the same as
+/// [`ImageMatcher::match_images_blocking`]: correspondences in source pixels, empty
+/// when no usable evidence exists, and the backend's actual identity.
+pub trait AsyncImageMatcher {
+    /// Stable backend and model identity for reports and derived caches.
+    fn identity(&self) -> &str;
+    /// Match two undistorted grayscale images in their source pixel coordinates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for incompatible images or a backend failure.
+    fn match_images(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+    ) -> impl Future<Output = Result<Vec<PixelMatch>, VisualError>>;
 }
 
 impl<M: ImageMatcher + ?Sized> ImageMatcher for Box<M> {
@@ -108,6 +133,25 @@ pub trait PointTracker: ImageMatcher {
         query: &GrayImage,
         points: &[Vector2<f64>],
     ) -> Result<Vec<Option<Vector2<f64>>>, VisualError>;
+    /// Locally refine predicted query locations against fixed reference patches.
+    ///
+    /// Each prediction belongs to the corresponding reference point. This is
+    /// local alignment without a coarse search, and can reject a poor initial
+    /// guess. Output slots preserve input identity; geometry stays with the host.
+    ///
+    /// # Errors
+    /// Returns invalid input, unsupported operation, or execution errors.
+    fn refine_points_blocking(
+        &mut self,
+        _reference: &GrayImage,
+        _query: &GrayImage,
+        _points: &[Vector2<f64>],
+        _initial: &[Vector2<f64>],
+    ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        Err(VisualError::Invalid {
+            field: "local point refinement unsupported by tracker",
+        })
+    }
 }
 
 impl ImageMatcher for PyramidalMatcher {
@@ -129,6 +173,15 @@ impl ImageMatcher for PyramidalMatcher {
     }
 }
 impl PointTracker for PyramidalMatcher {
+    fn refine_points_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+        points: &[Vector2<f64>],
+        initial: &[Vector2<f64>],
+    ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+        refinement::run(reference, query, points, initial)
+    }
     fn features_blocking(&mut self, image: &GrayImage) -> Result<Vec<Vector2<f64>>, VisualError> {
         Ok(pyramid::corners(image))
     }
@@ -150,6 +203,21 @@ impl PointTracker for PyramidalMatcher {
             })
             .collect())
     }
+}
+
+pub(crate) fn validate_refinement(
+    reference: &GrayImage,
+    query: &GrayImage,
+    points: &[Vector2<f64>],
+    initial: &[Vector2<f64>],
+) -> Result<(), VisualError> {
+    if points.len() != initial.len() {
+        return Err(VisualError::Invalid {
+            field: "point prediction count",
+        });
+    }
+    validate_points(reference, query, points)?;
+    validate_points(query, reference, initial)
 }
 
 pub(crate) fn validate_points(

@@ -68,9 +68,14 @@ pub fn search_prior(
         ])
         .map_err(|_| VisualFusionError::ImplausiblePosition)?;
     let v = solution.velocity;
-    let velocity_enu = Vector3::new(v.east_mps, v.north_mps, -v.down_mps);
-    let position_cov = ned_to_enu(&solution.position_cov);
-    let velocity_cov = ned_to_enu(&solution.velocity_cov);
+    let rotation = frame
+        .local_rotation([p.latitude_rad.to_degrees(), p.longitude_rad.to_degrees()])
+        .map_err(|_| VisualFusionError::ImplausiblePosition)?
+        .to_rotation_matrix()
+        .into_inner();
+    let velocity_enu = rotation * Vector3::new(v.east_mps, v.north_mps, -v.down_mps);
+    let position_cov = rotation * ned_to_enu(&solution.position_cov) * rotation.transpose();
+    let velocity_cov = rotation * ned_to_enu(&solution.velocity_cov) * rotation.transpose();
     if !v.is_finite() || !valid_covariance(&position_cov) || !valid_covariance(&velocity_cov) {
         return Err(VisualFusionError::InvalidCovariance);
     }
