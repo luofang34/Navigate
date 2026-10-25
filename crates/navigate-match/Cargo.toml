@@ -7,18 +7,23 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+default = ["flex"]
 # Runtimes. The burn device that the host supplies selects one of the compiled runtimes.
 flex = ["burn/flex"]
-wgpu = ["burn/wgpu"]
-webgpu = ["burn/webgpu"]
-metal = ["burn/metal"]
-vulkan = ["burn/vulkan"]
-cuda = ["burn/cuda"]
+wgpu = ["burn/wgpu", "gpu"]
+webgpu = ["burn/webgpu", "gpu"]
+metal = ["burn/metal", "gpu"]
+vulkan = ["burn/vulkan", "gpu"]
+cuda = ["burn/cuda", "gpu"]
+# CubeCL kernels for the GPU runtimes; the runtime features enable it.
+gpu = ["dep:burn-cubecl", "dep:cubecl", "dep:navigate-match-kernels"]
 
 [dependencies]
 navigate-visual = { path = "../navigate-visual" }
-burn = { version = "0.22.1", default-features = false, features = ["std"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
+burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
+cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
+navigate-match-kernels = { path = "../navigate-match-kernels", optional = true }
 safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
 half = "2.7.1"
 image.workspace = true

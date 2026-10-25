@@ -5,6 +5,7 @@ use super::{
     layers::{Linear, upload},
     transformer::Transformer,
 };
+use crate::kernels::{Layout, product};
 use crate::{MatchError, Weights};
 use burn::tensor::{Device, Int, Tensor, TensorData, activation::softmax, ops::PadMode};
 
@@ -134,8 +135,14 @@ pub(crate) fn window_indices(
 fn expectation(a: Tensor<3>, b: Tensor<3>) -> Tensor<2> {
     let [count, _, width] = b.dims();
     let device = b.device();
-    let centre = a.narrow(1, CELLS / 2, 1).swap_dims(1, 2);
-    let similarity = b.matmul(centre).reshape([count, CELLS]) / (width as f64).sqrt();
+    let centre = a.narrow(1, CELLS / 2, 1);
+    let layout = Layout {
+        trans_b: true,
+        ..Layout::default()
+    };
+    let zero = Tensor::<1>::zeros([1], &device);
+    let similarity =
+        product(b, centre, zero, layout).reshape([count, CELLS]) / (width as f64).sqrt();
     let heatmap = softmax(similarity, 1);
     let grid = upload(grid(), [CELLS, 2], &device);
     heatmap.matmul(grid)

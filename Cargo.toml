@@ -15,6 +15,7 @@ members = [
     "tools/visual-model",
     "crates/navigate-visual",
     "crates/navigate-match",
+    "crates/navigate-match-kernels",
     "crates/navigate-visual-workflow",
     "crates/navigate-visual-render",
     "crates/navigate-visual-fusion",

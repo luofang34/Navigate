@@ -7,12 +7,14 @@ on:
   pull_request:
     paths:
       - "crates/navigate-match/**"
+      - "crates/navigate-match-kernels/**"
       - "tools/visual-model/**"
       - ".github/workflows/models.yml"
   push:
     branches: [main]
     paths:
       - "crates/navigate-match/**"
+      - "crates/navigate-match-kernels/**"
       - "tools/visual-model/**"
       - ".github/workflows/models.yml"
   workflow_dispatch:
@@ -56,3 +58,28 @@ jobs:
         env:
           NAVIGATE_LOFTR_WEIGHTS: ${{ runner.temp }}/loftr-f16.safetensors
         run: cargo test --release -p navigate-match --test parity -- --ignored
+
+  # The CubeCL kernels run only on GPU runtimes. Lavapipe, the Mesa software Vulkan
+  # device, runs them on a CI machine without a GPU.
+  kernels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy
+
+      - name: Install the software Vulkan device
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Lint the GPU code paths
+        run: cargo clippy -p navigate-match -p navigate-match-kernels --features navigate-match/vulkan --all-targets -- -D warnings
+
+      - name: Compare the CubeCL kernels with the CPU operations
+        run: cargo test --release -p navigate-match --features vulkan kernels -- --ignored

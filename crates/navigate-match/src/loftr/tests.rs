@@ -195,43 +195,42 @@ fn the_position_encoding_uses_the_original_frequencies() {
 
 #[test]
 fn linear_attention_matches_the_reference_formula() {
-    let [heads, length, sources, depth] = [2, 3, 4, 2];
-    let q = values(heads * length * depth, 1, 1.0);
-    let k = values(heads * sources * depth, 2, 1.0);
-    let v = values(heads * sources * depth, 3, 1.0);
-    let upload =
-        |data: &[f32], l: usize| layers::upload(data.to_vec(), [1, heads, l, depth], &device());
-    let out: Vec<f32> =
-        transformer::linear_attention(upload(&q, length), upload(&k, sources), upload(&v, sources))
-            .into_data()
-            .iter::<f32>()
-            .collect();
+    let [length, sources, width] = [3, 4, 16];
+    let depth = width / 8;
+    let q = values(length * width, 1, 1.0);
+    let k = values(sources * width, 2, 1.0);
+    let v = values(sources * width, 3, 1.0);
+    let upload = |data: &[f32], l: usize| layers::upload(data.to_vec(), [1, l, width], &device());
+    let heads = transformer::Heads::new(width, &device());
+    let out: Vec<f32> = transformer::linear_attention(
+        upload(&q, length),
+        upload(&k, sources),
+        upload(&v, sources),
+        &heads,
+    )
+    .into_data()
+    .iter::<f32>()
+    .collect();
     let feature = |x: f32| if x > 0.0 { x + 1.0 } else { x.exp() };
-    for h in 0..heads {
-        for l in 0..length {
-            let qf: Vec<f32> = (0..depth)
-                .map(|d| feature(q[(h * length + l) * depth + d]))
-                .collect();
-            let mut numerator = vec![0.0_f32; depth];
-            let mut denominator = 0.0_f32;
+    for l in 0..length {
+        for c in 0..width {
+            let head = c / depth;
+            let channels = head * depth..(head + 1) * depth;
+            let (mut numerator, mut denominator) = (0.0_f32, 0.0_f32);
             for s in 0..sources {
-                let kf: Vec<f32> = (0..depth)
-                    .map(|d| feature(k[(h * sources + s) * depth + d]))
-                    .collect();
-                let weight: f32 = qf.iter().zip(&kf).map(|(a, b)| a * b).sum();
+                let weight: f32 = channels
+                    .clone()
+                    .map(|d| feature(q[l * width + d]) * feature(k[s * width + d]))
+                    .sum();
                 denominator += weight;
-                for d in 0..depth {
-                    numerator[d] += weight * v[(h * sources + s) * depth + d];
-                }
+                numerator += weight * v[s * width + c];
             }
-            for d in 0..depth {
-                let expected = numerator[d] / (denominator + 1e-6);
-                let actual = out[(h * length + l) * depth + d];
-                assert!(
-                    (actual - expected).abs() < 1e-4,
-                    "head {h} row {l}: {actual} against {expected}"
-                );
-            }
+            let expected = numerator / (denominator + 1e-6);
+            let actual = out[l * width + c];
+            assert!(
+                (actual - expected).abs() < 1e-4,
+                "row {l} channel {c}: {actual} against {expected}"
+            );
         }
     }
 }

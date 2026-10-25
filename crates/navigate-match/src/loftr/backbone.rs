@@ -67,7 +67,7 @@ impl Block {
     }
 
     fn forward(&self, x: Tensor<4>) -> Tensor<4> {
-        let y = self.conv2.forward(relu(self.conv1.forward(x.clone())));
+        let y = self.conv2.forward(self.conv1.forward_relu(x.clone()));
         let shortcut = match &self.downsample {
             Some(downsample) => downsample.forward(x),
             None => x,
@@ -178,7 +178,7 @@ impl Backbone {
 
     /// Extract features from `[N, 1, H, W]` images with values in 0 through 1.
     pub(crate) fn forward(&self, images: Tensor<4>) -> Features {
-        let mut x = relu(self.stem.forward(images));
+        let mut x = self.stem.forward_relu(images);
         let mut levels = Vec::with_capacity(self.stages.len());
         for [first, second] in &self.stages {
             x = second.forward(first.forward(x));
