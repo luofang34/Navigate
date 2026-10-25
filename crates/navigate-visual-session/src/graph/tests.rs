@@ -40,8 +40,12 @@ fn analytic_jacobians_match_central_differences() {
                 node: 1,
                 bias: Some(0),
                 pose: anchored,
-                position_sqrt_info: Matrix3::new(2.0, 0.0, 0.0, 0.3, 1.5, 0.0, 0.1, 0.2, 1.0),
-                sigma_rad: 0.05,
+                // Lower-triangular whitening with position-rotation cross terms.
+                sqrt_info: Box::new(Matrix6::from_fn(|i, j| match (i, j) {
+                    (i, j) if i == j => [2.0, 1.5, 1.0, 20.0, 25.0, 30.0][i],
+                    (i, j) if j < i => 0.1 * (i + 2 * j) as f64,
+                    _ => 0.0,
+                })),
             },
         ],
         disabled: vec![false, false],
@@ -187,8 +191,7 @@ fn a_shared_bias_takes_a_common_anchor_offset() {
             node: i,
             bias: Some(0),
             pose: shifted,
-            position_sqrt_info: Matrix3::identity() / 0.5,
-            sigma_rad: 0.01,
+            sqrt_info: Box::new(isotropic(0.5, 0.01)),
         });
     }
     factors.push(Factor::Prior {

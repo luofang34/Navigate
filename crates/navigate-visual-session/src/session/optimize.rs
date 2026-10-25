@@ -1,13 +1,13 @@
 //! Pose-graph construction, solution, outlier retraction, and revision events.
 
-use super::VisualSession;
+use super::{Anchor, VisualSession};
 use crate::{
     RevisedRange, RevisionCause, SessionEvent, TrajectoryRevision,
     graph::{Factor, Problem},
-    pose::Pose,
+    pose::{Pose, skew},
     store::KeyframeId,
 };
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix3, Matrix6, Vector3};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_ITERATIONS: usize = 30;
@@ -119,8 +119,7 @@ impl VisualSession {
         for (id, anchor) in &self.anchors {
             let Some(node) = built.node(id) else { continue };
             let bias = cells.iter().position(|c| *c == anchor.cell);
-            let mut covariance =
-                anchor.budget.independent_m2 + Matrix3::identity() * anchor.transfer_m.powi(2);
+            let mut covariance = keyframe_covariance(anchor);
             match bias {
                 Some(j) => {
                     let entry = shared.entry(j).or_insert((0.0, 0.0));
@@ -131,18 +130,19 @@ impl VisualSession {
                 None => {
                     let h = anchor.budget.shared_horizontal_m.powi(2);
                     let v = anchor.budget.shared_vertical_m.powi(2);
-                    covariance += Matrix3::from_diagonal(&Vector3::new(h, h, v));
+                    covariance[(0, 0)] += h;
+                    covariance[(1, 1)] += h;
+                    covariance[(2, 2)] += v;
                 }
             }
-            let Some(info) = sqrt_info(&covariance) else {
+            let Some(sqrt_info) = sqrt_info(&covariance) else {
                 continue;
             };
             let factor = Factor::Anchor {
                 node,
                 bias,
                 pose: anchor.keyframe_pose,
-                position_sqrt_info: info,
-                sigma_rad: anchor.budget.rotation_rad + anchor.transfer_rad,
+                sqrt_info: Box::new(sqrt_info),
             };
             built.push(factor, Source::Anchor(*id));
         }
@@ -346,7 +346,39 @@ impl VisualSession {
 }
 
 /// Inverse of the lower Cholesky factor: whitens a residual with this covariance.
-fn sqrt_info(covariance: &Matrix3<f64>) -> Option<Matrix3<f64>> {
+fn sqrt_info(covariance: &Matrix6<f64>) -> Option<Matrix6<f64>> {
     let symmetric = (covariance + covariance.transpose()) * 0.5;
     symmetric.cholesky()?.l().try_inverse()
 }
+
+/// Anchor covariance carried from the anchored frame to its keyframe. The
+/// transfer drift adds independent errors.
+fn keyframe_covariance(anchor: &Anchor) -> Matrix6<f64> {
+    let frame = &anchor.observation.pose;
+    let jacobian = transfer_jacobian(frame, &frame.inv_mul(&anchor.keyframe_pose));
+    let mut covariance = jacobian * anchor.budget.independent * jacobian.transpose();
+    for i in 0..3 {
+        covariance[(i, i)] += anchor.transfer_m.powi(2);
+        covariance[(i + 3, i + 3)] += anchor.transfer_rad.powi(2);
+    }
+    covariance
+}
+
+/// With `p_k = p_f + R_f t` and `R_k = R_f R_t`, a frame error
+/// `(dp, theta)` with `R_f' = R_f Exp(theta)` becomes
+/// `(dp - R_f [t]x theta, R_t^T theta)` at the keyframe.
+fn transfer_jacobian(frame: &Pose, transfer: &Pose) -> Matrix6<f64> {
+    let r_frame = frame.rotation.to_rotation_matrix().into_inner();
+    let r_transfer = transfer.rotation.to_rotation_matrix().into_inner();
+    let mut jacobian = Matrix6::identity();
+    jacobian
+        .fixed_view_mut::<3, 3>(0, 3)
+        .copy_from(&(-r_frame * skew(&transfer.translation.vector)));
+    jacobian
+        .fixed_view_mut::<3, 3>(3, 3)
+        .copy_from(&r_transfer.transpose());
+    jacobian
+}
+
+#[cfg(test)]
+mod tests;
