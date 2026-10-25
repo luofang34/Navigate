@@ -12,6 +12,8 @@ mod contracts;
 #[cfg(test)]
 mod footprint;
 #[cfg(test)]
+mod frames;
+#[cfg(test)]
 mod height;
 #[cfg(test)]
 mod memory;
@@ -21,5 +23,3 @@ mod recovery;
 mod revisit;
 #[cfg(test)]
 mod scene;
-#[cfg(test)]
-mod frames;
