@@ -138,7 +138,8 @@ def main():
     manifest = {'format': 'photo-terrain-testset', 'version': 1, 'source_root': str(source),
                 'tools': {'ffprobe': version.splitlines()[0], 'opencv': cv2.__version__},
                 'sample_fps': args.fps, 'videos': clips, 'flights': flights, 'photos': entries,
-                'capture_groups': [{'photos': f['photos'], 'basis': 'one video clip'} for f in flights]}
+                # Each video frame is its own exposure; tracking must not treat a clip as one capture.
+                'capture_groups': [{'photos': [e['id']], 'basis': 'one video frame'} for e in entries]}
     write_json(root / 'manifest.json', manifest)
     for name, prior in [('with-prior', True), ('no-prior', False)]:
         write_json(root / 'profiles' / (name + '.json'), {
