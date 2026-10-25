@@ -11,6 +11,7 @@
 mod convert;
 mod error;
 mod input;
+mod kernels;
 mod loftr;
 mod matcher;
 mod weights;

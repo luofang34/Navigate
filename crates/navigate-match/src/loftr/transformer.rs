@@ -1,10 +1,10 @@
 //! LoFTR encoder layers with linear attention, in self and cross order.
-use super::layers::{LayerNorm, Linear};
-use crate::{MatchError, Weights};
-use burn::tensor::{
-    Device, Tensor,
-    activation::{elu, relu},
+use super::layers::{LayerNorm, Linear, upload};
+use crate::{
+    MatchError, Weights,
+    kernels::{Layout, product},
 };
+use burn::tensor::{Device, Tensor, activation::elu};
 
 /// Head count of both transformers.
 const HEADS: usize = 8;
@@ -45,50 +45,84 @@ impl EncoderLayer {
     }
 
     /// Update `x` `[N, L, C]` with messages from `source` `[N, S, C]`.
-    fn forward(&self, x: Tensor<3>, source: Tensor<3>) -> Tensor<3> {
-        let query = heads(self.query.forward(x.clone()));
-        let key = heads(self.key.forward(source.clone()));
-        let value = heads(self.value.forward(source));
-        let message = merge_heads(linear_attention(query, key, value));
+    fn forward(&self, x: Tensor<3>, source: Tensor<3>, heads: &Heads) -> Tensor<3> {
+        let query = self.query.forward(x.clone());
+        let key = self.key.forward(source.clone());
+        let value = self.value.forward(source);
+        let message = linear_attention(query, key, value, heads);
         let message = self.norm1.forward(self.merge.forward(message));
-        let message = self.mlp_out.forward(relu(
-            self.mlp_in
-                .forward(Tensor::cat(vec![x.clone(), message], 2)),
-        ));
-        x + self.norm2.forward(message)
+        let hidden = self
+            .mlp_in
+            .forward_relu(Tensor::cat(vec![x.clone(), message], 2));
+        x + self.norm2.forward(self.mlp_out.forward(hidden))
     }
 }
 
-/// `[N, L, H·D]` to `[N, H, L, D]`.
-fn heads(x: Tensor<3>) -> Tensor<4> {
-    let [n, length, width] = x.dims();
-    x.reshape([n, length, HEADS, width / HEADS]).swap_dims(1, 2)
+/// Head structure of linear attention as matrices, so that no head reshapes are needed.
+///
+/// With `mask` block-diagonal (one block of ones for each head), the full
+/// `Kᵀ V · mask` holds every head's `Kᵀ V` on the diagonal. `Q · (Kᵀ V · mask)` then
+/// gives each head's message in its own channels, and `(Q ⊙ ΣK) · mask` gives each
+/// channel the normalizer of its head.
+pub(crate) struct Heads {
+    mask: Tensor<3>,
+    zeros: Tensor<1>,
 }
 
-/// `[N, H, L, D]` to `[N, L, H·D]`.
-fn merge_heads(x: Tensor<4>) -> Tensor<3> {
-    let [n, heads, length, depth] = x.dims();
-    x.swap_dims(1, 2).reshape([n, length, heads * depth])
+impl Heads {
+    pub(crate) fn new(width: usize, device: &Device) -> Self {
+        let depth = width / HEADS;
+        let mask = (0..width * width)
+            .map(|i| {
+                if (i / width) / depth == (i % width) / depth {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        Self {
+            mask: upload(mask, [1, width, width], device),
+            zeros: upload(vec![0.0; width], [width], device),
+        }
+    }
 }
 
-/// Linear attention with the feature map `elu(x) + 1`, on `[N, H, L, D]` tensors.
+/// Linear attention with the feature map `elu(x) + 1` on `[N, L, C]` tensors.
 ///
 /// The values are divided by the source length before the products and multiplied
 /// after them, as in the trained model, which did this to avoid an fp16 overflow.
-pub(crate) fn linear_attention(query: Tensor<4>, key: Tensor<4>, value: Tensor<4>) -> Tensor<4> {
-    let length = value.dims()[2] as f64;
+pub(crate) fn linear_attention(
+    query: Tensor<3>,
+    key: Tensor<3>,
+    value: Tensor<3>,
+    heads: &Heads,
+) -> Tensor<3> {
+    let length = value.dims()[1] as f64;
     let query = elu(query, 1.0) + 1.0;
     let key = elu(key, 1.0) + 1.0;
     let value = value / length;
-    let key_value = key.clone().swap_dims(2, 3).matmul(value);
-    let key_sum = key.sum_dim(2).swap_dims(2, 3);
-    let normalizer = (query.clone().matmul(key_sum) + EPSILON).recip();
-    query.matmul(key_value) * normalizer * length
+    let transposed = Layout {
+        trans_a: true,
+        ..Layout::default()
+    };
+    let key_value =
+        product(key.clone(), value, heads.zeros.clone(), transposed) * heads.mask.clone();
+    let key_sum = key.sum_dim(1);
+    let normalizer = product(
+        query.clone() * key_sum,
+        heads.mask.clone(),
+        heads.zeros.clone(),
+        Layout::default(),
+    );
+    let message = product(query, key_value, heads.zeros.clone(), Layout::default());
+    message / (normalizer + EPSILON) * length
 }
 
 /// Self and cross encoder layers that update two feature sequences together.
 pub(crate) struct Transformer {
     layers: Vec<(EncoderLayer, Kind)>,
+    heads: Heads,
 }
 
 #[derive(Clone, Copy)]
@@ -118,19 +152,22 @@ impl Transformer {
                 kind,
             ));
         }
-        Ok(Self { layers })
+        Ok(Self {
+            layers,
+            heads: Heads::new(width, device),
+        })
     }
 
     pub(crate) fn forward(&self, mut a: Tensor<3>, mut b: Tensor<3>) -> (Tensor<3>, Tensor<3>) {
         for (layer, kind) in &self.layers {
             match kind {
                 Kind::SelfAttention => {
-                    a = layer.forward(a.clone(), a);
-                    b = layer.forward(b.clone(), b);
+                    a = layer.forward(a.clone(), a, &self.heads);
+                    b = layer.forward(b.clone(), b, &self.heads);
                 }
                 Kind::CrossAttention => {
-                    a = layer.forward(a, b.clone());
-                    b = layer.forward(b, a.clone());
+                    a = layer.forward(a, b.clone(), &self.heads);
+                    b = layer.forward(b, a.clone(), &self.heads);
                 }
             }
         }

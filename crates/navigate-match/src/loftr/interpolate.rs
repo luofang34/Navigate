@@ -3,20 +3,22 @@
 //! The resampling is two matrix products with fixed weights. This gives the same
 //! result on every backend, without a dependency on how a backend defines corners.
 use super::layers::upload;
+use crate::kernels::{Layout, product};
 use burn::tensor::Tensor;
 
 /// Resample `[N, C, H, W]` to `[N, C, height, width]`.
 pub(crate) fn upsample_align_corners(x: Tensor<4>, [height, width]: [usize; 2]) -> Tensor<4> {
     let [n, c, h, w] = x.dims();
     let device = x.device();
-    let rows = upload(weights(h, height), [height, h], &device);
-    let columns = upload(weights(w, width), [width, w], &device).transpose();
-    let batch = n * c;
-    let rows = rows.unsqueeze::<3>().expand([batch, height, h]);
-    let columns = columns.unsqueeze::<3>().expand([batch, w, width]);
-    rows.matmul(x.reshape([batch, h, w]))
-        .matmul(columns)
-        .reshape([n, c, height, width])
+    let rows = upload(weights(h, height), [1, height, h], &device);
+    let columns = upload(weights(w, width), [1, width, w], &device);
+    let zeros = |width: usize| upload(vec![0.0; width], [width], &device);
+    let tall = product(rows, x.reshape([n * c, h, w]), zeros(w), Layout::default());
+    let layout = Layout {
+        trans_b: true,
+        ..Layout::default()
+    };
+    product(tall, columns, zeros(width), layout).reshape([n, c, height, width])
 }
 
 /// Row-major `[output, input]` weights of linear interpolation with aligned corners.

@@ -3,6 +3,7 @@
 //! The device makes the confidence matrix and reduces it to three vectors. The
 //! host then selects the matches. This keeps the read-back small: the matrix of a
 //! 640 × 480 pair has 4800 × 4800 values, but each vector has 4800.
+use crate::kernels::{Layout, product};
 use burn::tensor::{Int, Tensor, activation::softmax};
 
 /// Dual-softmax temperature of the trained model.
@@ -27,7 +28,12 @@ pub(crate) fn reduce(a: Tensor<3>, b: Tensor<3>) -> Reductions {
     let [_, length, channels] = a.dims();
     let [_, sources, _] = b.dims();
     let scale = (channels as f64).sqrt();
-    let similarity = (a / scale).matmul((b / scale).swap_dims(1, 2)) / TEMPERATURE;
+    let zeros = Tensor::<1>::zeros([sources], &a.device());
+    let layout = Layout {
+        trans_b: true,
+        ..Layout::default()
+    };
+    let similarity = product(a / scale, b / scale, zeros, layout) / TEMPERATURE;
     let confidence = softmax(similarity.clone(), 1) * softmax(similarity, 2);
     let (row_max, row_argmax) = confidence.clone().max_dim_with_indices(2);
     let column_max = confidence.max_dim(1);

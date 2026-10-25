@@ -5422,10 +5422,13 @@ name = "navigate-match"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "burn-cubecl",
+ "cubecl",
  "getrandom 0.4.3",
  "half",
  "image",
  "nalgebra 0.34.2",
+ "navigate-match-kernels",
  "navigate-visual",
  "pollster",
  "safetensors 0.8.0",
@@ -5433,6 +5436,13 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "navigate-match-kernels"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
 ]
 
 [[package]]
