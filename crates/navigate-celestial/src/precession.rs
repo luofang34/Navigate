@@ -14,8 +14,7 @@ pub(crate) fn mean_obliquity(t: f64) -> f64 {
 
 /// Rotate mean ecliptic-of-date axes to mean equator-of-date axes.
 pub(crate) fn ecliptic_to_equator(t: f64) -> Matrix3<f64> {
-    let (sin, cos) = mean_obliquity(t).sin_cos();
-    Matrix3::new(1.0, 0.0, 0.0, 0.0, cos, -sin, 0.0, sin, cos)
+    frame_x(-mean_obliquity(t))
 }
 
 /// Rotate J2000 mean equator axes to mean equator-of-date axes.
@@ -26,7 +25,14 @@ pub(crate) fn j2000_to_mean_of_date(t: f64) -> Matrix3<f64> {
     frame_z(-z) * frame_y(theta) * frame_z(-zeta)
 }
 
-fn frame_z(angle: f64) -> Matrix3<f64> {
+/// A rotation of the coordinate axes by `angle` about x.
+pub(crate) fn frame_x(angle: f64) -> Matrix3<f64> {
+    let (sin, cos) = angle.sin_cos();
+    Matrix3::new(1.0, 0.0, 0.0, 0.0, cos, sin, 0.0, -sin, cos)
+}
+
+/// A rotation of the coordinate axes by `angle` about z.
+pub(crate) fn frame_z(angle: f64) -> Matrix3<f64> {
     let (sin, cos) = angle.sin_cos();
     Matrix3::new(cos, sin, 0.0, -sin, cos, 0.0, 0.0, 0.0, 1.0)
 }

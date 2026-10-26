@@ -1,4 +1,4 @@
-use crate::{Ephemeris, Epoch, FrameId, State, precession};
+use crate::{Ephemeris, Epoch, FrameId, State, earth_rotation, precession};
 use nalgebra::Vector3;
 
 mod earth;
@@ -8,6 +8,7 @@ const SUN: i32 = 10;
 const MOON: i32 = 301;
 const EARTH: i32 = 399;
 const J2000: i32 = 1;
+const ITRF93: i32 = FrameId::EARTH_ITRF93.orientation;
 const ASTRONOMICAL_UNIT_M: f64 = 149_597_870_700.0;
 const SECONDS_PER_CENTURY: f64 = 36_525.0 * 86_400.0;
 /// Half-width of the central difference for velocity. The series are
@@ -30,6 +31,9 @@ pub enum AnalyticError {
     /// The epoch is outside the range where the accuracy bounds apply.
     #[error("epoch {0} is outside the analytic ephemeris range 1900 to 2100 TDB")]
     EpochOutOfRange(Epoch),
+    /// The epoch is before 1972 UTC, where UT1 - UTC has no 0.9 s bound.
+    #[error("epoch {0} is before 1972 UTC, outside the Earth rotation model range")]
+    EarthRotationOutOfRange(Epoch),
 }
 
 /// Sun, Earth, and Moon states from truncated analytic series.
@@ -52,7 +56,8 @@ pub enum AnalyticError {
 ///
 /// Supported bodies are the Sun (10), the Earth (399), and the Moon (301).
 /// Caller states must use J2000 axes (orientation 1) and one of these bodies
-/// as origin.
+/// as origin, or [`FrameId::EARTH_ITRF93`]. The Earth-fixed axes come from
+/// the model in [`sun_ecef`](crate::sun_ecef), not from ITRF93 data.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AnalyticEphemeris;
 
@@ -60,13 +65,21 @@ impl Ephemeris for AnalyticEphemeris {
     type Error = AnalyticError;
 
     fn barycentric_state(&self, state: State) -> Result<State, Self::Error> {
-        if state.frame.orientation != J2000 || !matches!(state.frame.center, SUN | EARTH | MOON) {
-            return Err(AnalyticError::UnsupportedFrame(state.frame));
-        }
+        let position = Vector3::from(state.position_m);
+        let velocity = Vector3::from(state.velocity_m_s);
+        let (position, velocity) = match (state.frame.center, state.frame.orientation) {
+            (SUN | EARTH | MOON, J2000) => (position, velocity),
+            (EARTH, ITRF93) => {
+                let to_j2000 = earth_rotation::j2000_to_earth_fixed(state.epoch)?.transpose();
+                let velocity = velocity + earth_rotation::rotation_velocity(position);
+                (to_j2000 * position, to_j2000 * velocity)
+            }
+            _ => return Err(AnalyticError::UnsupportedFrame(state.frame)),
+        };
         let origin = self.body_state(state.frame.center, state.epoch)?;
         Ok(State {
-            position_m: std::array::from_fn(|i| origin.position_m[i] + state.position_m[i]),
-            velocity_m_s: std::array::from_fn(|i| origin.velocity_m_s[i] + state.velocity_m_s[i]),
+            position_m: (Vector3::from(origin.position_m) + position).into(),
+            velocity_m_s: (Vector3::from(origin.velocity_m_s) + velocity).into(),
             epoch: state.epoch,
             frame: FrameId::SSB_J2000,
         })

@@ -5108,6 +5108,8 @@ dependencies = [
  "anise",
  "hifitime",
  "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-geodesy",
  "serde_json",
  "thiserror 2.0.19",
 ]

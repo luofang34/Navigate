@@ -15,6 +15,12 @@ impl FrameId {
         center: 0,
         orientation: 1,
     };
+
+    /// Earth centre, with Earth-fixed ITRF93 axes (NAIF frame 13000).
+    pub const EARTH_ITRF93: Self = Self {
+        center: 399,
+        orientation: 13000,
+    };
 }
 
 /// A geometric Cartesian state. The velocity is the derivative in `frame`.
