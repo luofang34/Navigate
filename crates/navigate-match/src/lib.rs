@@ -4,8 +4,11 @@
 //! (Vulkan, Metal) or CUDA, and on native CPUs. [`ModelInference`] and
 //! [`AsyncModelInference`] define the unified tensor session contract across browser,
 //! native, and embedded neural processing unit backends.
+//!
+//! [`Dinov2`] is the DINOv2 ViT-S/14 image transformer, whose tokens describe places.
 mod convert;
 pub mod corridor;
+mod dinov2;
 mod error;
 mod input;
 pub mod kashin;
@@ -28,6 +31,7 @@ pub use corridor::{
     ActiveTrackSet, CORRIDOR_MAGIC, CORRIDOR_VERSION, CorridorLandmarkBank, CorridorTileEntry,
     CorridorTileKey, TrackMatchConfig, Tracked3dMatch, VirtualCorridorView, VirtualViewCamera,
 };
+pub use dinov2::{DINOV2_WIDTH, Dinov2};
 pub use error::MatchError;
 pub use kashin::{
     DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,
