@@ -85,6 +85,10 @@ fn unknown_priors_give_more_hypotheses_and_known_ones_fewer() {
     let narrow = plan(&known, &scales);
     assert_eq!(narrow.canvases, 1);
     assert!(narrow.canvases * 10 < open.canvases);
+    assert!(
+        narrow.scales[0].verify < open.scales[0].verify,
+        "an unknown heading checks more places"
+    );
 }
 
 #[test]

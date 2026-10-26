@@ -281,16 +281,21 @@ impl Checks<'_> {
         for (place, h) in self.ranked {
             let hypothesis = &self.hypotheses[*h];
             let side_m = self.scales[hypothesis.scale].side_m;
-            let result = check::check(
-                tiles,
-                matcher,
-                gray,
-                &hypothesis.view,
-                hypothesis.footprint,
-                place.centre,
-                side_m,
-            )
-            .await?;
+            // An unknown heading leaves up to half a heading step of error, which an
+            // oblique view does not tolerate: check the neighbouring headings too.
+            let steps: &[f64] = if self.scales[hypothesis.scale].headings_deg.len() > 1 {
+                &[0.0, -15.0, 15.0]
+            } else {
+                &[0.0]
+            };
+            let views: Vec<View> = steps
+                .iter()
+                .map(|d| View {
+                    heading_deg: hypothesis.view.heading_deg + d,
+                    ..hypothesis.view
+                })
+                .collect();
+            let result = check::check(tiles, matcher, gray, &views, place.centre, side_m).await?;
             checked += 1;
             let inliers = result.map_or(0, |c| c.inliers);
             tracing::debug!(place = ?place.centre, score = place.score, heading = hypothesis.view.heading_deg,

@@ -7,6 +7,9 @@
 //!
 //! All heights use the terrain-model datum (mean sea level for Terrarium tiles).
 //! All angles use radians.
+//! The [`search`] module holds the messages of a region search.
+
+pub mod search;
 
 /// Protocol version of the locate worker messages.
 ///

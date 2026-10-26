@@ -33,7 +33,7 @@ pub(super) async fn locate_at<T: TileSource, M: AsyncImageMatcher>(
     focal_px: f64,
     progress: &mut impl FnMut(SearchProgress),
 ) -> Result<Outcome, LocateError> {
-    let view = &hypothesis.view;
+    let view = &found.view;
     let axis_m = view.height_m / view.pitch_deg.clamp(5.0, 90.0).to_radians().tan();
     let along = |heading: f64, d: f64| {
         [

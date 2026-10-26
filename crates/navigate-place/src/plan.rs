@@ -226,13 +226,19 @@ pub fn plan(request: &SearchRequest, scales: &[(f64, Vec<Cell>)]) -> SearchPlan 
     let area_km2 = request.region.area_km2();
     for scale in &mut by_scale {
         scale.cells.sort();
-        // A larger area holds more look-alike places; verify more of the ranked list.
-        scale.verify = if area_km2 < 50.0 {
+        // A larger area holds more look-alike places, and each unknown heading adds
+        // look-alikes: verify more of the ranked list.
+        let base = if area_km2 < 50.0 {
             10
         } else if area_km2 < 1_000.0 {
             20
         } else {
             50
+        };
+        scale.verify = if scale.headings_deg.len() > 1 {
+            base * 5 / 2
+        } else {
+            base
         };
     }
     by_scale.sort_by_key(|s| std::cmp::Reverse(s.views.len()));

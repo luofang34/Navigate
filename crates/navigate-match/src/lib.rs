@@ -48,6 +48,6 @@ pub use traits::{
 };
 pub use vendor_npu::{VendorNpuBackend, VendorNpuSession};
 #[cfg(target_arch = "wasm32")]
-pub use web_engine::{WebMlEngine, WebNnAvailability, probe_webnn};
+pub use web_engine::{WebMlEngine, WebNnAvailability, open_burn_device, probe_webnn};
 pub use weights::{WeightTensor, Weights};
 pub use xfeat::{DenseMaps, SparseFeatures, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat};

@@ -206,7 +206,13 @@ impl AsyncImageMatcher for WebMlEngine {
     }
 }
 
-async fn open_burn_device() -> Result<(Device, EngineKind), MatchError> {
+/// Open the browser burn device: WebGPU first, then the Burn CPU device when the
+/// `flex` feature is compiled in and the browser has no WebGPU adapter.
+///
+/// # Errors
+///
+/// Returns [`MatchError::Device`] when no compiled browser runtime can start.
+pub async fn open_burn_device() -> Result<(Device, EngineKind), MatchError> {
     #[cfg(feature = "webgpu")]
     {
         match Device::wgpu_options().init_async().await {

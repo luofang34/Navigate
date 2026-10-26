@@ -24,6 +24,8 @@ pub struct Check {
     pub ground: [f64; 2],
     /// Heading after the fit, degrees.
     pub heading_deg: f64,
+    /// The view whose projection gave the fit.
+    pub view: View,
 }
 
 /// Imagery zoom whose pixels make a window about 1.25 crop sides wide.
@@ -84,8 +86,9 @@ fn equalize(mut image: GrayImage) -> GrayImage {
     image
 }
 
-/// Match the photo, laid on flat ground with `view`, against the map window at
-/// `place`, the ground at the footprint centre that the ranking proposed.
+/// Match the photo, laid on flat ground with each of `views`, against the map window
+/// at `place`, the ground at the footprint centre that the ranking proposed. The
+/// window is fetched once; the view with the most inliers gives the result.
 ///
 /// # Errors
 ///
@@ -94,8 +97,7 @@ pub async fn check<S: TileSource, M: AsyncImageMatcher>(
     source: &S,
     matcher: &mut M,
     photo: &GrayImage,
-    view: &View,
-    footprint: [f64; 2],
+    views: &[View],
     place: [f64; 2],
     side_m: f64,
 ) -> Result<Option<Check>, LocateError> {
@@ -113,24 +115,39 @@ pub async fn check<S: TileSource, M: AsyncImageMatcher>(
     let gsd = ground_sample_m(atlas, place[0]);
     let [w, h] = WINDOW;
     let corner = atlas_pixel(atlas, place) - Vector2::new(f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let window = equalize(window(atlas, corner));
+    let centre = Vector2::new(f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let mut best: Option<Check> = None;
+    for view in views {
+        let Some(footprint) = view.footprint_centre(photo.dimensions()) else {
+            continue;
+        };
+        let projection = equalize(grey(photo, view, footprint, gsd, WINDOW));
+        let matches = matcher.match_images(&window, &projection).await?;
+        if let Some((inliers, model)) =
+            fit(&matches).filter(|(n, _)| best.is_none_or(|b| *n > b.inliers))
+        {
+            best = Some(Check {
+                inliers,
+                ground: lat_lon(atlas, model.apply(centre) + corner),
+                heading_deg: (view.heading_deg + model.angle_deg()).rem_euclid(360.0),
+                view: *view,
+            });
+        }
+    }
+    Ok(best)
+}
+
+/// The map imagery of the matcher window whose top-left atlas pixel is `corner`.
+fn window(atlas: &ImageAtlas, corner: Vector2<f64>) -> GrayImage {
+    let [w, h] = WINDOW;
     let [aw, ah] = atlas.layout.size;
-    let window = equalize(GrayImage::from_fn(w, h, |u, v| {
+    GrayImage::from_fn(w, h, |u, v| {
         let (x, y) = (corner.x + f64::from(u), corner.y + f64::from(v));
         if x < 0.0 || y < 0.0 || x >= f64::from(aw) || y >= f64::from(ah) {
             return image::Luma([0]);
         }
         let i = y as usize * aw as usize + x as usize;
         image::Luma([atlas.pixels.get(i).copied().unwrap_or(0)])
-    }));
-    let projection = equalize(grey(photo, view, footprint, gsd, WINDOW));
-    let matches = matcher.match_images(&window, &projection).await?;
-    let Some((inliers, model)) = fit(&matches) else {
-        return Ok(None);
-    };
-    let centre = Vector2::new(f64::from(w) / 2.0, f64::from(h) / 2.0);
-    Ok(Some(Check {
-        inliers,
-        ground: lat_lon(atlas, model.apply(centre) + corner),
-        heading_deg: (view.heading_deg + model.angle_deg()).rem_euclid(360.0),
-    }))
+    })
 }

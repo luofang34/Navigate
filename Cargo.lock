@@ -5255,6 +5255,7 @@ dependencies = [
  "js-sys",
  "navigate-locate",
  "navigate-match",
+ "navigate-place",
  "navigate-visual",
  "serde_json",
  "thiserror 2.0.19",

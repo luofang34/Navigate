@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 navigate-locate = { path = "../navigate-locate", features = ["serde"] }
+navigate-place = { path = "../navigate-place" }
 navigate-match = { path = "../navigate-match", default-features = false, features = ["webgpu", "flex"] }
 navigate-visual = { path = "../navigate-visual" }
 burn = { version = "0.22.1", default-features = false, features = ["std", "webgpu", "flex"] }
