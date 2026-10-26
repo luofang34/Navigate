@@ -4,7 +4,7 @@
 //! or loads a file. Earth surface coordinates belong in a caller adapter.
 //! [`AnalyticEphemeris`] supplies Sun, Earth, and Moon states without kernel
 //! files. [`sun_ecef`] and [`moon_ecef`] give their apparent directions in
-//! Earth-fixed axes.
+//! Earth-fixed axes, and [`stars_ecef`] gives the bright stars.
 
 mod analytic;
 #[cfg(feature = "anise")]
@@ -14,6 +14,7 @@ mod earth_rotation;
 mod error;
 mod observation;
 mod precession;
+mod stars;
 mod state;
 
 pub use analytic::{AnalyticEphemeris, AnalyticError};
@@ -23,4 +24,5 @@ pub use earth_fixed::{EarthFixedSight, SubsolarPoint, moon_ecef, subsolar_point,
 pub use error::ObservationError;
 pub use hifitime::{Duration, Epoch, TimeScale};
 pub use observation::{Correction, Sight, observe_body};
+pub use stars::{StarSight, stars_ecef};
 pub use state::{Ephemeris, FrameId, State};
