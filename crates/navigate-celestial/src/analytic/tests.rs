@@ -67,7 +67,7 @@ fn sun_matches_the_cspice_reception_fixture() {
             Correction::VacuumReception,
         );
         match case["name"].as_str().unwrap() {
-            "vleo" | "geo" => {
+            "vleo" | "geo" | "earth_fixed" => {
                 let sight = result.unwrap();
                 let expected = numbers("direction");
                 let error =
@@ -76,7 +76,7 @@ fn sun_matches_the_cspice_reception_fixture() {
                 let range = case["range_m"].as_f64().unwrap();
                 assert!((sight.coordinate_range_m - range).abs() < 2e6);
             }
-            // The provider has no Mars model and no Earth-fixed axes.
+            // The provider has no Mars model.
             _ => assert!(matches!(
                 result,
                 Err(ObservationError::Ephemeris {
