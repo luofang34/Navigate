@@ -12,6 +12,9 @@ cargo fmt --all --check
 echo "== cargo clippy =="
 cargo clippy --all-targets -- -D warnings
 
+echo "== wasm32 (navigate-celestial) =="
+cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
+
 echo "== cargo test =="
 cargo test --all-targets
 
