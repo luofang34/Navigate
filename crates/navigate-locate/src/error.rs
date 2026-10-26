@@ -54,4 +54,13 @@ pub enum LocateError {
     /// A geometry value was invalid.
     #[error("invalid geometry")]
     Visual(#[from] navigate_visual::VisualError),
+    /// A place index file could not be read.
+    #[error("place index file: {0}")]
+    Index(String),
+    /// A place index file or search request is not valid.
+    #[error("place index")]
+    Place(#[from] navigate_place::PlaceError),
+    /// The place encoder failed.
+    #[error("place encoder: {0}")]
+    Encoder(String),
 }
