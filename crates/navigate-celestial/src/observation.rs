@@ -110,7 +110,7 @@ pub fn observe_body<P: Ephemeris>(
     Err(ObservationError::LightTime { target })
 }
 
-fn aberrate(direction: Vector3, beta: Vector3) -> Vector3 {
+pub(crate) fn aberrate(direction: Vector3, beta: Vector3) -> Vector3 {
     // Lorentz-transform an incoming photon; direction points towards the source.
     let inverse_gamma = (1.0 - beta.norm_squared()).sqrt();
     let dot = direction.dot(&beta);
