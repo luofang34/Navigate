@@ -16,5 +16,12 @@ hifitime = "4.3.1"
 nalgebra.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+serde_json = "1"
+
+[[example]]
+name = "reference_table"
+required-features = ["anise"]
+
 [lints]
 workspace = true
