@@ -11,9 +11,11 @@ const J2000: i32 = 1;
 const ITRF93: i32 = FrameId::EARTH_ITRF93.orientation;
 const ASTRONOMICAL_UNIT_M: f64 = 149_597_870_700.0;
 const SECONDS_PER_CENTURY: f64 = 36_525.0 * 86_400.0;
-/// Half-width of the central difference for velocity. The series are
-/// smooth on this scale, and the rounding error stays below 1 µm/s.
-const VELOCITY_STEP_S: f64 = 60.0;
+/// Half-width of the central difference for velocity. The position is the
+/// mean of the two evaluations, which differs from the series by a h^2 / 2,
+/// less than 0.1 m for the heliocentric acceleration a, so each state costs
+/// two evaluations. The velocity rounding error stays below 1 mm/s.
+const VELOCITY_HALF_STEP_S: f64 = 4.0;
 
 /// A failed analytic state evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
@@ -88,11 +90,11 @@ impl Ephemeris for AnalyticEphemeris {
         if !(-2.0..=2.0).contains(&t) {
             return Err(AnalyticError::EpochOutOfRange(epoch));
         }
-        let step = VELOCITY_STEP_S / SECONDS_PER_CENTURY;
-        let velocity =
-            (position(body, t + step)? - position(body, t - step)?) / (2.0 * VELOCITY_STEP_S);
+        let step = VELOCITY_HALF_STEP_S / SECONDS_PER_CENTURY;
+        let (before, after) = (position(body, t - step)?, position(body, t + step)?);
+        let velocity = (after - before) / (2.0 * VELOCITY_HALF_STEP_S);
         Ok(State {
-            position_m: position(body, t)?.into(),
+            position_m: ((before + after) / 2.0).into(),
             velocity_m_s: velocity.into(),
             epoch,
             frame: FrameId::SSB_J2000,

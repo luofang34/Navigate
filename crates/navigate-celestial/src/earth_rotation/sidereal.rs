@@ -12,8 +12,30 @@
 use crate::precession;
 use nalgebra::Matrix3;
 
-/// Gauss-Legendre nodes and weights on [0, 1].
-const GAUSS_LEGENDRE: [[f64; 2]; 16] = [
+/// Gauss-Legendre nodes and weights on [0, 1]. Four nodes integrate the
+/// pole terms to 1e-15 rad for |t| <= 10 centuries, and eight to 1e-17 rad
+/// at 40 centuries, against a 16-node rule.
+const FOUR_NODES: [[f64; 2]; 4] = [
+    [0.06943184420297371, 0.17392742256872673],
+    [0.33000947820757187, 0.32607257743127327],
+    [0.6699905217924281, 0.32607257743127327],
+    [0.9305681557970262, 0.17392742256872673],
+];
+
+const EIGHT_NODES: [[f64; 2]; 8] = [
+    [0.019855071751231912, 0.05061426814518826],
+    [0.10166676129318664, 0.11119051722668723],
+    [0.2372337950418355, 0.15685332293894358],
+    [0.40828267875217505, 0.1813418916891809],
+    [0.591717321247825, 0.1813418916891809],
+    [0.7627662049581645, 0.15685332293894358],
+    [0.8983332387068134, 0.11119051722668723],
+    [0.9801449282487681, 0.05061426814518826],
+];
+
+/// The 16-node rule that the tests use as the reference.
+#[cfg(test)]
+const SIXTEEN_NODES: [[f64; 2]; 16] = [
     [0.005299532504175031, 0.013576229705877027],
     [0.0277124884633837, 0.031126761969323805],
     [0.06718439880608418, 0.0475792558412465],
@@ -50,7 +72,11 @@ pub(crate) fn earth_rotation_angle(ut1_days: f64) -> f64 {
 
 /// CIO locator s of the mean pole, in radians.
 pub(crate) fn cio_locator(t: f64) -> f64 {
-    integrate(t, &GAUSS_LEGENDRE)
+    if t.abs() <= 10.0 {
+        integrate(t, &FOUR_NODES)
+    } else {
+        integrate(t, &EIGHT_NODES)
+    }
 }
 
 fn integrate(t: f64, rule: &[[f64; 2]]) -> f64 {
