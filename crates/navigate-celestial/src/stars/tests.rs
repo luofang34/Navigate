@@ -1,9 +1,8 @@
 use super::*;
 
 const SKYFIELD: &str = include_str!("../../fixtures/skyfield-stars.txt");
-// The measured maximum over the Skyfield table is 8.1 arcseconds. The bound
-// keeps the UT1 - UTC margin of the Sun.
-const BOUND_DEG: f64 = 15.0 / 3600.0;
+// The measured maximum over the Skyfield table is 1.4 arcseconds.
+const BOUND_DEG: f64 = 3.0 / 3600.0;
 
 fn separation_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
     let (a, b) = (Vector3::from(a), Vector3::from(b));
@@ -74,10 +73,11 @@ fn magnitude_limit_selects_bright_stars() {
 
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
+    // The error gives the TT of the reading, which is Delta T later.
     let early: Epoch = "1849-12-01T00:00:00 UTC".parse().unwrap();
-    assert_eq!(
+    assert!(matches!(
         stars_ecef(early, 6.0),
-        Err(AnalyticError::EpochOutOfRange(early))
-    );
+        Err(AnalyticError::EpochOutOfRange(_))
+    ));
     assert!(stars_ecef("1943-05-16T21:28:00 UTC".parse().unwrap(), 6.0).is_ok());
 }

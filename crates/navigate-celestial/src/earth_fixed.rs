@@ -1,6 +1,6 @@
 use crate::{
     AnalyticEphemeris, AnalyticError, Correction, Epoch, FrameId, ObservationError, State,
-    earth_rotation, observe_body,
+    civil_time, earth_rotation, observe_body,
 };
 use nalgebra::Vector3;
 
@@ -47,17 +47,18 @@ pub struct SubsolarPoint {
 /// Earth's surface. `None` is the Earth's centre. The calculation uses
 /// [`AnalyticEphemeris`] and [`Correction::VacuumReception`].
 ///
-/// The Earth rotation model applies IAU 1976 precession, the main IAU 1980
-/// nutation terms, and GAST. It takes UT1 as equal to UTC and omits polar
-/// motion. From 1972, leap seconds keep the UT1 difference within 0.9 s, which
-/// rotates directions by up to 13.5 arcseconds about the pole. Before 1972,
-/// the model reads the UTC clock reading as UT1, because civil time (GMT)
-/// then followed the Earth's rotation. From 2000 to 2026, the tests bound the
-/// direction error relative to JPL DE421 with ITRF93 Earth orientation at
-/// 15 arcseconds for the Sun and 22 arcseconds for the Moon, for observers at
-/// the Earth's centre and on its surface. From 1850 to 1971, the tests bound
-/// it relative to Skyfield with historical Delta T at 15 arcseconds for the
-/// Sun and 30 arcseconds for the Moon.
+/// `epoch` is a civil clock reading: UT1 before 1972 and UTC from 1972, as
+/// [`civil_time`] gives. The Earth rotation model applies IAU 1976
+/// precession, the main IAU 1980 nutation terms, and GAST at UT1 = TT - Delta
+/// T, from [`delta_t`](fn@crate::delta_t). It omits polar motion.
+///
+/// From 2000 to 2026, the tests bound the direction error relative to JPL
+/// DE421 with ITRF93 Earth orientation at 2 arcseconds for the Sun and 15
+/// arcseconds for the Moon, for observers at the Earth's centre and on its
+/// surface. From 1850 to 1971, the tests bound it relative to Skyfield with
+/// historical Delta T at 2 arcseconds for the Sun and 10 arcseconds for the
+/// Moon. After the last IERS prediction, Delta T is an extrapolation: its
+/// uncertainty in seconds, times 15 arcseconds, adds to these bounds.
 ///
 /// # Errors
 /// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
@@ -103,6 +104,7 @@ fn sight(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
+    let epoch = civil_time(epoch).terrestrial;
     let observer = State {
         position_m: observer_ecef_m.unwrap_or([0.0; 3]),
         velocity_m_s: [0.0; 3],

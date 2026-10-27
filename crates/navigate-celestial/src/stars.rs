@@ -5,7 +5,9 @@
 //! distribute it freely. The 9096 entries with a J2000 position are embedded
 //! as `data/bsc5.bin`, which the `star_catalog` example writes.
 
-use crate::{AnalyticEphemeris, AnalyticError, Ephemeris, Epoch, earth_rotation, observation};
+use crate::{
+    AnalyticEphemeris, AnalyticError, Ephemeris, Epoch, civil_time, earth_rotation, observation,
+};
 use nalgebra::Vector3;
 
 const CATALOG: &[u8] = include_bytes!("../data/bsc5.bin");
@@ -29,13 +31,14 @@ pub struct StarSight {
 
 /// The catalogue stars at least as bright as `faintest_v_magnitude`.
 ///
+/// `epoch` is a civil clock reading, as for [`sun_ecef`](crate::sun_ecef).
+///
 /// Each J2000 position moves by its linear proper motion, then annual
 /// aberration from the Earth's velocity applies, then the Earth rotation
 /// model of [`sun_ecef`](crate::sun_ecef) turns it to ECEF axes. Parallax
 /// (less than 0.8 arcsecond), radial velocity, diurnal aberration (0.3
 /// arcsecond), and gravitational deflection are omitted. The tests bound
-/// the error relative to Skyfield with IERS UT1 at 15 arcseconds, the same
-/// as the Sun.
+/// the error relative to Skyfield with IERS UT1 at 3 arcseconds.
 ///
 /// # Errors
 /// Returns an error for an epoch outside 1850 to 2100 TDB.
@@ -43,6 +46,7 @@ pub fn stars_ecef(
     epoch: Epoch,
     faintest_v_magnitude: f64,
 ) -> Result<Vec<StarSight>, AnalyticError> {
+    let epoch = civil_time(epoch).terrestrial;
     let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch);
     let beta =
         Vector3::from(AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s) / LIGHT_SPEED_M_S;
