@@ -1,0 +1,25 @@
+[package]
+name = "flamsteed"
+description = "Bright stars and their motion in space, from public-domain catalogue data, with no I/O"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/luofang34/Navigate"
+readme = "README.md"
+keywords = ["astronomy", "stars", "catalogue", "astrometry", "wasm"]
+categories = ["science"]
+publish = true
+include = [
+    "src/**/*.rs",
+    "data/bsc5.bin",
+    "fixtures/star-space-motion.txt",
+    "LICENSE",
+    "README.md",
+]
+
+[dev-dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

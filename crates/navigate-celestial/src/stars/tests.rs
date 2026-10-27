@@ -10,28 +10,6 @@ fn separation_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 #[test]
-fn every_embedded_record_decodes() {
-    let (records, rest) = CATALOG.as_chunks::<RECORD_BYTES>();
-    assert!(rest.is_empty());
-    let records: Vec<Record> = records.iter().map(decode).collect();
-    assert_eq!(records.len(), 9096);
-    let sirius = records.iter().find(|star| star.hr == 2491).unwrap();
-    assert_eq!(sirius.v_magnitude, -1.46);
-    assert_eq!(sirius.b_minus_v, Some(0.0));
-    // 06h45m08.9s -16°42'58" J2000, proper motion -0.553 and -1.205 arcsec/yr.
-    assert!((sirius.ra.to_degrees() - 101.287_08).abs() < 1e-5);
-    assert!((sirius.dec.to_degrees() + 16.716_11).abs() < 1e-5);
-    assert!((sirius.pm_ra / MAS + 553.0).abs() < 1e-9);
-    assert!((sirius.pm_dec / MAS + 1205.0).abs() < 1e-9);
-    assert!(
-        records
-            .iter()
-            .all(|star| star.dec.abs() <= std::f64::consts::FRAC_PI_2)
-    );
-    assert!(records.iter().any(|star| star.b_minus_v.is_none()));
-}
-
-#[test]
 fn stars_match_skyfield_from_1975_to_2026() {
     let mut worst = 0.0_f64;
     let mut rows = 0;
@@ -113,15 +91,12 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
 
     // The documented pipeline at the instant: space motion, aberration, and
     // the Earth rotation that the Sun and Moon use at the same TT.
-    let record = CATALOG
-        .as_chunks::<RECORD_BYTES>()
-        .0
-        .iter()
-        .map(decode)
-        .find(|record| record.hr == 2491)
+    let record = flamsteed::Catalog::bright_star_catalogue()
+        .stars()
+        .find(|star| star.hr == 2491)
         .unwrap();
     let years = instant.to_tdb_centuries_since_j2000() * 100.0;
-    let moved = space_motion(&record, years);
+    let moved = Vector3::from(record.direction_at(years));
     let beta = Vector3::from(
         AnalyticEphemeris
             .body_state(399, instant)
@@ -134,34 +109,4 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
     // Reading the instant as a UT1 clock would turn it by Delta T, about 40
     // arcseconds in 1900.
     assert!(separation_deg(from_instant.direction, expected.into()) < 1e-9);
-}
-
-#[test]
-fn space_motion_matches_the_reference_from_minus_2000_to_3000() {
-    const REFERENCE: &str = include_str!("../../fixtures/star-space-motion.txt");
-    let records: Vec<Record> = CATALOG
-        .as_chunks::<RECORD_BYTES>()
-        .0
-        .iter()
-        .map(decode)
-        .collect();
-    let mut rows = 0;
-    for line in REFERENCE.lines().filter(|line| !line.starts_with('#')) {
-        let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
-        let star = records
-            .iter()
-            .find(|star| f64::from(star.hr) == v[0])
-            .unwrap();
-        let error = separation_deg(space_motion(star, v[1]).into(), [v[2], v[3], v[4]]);
-        // The packed positions round to 0.3 milliarcsecond.
-        assert!(
-            error < 0.01 / 3600.0,
-            "HR {} at {} years: {}\"",
-            v[0],
-            v[1],
-            error * 3600.0
-        );
-        rows += 1;
-    }
-    assert_eq!(rows, 150);
 }

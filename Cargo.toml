@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/flamsteed",
     "crates/navigate-celestial",
     "crates/navigate-contract",
     "crates/navigate-geodesy",
@@ -41,6 +42,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
+flamsteed = { path = "crates/flamsteed", version = "0.1.0" }
 navigate-contract = { path = "crates/navigate-contract" }
 navigate-geodesy = { path = "crates/navigate-geodesy" }
 navigate-fusion = { path = "crates/navigate-fusion" }
