@@ -109,3 +109,39 @@ fn the_extrapolation_error_reaches_past_2200() {
             .all(|pair| pair[0] <= pair[1])
     );
 }
+
+#[test]
+fn the_model_meets_the_table_at_its_first_row() {
+    let [first_mjd, first_seconds, _] = table::ROWS[0];
+    let before = at_mjd(first_mjd - 1.0);
+    let at = at_mjd(first_mjd);
+    assert_eq!(before.basis, DeltaTBasis::Modelled);
+    assert_eq!(at.basis, DeltaTBasis::Observed);
+    assert_eq!(at.seconds, first_seconds);
+    // Both estimates have about 2 s uncertainty here; they differ by about 1 s.
+    assert!((before.seconds - first_seconds).abs() < 2.0, "{before:?}");
+}
+
+#[test]
+fn ancient_delta_t_is_hours_with_hours_of_uncertainty() {
+    // An epoch in 585 BC (astronomical year -584).
+    let delta_t = delta_t(Epoch::from_gregorian(
+        -584,
+        5,
+        28,
+        12,
+        0,
+        0,
+        0,
+        TimeScale::UTC,
+    ));
+    assert_eq!(delta_t.basis, DeltaTBasis::Modelled);
+    assert!(
+        (17_000.0..23_000.0).contains(&delta_t.seconds),
+        "{delta_t:?}"
+    );
+    assert!(
+        (400.0..700.0).contains(&delta_t.uncertainty_seconds),
+        "{delta_t:?}"
+    );
+}

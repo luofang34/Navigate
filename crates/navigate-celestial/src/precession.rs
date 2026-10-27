@@ -18,16 +18,19 @@ use nalgebra::{Matrix3, Vector3};
 
 const ARCSECOND: f64 = std::f64::consts::PI / 648_000.0;
 
+#[cfg(not(feature = "long-range"))]
 /// Mean obliquity of the ecliptic of date, in radians.
 pub(crate) fn mean_obliquity(t: f64) -> f64 {
     (84_381.448 + t * (-46.815 + t * (-0.000_59 + t * 0.001_813))) * ARCSECOND
 }
 
+#[cfg(not(feature = "long-range"))]
 /// Rotate mean ecliptic-of-date axes to mean equator-of-date axes.
 pub(crate) fn ecliptic_to_equator(t: f64) -> Matrix3<f64> {
     frame_x(-mean_obliquity(t))
 }
 
+#[cfg(not(feature = "long-range"))]
 /// Rotate J2000 mean equator axes to mean equator-of-date axes.
 pub(crate) fn j2000_to_mean_of_date(t: f64) -> Matrix3<f64> {
     let zeta = t * (2_306.218_1 + t * (0.301_88 + t * 0.017_998)) * ARCSECOND;
@@ -48,6 +51,7 @@ pub(crate) fn frame_z(angle: f64) -> Matrix3<f64> {
     Matrix3::new(cos, sin, 0.0, -sin, cos, 0.0, 0.0, 0.0, 1.0)
 }
 
+#[cfg(not(feature = "long-range"))]
 fn frame_y(angle: f64) -> Matrix3<f64> {
     let (sin, cos) = angle.sin_cos();
     Matrix3::new(cos, 0.0, -sin, 0.0, 1.0, 0.0, sin, 0.0, cos)
