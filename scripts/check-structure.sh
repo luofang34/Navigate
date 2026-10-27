@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Structural conventions: no mod.rs, bounded file sizes, lib.rs stays a
 # re-export surface, every lib.rs opens with a crate-level doc comment,
-# each lockfile resolves one wgpu major version, and the root LICENSE is the
-# GNU AGPL version 3.
+# each lockfile resolves one wgpu major version, the root LICENSE is the
+# GNU AGPL version 3, and git holds no build output and no file over 5 MiB.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -52,5 +52,20 @@ if ! head -2 LICENSE 2>/dev/null | grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' \
     echo "FAIL: LICENSE — the repository root must hold the GNU AGPL version 3 text" >&2
     fail=1
 fi
+
+# Build output never enters the repository, and no file inflates the clone.
+while IFS= read -r path; do
+    echo "FAIL: $path — build output in a target/ directory must not be in git" >&2
+    fail=1
+done < <(git ls-files | grep -E '(^|/)target/')
+max_bytes=$((5 * 1024 * 1024))
+while IFS= read -r path; do
+    [ -f "$path" ] || continue
+    size=$(wc -c < "$path")
+    if [ "$size" -gt "$max_bytes" ]; then
+        echo "FAIL: $path — $size bytes exceeds the 5 MiB limit for a tracked file" >&2
+        fail=1
+    fi
+done < <(git ls-files)
 
 exit "$fail"
