@@ -7,13 +7,14 @@
 //! (13.5 arcseconds) about the pole. It omits polar motion, which is less
 //! than 0.6 arcsecond. Leap seconds come from hifitime.
 //!
-//! Leap seconds keep UT1 - UTC within 0.9 s from 1972. Before 1972, UTC is
-//! not that close to UT1, so the model rejects those epochs. After the last
-//! leap second that hifitime knows, the bound holds only while the IERS keeps
-//! UT1 - UTC within 0.9 s.
+//! Leap seconds keep UT1 - UTC within 0.9 s from 1972. After the last leap
+//! second that hifitime knows, the bound holds only while the IERS keeps
+//! UT1 - UTC within 0.9 s. Before 1972, civil time (GMT) followed the Earth's
+//! rotation, so the model reads a UTC clock reading of that period as UT1.
+//! TT then comes from hifitime and not from the historical Delta T.
 
 use crate::{
-    AnalyticError, Epoch, precession,
+    Epoch, precession,
     precession::{frame_x, frame_z},
 };
 use nalgebra::{Matrix3, Vector3};
@@ -23,17 +24,14 @@ const ARCSECOND: f64 = std::f64::consts::PI / 648_000.0;
 pub(crate) const ROTATION_RATE_RAD_S: f64 = 7.292_115_146_706_979e-5;
 
 /// Rotate J2000 axes to Earth-fixed axes at `epoch`.
-pub(crate) fn j2000_to_earth_fixed(epoch: Epoch) -> Result<Matrix3<f64>, AnalyticError> {
-    if epoch.to_tai_seconds() < Epoch::from_gregorian_utc_at_midnight(1972, 1, 1).to_tai_seconds() {
-        return Err(AnalyticError::EarthRotationOutOfRange(epoch));
-    }
+pub(crate) fn j2000_to_earth_fixed(epoch: Epoch) -> Matrix3<f64> {
     let t = epoch.to_tdb_centuries_since_j2000();
     let (longitude, obliquity) = nutation(t);
     let mean_obliquity = precession::mean_obliquity(t);
     let nutation =
         frame_x(-(mean_obliquity + obliquity)) * frame_z(-longitude) * frame_x(mean_obliquity);
     let sidereal = gmst(epoch) + longitude * mean_obliquity.cos();
-    Ok(frame_z(sidereal) * nutation * precession::j2000_to_mean_of_date(t))
+    frame_z(sidereal) * nutation * precession::j2000_to_mean_of_date(t)
 }
 
 /// Velocity in J2000 axes of a point fixed on the rotating Earth.

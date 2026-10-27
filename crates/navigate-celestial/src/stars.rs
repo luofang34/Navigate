@@ -38,12 +38,12 @@ pub struct StarSight {
 /// as the Sun.
 ///
 /// # Errors
-/// Returns an error for an epoch before 1972 UTC or after 2100 TDB.
+/// Returns an error for an epoch outside 1900 to 2100 TDB.
 pub fn stars_ecef(
     epoch: Epoch,
     faintest_v_magnitude: f64,
 ) -> Result<Vec<StarSight>, AnalyticError> {
-    let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch)?;
+    let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch);
     let beta =
         Vector3::from(AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s) / LIGHT_SPEED_M_S;
     let years = epoch.to_tdb_centuries_since_j2000() * 100.0;

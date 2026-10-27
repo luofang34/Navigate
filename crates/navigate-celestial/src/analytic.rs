@@ -31,9 +31,6 @@ pub enum AnalyticError {
     /// The epoch is outside the range where the accuracy bounds apply.
     #[error("epoch {0} is outside the analytic ephemeris range 1900 to 2100 TDB")]
     EpochOutOfRange(Epoch),
-    /// The epoch is before 1972 UTC, where UT1 - UTC has no 0.9 s bound.
-    #[error("epoch {0} is before 1972 UTC, outside the Earth rotation model range")]
-    EarthRotationOutOfRange(Epoch),
 }
 
 /// Sun, Earth, and Moon states from truncated analytic series.
@@ -70,7 +67,7 @@ impl Ephemeris for AnalyticEphemeris {
         let (position, velocity) = match (state.frame.center, state.frame.orientation) {
             (SUN | EARTH | MOON, J2000) => (position, velocity),
             (EARTH, ITRF93) => {
-                let to_j2000 = earth_rotation::j2000_to_earth_fixed(state.epoch)?.transpose();
+                let to_j2000 = earth_rotation::j2000_to_earth_fixed(state.epoch).transpose();
                 let velocity = velocity + earth_rotation::rotation_velocity(position);
                 (to_j2000 * position, to_j2000 * velocity)
             }

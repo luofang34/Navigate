@@ -73,10 +73,11 @@ fn magnitude_limit_selects_bright_stars() {
 }
 
 #[test]
-fn rejects_epochs_before_1972() {
-    let early: Epoch = "1971-06-01T00:00:00 UTC".parse().unwrap();
+fn rejects_epochs_before_the_ephemeris_range() {
+    let early: Epoch = "1899-06-01T00:00:00 UTC".parse().unwrap();
     assert_eq!(
         stars_ecef(early, 6.0),
-        Err(AnalyticError::EarthRotationOutOfRange(early))
+        Err(AnalyticError::EpochOutOfRange(early))
     );
+    assert!(stars_ecef("1943-05-16T21:28:00 UTC".parse().unwrap(), 6.0).is_ok());
 }

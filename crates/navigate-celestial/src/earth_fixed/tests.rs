@@ -4,12 +4,17 @@ use navigate_contract::GeodeticPosition;
 use navigate_geodesy::geodetic_to_ecef;
 
 const ITRF93: &str = include_str!("../../fixtures/de421-itrf93.txt");
+const BEFORE_1972: &str = include_str!("../../fixtures/skyfield-before-1972.txt");
 const ARCSECOND: f64 = 1.0 / 3600.0;
 // Measured over the ITRF93 table: 9.6 arcseconds for the Sun, mostly from
 // UT1 - UTC, and 15.0 arcseconds and 9.4 km for the Moon. The Sun bound also
 // covers the largest UT1 - UTC of 0.9 s.
 const SUN_BOUND_DEG: f64 = 15.0 * ARCSECOND;
 const MOON_BOUND_DEG: f64 = 22.0 * ARCSECOND;
+// Measured over the Skyfield table from 1900 to 1971: 1.4 arcseconds for the
+// Sun and 21.8 arcseconds for the Moon, mostly from TT that hifitime finds
+// from UTC instead of the historical Delta T.
+const MOON_BEFORE_1972_BOUND_DEG: f64 = 30.0 * ARCSECOND;
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
 /// The sunrise test observer: 41.07204° N, 71.85733° W, 0 m on WGS84.
 const HORIZON_OBSERVER: (f64, f64) = (41.072_04, -71.857_33);
@@ -223,14 +228,30 @@ fn an_earth_fixed_observer_moves_with_the_earth_rotation() {
 }
 
 #[test]
-fn rejects_epochs_before_leap_seconds_bound_ut1() {
-    let early = utc("1971-12-31T23:59:59 UTC");
+fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1900_to_1971() {
+    let mut worst = [0.0_f64; 2];
+    for line in BEFORE_1972.lines().filter(|line| !line.starts_with('#')) {
+        let mut fields = line.split(' ');
+        let epoch = utc(&format!("{} UTC", fields.next().unwrap()));
+        let v: Vec<f64> = fields.map(|x| x.parse().unwrap()).collect();
+        let observer = (v[..3] != [0.0; 3]).then(|| [v[0], v[1], v[2]]);
+        let sun = sun_ecef(epoch, observer).unwrap().direction;
+        let moon = moon_ecef(epoch, observer).unwrap().direction;
+        worst[0] = worst[0].max(separation_deg(sun, [v[3], v[4], v[5]]));
+        worst[1] = worst[1].max(separation_deg(moon, [v[6], v[7], v[8]]));
+    }
+    assert!(worst[0] < SUN_BOUND_DEG, "{worst:?}");
+    assert!(worst[1] < MOON_BEFORE_1972_BOUND_DEG, "{worst:?}");
+}
+
+#[test]
+fn rejects_epochs_before_the_ephemeris_range() {
     assert!(matches!(
-        sun_ecef(early, None),
+        sun_ecef(utc("1899-12-31T00:00:00 UTC"), None),
         Err(ObservationError::Ephemeris {
-            source: AnalyticError::EarthRotationOutOfRange(_),
+            source: AnalyticError::EpochOutOfRange(_),
             ..
         })
     ));
-    assert!(moon_ecef(utc("1972-01-01T00:00:00 UTC"), None).is_ok());
+    assert!(moon_ecef(utc("1900-01-02T00:00:00 UTC"), None).is_ok());
 }
