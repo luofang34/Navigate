@@ -128,3 +128,10 @@ fn f32_motions_decode_without_f64_to_the_same_directions() {
             .all(|(motion, star)| motion == star.motion())
     );
 }
+
+#[test]
+fn prepared_motions_have_the_documented_size() {
+    // The README gives these sizes for RAM planning.
+    assert_eq!(core::mem::size_of::<crate::Motion<f32>>(), 28);
+    assert_eq!(core::mem::size_of::<crate::Motion<f64>>(), 56);
+}

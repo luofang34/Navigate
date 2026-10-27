@@ -65,7 +65,9 @@ The table stores each star as a J2000 unit vector and a space velocity in
 fixed point. Thus no trigonometry runs when the crate reads a star or moves
 it. `Motion` holds the vectors in `f64` or `f32`:
 
-- `f64` keeps the precision of the table: 0.1 milliarcsecond.
+- `f64` keeps the precision of the table. Format version 1 stores a position
+  to 0.1 milliarcsecond, a velocity to 0.0002 milliarcsecond per year, and a
+  parallax to 1 milliarcsecond.
 - `f32` keeps a direction within 0.03 arcsecond of `f64` for every star from
   -4000 to 1000 years from J2000 (measured maximum 0.021 arcsecond). A
   single-precision FPU, for example the Cortex-M33 FPU of the RP2350,
@@ -87,7 +89,12 @@ These are measured costs for each star:
 `scripts/check-flamsteed-qemu.sh` gives the microcontroller values. It runs
 the crate in QEMU on a Cortex-M33 (`mps2-an505`, as the RP2350 Arm cores)
 and on an RV32IMAC core (as the RP2350 RISC-V cores), and it compares each
-checksum with the host. QEMU counts instructions, not clock cycles.
+checksum with the host. QEMU counts instructions, not clock cycles. CI builds
+the crate for the RP2040 (Cortex-M0+, no FPU) but does not run it there; the
+RV32IMAC column, which also has no FPU, is the nearest measurement.
+
+A prepared `Motion<f32>` uses 28 bytes of RAM and a `Motion<f64>` 56 bytes.
+All 9096 stars in `f32` use 255 KB.
 
 ## Targets and features
 
@@ -100,7 +107,9 @@ checksum with the host. QEMU counts instructions, not clock cycles.
 | neither | embed the 518 stars to magnitude 4.0: 18 KB |
 
 For a microcontroller, use `default-features = false, features = ["libm"]`
-and add a magnitude feature if the flash has space. CI builds the crate for
+and add a magnitude feature if the flash has space. Cargo unifies features
+across the dependency graph: if another crate depends on flamsteed with its
+default features, the full table comes back. CI builds the crate for
 `thumbv8m.main-none-eabihf` (RP2350 Arm cores),
 `riscv32imac-unknown-none-elf` (RP2350 RISC-V cores), and
 `thumbv6m-none-eabi` (RP2040). The code is about 32 KB on RV32IMAC, with the
@@ -138,6 +147,11 @@ Hipparcos is not the truth for long spans. Its proper motions come from three
 years of observations, and the orbits of binary stars change them. The model
 does not include the orbits of binary stars. Close binaries, for example
 Alpha Centauri, can differ by some arcminutes in the past.
+
+The FK5 axes of the catalogue also turn slowly relative to ICRS, by up to
+about 0.9 milliarcsecond per year (Mignard and Froeschle 2000). The crate does
+not correct this rotation. At -2000 it is about 3.6 arcseconds, and the
+measured differences above include it.
 
 ## Comparison with ESA catalogues
 

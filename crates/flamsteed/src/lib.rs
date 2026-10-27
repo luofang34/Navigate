@@ -8,7 +8,8 @@
 //! that `libm` gives the float functions. [`Motion`] evaluates in `f64` or, for
 //! a single-precision FPU, in `f32`. Directions are in J2000 equatorial axes as
 //! seen from the solar system barycentre. The axes are those of FK5, which
-//! differ from ICRS by less than 0.1 arcsecond. Aberration, the observer's
+//! differ from ICRS by less than 0.1 arcsecond at J2000 and turn by up to about
+//! 0.9 milliarcsecond per year. Aberration, the observer's
 //! parallax, and Earth axes belong to the caller.
 //!
 //! No ESA data is in this crate, in its tests, or in any step that makes its

@@ -45,6 +45,12 @@ enum Error {
     },
     #[error("line {line}: invalid {field} field")]
     Field { line: usize, field: &'static str },
+    #[error("line {line}: {field} {value} does not fit the record field")]
+    Range {
+        line: usize,
+        field: &'static str,
+        value: f64,
+    },
     #[error("cannot write {}", path.display())]
     Write {
         path: PathBuf,
@@ -115,11 +121,13 @@ fn main() -> Result<(), Error> {
         table.extend_from_slice(&(hr as u16).to_le_bytes());
         for component in position {
             table.extend_from_slice(
-                &((component * f64::from(i32::MAX)).round() as i32).to_le_bytes(),
+                &fixed(component * f64::from(i32::MAX), line, "position")?.to_le_bytes(),
             );
         }
         for component in velocity {
-            table.extend_from_slice(&((component / VELOCITY_UNIT).round() as i32).to_le_bytes());
+            table.extend_from_slice(
+                &fixed(component / VELOCITY_UNIT, line, "velocity")?.to_le_bytes(),
+            );
         }
         table.extend_from_slice(&magnitude.to_le_bytes());
         table.extend_from_slice(&b_minus_v.to_le_bytes());
@@ -187,6 +195,17 @@ fn space_motion(
         position[i] * radial_rate + light_time * (east[i] * pm_ra + north[i] * pm_dec)
     });
     (position, velocity)
+}
+
+/// The nearest i32 to `value`, or an error if it is out of range. A cast
+/// would saturate and store a wrong value without a sign.
+fn fixed(value: f64, line: usize, field: &'static str) -> Result<i32, Error> {
+    let rounded = value.round();
+    if rounded.is_finite() && (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&rounded) {
+        Ok(rounded as i32)
+    } else {
+        Err(Error::Range { line, field, value })
+    }
 }
 
 /// CRC-32 (IEEE 802.3, reflected, polynomial 0xEDB88320).
