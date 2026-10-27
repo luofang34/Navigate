@@ -1,8 +1,9 @@
 //! J2000 to Earth-fixed axes from precession, nutation, and sidereal time.
 //!
-//! The model applies IAU 1976 precession, the four largest IAU 1980
-//! nutation terms (Meeus, chapter 22: 0.5 arcsecond in longitude and 0.1
-//! arcsecond in obliquity), and GAST from the IAU 1982 GMST. The epochs are
+//! The model applies the Vondrák et al. 2011 long-term precession, the four
+//! largest IAU 1980 nutation terms (Meeus, chapter 22: 0.5 arcsecond in
+//! longitude and 0.1 arcsecond in obliquity), and GAST from a GMST that the
+//! same precession gives (see [`sidereal`]). The epochs are
 //! TT, and UT1 is TT - Delta T from [`delta_t`](fn@crate::delta_t). It omits
 //! polar motion, which is less than 0.6 arcsecond.
 
@@ -12,6 +13,8 @@ use crate::{
 };
 use nalgebra::{Matrix3, Vector3};
 
+mod sidereal;
+
 const ARCSECOND: f64 = std::f64::consts::PI / 648_000.0;
 /// Earth rotation rate relative to the precessing equinox, in rad/s.
 pub(crate) const ROTATION_RATE_RAD_S: f64 = 7.292_115_146_706_979e-5;
@@ -20,11 +23,12 @@ pub(crate) const ROTATION_RATE_RAD_S: f64 = 7.292_115_146_706_979e-5;
 pub(crate) fn j2000_to_earth_fixed(epoch: Epoch) -> Matrix3<f64> {
     let t = epoch.to_tdb_centuries_since_j2000();
     let (longitude, obliquity) = nutation(t);
-    let mean_obliquity = precession::mean_obliquity(t);
+    let mean_obliquity = precession::long_term_mean_obliquity(t);
     let nutation =
         frame_x(-(mean_obliquity + obliquity)) * frame_z(-longitude) * frame_x(mean_obliquity);
-    let sidereal = gmst(epoch) + longitude * mean_obliquity.cos();
-    frame_z(sidereal) * nutation * precession::j2000_to_mean_of_date(t)
+    let ut1_days = delta_t::ut1_julian_days(epoch) - 2_451_545.0;
+    let sidereal = sidereal::gmst(ut1_days, t) + longitude * mean_obliquity.cos();
+    frame_z(sidereal) * nutation * precession::long_term_j2000_to_mean_of_date(t)
 }
 
 /// Velocity in J2000 axes of a point fixed on the rotating Earth.
@@ -42,13 +46,4 @@ fn nutation(t: f64) -> (f64, f64) {
     let obliquity = 9.20 * node.cos() + 0.57 * (2.0 * sun).cos() + 0.10 * (2.0 * moon).cos()
         - 0.09 * (2.0 * node).cos();
     (longitude * ARCSECOND, obliquity * ARCSECOND)
-}
-
-/// Greenwich mean sidereal time in radians (Meeus 12.4), at the UT1 of `epoch`.
-fn gmst(epoch: Epoch) -> f64 {
-    let days = delta_t::ut1_julian_days(epoch) - 2_451_545.0;
-    let t = days / 36_525.0;
-    let degrees =
-        280.460_618_37 + 360.985_647_366_29 * days + t * t * (0.000_387_933 - t / 38_710_000.0);
-    degrees.rem_euclid(360.0).to_radians()
 }

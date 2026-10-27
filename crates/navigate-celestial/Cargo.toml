@@ -17,6 +17,7 @@ nalgebra.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+erfa = "0.2.1"
 navigate-contract.workspace = true
 navigate-geodesy.workspace = true
 serde_json = "1"

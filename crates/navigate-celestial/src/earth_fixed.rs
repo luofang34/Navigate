@@ -48,9 +48,10 @@ pub struct SubsolarPoint {
 /// [`AnalyticEphemeris`] and [`Correction::VacuumReception`].
 ///
 /// `epoch` is a civil clock reading: UT1 before 1972 and UTC from 1972, as
-/// [`civil_time`] gives. The Earth rotation model applies IAU 1976
-/// precession, the main IAU 1980 nutation terms, and GAST at UT1 = TT - Delta
-/// T, from [`delta_t`](fn@crate::delta_t). It omits polar motion.
+/// [`civil_time`] gives. The Earth rotation model applies the Vondrák et al.
+/// 2011 long-term precession, the main IAU 1980 nutation terms, and GAST
+/// from the Earth rotation angle at UT1 = TT - Delta T, from
+/// [`delta_t`](fn@crate::delta_t). It omits polar motion.
 ///
 /// From 2000 to 2026, the tests bound the direction error relative to JPL
 /// DE421 with ITRF93 Earth orientation at 2 arcseconds for the Sun and 15
