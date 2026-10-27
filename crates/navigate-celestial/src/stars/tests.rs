@@ -73,13 +73,32 @@ fn magnitude_limit_selects_bright_stars() {
 
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
-    // The error gives the TT of the reading, which is Delta T later.
+    // The stars have the range of the ephemeris: 1800 to 2200, or -2000 to
+    // 3000 with the long-range feature.
+    #[cfg(not(feature = "long-range"))]
     let early: Epoch = "1799-12-01T00:00:00 UTC".parse().unwrap();
+    #[cfg(feature = "long-range")]
+    let early = Epoch::from_gregorian(-2001, 1, 1, 0, 0, 0, 0, crate::TimeScale::TT);
     assert!(matches!(
-        stars_ecef(early, 6.0),
+        stars_ecef_tt(early, 6.0),
         Err(AnalyticError::EpochOutOfRange(_))
     ));
     assert!(stars_ecef("1943-05-16T21:28:00 UTC".parse().unwrap(), 6.0).is_ok());
+}
+
+#[cfg(feature = "long-range")]
+#[test]
+fn long_range_stars_cover_the_ancient_sky() {
+    for year in [-1999, -330] {
+        let epoch = Epoch::from_gregorian(year, 9, 20, 18, 0, 0, 0, crate::TimeScale::TT);
+        let stars = stars_ecef_tt(epoch, 6.0).unwrap();
+        assert!(stars.len() > 5000, "{year}: {}", stars.len());
+        assert!(
+            stars
+                .iter()
+                .all(|star| (Vector3::from(star.direction).norm() - 1.0).abs() < 1e-12)
+        );
+    }
 }
 
 #[test]
@@ -92,7 +111,7 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
     let from_instant = sirius(stars_ecef_tt(instant, 0.0).unwrap());
     assert_eq!(from_clock, from_instant);
 
-    // The documented pipeline at the instant: proper motion, aberration, and
+    // The documented pipeline at the instant: space motion, aberration, and
     // the Earth rotation that the Sun and Moon use at the same TT.
     let record = CATALOG
         .as_chunks::<RECORD_BYTES>()
@@ -102,12 +121,7 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
         .find(|record| record.hr == 2491)
         .unwrap();
     let years = instant.to_tdb_centuries_since_j2000() * 100.0;
-    let (sin_ra, cos_ra) = record.ra.sin_cos();
-    let (sin_dec, cos_dec) = record.dec.sin_cos();
-    let position = Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec);
-    let east = Vector3::new(-sin_ra, cos_ra, 0.0);
-    let north = Vector3::new(-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec);
-    let moved = (position + (east * record.pm_ra + north * record.pm_dec) * years).normalize();
+    let moved = space_motion(&record, years);
     let beta = Vector3::from(
         AnalyticEphemeris
             .body_state(399, instant)
@@ -120,4 +134,34 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
     // Reading the instant as a UT1 clock would turn it by Delta T, about 40
     // arcseconds in 1900.
     assert!(separation_deg(from_instant.direction, expected.into()) < 1e-9);
+}
+
+#[test]
+fn space_motion_matches_the_reference_from_minus_2000_to_3000() {
+    const REFERENCE: &str = include_str!("../../fixtures/star-space-motion.txt");
+    let records: Vec<Record> = CATALOG
+        .as_chunks::<RECORD_BYTES>()
+        .0
+        .iter()
+        .map(decode)
+        .collect();
+    let mut rows = 0;
+    for line in REFERENCE.lines().filter(|line| !line.starts_with('#')) {
+        let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
+        let star = records
+            .iter()
+            .find(|star| f64::from(star.hr) == v[0])
+            .unwrap();
+        let error = separation_deg(space_motion(star, v[1]).into(), [v[2], v[3], v[4]]);
+        // The packed positions round to 0.3 milliarcsecond.
+        assert!(
+            error < 0.01 / 3600.0,
+            "HR {} at {} years: {}\"",
+            v[0],
+            v[1],
+            error * 3600.0
+        );
+        rows += 1;
+    }
+    assert_eq!(rows, 150);
 }
