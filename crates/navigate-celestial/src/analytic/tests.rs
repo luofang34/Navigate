@@ -254,3 +254,42 @@ fn earth_orbital_velocity_is_the_derivative_of_position() {
     assert!((29_000.0..30_500.0).contains(&speed));
     assert!((difference - Vector3::from(state.velocity_m_s)).norm() < 1e-2);
 }
+
+#[test]
+fn velocity_holds_at_the_ends_of_the_range() {
+    let modern: Vec<Epoch> = ["1800-01-02T00:00:00 TDB", "2199-12-30T00:00:00 TDB"]
+        .iter()
+        .map(|text| text.parse().unwrap())
+        .collect();
+    // Measured: 4 mm/s, and 0.074 m/s at -1999 with long-range.
+    #[cfg(not(feature = "long-range"))]
+    let (epochs, bound) = (modern, 0.01);
+    #[cfg(feature = "long-range")]
+    let (epochs, bound) = {
+        let mut epochs = modern;
+        epochs.push("2999-12-30T00:00:00 TDB".parse().unwrap());
+        epochs.push(Epoch::from_gregorian(
+            -1999,
+            1,
+            2,
+            0,
+            0,
+            0,
+            0,
+            crate::TimeScale::TDB,
+        ));
+        (epochs, 0.15)
+    };
+    for epoch in epochs {
+        for body in [EARTH, MOON] {
+            let state = AnalyticEphemeris.body_state(body, epoch).unwrap();
+            let step = crate::Duration::from_seconds(30.0);
+            let before = AnalyticEphemeris.body_state(body, epoch - step).unwrap();
+            let after = AnalyticEphemeris.body_state(body, epoch + step).unwrap();
+            let difference =
+                (Vector3::from(after.position_m) - Vector3::from(before.position_m)) / 60.0;
+            let error = (difference - Vector3::from(state.velocity_m_s)).norm();
+            assert!(error < bound, "{epoch} {body}: {error} m/s");
+        }
+    }
+}

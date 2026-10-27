@@ -51,9 +51,17 @@ fn gmst_matches_iau_2006_from_1800_to_2200() {
 #[test]
 fn cio_locator_quadrature_has_converged() {
     for t in [-40.0, -2.0, 2.0, 10.0] {
-        let halves = integrate(t / 2.0, &GAUSS_LEGENDRE) + second_half(t);
-        let error = (cio_locator(t) - halves).abs();
+        let halves = integrate(t / 2.0, &SIXTEEN_NODES) + second_half(t);
+        let error = (integrate(t, &SIXTEEN_NODES) - halves).abs();
         assert!(error < 1e-12, "t = {t}: {error}");
+    }
+}
+
+#[test]
+fn fewer_nodes_match_the_sixteen_node_rule() {
+    for t in [-50.0, -40.0, -10.5, -10.0, -2.0, 0.3, 2.0, 10.0, 10.5, 50.0] {
+        let error = (cio_locator(t) - integrate(t, &SIXTEEN_NODES)).abs();
+        assert!(error < 1e-14, "t = {t}: {error}");
     }
 }
 
@@ -73,7 +81,7 @@ fn equator_pole_rate_is_the_derivative_of_the_pole() {
 fn second_half(t: f64) -> f64 {
     let half = t / 2.0;
     -half
-        * GAUSS_LEGENDRE
+        * SIXTEEN_NODES
             .iter()
             .map(|[node, weight]| {
                 let tau = half + node * half;
