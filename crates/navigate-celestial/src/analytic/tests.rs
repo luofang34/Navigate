@@ -4,13 +4,23 @@ use crate::{Correction, ObservationError, observe_body};
 const CSPICE: &str = include_str!("../../fixtures/celestial-cspice.json");
 const DE421: &str = include_str!("../../fixtures/de421-geocentric.txt");
 const DE440: &str = include_str!("../../fixtures/de440-geocentric.txt");
+#[cfg(feature = "long-range")]
+const DE441: &str = include_str!("../../fixtures/de441-geocentric.txt");
 const ARCSECOND: f64 = 1.0 / 3600.0;
 // About 1.5 times the largest error measured: 0.73 arcsecond for the Sun,
 // 12.1 arcseconds and 9.8 km for the Moon over the DE421 table, and 0.83
 // arcsecond, 10.1 arcseconds and 10.1 km over the DE440 table.
 const SUN_BOUND_DEG: f64 = 1.5 * ARCSECOND;
+#[cfg(not(feature = "long-range"))]
 const MOON_BOUND_DEG: f64 = 18.0 * ARCSECOND;
+#[cfg(not(feature = "long-range"))]
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
+// With ELP2000-82B: 1.1 arcseconds and 1.0 km over DE421, 1.8 arcseconds and
+// 1.2 km over DE440.
+#[cfg(feature = "long-range")]
+const MOON_BOUND_DEG: f64 = 3.0 * ARCSECOND;
+#[cfg(feature = "long-range")]
+const MOON_RANGE_BOUND_M: f64 = 2_000.0;
 
 fn geocentre(epoch: Epoch) -> State {
     State {
@@ -94,8 +104,18 @@ fn sun_matches_the_cspice_reception_fixture() {
 /// The largest Sun direction, Moon direction, and Moon range errors over a
 /// table that `examples/reference_table.rs` writes.
 fn worst_errors(table: &str) -> [f64; 3] {
+    let worst = worst_errors_of(table);
+    assert_eq!(rows_in(table), 400);
+    worst
+}
+
+fn rows_in(table: &str) -> usize {
+    table.lines().filter(|line| !line.starts_with('#')).count()
+}
+
+/// The largest errors over the rows of `table`, which may be a subset.
+fn worst_errors_of(table: &str) -> [f64; 3] {
     let mut worst = [0.0_f64; 3];
-    let mut rows = 0;
     for line in table.lines().filter(|line| !line.starts_with('#')) {
         let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
         let observer = geocentre(Epoch::from_tdb_seconds(v[0]));
@@ -109,9 +129,7 @@ fn worst_errors(table: &str) -> [f64; 3] {
         for (worst, error) in worst.iter_mut().zip(errors) {
             *worst = worst.max(error);
         }
-        rows += 1;
     }
-    assert_eq!(rows, 400);
     worst
 }
 
@@ -133,6 +151,45 @@ fn sun_and_moon_match_de421_from_1900_to_2050() {
         "Moon range error {} m",
         worst[2]
     );
+}
+
+#[cfg(feature = "long-range")]
+#[test]
+fn long_range_sun_and_moon_match_de441_from_minus_2000_to_3000() {
+    // About 1.3 times the measured maximum of each millennium. The Moon
+    // error grows into the past: ELP2000-82B with the Canon tidal
+    // acceleration departs from the DE441 integration there.
+    let eras = [
+        (-2000, -1000, 4.0, 210.0, 20_000.0),
+        (-1000, 0, 3.0, 75.0, 7_000.0),
+        (0, 1000, 1.5, 12.0, 2_000.0),
+        (1000, 2000, 1.5, 6.0, 2_000.0),
+        (2000, 3000, 1.0, 3.5, 1_500.0),
+    ];
+    for (first, last, sun_bound, moon_bound, range_bound) in eras {
+        let rows: String = DE441
+            .lines()
+            .filter(|line| {
+                let tdb_s: f64 = line.split(' ').next().unwrap().parse().unwrap_or(f64::NAN);
+                let year = 2000.0 + tdb_s / (365.25 * 86_400.0);
+                (f64::from(first)..f64::from(last)).contains(&year)
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let worst = worst_errors_of(&rows);
+        assert!(rows_in(&rows) > 50, "{first}..{last}");
+        assert!(
+            worst[0] < sun_bound * ARCSECOND,
+            "{first}: Sun {}\"",
+            worst[0] * 3600.0
+        );
+        assert!(
+            worst[1] < moon_bound * ARCSECOND,
+            "{first}: Moon {}\"",
+            worst[1] * 3600.0
+        );
+        assert!(worst[2] < range_bound, "{first}: Moon range {} m", worst[2]);
+    }
 }
 
 #[test]
@@ -170,12 +227,18 @@ fn rejects_unknown_bodies_barycentric_origins_and_distant_epochs() {
         AnalyticEphemeris.barycentric_state(barycentric),
         Err(AnalyticError::UnsupportedFrame(FrameId::SSB_J2000))
     );
+    #[cfg(not(feature = "long-range"))]
     let late: Epoch = "2200-01-03T00:00:00 TDB".parse().unwrap();
+    #[cfg(feature = "long-range")]
+    let late: Epoch = "3000-01-20T00:00:00 TDB".parse().unwrap();
     assert_eq!(
         AnalyticEphemeris.body_state(SUN, late),
         Err(AnalyticError::EpochOutOfRange(late))
     );
+    #[cfg(not(feature = "long-range"))]
     let early: Epoch = "1799-12-01T00:00:00 TDB".parse().unwrap();
+    #[cfg(feature = "long-range")]
+    let early = Epoch::from_gregorian(-2001, 1, 1, 0, 0, 0, 0, crate::TimeScale::TDB);
     assert!(AnalyticEphemeris.body_state(MOON, early).is_err());
 }
 

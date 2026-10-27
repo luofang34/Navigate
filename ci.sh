@@ -14,6 +14,11 @@ cargo clippy --all-targets -- -D warnings
 
 echo "== wasm32 (navigate-celestial) =="
 cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-celestial --features long-range --target wasm32-unknown-unknown -- -D warnings
+
+echo "== navigate-celestial long-range feature =="
+cargo clippy -p navigate-celestial --features long-range --all-targets -- -D warnings
+cargo test -p navigate-celestial --features long-range
 
 echo "== cargo test =="
 cargo test --all-targets

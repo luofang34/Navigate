@@ -6,11 +6,13 @@
 //! truncation error is less than 0.8 arcsecond in longitude, 0.4 arcsecond
 //! in latitude, and 640 km in distance.
 
+#[cfg(not(feature = "long-range"))]
 use std::f64::consts::PI;
 
 /// Amplitude, phase in radians, and frequency in radians per Julian millennium.
-type Term = (f64, f64, f64);
+pub(super) type Term = (f64, f64, f64);
 
+#[cfg(not(feature = "long-range"))]
 /// Heliocentric longitude and latitude in radians and distance in AU, in
 /// the dynamical ecliptic and equinox of date. `t` is TDB Julian centuries
 /// from J2000.
@@ -19,7 +21,8 @@ pub(crate) fn heliocentric(t: f64) -> (f64, f64, f64) {
     (sum(&L, tau), sum(&B, tau), sum(&R, tau))
 }
 
-fn sum(series: &[&[Term]], tau: f64) -> f64 {
+/// Sum a VSOP87 series in powers of `tau`, Julian millennia from J2000.
+pub(super) fn sum(series: &[&[Term]], tau: f64) -> f64 {
     series.iter().rev().fold(0.0, |total, terms| {
         total * tau
             + terms
@@ -29,6 +32,7 @@ fn sum(series: &[&[Term]], tau: f64) -> f64 {
     })
 }
 
+#[cfg(not(feature = "long-range"))]
 const L: [&[Term]; 6] = [
     &[
         (1.75347045673, 0.0, 0.0),
@@ -99,6 +103,7 @@ const L: [&[Term]; 6] = [
     &[(8.78e-09, PI, 0.0)],
 ];
 
+#[cfg(not(feature = "long-range"))]
 const B: [&[Term]; 2] = [
     &[
         (2.7962e-06, 3.19870156017, 84334.66158130829),
@@ -109,6 +114,7 @@ const B: [&[Term]; 2] = [
     &[(1.43e-09, 0.0, 0.0)],
 ];
 
+#[cfg(not(feature = "long-range"))]
 const R: [&[Term]; 4] = [
     &[
         (1.00013988799, 0.0, 0.0),

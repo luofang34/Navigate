@@ -1,7 +1,12 @@
-use crate::{Ephemeris, Epoch, FrameId, State, earth_rotation, precession};
+#[cfg(not(feature = "long-range"))]
+use crate::precession;
+use crate::{Ephemeris, Epoch, FrameId, State, earth_rotation};
 use nalgebra::Vector3;
 
 mod earth;
+#[cfg(feature = "long-range")]
+mod long_range;
+#[cfg(not(feature = "long-range"))]
 mod moon;
 
 const SUN: i32 = 10;
@@ -11,6 +16,12 @@ const J2000: i32 = 1;
 const ITRF93: i32 = FrameId::EARTH_ITRF93.orientation;
 const ASTRONOMICAL_UNIT_M: f64 = 149_597_870_700.0;
 const SECONDS_PER_CENTURY: f64 = 36_525.0 * 86_400.0;
+/// The supported range in TDB Julian centuries from J2000: 1800 to 2200, or
+/// -2000 to 3000 with the `long-range` feature.
+#[cfg(not(feature = "long-range"))]
+const CENTURIES: std::ops::RangeInclusive<f64> = -2.0..=2.0;
+#[cfg(feature = "long-range")]
+const CENTURIES: std::ops::RangeInclusive<f64> = -40.0..=10.0;
 /// Half-width of the central difference for velocity. The series are
 /// smooth on this scale, and the rounding error stays below 1 µm/s.
 const VELOCITY_STEP_S: f64 = 60.0;
@@ -28,16 +39,20 @@ pub enum AnalyticError {
         .0.orientation
     )]
     UnsupportedFrame(FrameId),
-    /// The epoch is outside the range where the accuracy bounds apply.
-    #[error("epoch {0} is outside the analytic ephemeris range 1800 to 2200 TDB")]
+    /// The epoch is outside the range where the accuracy bounds apply: 1800
+    /// to 2200 TDB, or -2000 to 3000 with the `long-range` feature.
+    #[error("epoch {0} is outside the analytic ephemeris range")]
     EpochOutOfRange(Epoch),
 }
 
 /// Sun, Earth, and Moon states from truncated analytic series.
 ///
 /// This provider needs no kernel files, reads no clock, and does no I/O.
-/// The Earth comes from VSOP87D and the Moon from the ELP-2000/82 series in
-/// Meeus, chapter 47. IAU 1976 precession rotates both to J2000 axes.
+/// By default the Earth comes from VSOP87D and the Moon from the ELP-2000/82
+/// series in Meeus, chapter 47, and IAU 1976 precession rotates both to
+/// J2000 axes. With the `long-range` feature the Earth comes from VSOP87B and
+/// the Moon from ELP2000-82B with the tidal acceleration of the NASA Five
+/// Millennium Canon, both in J2000 axes.
 ///
 /// The origin is the centre of the Sun, not the solar system barycentre.
 /// The two are up to 1.5e9 m apart, so only differences between states of
@@ -51,6 +66,12 @@ pub enum AnalyticError {
 /// DE421 (1900 to 2050) and DE440 (1800 to 2200) at 1.5 arcseconds for the
 /// Sun and 18 arcseconds for the Moon, and the Moon range error at 15 km. The
 /// supported range is 1800 to 2200 TDB.
+///
+/// With `long-range`, the same tests bound the Moon at 3 arcseconds and 2 km,
+/// and the range is -2000 to 3000 TDB. Relative to DE441 the tests bound the
+/// Sun at 4 arcseconds, and the Moon by millennium: 3.5 arcseconds from 2000
+/// to 3000, 6 from 1000, 12 from 0, 75 from -1000, and 210 from -2000. The
+/// Moon follows the Canon convention, which departs from DE441 in the past.
 ///
 /// Supported bodies are the Sun (10), the Earth (399), and the Moon (301).
 /// Caller states must use J2000 axes (orientation 1) and one of these bodies
@@ -85,7 +106,7 @@ impl Ephemeris for AnalyticEphemeris {
 
     fn body_state(&self, body: i32, epoch: Epoch) -> Result<State, Self::Error> {
         let t = epoch.to_tdb_centuries_since_j2000();
-        if !(-2.0..=2.0).contains(&t) {
+        if !CENTURIES.contains(&t) {
             return Err(AnalyticError::EpochOutOfRange(epoch));
         }
         let step = VELOCITY_STEP_S / SECONDS_PER_CENTURY;
@@ -101,6 +122,18 @@ impl Ephemeris for AnalyticEphemeris {
 }
 
 /// Heliocentric position in J2000 axes, in metres.
+#[cfg(feature = "long-range")]
+fn position(body: i32, t: f64) -> Result<Vector3<f64>, AnalyticError> {
+    match body {
+        SUN => Ok(Vector3::zeros()),
+        EARTH => Ok(long_range::earth(t)),
+        MOON => Ok(long_range::earth(t) + long_range::moon(t)),
+        _ => Err(AnalyticError::UnsupportedBody(body)),
+    }
+}
+
+/// Heliocentric position in J2000 axes, in metres.
+#[cfg(not(feature = "long-range"))]
 fn position(body: i32, t: f64) -> Result<Vector3<f64>, AnalyticError> {
     match body {
         SUN => Ok(Vector3::zeros()),
@@ -113,6 +146,7 @@ fn position(body: i32, t: f64) -> Result<Vector3<f64>, AnalyticError> {
     }
 }
 
+#[cfg(not(feature = "long-range"))]
 fn earth(t: f64) -> Vector3<f64> {
     let (longitude, latitude, distance) = earth::heliocentric(t);
     of_date_to_j2000(
@@ -127,6 +161,7 @@ fn spherical(longitude: f64, latitude: f64, distance: f64) -> Vector3<f64> {
     Vector3::new(cos_lat * cos_lon, cos_lat * sin_lon, sin_lat) * distance
 }
 
+#[cfg(not(feature = "long-range"))]
 /// Rotate mean ecliptic-of-date coordinates to J2000 equator axes.
 fn of_date_to_j2000(t: f64, ecliptic: Vector3<f64>) -> Vector3<f64> {
     precession::j2000_to_mean_of_date(t).transpose() * precession::ecliptic_to_equator(t) * ecliptic

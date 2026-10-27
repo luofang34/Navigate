@@ -251,14 +251,25 @@ fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1800_to_1971() {
 
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
+    #[cfg(not(feature = "long-range"))]
+    let (early, first) = (
+        utc("1799-12-01T00:00:00 UTC"),
+        utc("1800-01-02T00:00:00 UTC"),
+    );
+    // Before 1972 a civil reading is UT1, so the instant is Delta T later.
+    #[cfg(feature = "long-range")]
+    let (early, first) = (
+        Epoch::from_gregorian(-2001, 1, 1, 0, 0, 0, 0, TimeScale::UTC),
+        Epoch::from_gregorian(-2000, 1, 2, 0, 0, 0, 0, TimeScale::UTC),
+    );
     assert!(matches!(
-        sun_ecef(utc("1799-12-01T00:00:00 UTC"), None),
+        sun_ecef(early, None),
         Err(ObservationError::Ephemeris {
             source: AnalyticError::EpochOutOfRange(_),
             ..
         })
     ));
-    assert!(moon_ecef(utc("1800-01-02T00:00:00 UTC"), None).is_ok());
+    assert!(moon_ecef(first, None).is_ok());
 }
 
 #[test]
