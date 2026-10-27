@@ -9,6 +9,8 @@ publish.workspace = true
 [features]
 default = []
 anise = ["dep:anise"]
+# Sun and Moon from -2000 to 3000 with VSOP87B and ELP2000-82B.
+long-range = []
 
 [dependencies]
 anise = { version = "0.10.6", default-features = false, optional = true }

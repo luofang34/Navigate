@@ -62,7 +62,8 @@ pub struct SubsolarPoint {
 /// uncertainty in seconds, times 15 arcseconds, adds to these bounds.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`], or for a
 /// non-finite observer position.
 pub fn sun_ecef(
     epoch: Epoch,
@@ -78,7 +79,8 @@ pub fn sun_ecef(
 /// Axes, model, and bounds are the same as for [`sun_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`], or for a
 /// non-finite observer position.
 pub fn moon_ecef(
     epoch: Epoch,
@@ -95,7 +97,8 @@ pub fn moon_ecef(
 /// and bounds are the same as for [`sun_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`], or for a
 /// non-finite observer position.
 pub fn sun_ecef_tt(
     epoch: Epoch,
@@ -110,7 +113,8 @@ pub fn sun_ecef_tt(
 /// same as for [`moon_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`], or for a
 /// non-finite observer position.
 pub fn moon_ecef_tt(
     epoch: Epoch,
@@ -122,7 +126,8 @@ pub fn moon_ecef_tt(
 /// The subsolar point from the geocentric apparent Sun.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1800 to 2200 TDB.
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`].
 pub fn subsolar_point(epoch: Epoch) -> Result<SubsolarPoint, ObservationError<AnalyticError>> {
     let [x, y, z] = sun_ecef(epoch, None)?.direction;
     Ok(SubsolarPoint {
