@@ -1,10 +1,10 @@
 //! Heliocentric Earth from VSOP87D (Bretagnon and Francou 1988).
 //!
 //! The source is `VSOP87D.ear` from IMCCE. Terms with amplitude below
-//! 5e-7 (radians or AU), scaled by 0.1 to the power of the time exponent,
-//! are omitted. Compared with the full series from 1900 to 2100, the
-//! truncation error is less than 1.0 arcsecond in longitude, 0.4 arcsecond
-//! in latitude, and 710 km in distance.
+//! 5e-7 (radians or AU), scaled by 0.2 to the power of the time exponent,
+//! are omitted. Compared with the full series from 1800 to 2200, the
+//! truncation error is less than 0.8 arcsecond in longitude, 0.4 arcsecond
+//! in latitude, and 640 km in distance.
 
 use std::f64::consts::PI;
 
@@ -88,6 +88,7 @@ const L: [&[Term]; 6] = [
         (6283.31966747491, 0.0, 0.0),
         (0.00206058863, 2.67823455584, 6283.0758499914),
         (4.30343e-05, 2.63512650414, 12566.1516999828),
+        (4.25264e-06, 1.59046980729, 3.523118349),
     ],
     &[
         (0.0005291887, 0.0, 0.0),
@@ -140,6 +141,9 @@ const R: [&[Term]; 4] = [
         (1.721238e-05, 1.06442301418, 12566.1516999828),
         (7.02215e-06, PI, 0.0),
     ],
-    &[(1.2341e-07, PI, 0.0)],
+    &[
+        (4.359385e-05, 5.78455133738, 6283.0758499914),
+        (1.2341e-07, PI, 0.0),
+    ],
     &[(7.74e-09, 0.0, 0.0)],
 ];

@@ -11,8 +11,8 @@ const ARCSECOND: f64 = 1.0 / 3600.0;
 // from the truncated lunar series.
 const SUN_BOUND_DEG: f64 = 2.0 * ARCSECOND;
 const MOON_BOUND_DEG: f64 = 15.0 * ARCSECOND;
-// Measured over the Skyfield table from 1850 to 1971: 0.41 arcsecond for the
-// Sun and 4.5 arcseconds for the Moon.
+// Measured over the Skyfield table from 1800 to 1971: 0.45 arcsecond for the
+// Sun and 6.4 arcseconds for the Moon.
 const MOON_BEFORE_1972_BOUND_DEG: f64 = 10.0 * ARCSECOND;
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
 /// The sunrise test observer: 41.07204° N, 71.85733° W, 0 m on WGS84.
@@ -227,7 +227,7 @@ fn an_earth_fixed_observer_moves_with_the_earth_rotation() {
 }
 
 #[test]
-fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1850_to_1971() {
+fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1800_to_1971() {
     let mut worst = [0.0_f64; 2];
     for line in BEFORE_1972.lines().filter(|line| !line.starts_with('#')) {
         let mut fields = line.split(' ');
@@ -252,13 +252,13 @@ fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1850_to_1971() {
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
     assert!(matches!(
-        sun_ecef(utc("1849-12-01T00:00:00 UTC"), None),
+        sun_ecef(utc("1799-12-01T00:00:00 UTC"), None),
         Err(ObservationError::Ephemeris {
             source: AnalyticError::EpochOutOfRange(_),
             ..
         })
     ));
-    assert!(moon_ecef(utc("1850-01-02T00:00:00 UTC"), None).is_ok());
+    assert!(moon_ecef(utc("1800-01-02T00:00:00 UTC"), None).is_ok());
 }
 
 #[test]

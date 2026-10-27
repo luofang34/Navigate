@@ -1,4 +1,4 @@
-"""Write src/delta_t/table.rs: Delta T (TT - UT1) from 1849 to the IERS prediction horizon.
+"""Write src/delta_t/table.rs: Delta T (TT - UT1) from 1799.5 to the IERS prediction horizon.
 
 python3 -I delta_t_table.py historic_deltat.data deltat.data finals2000A.all ../src/delta_t/table.rs
 
@@ -32,7 +32,7 @@ rows = []
 for line in open(historic).read().splitlines()[2:]:
     fields = line.split()
     year = float(fields[0])
-    if 1849.0 <= year <= 1973.0:
+    if 1799.5 <= year <= 1973.0:
         rows.append((51544.5 + (year - 2000.0) * 365.25, float(fields[1]), float(fields[2])))
 for line in open(monthly).read().splitlines():
     fields = line.split()
@@ -51,8 +51,10 @@ for line in open(finals):
 assert all(a[0] < b[0] for a, b in zip(rows, rows[1:]))
 
 # After the last row, Delta T continues with the slope of the last year. The
-# error of that rule after n years is the largest error it gave from 1900 on:
-# from each month, extrapolated in half-year steps, and compared with the table.
+# error of that rule after n years is the largest error it gave: from each
+# month, extrapolated in half-year steps, and compared with the table. Up to
+# 80 years the months start in 1900. From 81 to 175 years, which reach past
+# 2200, only the months from 1802 give enough history.
 YEAR = 365.25
 
 
@@ -62,19 +64,24 @@ def interpolate(day):
             return v0 + (v1 - v0) * (day - d0) / (d1 - d0)
 
 
-errors = [0.0] * 81
-base = 51544.5 - 100 * YEAR
-while base + YEAR <= rows[-1][0]:
-    value = interpolate(base)
-    slope = value - interpolate(base - YEAR)
-    for step in range(1, 2 * len(errors) - 1):
-        day = base + step * YEAR / 2
-        if day > rows[-1][0]:
-            break
-        error = abs(value + slope * step / 2 - interpolate(day))
-        whole = -(-step // 2)
-        errors[whole] = max(errors[whole], error)
-    base += YEAR / 12
+def backtest(first_base, years):
+    errors = [0.0] * (years + 1)
+    base = first_base
+    while base + YEAR <= rows[-1][0]:
+        value = interpolate(base)
+        slope = value - interpolate(base - YEAR)
+        for step in range(1, 2 * len(errors) - 1):
+            day = base + step * YEAR / 2
+            if day > rows[-1][0]:
+                break
+            error = abs(value + slope * step / 2 - interpolate(day))
+            whole = -(-step // 2)
+            errors[whole] = max(errors[whole], error)
+        base += YEAR / 12
+    return errors
+
+
+errors = backtest(51544.5 - 100 * YEAR, 80) + backtest(51544.5 - 198 * YEAR, 175)[81:]
 for n in range(1, len(errors)):
     errors[n] = max(errors[n], errors[n - 1])
 
@@ -83,7 +90,8 @@ with open(out, 'w') as f:
     f.write('/// Modified Julian date of the first row that is an IERS prediction.\n')
     f.write(f'pub(super) const FIRST_PREDICTED_MJD: f64 = {first_predicted!r};\n\n')
     f.write('/// The largest error, in seconds, of extrapolation from the last row for up\n')
-    f.write('/// to n whole years, from a backtest over the rows from 1900.\n')
+    f.write('/// to n whole years: a backtest over the rows from 1900 up to 80 years, and\n')
+    f.write('/// over the rows from 1802 after that.\n')
     f.write('#[rustfmt::skip]\n')
     f.write(f'pub(super) const EXTRAPOLATION_ERROR: [f64; {len(errors)}] = [\n')
     for i in range(0, len(errors), 9):

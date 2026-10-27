@@ -55,13 +55,13 @@ pub struct SubsolarPoint {
 /// From 2000 to 2026, the tests bound the direction error relative to JPL
 /// DE421 with ITRF93 Earth orientation at 2 arcseconds for the Sun and 15
 /// arcseconds for the Moon, for observers at the Earth's centre and on its
-/// surface. From 1850 to 1971, the tests bound it relative to Skyfield with
+/// surface. From 1800 to 1971, the tests bound it relative to Skyfield with
 /// historical Delta T at 2 arcseconds for the Sun and 10 arcseconds for the
 /// Moon. After the last IERS prediction, Delta T is an extrapolation: its
 /// uncertainty in seconds, times 15 arcseconds, adds to these bounds.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
 /// non-finite observer position.
 pub fn sun_ecef(
     epoch: Epoch,
@@ -77,7 +77,7 @@ pub fn sun_ecef(
 /// Axes, model, and bounds are the same as for [`sun_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
 /// non-finite observer position.
 pub fn moon_ecef(
     epoch: Epoch,
@@ -94,7 +94,7 @@ pub fn moon_ecef(
 /// and bounds are the same as for [`sun_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
 /// non-finite observer position.
 pub fn sun_ecef_tt(
     epoch: Epoch,
@@ -109,7 +109,7 @@ pub fn sun_ecef_tt(
 /// same as for [`moon_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1800 to 2200 TDB, or for a
 /// non-finite observer position.
 pub fn moon_ecef_tt(
     epoch: Epoch,
@@ -121,7 +121,7 @@ pub fn moon_ecef_tt(
 /// The subsolar point from the geocentric apparent Sun.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB.
+/// Returns an error for an epoch outside 1800 to 2200 TDB.
 pub fn subsolar_point(epoch: Epoch) -> Result<SubsolarPoint, ObservationError<AnalyticError>> {
     let [x, y, z] = sun_ecef(epoch, None)?.direction;
     Ok(SubsolarPoint {

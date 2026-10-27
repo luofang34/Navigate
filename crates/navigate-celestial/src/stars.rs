@@ -41,7 +41,7 @@ pub struct StarSight {
 /// the error relative to Skyfield with IERS UT1 at 3 arcseconds.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1850 to 2100 TDB.
+/// Returns an error for an epoch outside 1800 to 2200 TDB.
 pub fn stars_ecef(
     epoch: Epoch,
     faintest_v_magnitude: f64,
