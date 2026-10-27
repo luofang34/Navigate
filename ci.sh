@@ -16,6 +16,10 @@ echo "== wasm32 (navigate-celestial) =="
 cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-celestial --features long-range --target wasm32-unknown-unknown -- -D warnings
 
+echo "== flamsteed (wasm32 and crates.io package) =="
+cargo clippy -p flamsteed --target wasm32-unknown-unknown -- -D warnings
+cargo package -p flamsteed --allow-dirty
+
 echo "== navigate-celestial long-range feature =="
 cargo clippy -p navigate-celestial --features long-range --all-targets -- -D warnings
 cargo test -p navigate-celestial --features long-range

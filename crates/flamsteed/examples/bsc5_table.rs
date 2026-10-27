@@ -1,9 +1,8 @@
-//! Pack the Bright Star Catalogue into the binary table that the crate embeds.
+//! Pack the Bright Star Catalogue into the binary table that flamsteed embeds.
 //!
 //! ```text
 //! curl -O https://cdsarc.cds.unistra.fr/ftp/V/50/catalog.gz && gunzip catalog.gz
-//! cargo run -p navigate-celestial --example star_catalog -- \
-//!     catalog crates/navigate-celestial/data/bsc5.bin
+//! cargo run -p flamsteed --example bsc5_table -- catalog crates/flamsteed/data/bsc5.bin
 //! ```
 //!
 //! The input is the CDS file `V/50/catalog` (Hoffleit and Warren 1991) with
@@ -20,7 +19,7 @@ use std::{f64::consts::PI, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
-    #[error("usage: star_catalog <V/50 catalog> <output>")]
+    #[error("usage: bsc5_table <V/50 catalog> <output>")]
     Arguments,
     #[error("cannot read {}", path.display())]
     Read {
