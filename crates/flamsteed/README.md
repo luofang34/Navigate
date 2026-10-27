@@ -6,7 +6,9 @@ software.
 flamsteed gives the direction of each naked-eye star at an epoch that you
 supply. The tests cover -2000 to 3000. It embeds the Yale Bright Star
 Catalogue: 9096 stars, about every star to visual magnitude 6.5. It reads no
-file and no clock, and it builds for `wasm32-unknown-unknown`.
+file and no clock, and it does not allocate. It builds for
+`wasm32-unknown-unknown` and, without the standard library, for
+microcontrollers such as the RP2350.
 
 The crate has its name from John Flamsteed (1646-1719), the first Astronomer
 Royal. He measured the positions of about 3000 stars. In 1712 his data was
@@ -27,8 +29,10 @@ and each claim about accuracy has a measurement.
   measured differences.
 - **Measured claims.** Each accuracy statement comes from a test or a
   measurement that this repository can repeat.
-- **No I/O.** The crate has no dependencies, reads no file, and reads no
-  clock. You supply the epoch.
+- **No I/O.** The crate reads no file and no clock, and it does not
+  allocate. You supply the epoch.
+- **Small dependencies.** With the standard library the crate has no
+  dependencies. Without it, `libm` (MIT) gives the float functions.
 
 ## Use
 
@@ -38,23 +42,72 @@ use flamsteed::Catalog;
 // Julian years (TT) from J2000: -2330.0 is 331 BC.
 let bright: Vec<[f64; 3]> = Catalog::bright_star_catalogue()
     .brighter_than(2.0)
+    .stars()
     .map(|star| star.direction_at(-2330.0))
     .collect();
 ```
 
 Each direction is a unit vector in J2000 equatorial axes, from the solar
 system barycentre. The axes are those of FK5, which differ from ICRS by less
-than 0.1 arcsecond. For an observer on the
-Earth, apply aberration and Earth axes. The `navigate-celestial` crate does
-these steps.
+than 0.1 arcsecond. For an observer on the Earth, apply aberration and Earth
+axes. The `navigate-celestial` crate does these steps.
 
-The catalogue keeps the stars in magnitude order, brightest first. Thus
-`brighter_than` reads only the stars that it returns. For many epochs, call
-`star.motion()` once: `Motion::direction_at` then needs no trigonometry,
-about 1.5 ns for each star on a laptop CPU. Each `Star` also gives
-its identifier, V magnitude, B-V colour, reference position and epoch,
-proper motion, parallax, and radial velocity. A value that the catalogue does
-not give is `None`.
+The catalogue keeps the stars in magnitude order, brightest first.
+`brighter_than` gives a smaller catalogue, a prefix, and reads only the stars
+that it keeps. Each `Star` gives its identifier, V magnitude, B-V colour,
+position and velocity at the reference epoch, parallax, and radial velocity.
+A value that the catalogue does not give is `None`. The right ascension,
+declination, and proper motion are methods.
+
+## Speed and precision
+
+The table stores each star as a J2000 unit vector and a space velocity in
+fixed point. Thus no trigonometry runs when the crate reads a star or moves
+it. `Motion` holds the vectors in `f64` or `f32`:
+
+- `f64` keeps the precision of the table: 0.1 milliarcsecond.
+- `f32` keeps a direction within 0.03 arcsecond of `f64` for every star from
+  -4000 to 1000 years from J2000 (measured maximum 0.021 arcsecond). A
+  single-precision FPU, for example the Cortex-M33 FPU of the RP2350,
+  calculates it natively. `catalog.motions::<f32>()` reads the table to `f32`
+  with no double-precision operation.
+
+`Motion::direction_at` needs one square root. `Motion::position_at` gives the
+direction before normalization, with only multiplications and additions, for
+a GPU or a microcontroller that normalizes itself.
+
+These are measured costs for each star:
+
+| Path | Laptop CPU (Apple silicon) | Cortex-M33 with FPU | RV32IMAC, no FPU |
+|---|---|---|---|
+| read and `direction_at`, `f64` | 2.1 ns | 1,940 instructions | 3,014 instructions |
+| `motions::<f32>()` and `direction_at` | 1.7 ns | 161 instructions | 1,974 instructions |
+| prepared `Motion::direction_at` (`f64` on the laptop, `f32` on the microcontrollers) | 1.6 ns | 97 instructions | 1,202 instructions |
+
+`scripts/check-flamsteed-qemu.sh` gives the microcontroller values. It runs
+the crate in QEMU on a Cortex-M33 (`mps2-an505`, as the RP2350 Arm cores)
+and on an RV32IMAC core (as the RP2350 RISC-V cores), and it compares each
+checksum with the host. QEMU counts instructions, not clock cycles.
+
+## Targets and features
+
+| Feature | Effect |
+|---|---|
+| `std` (default) | float functions from the standard library |
+| `libm` | float functions from `libm`, for targets without the standard library |
+| `all-stars` (default) | embed all 9096 stars: 309 KB |
+| `magnitude-5` | embed the 1630 stars to magnitude 5.0: 55 KB |
+| neither | embed the 518 stars to magnitude 4.0: 18 KB |
+
+For a microcontroller, use `default-features = false, features = ["libm"]`
+and add a magnitude feature if the flash has space. CI builds the crate for
+`thumbv8m.main-none-eabihf` (RP2350 Arm cores),
+`riscv32imac-unknown-none-elf` (RP2350 RISC-V cores), and
+`thumbv6m-none-eabi` (RP2040). The code is about 32 KB on RV32IMAC, with the
+QEMU runtime.
+
+The build script checks the table and its CRC-32, and a constant check in
+the crate rejects a bad header, so a damaged table stops the build.
 
 ## Model
 
@@ -103,7 +156,7 @@ licence, every bright star, and a small package with no I/O.
 The data comes from CDS catalogue V/50, the Bright Star Catalogue, 5th
 revised edition (Hoffleit and Warren 1991). The NASA Astronomical Data Center
 prepared it. The `bsc5_table` example makes `data/bsc5.bin` from the CDS
-file and records its SHA-256. The example also gives the 22-byte record
+file and records its SHA-256. The example also gives the 34-byte record
 layout.
 
 ## Licence

@@ -68,7 +68,9 @@ pub fn stars_ecef_tt(
         Vector3::from(AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s) / LIGHT_SPEED_M_S;
     let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch);
     let years = epoch.to_tdb_centuries_since_j2000() * 100.0;
-    let stars = Catalog::bright_star_catalogue().brighter_than(faintest_v_magnitude);
+    let stars = Catalog::bright_star_catalogue()
+        .brighter_than(faintest_v_magnitude)
+        .stars();
     let mut sights = Vec::with_capacity(stars.len());
     for star in stars {
         let Some(hr) = star.hr() else { continue };

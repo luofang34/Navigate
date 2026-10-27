@@ -1,0 +1,44 @@
+# Runs flamsteed without the standard library on an Arm Cortex-M33 with a
+# single-precision FPU (the RP2350 Arm cores), in QEMU (mps2-an505). It is not
+# part of the workspace and is not published; scripts/check-flamsteed-qemu.sh
+# runs it.
+[package]
+name = "flamsteed-qemu-arm"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+flamsteed = { path = "..", default-features = false, features = ["libm", "all-stars"] }
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+semihosting = { version = "0.1", features = ["stdio"] }
+panic-halt = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[workspace]
+
+# The workspace lint table, repeated for this package outside the workspace.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "forbid"
+
+[lints.clippy]
+unwrap_used = "forbid"
+expect_used = "forbid"
+panic = "forbid"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "forbid"
+exit = "forbid"
+mem_forget = "forbid"
+get_unwrap = "forbid"
+let_underscore_must_use = "forbid"
+let_underscore_future = "forbid"
+await_holding_lock = "forbid"
+disallowed_types = "forbid"
+disallowed_macros = "forbid"

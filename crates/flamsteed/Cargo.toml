@@ -11,12 +11,28 @@ keywords = ["astronomy", "stars", "catalogue", "astrometry", "wasm"]
 categories = ["science"]
 publish = true
 include = [
+    "build.rs",
     "src/**/*.rs",
     "data/bsc5.bin",
     "fixtures/star-space-motion.txt",
     "LICENSE",
     "README.md",
 ]
+
+[features]
+default = ["std", "all-stars"]
+# Float functions from the standard library.
+std = []
+# Embed the stars to visual magnitude 5.0. Without a magnitude feature the
+# crate embeds the stars to magnitude 4.0.
+magnitude-5 = []
+# Embed every star of the catalogue.
+all-stars = ["magnitude-5"]
+# Float functions from libm, for targets without the standard library.
+libm = ["dep:libm"]
+
+[dependencies]
+libm = { version = "0.2.16", optional = true }
 
 [dev-dependencies]
 thiserror.workspace = true

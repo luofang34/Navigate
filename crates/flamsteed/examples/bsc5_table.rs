@@ -14,18 +14,24 @@
 //! record count (u32), the reference epoch in Julian years from J2000 (f64),
 //! the CRC-32 (IEEE) of the records (u32), and the source (u32, 1 for this
 //! catalogue, whose identifiers are HR numbers). The records follow,
-//! brightest first, then by identifier. Each record is 22 bytes: identifier
-//! (u16), right ascension (u32, 2^32 per turn), declination (i32,
-//! (2^31 - 1) per quarter turn), proper motion in right ascension times
-//! cos(declination) and in declination (i16 each, mas/yr), V magnitude (i16,
-//! centimagnitudes), B-V (i16, centimagnitudes, `i16::MIN` if absent),
-//! trigonometric parallax (u16, mas, `u16::MAX` if absent or dynamical), and
-//! heliocentric radial velocity (i16, km/s, `i16::MIN` if absent).
+//! brightest first, then by identifier. Each record is 34 bytes: identifier
+//! (u16); the J2000 unit direction (three i32, 2^31 - 1 for 1); the space
+//! velocity in 1e-12 reference distances per Julian year (three i32), with
+//! the light-time factor and the radial term applied; V magnitude (i16,
+//! centimagnitudes); B-V (i16, centimagnitudes, `i16::MIN` if absent);
+//! trigonometric parallax (u16, mas, `u16::MAX` if absent or dynamical); and
+//! heliocentric radial velocity (i16, km/s, `i16::MIN` if absent). No
+//! trigonometry is necessary to read a record.
 
 use std::{f64::consts::PI, path::PathBuf};
 
 const HEADER_BYTES: usize = 32;
-const RECORD_BYTES: usize = 22;
+const RECORD_BYTES: usize = 34;
+/// The velocity unit: reference distances per Julian year.
+const VELOCITY_UNIT: f64 = 1e-12;
+/// Parsecs per Julian year at 1 km/s.
+const PARSEC_PER_YEAR_PER_KM_S: f64 = 1.022_712_165_053_707_7e-6;
+const LIGHT_SPEED_KM_S: f64 = 299_792.458;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -89,35 +95,44 @@ fn main() -> Result<(), Error> {
         } else {
             (number(110, 114, "B-V")? * 100.0).round() as i16
         };
-        let mut table = Vec::with_capacity(RECORD_BYTES);
-        table.extend_from_slice(&(hr as u16).to_le_bytes());
-        table.extend_from_slice(
-            &((ra / (2.0 * PI) * 4_294_967_296.0).round() as u64 as u32).to_le_bytes(),
-        );
-        table.extend_from_slice(
-            &((dec / (PI / 2.0) * f64::from(i32::MAX)).round() as i32).to_le_bytes(),
-        );
-        for (first, last, name) in [(149, 154, "pmRA"), (155, 160, "pmDE")] {
-            table.extend_from_slice(
-                &((number(first, last, name)? * 1000.0).round() as i16).to_le_bytes(),
-            );
-        }
+        let pm_ra = number(149, 154, "pmRA")? / 3600.0 * PI / 180.0;
+        let pm_dec = number(155, 160, "pmDE")? / 3600.0 * PI / 180.0;
         let magnitude = (number(103, 107, "Vmag")? * 100.0).round() as i16;
-        table.extend_from_slice(&magnitude.to_le_bytes());
-        table.extend_from_slice(&b_minus_v.to_le_bytes());
         // A dynamical parallax (flag D) is a model value, not a measurement.
-        let parallax = if field(record, 162, 166).is_empty() || field(record, 161, 161) == "D" {
-            u16::MAX
+        let parallax_mas = if field(record, 162, 166).is_empty() || field(record, 161, 161) == "D" {
+            None
         } else {
-            (number(162, 166, "Parallax")? * 1000.0).round() as u16
+            Some(number(162, 166, "Parallax")? * 1000.0)
         };
         let radial_velocity = if field(record, 167, 170).is_empty() {
-            i16::MIN
+            None
         } else {
-            number(167, 170, "RadVel")?.round() as i16
+            Some(number(167, 170, "RadVel")?)
         };
-        table.extend_from_slice(&parallax.to_le_bytes());
-        table.extend_from_slice(&radial_velocity.to_le_bytes());
+        let (position, velocity) =
+            space_motion(ra, dec, pm_ra, pm_dec, parallax_mas, radial_velocity);
+        let mut table = Vec::with_capacity(RECORD_BYTES);
+        table.extend_from_slice(&(hr as u16).to_le_bytes());
+        for component in position {
+            table.extend_from_slice(
+                &((component * f64::from(i32::MAX)).round() as i32).to_le_bytes(),
+            );
+        }
+        for component in velocity {
+            table.extend_from_slice(&((component / VELOCITY_UNIT).round() as i32).to_le_bytes());
+        }
+        table.extend_from_slice(&magnitude.to_le_bytes());
+        table.extend_from_slice(&b_minus_v.to_le_bytes());
+        table.extend_from_slice(
+            &parallax_mas
+                .map_or(u16::MAX, |p| p.round() as u16)
+                .to_le_bytes(),
+        );
+        table.extend_from_slice(
+            &radial_velocity
+                .map_or(i16::MIN, |v| v.round() as i16)
+                .to_le_bytes(),
+        );
         records.push((magnitude, hr as u16, table));
     }
     records.sort_by_key(|&(magnitude, hr, _)| (magnitude, hr));
@@ -138,6 +153,40 @@ fn main() -> Result<(), Error> {
         path: output.into(),
         source,
     })
+}
+
+/// The J2000 unit direction and the space velocity, in reference distances
+/// per Julian year. The velocity holds the proper motion and, where both a
+/// trigonometric parallax and a radial velocity exist, the radial term, all
+/// scaled by the light-time factor 1 / (1 - v_r / c) (Stumpff 1985; SOFA
+/// eraStarpv).
+fn space_motion(
+    ra: f64,
+    dec: f64,
+    pm_ra: f64,
+    pm_dec: f64,
+    parallax_mas: Option<f64>,
+    radial_velocity: Option<f64>,
+) -> ([f64; 3], [f64; 3]) {
+    let (sin_ra, cos_ra) = ra.sin_cos();
+    let (sin_dec, cos_dec) = dec.sin_cos();
+    let position = [cos_dec * cos_ra, cos_dec * sin_ra, sin_dec];
+    let east = [-sin_ra, cos_ra, 0.0];
+    let north = [-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec];
+    let (light_time, radial_rate) = match (parallax_mas, radial_velocity) {
+        (Some(parallax), Some(velocity)) if parallax > 0.0 => {
+            let light_time = 1.0 / (1.0 - velocity / LIGHT_SPEED_KM_S);
+            (
+                light_time,
+                light_time * velocity * parallax / 1000.0 * PARSEC_PER_YEAR_PER_KM_S,
+            )
+        }
+        _ => (1.0, 0.0),
+    };
+    let velocity = std::array::from_fn(|i| {
+        position[i] * radial_rate + light_time * (east[i] * pm_ra + north[i] * pm_dec)
+    });
+    (position, velocity)
 }
 
 /// CRC-32 (IEEE 802.3, reflected, polynomial 0xEDB88320).
