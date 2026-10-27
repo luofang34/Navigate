@@ -81,3 +81,43 @@ fn rejects_epochs_before_the_ephemeris_range() {
     ));
     assert!(stars_ecef("1943-05-16T21:28:00 UTC".parse().unwrap(), 6.0).is_ok());
 }
+
+#[test]
+fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
+    // Before 1972 a civil reading is UT1, so the instant is Delta T later.
+    let reading: Epoch = "1900-05-28T14:00:00 UTC".parse().unwrap();
+    let instant = civil_time(reading).terrestrial;
+    let sirius = |stars: Vec<StarSight>| stars.into_iter().find(|star| star.hr == 2491).unwrap();
+    let from_clock = sirius(stars_ecef(reading, 0.0).unwrap());
+    let from_instant = sirius(stars_ecef_tt(instant, 0.0).unwrap());
+    assert_eq!(from_clock, from_instant);
+
+    // The documented pipeline at the instant: proper motion, aberration, and
+    // the Earth rotation that the Sun and Moon use at the same TT.
+    let record = CATALOG
+        .as_chunks::<RECORD_BYTES>()
+        .0
+        .iter()
+        .map(decode)
+        .find(|record| record.hr == 2491)
+        .unwrap();
+    let years = instant.to_tdb_centuries_since_j2000() * 100.0;
+    let (sin_ra, cos_ra) = record.ra.sin_cos();
+    let (sin_dec, cos_dec) = record.dec.sin_cos();
+    let position = Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec);
+    let east = Vector3::new(-sin_ra, cos_ra, 0.0);
+    let north = Vector3::new(-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec);
+    let moved = (position + (east * record.pm_ra + north * record.pm_dec) * years).normalize();
+    let beta = Vector3::from(
+        AnalyticEphemeris
+            .body_state(399, instant)
+            .unwrap()
+            .velocity_m_s,
+    ) / LIGHT_SPEED_M_S;
+    let expected = (earth_rotation::j2000_to_earth_fixed(instant)
+        * observation::aberrate(moved, beta))
+    .normalize();
+    // Reading the instant as a UT1 clock would turn it by Delta T, about 40
+    // arcseconds in 1900.
+    assert!(separation_deg(from_instant.direction, expected.into()) < 1e-9);
+}

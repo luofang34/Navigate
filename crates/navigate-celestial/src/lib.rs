@@ -5,9 +5,9 @@
 //! [`AnalyticEphemeris`] supplies Sun, Earth, and Moon states without kernel
 //! files. [`sun_ecef`] and [`moon_ecef`] give their apparent directions in
 //! Earth-fixed axes from a civil clock reading, [`sun_ecef_tt`] and
-//! [`moon_ecef_tt`] from an instant such as TT, and [`stars_ecef`] gives the
-//! bright stars. [`civil_time`] and [`delta_t`](fn@delta_t) give the TT and
-//! UT1 of a civil clock reading.
+//! [`moon_ecef_tt`] from an instant such as TT, and [`stars_ecef`] and
+//! [`stars_ecef_tt`] give the bright stars. [`civil_time`] and
+//! [`delta_t`](fn@delta_t) give the TT and UT1 of a civil clock reading.
 //!
 //! The Sun and the Moon cover 1800 to 2200. The `long-range` feature extends
 //! them to -2000 to 3000 with larger series tables, and it improves the Moon
@@ -35,5 +35,5 @@ pub use earth_fixed::{
 pub use error::ObservationError;
 pub use hifitime::{Duration, Epoch, TimeScale};
 pub use observation::{Correction, Sight, observe_body};
-pub use stars::{StarSight, stars_ecef};
+pub use stars::{StarSight, stars_ecef, stars_ecef_tt};
 pub use state::{Ephemeris, FrameId, State};
