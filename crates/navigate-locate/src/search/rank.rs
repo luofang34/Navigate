@@ -3,8 +3,11 @@ use super::{Hypothesis, IndexSource, PlaceEncoder, SearchProgress};
 use crate::LocateError;
 use navigate_place::{
     Canvas, Descriptor, IndexManifest, Ranked, ScaleEntry, ScalePlan, SearchRequest, cell_weights,
-    decode_shard, describe, rank,
+    decode_shard, describe, rank, refine,
 };
+
+/// Score difference that lowers a neighbour's weight by a factor of e, in [`refine`].
+const REFINE_TEMPERATURE: f32 = 0.02;
 
 /// The query head bytes of a scale, if it has one.
 async fn head<I: IndexSource>(
@@ -102,7 +105,14 @@ pub(super) async fn rank_all<I: IndexSource>(
             part.verify,
             part.side_m / 2.0,
         );
-        out.extend(ranked.into_iter().map(|r| {
+        out.extend(ranked.into_iter().map(|mut r| {
+            r.centre = refine(
+                &r,
+                &queries[r.query],
+                &records,
+                part.side_m,
+                REFINE_TEMPERATURE,
+            );
             let h = members[r.query];
             (r, h)
         }));

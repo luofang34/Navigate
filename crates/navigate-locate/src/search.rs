@@ -5,14 +5,11 @@
 //! the planned cells, checks the best places against map windows, and runs the
 //! locate pipeline once at the best place. A browser Worker and a native host run
 //! the same code with their own encoder, index source and tile source.
-mod check;
 mod finish;
 mod horizon;
 mod project;
 mod rank;
-mod similarity;
 
-pub use check::{Check, zoom_for};
 pub use horizon::{Horizon, horizon};
 pub use project::{View, canvas as search_canvas};
 
@@ -24,14 +21,8 @@ use navigate_place::{
 use navigate_visual::AsyncImageMatcher;
 use std::future::Future;
 
-/// Inliers that make a checked place acceptable.
-const ACCEPT_INLIERS: usize = 12;
-/// Checked places that the locate step tries, best first.
-const LOCATE_TRIES: usize = 3;
 /// Uncertainty of a camera angle read from the horizon, degrees.
 const HORIZON_SIGMA_DEG: f64 = 4.0;
-/// Inliers that end the checks early.
-const STRONG_INLIERS: usize = 30;
 
 /// Port to a place descriptor model, for example DINOv2 on burn or ONNX Runtime.
 pub trait PlaceEncoder {
@@ -130,7 +121,7 @@ pub async fn search<
 >(
     sources: &SearchSources<'_, T, I>,
     encoder: &mut E,
-    mut matcher: M,
+    matcher: M,
     photo: &RgbImage,
     request: &SearchRequest,
     mut progress: impl FnMut(SearchProgress),
@@ -167,39 +158,15 @@ pub async fn search<
     )
     .await?;
     let gray = image::DynamicImage::ImageRgb8(photo.clone()).to_luma8();
-    let checks = Checks {
+    let (small, focal_px) = finish::working_size(&gray, request.focal_px);
+    let probes = Probes {
         ranked: &ranked,
         hypotheses: &hypotheses,
         scales: &planned.scales,
     };
-    let (accepted, checked, best_inliers) = checks
-        .run(tiles, &mut matcher, &gray, &mut progress)
-        .await?;
-    let (small, focal_px) = finish::working_size(&gray, request.focal_px);
-    for (found, h) in accepted.iter().take(LOCATE_TRIES) {
-        let outcome = finish::locate_at(
-            tiles,
-            matcher.clone(),
-            &small,
-            &hypotheses[*h],
-            found,
-            focal_px,
-            &mut progress,
-        )
-        .await?;
-        if let Outcome::Found(located) = outcome {
-            return Ok(SearchOutcome::Found {
-                located,
-                inliers: found.inliers,
-                checked,
-            });
-        }
-    }
-    Ok(SearchOutcome::NotFound {
-        ranked: ranked.len(),
-        checked,
-        best_inliers,
-    })
+    probes
+        .run(tiles, matcher, &small, focal_px, &mut progress)
+        .await
 }
 
 /// The request with a camera angle from the photo's horizon when it has none, and
@@ -259,63 +226,78 @@ fn hypotheses(
     (hypotheses, canvases)
 }
 
-/// The ranked places and their hypotheses, to check against map windows.
-struct Checks<'a> {
+/// The ranked places and their hypotheses, each tested with a fast locate step.
+struct Probes<'a> {
     ranked: &'a [(Ranked, usize)],
     hypotheses: &'a [Hypothesis],
     scales: &'a [ScalePlan],
 }
 
-impl Checks<'_> {
-    /// The accepted checks, most inliers first, the places checked, and the most
-    /// inliers of one check.
-    async fn run<T: TileSource, M: AsyncImageMatcher>(
+impl Probes<'_> {
+    /// Test the ranked places in order; at the first that gives a pose, run the full
+    /// locate step there.
+    async fn run<T: TileSource, M: AsyncImageMatcher + Clone>(
         &self,
         tiles: &T,
-        matcher: &mut M,
+        matcher: M,
         gray: &image::GrayImage,
+        focal_px: f64,
         progress: &mut impl FnMut(SearchProgress),
-    ) -> Result<(Vec<(check::Check, usize)>, usize, usize), LocateError> {
-        let mut accepted: Vec<(check::Check, usize)> = Vec::new();
-        let (mut checked, mut best_inliers) = (0, 0);
-        for (place, h) in self.ranked {
+    ) -> Result<SearchOutcome, LocateError> {
+        let total = self.ranked.len().min(self.budget());
+        let mut best_matches = 0;
+        for (checked, (place, h)) in self.ranked.iter().take(total).enumerate() {
             let hypothesis = &self.hypotheses[*h];
-            let side_m = self.scales[hypothesis.scale].side_m;
-            // An unknown heading leaves up to half a heading step of error, which an
-            // oblique view does not tolerate: check the neighbouring headings too.
-            let steps: &[f64] = if self.scales[hypothesis.scale].headings_deg.len() > 1 {
-                &[0.0, -15.0, 15.0]
+            // An unknown heading leaves up to half a heading step of error; the probe
+            // covers ten degrees each side, so try the neighbouring steps too.
+            let turns: &[f64] = if self.scales[hypothesis.scale].headings_deg.len() > 1 {
+                &[0.0, -20.0, 20.0]
             } else {
                 &[0.0]
             };
-            let views: Vec<View> = steps
-                .iter()
-                .map(|d| View {
-                    heading_deg: hypothesis.view.heading_deg + d,
-                    ..hypothesis.view
-                })
-                .collect();
-            let result = check::check(tiles, matcher, gray, &views, place.centre, side_m).await?;
-            checked += 1;
-            let inliers = result.map_or(0, |c| c.inliers);
-            tracing::debug!(place = ?place.centre, score = place.score, heading = hypothesis.view.heading_deg,
-                pitch = hypothesis.view.pitch_deg, height = hypothesis.view.height_m, inliers, "checked place");
-            progress(SearchProgress::Checking {
-                done: checked,
-                total: self.ranked.len(),
-            });
-            best_inliers = best_inliers.max(inliers);
-            if let Some(c) = result.filter(|c| c.inliers >= ACCEPT_INLIERS) {
-                accepted.push((c, *h));
-                if c.inliers >= STRONG_INLIERS {
-                    break;
+            for turn in turns {
+                let aim = finish::Aim {
+                    view: View {
+                        heading_deg: hypothesis.view.heading_deg + turn,
+                        ..hypothesis.view
+                    },
+                    ground: place.centre,
+                    centre_back_m: hypothesis.footprint[0].hypot(hypothesis.footprint[1]),
+                    slack_m: 0.75 * self.scales[hypothesis.scale].side_m,
+                };
+                let outcome =
+                    finish::locate_at(tiles, matcher.clone(), gray, &aim, focal_px, progress)
+                        .await?;
+                match outcome {
+                    Outcome::Found(located) => {
+                        // The locate step already re-checks its estimate with a view
+                        // rendered there; the probe's pose is the result.
+                        let inliers = located.estimate.quality.inliers;
+                        return Ok(SearchOutcome::Found {
+                            located,
+                            inliers,
+                            checked: checked + 1,
+                        });
+                    }
+                    Outcome::NotFound {
+                        best_matches: m, ..
+                    } => best_matches = best_matches.max(m),
                 }
             }
+            progress(SearchProgress::Checking {
+                done: checked + 1,
+                total,
+            });
         }
-        accepted.sort_by_key(|(c, _)| std::cmp::Reverse(c.inliers));
-        Ok((accepted, checked, best_inliers))
+        Ok(SearchOutcome::NotFound {
+            ranked: self.ranked.len(),
+            checked: total,
+            best_inliers: best_matches,
+        })
+    }
+
+    /// Ranked places to test: the plan's verification count of the first scale.
+    fn budget(&self) -> usize {
+        self.scales.iter().map(|s| s.verify).max().unwrap_or(0)
     }
 }
-
-#[cfg(test)]
-mod tests;

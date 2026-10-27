@@ -63,5 +63,42 @@ pub fn rank<'a>(
     kept
 }
 
+/// The centre of a ranked place moved to the score-weighted centre of the records
+/// within `radius_m` of it, scored with query `query`. Crops overlap by half a side,
+/// so the neighbours of the true footprint score high too; their weighted centre is
+/// nearer the footprint than any one crop centre. `temperature` sets how fast the
+/// weight falls with the score.
+pub fn refine<'a>(
+    place: &Ranked,
+    query: &Descriptor,
+    records: impl IntoIterator<Item = &'a Record>,
+    radius_m: f64,
+    temperature: f32,
+) -> [f64; 2] {
+    let (mut sum, mut total) = ([0.0, 0.0], 0.0);
+    for record in records {
+        if distance_m(record.centre, place.centre) > radius_m {
+            continue;
+        }
+        let score: f32 = query
+            .values
+            .iter()
+            .zip(&record.descriptor)
+            .map(|(a, b)| a * b)
+            .sum();
+        let weight = f64::from(((score - place.score) / temperature.max(1e-6)).exp());
+        sum = [
+            sum[0] + weight * record.centre[0],
+            sum[1] + weight * record.centre[1],
+        ];
+        total += weight;
+    }
+    if total > 0.0 {
+        [sum[0] / total, sum[1] / total]
+    } else {
+        place.centre
+    }
+}
+
 #[cfg(test)]
 mod tests;

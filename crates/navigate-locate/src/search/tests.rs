@@ -1,7 +1,5 @@
 use super::*;
 use image::{Rgb, RgbImage};
-use nalgebra::Vector2;
-use navigate_visual::PixelMatch;
 
 #[test]
 fn a_straight_down_view_sees_the_ground_below_the_camera() {
@@ -33,24 +31,6 @@ fn a_forward_view_looks_along_its_heading() {
 }
 
 #[test]
-fn the_similarity_fit_recovers_a_turn_and_a_shift() {
-    let (s, c) = 0.3_f64.sin_cos();
-    let truth = |p: Vector2<f64>| Vector2::new(c * p.x - s * p.y + 40.0, s * p.x + c * p.y - 12.0);
-    let matches: Vec<PixelMatch> = (0..30)
-        .map(|i| {
-            let query = Vector2::new(f64::from(i * 17 % 500), f64::from(i * 31 % 400));
-            PixelMatch {
-                reference: truth(query),
-                query,
-            }
-        })
-        .collect();
-    let (inliers, model) = similarity::fit(&matches).unwrap();
-    assert_eq!(inliers, 30);
-    assert!((model.angle_deg() - 0.3_f64.to_degrees()).abs() < 1e-6);
-}
-
-#[test]
 fn the_horizon_of_a_level_photo_is_at_its_centre_and_a_ground_photo_has_none() {
     let level = RgbImage::from_fn(800, 600, |_, y| {
         if y < 300 {
@@ -75,10 +55,4 @@ fn the_horizon_of_a_level_photo_is_at_its_centre_and_a_ground_photo_has_none() {
     );
     let ground = RgbImage::from_pixel(800, 600, Rgb([60, 80, 40]));
     assert!(horizon(&ground, 700.0).is_none());
-}
-
-#[test]
-fn the_check_zoom_follows_the_crop_size() {
-    assert!(zoom_for(4_000.0, 41.0) <= 15);
-    assert!(zoom_for(160.0, 40.5) >= 18);
 }

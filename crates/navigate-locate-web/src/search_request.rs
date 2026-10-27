@@ -7,8 +7,8 @@ use navigate_place::{
 };
 use navigate_visual::CameraModel;
 
-/// Width of the photo in the locate step, as `navigate_locate::search` uses it.
-const LOCATE_WIDTH: u32 = 640;
+/// Long edge of the photo in the locate step, as `navigate_locate::search` uses it.
+const LOCATE_EDGE: u32 = 640;
 
 /// Decode `photo`, reduce it to the request's maximum width, and give the plan
 /// request at that size.
@@ -89,7 +89,7 @@ pub fn search_response_of(
         SearchOutcome::Found {
             located, checked, ..
         } => {
-            let scale = (f64::from(LOCATE_WIDTH) / f64::from(width)).min(1.0);
+            let scale = (f64::from(LOCATE_EDGE) / f64::from(width.max(height))).min(1.0);
             let w = (f64::from(width) * scale).round() as u32;
             let h = (f64::from(height) * scale).round() as u32;
             let camera = CameraModel {

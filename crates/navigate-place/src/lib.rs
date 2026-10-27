@@ -26,5 +26,5 @@ pub use plan::{
     SearchRequest, plan,
 };
 pub use pooling::{Descriptor, describe};
-pub use rank::{Ranked, rank};
+pub use rank::{Ranked, rank, refine};
 pub use region::{CELL_ZOOM, Cell, Region, cells};

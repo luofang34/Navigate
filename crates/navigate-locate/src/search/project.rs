@@ -4,7 +4,7 @@
 //! the camera height below it. The ranking and the map-window check tolerate the
 //! error that hills give; the final locate step uses the terrain.
 use crate::orientation;
-use image::{GrayImage, Luma, RgbImage};
+use image::RgbImage;
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_place::{CANVAS_PX, Canvas};
 
@@ -134,28 +134,4 @@ pub fn canvas(photo: &RgbImage, view: &View, centre: [f64; 2], side_m: f64) -> C
         }
     }
     out
-}
-
-/// The photo on the ground in grey, `size` pixels of `gsd_m` metres, centred at
-/// `centre`, north up. Zero marks ground outside the photo.
-pub fn grey(
-    photo: &GrayImage,
-    view: &View,
-    centre: [f64; 2],
-    gsd_m: f64,
-    [w, h]: [u32; 2],
-) -> GrayImage {
-    let size = photo.dimensions();
-    let inverse = view.rotation().inverse();
-    GrayImage::from_fn(w, h, |u, v| {
-        let east = centre[0] + (f64::from(u) + 0.5 - f64::from(w) / 2.0) * gsd_m;
-        let north = centre[1] - (f64::from(v) + 0.5 - f64::from(h) / 2.0) * gsd_m;
-        match view.pixel(size, &inverse, [east, north]) {
-            Some(p) => Luma([
-                bilinear(|x, y| [f32::from(photo.get_pixel(x, y).0[0])], p)[0].clamp(1.0, 255.0)
-                    as u8,
-            ]),
-            None => Luma([0]),
-        }
-    })
 }

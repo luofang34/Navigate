@@ -28,6 +28,6 @@ pub use locate::{LocateRequest, Located, Outcome, Progress, locate};
 pub use metadata::PhotoMetadata;
 pub use scene::{SceneRequest, TileKind, TileSource, build as build_scene, height_at};
 pub use search::{
-    Check, Horizon, IndexSource, PlaceEncoder, SearchOutcome, SearchProgress, SearchSources, View,
-    horizon, search, search_canvas, zoom_for,
+    Horizon, IndexSource, PlaceEncoder, SearchOutcome, SearchProgress, SearchSources, View,
+    horizon, search, search_canvas,
 };
