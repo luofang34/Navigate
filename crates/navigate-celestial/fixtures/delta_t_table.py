@@ -10,7 +10,7 @@ predictions for about one year. A predicted row becomes Delta T with
 TAI - UTC = 37 s, which stays fixed because UTC has no leap seconds from
 20 May 2027 (CGPM 2026, Resolution 5).
 
-The table uses the historical rows up to 1972.0, the monthly rows from
+The table uses the historical rows up to 1973.0, the monthly rows from
 1973-02-01, and then the predicted rows on the first day of each month. A
 monthly row gets an uncertainty of 0.01 s: linear interpolation between monthly
 rows differs from the daily IERS values by at most 0.0068 s from 1973 to 2026.
@@ -32,7 +32,7 @@ rows = []
 for line in open(historic).read().splitlines()[2:]:
     fields = line.split()
     year = float(fields[0])
-    if 1849.0 <= year <= 1972.0:
+    if 1849.0 <= year <= 1973.0:
         rows.append((51544.5 + (year - 2000.0) * 365.25, float(fields[1]), float(fields[2])))
 for line in open(monthly).read().splitlines():
     fields = line.split()
