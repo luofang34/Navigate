@@ -3,8 +3,8 @@
 //! The crate embeds the Yale Bright Star Catalogue, 5th revised edition, and
 //! moves each star on a straight line in space to any epoch. It reads no
 //! file and no clock, so it builds for `wasm32-unknown-unknown`. Directions
-//! are in J2000 equatorial axes (FK5, within 0.03 arcsecond of ICRS) as seen
-//! from the solar system barycentre. Aberration, the observer's parallax, and
+//! are in J2000 equatorial axes as seen from the solar system barycentre. The
+//! axes are those of FK5, which differ from ICRS by less than 0.1 arcsecond. Aberration, the observer's parallax, and
 //! Earth axes belong to the caller.
 //!
 //! No ESA data is in this crate, in its tests, or in any step that makes its
@@ -28,3 +28,8 @@ mod catalog;
 mod motion;
 
 pub use catalog::{Catalog, Star};
+
+/// The README examples, compiled and run as documentation tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
