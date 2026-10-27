@@ -11,13 +11,17 @@
 //! tables. ESA catalogues serve only for offline comparison, and the crate
 //! documentation states those comparisons as measured differences.
 //!
+//! The stable API in 0.1 is [`Catalog`], the fields of [`Star`], [`StarId`],
+//! [`Motion`], and the `direction_at` functions. [`Star`] and [`StarId`] can gain fields and
+//! variants without a major version. The binary file format is internal: the
+//! crate does not read external files yet.
+//!
 //! ```
 //! use flamsteed::Catalog;
 //!
 //! // Julian years (TT) from J2000: -2330.0 is 331 BC.
 //! let bright: Vec<[f64; 3]> = Catalog::bright_star_catalogue()
-//!     .stars()
-//!     .filter(|star| star.v_magnitude <= 2.0)
+//!     .brighter_than(2.0)
 //!     .map(|star| star.direction_at(-2330.0))
 //!     .collect();
 //! assert!(bright.len() > 40);
@@ -27,7 +31,8 @@
 mod catalog;
 mod motion;
 
-pub use catalog::{Catalog, Star};
+pub use catalog::{Catalog, Star, StarId};
+pub use motion::Motion;
 
 /// The README examples, compiled and run as documentation tests.
 #[cfg(doctest)]

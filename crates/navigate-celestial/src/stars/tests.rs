@@ -93,7 +93,7 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
     // the Earth rotation that the Sun and Moon use at the same TT.
     let record = flamsteed::Catalog::bright_star_catalogue()
         .stars()
-        .find(|star| star.hr == 2491)
+        .find(|star| star.hr() == Some(2491))
         .unwrap();
     let years = instant.to_tdb_centuries_since_j2000() * 100.0;
     let moved = Vector3::from(record.direction_at(years));

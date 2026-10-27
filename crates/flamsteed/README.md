@@ -37,8 +37,7 @@ use flamsteed::Catalog;
 
 // Julian years (TT) from J2000: -2330.0 is 331 BC.
 let bright: Vec<[f64; 3]> = Catalog::bright_star_catalogue()
-    .stars()
-    .filter(|star| star.v_magnitude <= 2.0)
+    .brighter_than(2.0)
     .map(|star| star.direction_at(-2330.0))
     .collect();
 ```
@@ -49,8 +48,13 @@ than 0.1 arcsecond. For an observer on the
 Earth, apply aberration and Earth axes. The `navigate-celestial` crate does
 these steps.
 
-Each `Star` also gives its HR number, V magnitude, B-V colour, J2000
-position, proper motion, parallax, and radial velocity.
+The catalogue keeps the stars in magnitude order, brightest first. Thus
+`brighter_than` reads only the stars that it returns. For many epochs, call
+`star.motion()` once: `Motion::direction_at` then needs no trigonometry,
+about 1.5 ns for each star on a laptop CPU. Each `Star` also gives
+its identifier, V magnitude, B-V colour, reference position and epoch,
+proper motion, parallax, and radial velocity. A value that the catalogue does
+not give is `None`.
 
 ## Model
 

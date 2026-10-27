@@ -21,7 +21,7 @@ fn space_motion_matches_the_reference_from_minus_2000_to_3000() {
         let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
         let star = stars
             .iter()
-            .find(|star| f64::from(star.hr) == v[0])
+            .find(|star| star.hr().map(f64::from) == Some(v[0]))
             .unwrap();
         let error = separation_arcsec(star.direction_at(v[1]), [v[2], v[3], v[4]]);
         // The packed positions round to 0.3 milliarcsecond.
@@ -38,5 +38,22 @@ fn at_j2000_the_direction_is_the_catalogue_position() {
         let (sin_dec, cos_dec) = star.declination_rad.sin_cos();
         let expected = [cos_dec * cos_ra, cos_dec * sin_ra, sin_dec];
         assert!(separation_arcsec(star.direction_at(0.0), expected) < 1e-9);
+    }
+}
+
+#[test]
+fn a_prepared_motion_starts_at_the_reference_position() {
+    for star in Catalog::bright_star_catalogue().brighter_than(3.0) {
+        let motion = star.motion();
+        let length = motion.position.iter().map(|c| c * c).sum::<f64>().sqrt();
+        assert!((length - 1.0).abs() < 1e-15);
+        assert_eq!(motion.reference_epoch_years, star.reference_epoch_years);
+        assert!(
+            separation_arcsec(
+                motion.direction_at(motion.reference_epoch_years),
+                motion.position
+            ) < 1e-9
+        );
+        assert_eq!(motion.direction_at(-2330.0), star.direction_at(-2330.0));
     }
 }
