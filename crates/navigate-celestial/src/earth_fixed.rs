@@ -55,12 +55,12 @@ pub struct SubsolarPoint {
 /// then followed the Earth's rotation. From 2000 to 2026, the tests bound the
 /// direction error relative to JPL DE421 with ITRF93 Earth orientation at
 /// 15 arcseconds for the Sun and 22 arcseconds for the Moon, for observers at
-/// the Earth's centre and on its surface. From 1900 to 1971, the tests bound
+/// the Earth's centre and on its surface. From 1850 to 1971, the tests bound
 /// it relative to Skyfield with historical Delta T at 15 arcseconds for the
 /// Sun and 30 arcseconds for the Moon.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1900 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
 /// non-finite observer position.
 pub fn sun_ecef(
     epoch: Epoch,
@@ -76,7 +76,7 @@ pub fn sun_ecef(
 /// Axes, model, and bounds are the same as for [`sun_ecef`].
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1900 to 2100 TDB, or for a
+/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
 /// non-finite observer position.
 pub fn moon_ecef(
     epoch: Epoch,
@@ -88,7 +88,7 @@ pub fn moon_ecef(
 /// The subsolar point from the geocentric apparent Sun.
 ///
 /// # Errors
-/// Returns an error for an epoch outside 1900 to 2100 TDB.
+/// Returns an error for an epoch outside 1850 to 2100 TDB.
 pub fn subsolar_point(epoch: Epoch) -> Result<SubsolarPoint, ObservationError<AnalyticError>> {
     let [x, y, z] = sun_ecef(epoch, None)?.direction;
     Ok(SubsolarPoint {

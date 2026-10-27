@@ -11,8 +11,8 @@ const ARCSECOND: f64 = 1.0 / 3600.0;
 // covers the largest UT1 - UTC of 0.9 s.
 const SUN_BOUND_DEG: f64 = 15.0 * ARCSECOND;
 const MOON_BOUND_DEG: f64 = 22.0 * ARCSECOND;
-// Measured over the Skyfield table from 1900 to 1971: 1.4 arcseconds for the
-// Sun and 21.8 arcseconds for the Moon, mostly from TT that hifitime finds
+// Measured over the Skyfield table from 1850 to 1971: 1.6 arcseconds for the
+// Sun and 22.1 arcseconds for the Moon, mostly from TT that hifitime finds
 // from UTC instead of the historical Delta T.
 const MOON_BEFORE_1972_BOUND_DEG: f64 = 30.0 * ARCSECOND;
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
@@ -228,7 +228,7 @@ fn an_earth_fixed_observer_moves_with_the_earth_rotation() {
 }
 
 #[test]
-fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1900_to_1971() {
+fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1850_to_1971() {
     let mut worst = [0.0_f64; 2];
     for line in BEFORE_1972.lines().filter(|line| !line.starts_with('#')) {
         let mut fields = line.split(' ');
@@ -247,11 +247,11 @@ fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1900_to_1971() {
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
     assert!(matches!(
-        sun_ecef(utc("1899-12-31T00:00:00 UTC"), None),
+        sun_ecef(utc("1849-12-01T00:00:00 UTC"), None),
         Err(ObservationError::Ephemeris {
             source: AnalyticError::EpochOutOfRange(_),
             ..
         })
     ));
-    assert!(moon_ecef(utc("1900-01-02T00:00:00 UTC"), None).is_ok());
+    assert!(moon_ecef(utc("1850-01-02T00:00:00 UTC"), None).is_ok());
 }

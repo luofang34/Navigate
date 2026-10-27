@@ -146,7 +146,7 @@ fn rejects_unknown_bodies_barycentric_origins_and_distant_epochs() {
         AnalyticEphemeris.body_state(SUN, late),
         Err(AnalyticError::EpochOutOfRange(late))
     );
-    let early: Epoch = "1899-12-31T00:00:00 TDB".parse().unwrap();
+    let early: Epoch = "1849-12-01T00:00:00 TDB".parse().unwrap();
     assert!(AnalyticEphemeris.body_state(MOON, early).is_err());
 }
 
