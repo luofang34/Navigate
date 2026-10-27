@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Structural conventions: no mod.rs, bounded file sizes, lib.rs stays a
 # re-export surface, every lib.rs opens with a crate-level doc comment,
-# and each lockfile resolves one wgpu major version.
+# each lockfile resolves one wgpu major version, and the root LICENSE is the
+# GNU AGPL version 3.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -44,5 +45,12 @@ while IFS= read -r f; do
         fail=1
     fi
 done < <(git ls-files '*Cargo.lock')
+
+# The repository is free software under the GNU AGPL, version 3 or later.
+if ! head -2 LICENSE 2>/dev/null | grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' \
+    || ! head -2 LICENSE | grep -q 'Version 3, 19 November 2007'; then
+    echo "FAIL: LICENSE — the repository root must hold the GNU AGPL version 3 text" >&2
+    fail=1
+fi
 
 exit "$fail"

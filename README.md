@@ -98,3 +98,9 @@ MapLibre fork.
 -- -D warnings`, `test --all-targets`, `doc` with `-D missing_docs` and
 broken-link denial, structure checks (file size, no `mod.rs`), and a
 release build. CI runs the same gates.
+
+## Licence
+
+Navigate is free software under the GNU Affero General Public License,
+version 3 or later. Refer to [LICENSE](LICENSE). Some files keep their own
+notices, for example `crates/navigate-celestial/LICENSE-ERFA`.
