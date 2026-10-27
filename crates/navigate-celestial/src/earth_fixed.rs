@@ -67,7 +67,7 @@ pub fn sun_ecef(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
-    sight(SUN, SUN_RADIUS_M, epoch, observer_ecef_m)
+    sun_ecef_tt(civil_time(epoch).terrestrial, observer_ecef_m)
 }
 
 /// The apparent Moon from an Earth-fixed observer, without kernel files.
@@ -80,6 +80,38 @@ pub fn sun_ecef(
 /// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
 /// non-finite observer position.
 pub fn moon_ecef(
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
+    moon_ecef_tt(civil_time(epoch).terrestrial, observer_ecef_m)
+}
+
+/// The apparent Sun at the instant `epoch`, without a civil reading.
+///
+/// [`sun_ecef`] reads its epoch as a civil clock: UT1 before 1972. This
+/// function takes `epoch` as the instant itself, in any time scale, for
+/// example TT. UT1 for the Earth rotation is TT - Delta T. The model, axes,
+/// and bounds are the same as for [`sun_ecef`].
+///
+/// # Errors
+/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// non-finite observer position.
+pub fn sun_ecef_tt(
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
+    sight(SUN, SUN_RADIUS_M, epoch, observer_ecef_m)
+}
+
+/// The apparent Moon at the instant `epoch`, without a civil reading.
+///
+/// The epoch is as for [`sun_ecef_tt`]. The model, axes, and bounds are the
+/// same as for [`moon_ecef`].
+///
+/// # Errors
+/// Returns an error for an epoch outside 1850 to 2100 TDB, or for a
+/// non-finite observer position.
+pub fn moon_ecef_tt(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
@@ -104,7 +136,6 @@ fn sight(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
-    let epoch = civil_time(epoch).terrestrial;
     let observer = State {
         position_m: observer_ecef_m.unwrap_or([0.0; 3]),
         velocity_m_s: [0.0; 3],

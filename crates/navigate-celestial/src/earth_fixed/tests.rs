@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Duration, Ephemeris};
+use crate::{Duration, Ephemeris, TimeScale};
 use navigate_contract::GeodeticPosition;
 use navigate_geodesy::geodetic_to_ecef;
 
@@ -234,10 +234,16 @@ fn sun_and_moon_match_skyfield_with_historical_delta_t_from_1850_to_1971() {
         let epoch = utc(&format!("{} UTC", fields.next().unwrap()));
         let v: Vec<f64> = fields.map(|x| x.parse().unwrap()).collect();
         let observer = (v[..3] != [0.0; 3]).then(|| [v[0], v[1], v[2]]);
-        let sun = sun_ecef(epoch, observer).unwrap().direction;
-        let moon = moon_ecef(epoch, observer).unwrap().direction;
-        worst[0] = worst[0].max(separation_deg(sun, [v[3], v[4], v[5]]));
-        worst[1] = worst[1].max(separation_deg(moon, [v[6], v[7], v[8]]));
+        // The civil functions read the UT1 clock. The TT functions take the
+        // instant, which is that UT1 plus Delta T.
+        let instant = crate::civil_time(epoch).terrestrial;
+        let suns = [sun_ecef(epoch, observer), sun_ecef_tt(instant, observer)];
+        let moons = [moon_ecef(epoch, observer), moon_ecef_tt(instant, observer)];
+        for (sun, moon) in suns.into_iter().zip(moons) {
+            let (sun, moon) = (sun.unwrap().direction, moon.unwrap().direction);
+            worst[0] = worst[0].max(separation_deg(sun, [v[3], v[4], v[5]]));
+            worst[1] = worst[1].max(separation_deg(moon, [v[6], v[7], v[8]]));
+        }
     }
     assert!(worst[0] < SUN_BOUND_DEG, "{worst:?}");
     assert!(worst[1] < MOON_BEFORE_1972_BOUND_DEG, "{worst:?}");
@@ -253,4 +259,30 @@ fn rejects_epochs_before_the_ephemeris_range() {
         })
     ));
     assert!(moon_ecef(utc("1850-01-02T00:00:00 UTC"), None).is_ok());
+}
+
+#[test]
+fn tt_entry_points_take_the_instant_and_civil_ones_read_a_clock() {
+    let observer = Some(surface(HORIZON_OBSERVER));
+    // Before 1972 the civil reading is UT1, so the instant is UT1 + Delta T.
+    for reading in [
+        utc("1900-05-28T14:00:00 UTC"),
+        utc("2026-06-14T09:19:41 UTC"),
+    ] {
+        let instant = crate::civil_time(reading).terrestrial;
+        assert_eq!(
+            sun_ecef(reading, observer).unwrap(),
+            sun_ecef_tt(instant, observer).unwrap()
+        );
+        assert_eq!(
+            moon_ecef(reading, None).unwrap(),
+            moon_ecef_tt(instant, None).unwrap()
+        );
+    }
+    // From 1972 the reading is UTC, which is the instant itself.
+    let modern = utc("2026-06-14T09:19:41 UTC");
+    assert_eq!(
+        sun_ecef(modern, None).unwrap(),
+        sun_ecef_tt(modern.to_time_scale(TimeScale::TT), None).unwrap()
+    );
 }
