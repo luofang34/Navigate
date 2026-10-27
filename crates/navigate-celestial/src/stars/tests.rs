@@ -74,7 +74,7 @@ fn magnitude_limit_selects_bright_stars() {
 
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
-    let early: Epoch = "1899-06-01T00:00:00 UTC".parse().unwrap();
+    let early: Epoch = "1849-12-01T00:00:00 UTC".parse().unwrap();
     assert_eq!(
         stars_ecef(early, 6.0),
         Err(AnalyticError::EpochOutOfRange(early))

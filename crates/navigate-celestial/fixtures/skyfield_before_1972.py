@@ -1,22 +1,26 @@
-"""Write skyfield-before-1972.txt: the apparent Sun and Moon in ITRS axes, 1900 to 1971.
+"""Write skyfield-before-1972.txt: the apparent Sun and Moon in ITRS axes, 1850 to 1971.
 
 uv run --no-project --python 3.13 --with skyfield==1.53 python -I \
-    skyfield_before_1972.py de421.bsp skyfield-before-1972.txt
+    skyfield_before_1972.py de440s.bsp skyfield-before-1972.txt
 
-The input is NAIF `de421.bsp`. Each instant is a UT1 clock reading, which is
-what civil time (GMT) gave before 1972. Skyfield finds TT from its built-in
-historical Delta T. The ITRS axes have no polar motion.
+The input is NAIF `de440s.bsp`, which starts before 1850. Each instant is a
+UT1 clock reading, which is what civil time (GMT) gave before 1972.
+Skyfield finds TT from its built-in historical Delta T. The ITRS axes have
+no polar motion.
 """
 import sys
 from skyfield.api import load, wgs84
 from skyfield.framelib import itrs
-de421, out = sys.argv[1:3]
+de440s, out = sys.argv[1:3]
 ts = load.timescale(builtin=True)
-eph = load(de421)
+eph = load(de440s)
 earth, sun, moon = eph['earth'], eph['sun'], eph['moon']
-# Geocentre, then observers at 51.4° N 8.1° E, 7.5° S 155.8° E and 4.5° N 114.0° E.
-observers = [None, (51.4, 8.1), (-7.5, 155.8), (4.5, 114.0)]
+# Geocentre, then observers at 39.3° N 77.7° W, 51.4° N 8.1° E, 7.5° S 155.8° E and 4.5° N 114.0° E.
+observers = [None, (39.3, -77.7), (51.4, 8.1), (-7.5, 155.8), (4.5, 114.0)]
 readings = [
+    (1850, 1, 2, 0, 0, 0), (1856, 2, 29, 9, 15, 0), (1859, 10, 16, 3, 0, 0),
+    (1859, 10, 18, 11, 0, 0), (1866, 11, 14, 22, 40, 0), (1875, 3, 21, 17, 0, 0),
+    (1885, 5, 4, 7, 45, 0), (1895, 1, 26, 20, 0, 0),
     (1900, 1, 2, 0, 0, 0), (1905, 8, 30, 12, 30, 0), (1911, 3, 15, 6, 0, 0),
     (1918, 11, 11, 10, 0, 0), (1926, 6, 21, 18, 45, 0), (1933, 1, 7, 3, 20, 0),
     (1943, 4, 17, 23, 34, 30), (1943, 5, 16, 20, 25, 0), (1944, 12, 10, 2, 0, 0),
