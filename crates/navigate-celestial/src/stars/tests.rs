@@ -74,7 +74,7 @@ fn magnitude_limit_selects_bright_stars() {
 #[test]
 fn rejects_epochs_before_the_ephemeris_range() {
     // The error gives the TT of the reading, which is Delta T later.
-    let early: Epoch = "1849-12-01T00:00:00 UTC".parse().unwrap();
+    let early: Epoch = "1799-12-01T00:00:00 UTC".parse().unwrap();
     assert!(matches!(
         stars_ecef(early, 6.0),
         Err(AnalyticError::EpochOutOfRange(_))

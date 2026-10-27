@@ -1,12 +1,13 @@
 //! Delta T (TT - UT1), and the TT and UT1 that a civil clock reading gives.
 //!
 //! The Earth rotation angle follows UT1. The ephemeris uses TT. Delta T
-//! connects them, and a table gives it from 1849 to the last IERS prediction:
+//! connects them, and a table gives it from 1799 to the last IERS prediction:
 //! historical values to 1972, IERS measurements from 1973, then the IERS
 //! predictions for about one year. `fixtures/delta_t_table.py` writes the
 //! table from the USNO files. After the last prediction, Delta T continues
 //! with the slope of the last year, and its uncertainty grows as a backtest of
-//! that rule on the table from 1900 measured.
+//! that rule on the table measured: from 1900 for up to 80 years, and from
+//! 1802 for up to 175 years, which reaches past 2200.
 //!
 //! A civil clock reading means UT1 before 1972, because civil time (GMT)
 //! then followed the Earth's rotation. From 1972 it means UTC, which TAI
@@ -127,7 +128,7 @@ fn extrapolate(base_mjd: f64, mjd: f64) -> f64 {
 }
 
 /// The backtest error for `years` after the last row, rounded up to whole
-/// years. The table reaches past 2100, the end of the ephemeris range; after
+/// years. The table reaches past 2200, the end of the ephemeris range; after
 /// it the error grows at its last yearly rate.
 fn extrapolation_error(years: f64) -> f64 {
     let whole = years.max(0.0).ceil() as usize;

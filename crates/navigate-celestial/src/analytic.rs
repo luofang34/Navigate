@@ -29,7 +29,7 @@ pub enum AnalyticError {
     )]
     UnsupportedFrame(FrameId),
     /// The epoch is outside the range where the accuracy bounds apply.
-    #[error("epoch {0} is outside the analytic ephemeris range 1850 to 2100 TDB")]
+    #[error("epoch {0} is outside the analytic ephemeris range 1800 to 2200 TDB")]
     EpochOutOfRange(Epoch),
 }
 
@@ -45,11 +45,12 @@ pub enum AnalyticError {
 /// barycentric origin for this reason. The offset changes the Sun's velocity
 /// by less than 20 m/s, which changes aberration by less than 0.02 arcsecond.
 ///
-/// From 1900 to 2050, through [`observe_body`](crate::observe_body) with
+/// Through [`observe_body`](crate::observe_body) with
 /// [`Correction::VacuumReception`](crate::Correction::VacuumReception) for a
 /// geocentric observer, the tests bound the direction error relative to JPL
-/// DE421 at 1.5 arcseconds for the Sun and 18 arcseconds for the Moon, and
-/// the Moon range error at 15 km. The supported range is 1850 to 2100 TDB.
+/// DE421 (1900 to 2050) and DE440 (1800 to 2200) at 1.5 arcseconds for the
+/// Sun and 18 arcseconds for the Moon, and the Moon range error at 15 km. The
+/// supported range is 1800 to 2200 TDB.
 ///
 /// Supported bodies are the Sun (10), the Earth (399), and the Moon (301).
 /// Caller states must use J2000 axes (orientation 1) and one of these bodies
@@ -84,7 +85,7 @@ impl Ephemeris for AnalyticEphemeris {
 
     fn body_state(&self, body: i32, epoch: Epoch) -> Result<State, Self::Error> {
         let t = epoch.to_tdb_centuries_since_j2000();
-        if !(-1.5..=1.0).contains(&t) {
+        if !(-2.0..=2.0).contains(&t) {
             return Err(AnalyticError::EpochOutOfRange(epoch));
         }
         let step = VELOCITY_STEP_S / SECONDS_PER_CENTURY;

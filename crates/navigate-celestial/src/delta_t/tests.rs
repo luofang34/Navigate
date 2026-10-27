@@ -98,11 +98,11 @@ fn extrapolation_stays_inside_its_stated_error_over_the_table_from_1900() {
 }
 
 #[test]
-fn the_extrapolation_error_reaches_past_2100() {
+fn the_extrapolation_error_reaches_past_2200() {
     let [last_mjd, _, _] = *table::ROWS.last().unwrap();
-    let years_to_2100 =
-        (utc("2100-01-01T00:00:00 UTC").to_mjd_tt_days() - last_mjd) / DAYS_PER_YEAR;
-    assert!((table::EXTRAPOLATION_ERROR.len() as f64) > years_to_2100);
+    let years_to_2200 =
+        (utc("2200-01-01T00:00:00 UTC").to_mjd_tt_days() - last_mjd) / DAYS_PER_YEAR;
+    assert!((table::EXTRAPOLATION_ERROR.len() as f64) > years_to_2200);
     assert!(
         table::EXTRAPOLATION_ERROR
             .windows(2)
