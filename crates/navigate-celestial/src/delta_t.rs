@@ -1,7 +1,8 @@
 //! Delta T (TT - UT1), and the TT and UT1 that a civil clock reading gives.
 //!
 //! The Earth rotation angle follows UT1. The ephemeris uses TT. Delta T
-//! connects them, and a table gives it from 1799 to the last IERS prediction:
+//! connects them. Before 1799.5, polynomials model it (see `delta_t/model.rs`). A
+//! table gives it from 1799.5 to the last IERS prediction:
 //! historical values to 1972, IERS measurements from 1973, then the IERS
 //! predictions for about one year. `fixtures/delta_t_table.py` writes the
 //! table from the USNO files. After the last prediction, Delta T continues
@@ -18,6 +19,7 @@
 use crate::Epoch;
 use hifitime::TimeScale;
 
+mod model;
 mod table;
 
 const DAYS_PER_YEAR: f64 = 365.25;
@@ -26,6 +28,9 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// How a value of Delta T is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeltaTBasis {
+    /// Before the table: the Espenak and Meeus polynomials for the Morrison
+    /// and Stephenson (2004) values, with the Canon tidal correction.
+    Modelled,
     /// A historical value before 1973, or an IERS measurement from 1973.
     Observed,
     /// An IERS prediction, for about one year after the last measurement.
@@ -99,6 +104,17 @@ pub(crate) fn ut1_julian_days(epoch: Epoch) -> f64 {
 
 fn at_mjd(mjd: f64) -> DeltaT {
     let rows = &table::ROWS;
+    if let Some(&[first_mjd, _, _]) = rows.first()
+        && mjd < first_mjd
+    {
+        let (seconds, uncertainty_seconds) =
+            model::at_year(2000.0 + (mjd - 51_544.5) / DAYS_PER_YEAR);
+        return DeltaT {
+            seconds,
+            uncertainty_seconds,
+            basis: DeltaTBasis::Modelled,
+        };
+    }
     match rows.last() {
         Some(&[last_mjd, _, last_error]) if mjd > last_mjd => DeltaT {
             seconds: extrapolate(last_mjd, mjd),
