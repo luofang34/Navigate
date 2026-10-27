@@ -47,7 +47,21 @@ pub fn stars_ecef(
     epoch: Epoch,
     faintest_v_magnitude: f64,
 ) -> Result<Vec<StarSight>, AnalyticError> {
-    let epoch = civil_time(epoch).terrestrial;
+    stars_ecef_tt(civil_time(epoch).terrestrial, faintest_v_magnitude)
+}
+
+/// The catalogue stars at the instant `epoch`, without a civil reading.
+///
+/// `epoch` is the instant itself, in any time scale, as for
+/// [`sun_ecef_tt`](crate::sun_ecef_tt). The model, bounds, and range are the
+/// same as for [`stars_ecef`].
+///
+/// # Errors
+/// Returns an error for an epoch outside 1800 to 2200 TDB.
+pub fn stars_ecef_tt(
+    epoch: Epoch,
+    faintest_v_magnitude: f64,
+) -> Result<Vec<StarSight>, AnalyticError> {
     // Linear proper motion holds for about two centuries from J2000.
     if !(-2.0..=2.0).contains(&epoch.to_tdb_centuries_since_j2000()) {
         return Err(AnalyticError::EpochOutOfRange(epoch));
