@@ -25,7 +25,11 @@ const CENTURIES: std::ops::RangeInclusive<f64> = -40.0..=10.0;
 /// Half-width of the central difference for velocity. The position is the
 /// mean of the two evaluations, which differs from the series by a h^2 / 2,
 /// less than 0.1 m for the heliocentric acceleration a, so each state costs
-/// two evaluations. The velocity rounding error stays below 1 mm/s.
+/// two evaluations. Rounding in the series (the mean longitudes reach
+/// thousands of radians) gives velocity errors of 4 mm/s at the ends of 1800
+/// to 2200, and 0.08 m/s at -2000 with `long-range`; the aberration changes
+/// by less than 0.1 milliarcsecond. A longer step would reduce them but move
+/// the mean position further from the series.
 const VELOCITY_HALF_STEP_S: f64 = 4.0;
 
 /// A failed analytic state evaluation.
@@ -112,8 +116,11 @@ impl Ephemeris for AnalyticEphemeris {
             return Err(AnalyticError::EpochOutOfRange(epoch));
         }
         let step = VELOCITY_HALF_STEP_S / SECONDS_PER_CENTURY;
-        let (before, after) = (position(body, t - step)?, position(body, t + step)?);
-        let velocity = (after - before) / (2.0 * VELOCITY_HALF_STEP_S);
+        let (early, late) = (t - step, t + step);
+        let (before, after) = (position(body, early)?, position(body, late)?);
+        // The rounded times enter exactly: the difference of two close values
+        // has no rounding error.
+        let velocity = (after - before) / ((late - early) * SECONDS_PER_CENTURY);
         Ok(State {
             position_m: ((before + after) / 2.0).into(),
             velocity_m_s: velocity.into(),
