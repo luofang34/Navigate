@@ -8,12 +8,13 @@
 //!
 //! The input is the CDS file `V/50/catalog` (Hoffleit and Warren 1991) with
 //! SHA-256 `69797549cc1605aad7ff94e9325e29a1661f2a253917faaa056d9bf20b809afd`.
-//! Entries without a J2000 position are omitted. Each output record is 18
+//! Entries without a J2000 position are omitted. Each output record is 22
 //! little-endian bytes: HR number (u16), right ascension (u32, 2^32 per
 //! turn), declination (i32, (2^31 - 1) per quarter turn), proper motion in
 //! right ascension times cos(declination) and in declination (i16 each,
-//! mas/yr), V magnitude (i16, centimagnitudes), and B-V (i16,
-//! centimagnitudes, `i16::MIN` if absent).
+//! mas/yr), V magnitude (i16, centimagnitudes), B-V (i16, centimagnitudes,
+//! `i16::MIN` if absent), trigonometric parallax (u16, mas, 0 if absent or
+//! dynamical), and heliocentric radial velocity (i16, km/s, 0 if absent).
 
 use std::{f64::consts::PI, path::PathBuf};
 
@@ -94,6 +95,19 @@ fn main() -> Result<(), Error> {
         table
             .extend_from_slice(&((number(103, 107, "Vmag")? * 100.0).round() as i16).to_le_bytes());
         table.extend_from_slice(&b_minus_v.to_le_bytes());
+        // A dynamical parallax (flag D) is a model value, not a measurement.
+        let parallax = if field(record, 162, 166).is_empty() || field(record, 161, 161) == "D" {
+            0
+        } else {
+            (number(162, 166, "Parallax")? * 1000.0).round() as u16
+        };
+        let radial_velocity = if field(record, 167, 170).is_empty() {
+            0
+        } else {
+            number(167, 170, "RadVel")?.round() as i16
+        };
+        table.extend_from_slice(&parallax.to_le_bytes());
+        table.extend_from_slice(&radial_velocity.to_le_bytes());
     }
     std::fs::write(output, table).map_err(|source| Error::Write {
         path: output.into(),
