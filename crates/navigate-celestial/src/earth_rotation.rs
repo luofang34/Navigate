@@ -2,19 +2,12 @@
 //!
 //! The model applies IAU 1976 precession, the four largest IAU 1980
 //! nutation terms (Meeus, chapter 22: 0.5 arcsecond in longitude and 0.1
-//! arcsecond in obliquity), and GAST from the IAU 1982 GMST. It takes UT1
-//! as equal to UTC, which rotates the axes by up to 0.9 s × 15 arcseconds/s
-//! (13.5 arcseconds) about the pole. It omits polar motion, which is less
-//! than 0.6 arcsecond. Leap seconds come from hifitime.
-//!
-//! Leap seconds keep UT1 - UTC within 0.9 s from 1972. After the last leap
-//! second that hifitime knows, the bound holds only while the IERS keeps
-//! UT1 - UTC within 0.9 s. Before 1972, civil time (GMT) followed the Earth's
-//! rotation, so the model reads a UTC clock reading of that period as UT1.
-//! TT then comes from hifitime and not from the historical Delta T.
+//! arcsecond in obliquity), and GAST from the IAU 1982 GMST. The epochs are
+//! TT, and UT1 is TT - Delta T from [`delta_t`](fn@crate::delta_t). It omits
+//! polar motion, which is less than 0.6 arcsecond.
 
 use crate::{
-    Epoch, precession,
+    Epoch, delta_t, precession,
     precession::{frame_x, frame_z},
 };
 use nalgebra::{Matrix3, Vector3};
@@ -23,7 +16,7 @@ const ARCSECOND: f64 = std::f64::consts::PI / 648_000.0;
 /// Earth rotation rate relative to the precessing equinox, in rad/s.
 pub(crate) const ROTATION_RATE_RAD_S: f64 = 7.292_115_146_706_979e-5;
 
-/// Rotate J2000 axes to Earth-fixed axes at `epoch`.
+/// Rotate J2000 axes to Earth-fixed axes at the TT epoch `epoch`.
 pub(crate) fn j2000_to_earth_fixed(epoch: Epoch) -> Matrix3<f64> {
     let t = epoch.to_tdb_centuries_since_j2000();
     let (longitude, obliquity) = nutation(t);
@@ -51,9 +44,9 @@ fn nutation(t: f64) -> (f64, f64) {
     (longitude * ARCSECOND, obliquity * ARCSECOND)
 }
 
-/// Greenwich mean sidereal time in radians (Meeus 12.4), with UT1 = UTC.
+/// Greenwich mean sidereal time in radians (Meeus 12.4), at the UT1 of `epoch`.
 fn gmst(epoch: Epoch) -> f64 {
-    let days = epoch.to_jde_utc_days() - 2_451_545.0;
+    let days = delta_t::ut1_julian_days(epoch) - 2_451_545.0;
     let t = days / 36_525.0;
     let degrees =
         280.460_618_37 + 360.985_647_366_29 * days + t * t * (0.000_387_933 - t / 38_710_000.0);

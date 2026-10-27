@@ -4,11 +4,13 @@
 //! or loads a file. Earth surface coordinates belong in a caller adapter.
 //! [`AnalyticEphemeris`] supplies Sun, Earth, and Moon states without kernel
 //! files. [`sun_ecef`] and [`moon_ecef`] give their apparent directions in
-//! Earth-fixed axes, and [`stars_ecef`] gives the bright stars.
+//! Earth-fixed axes, and [`stars_ecef`] gives the bright stars. [`civil_time`]
+//! and [`delta_t`](fn@delta_t) give the TT and UT1 of a civil clock reading.
 
 mod analytic;
 #[cfg(feature = "anise")]
 mod anise_adapter;
+mod delta_t;
 mod earth_fixed;
 mod earth_rotation;
 mod error;
@@ -20,6 +22,7 @@ mod state;
 pub use analytic::{AnalyticEphemeris, AnalyticError};
 #[cfg(feature = "anise")]
 pub use anise_adapter::{AniseEphemeris, AniseError};
+pub use delta_t::{CivilTime, DeltaT, DeltaTBasis, civil_time, delta_t};
 pub use earth_fixed::{EarthFixedSight, SubsolarPoint, moon_ecef, subsolar_point, sun_ecef};
 pub use error::ObservationError;
 pub use hifitime::{Duration, Epoch, TimeScale};
