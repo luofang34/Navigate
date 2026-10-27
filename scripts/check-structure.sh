@@ -68,4 +68,21 @@ while IFS= read -r path; do
     fi
 done < <(git ls-files)
 
+# A crate for crates.io states its licence and ships its licence text and
+# README, so that the package stands alone.
+while IFS= read -r manifest; do
+    dir=$(dirname "$manifest")
+    grep -q '^publish = true' "$manifest" || continue
+    if ! grep -q '^license = ' "$manifest"; then
+        echo "FAIL: $manifest — a published crate must declare its license" >&2
+        fail=1
+    fi
+    for file in LICENSE README.md; do
+        if [ ! -f "$dir/$file" ]; then
+            echo "FAIL: $dir — a published crate must ship $file" >&2
+            fail=1
+        fi
+    done
+done < <(find crates tools -path '*/target' -prune -o -name Cargo.toml -type f -print 2>/dev/null)
+
 exit "$fail"
