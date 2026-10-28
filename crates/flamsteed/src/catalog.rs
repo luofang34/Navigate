@@ -7,7 +7,7 @@
 //! documents format version 1. The build script embeds the magnitude prefix
 //! that the features select.
 
-use crate::{Float, Motion, float};
+use crate::{Float, FormatError, Motion, float};
 
 const STARS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/stars.bin"));
 const MAGIC: &[u8; 8] = b"FLAMSTED";
@@ -22,8 +22,8 @@ const POSITION_SCALE: f64 = 1.0 / i32::MAX as f64;
 const VELOCITY_SCALE: f64 = 1e-12;
 
 /// The embedded table, checked when the crate compiles.
-const EMBEDDED: Option<Catalog<'static>> = parse(STARS);
-const _: () = assert!(EMBEDDED.is_some(), "the embedded star table is malformed");
+const EMBEDDED: Result<Catalog<'static>, FormatError> = parse(STARS);
+const _: () = assert!(EMBEDDED.is_ok(), "the embedded star table is malformed");
 
 /// A star identifier, with the catalogue that gives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -47,8 +47,8 @@ impl Catalog<'static> {
     /// magnitude 5.0, and without either the stars to magnitude 4.0.
     pub const fn bright_star_catalogue() -> Self {
         match EMBEDDED {
-            Some(catalog) => catalog,
-            None => Self {
+            Ok(catalog) => catalog,
+            Err(_) => Self {
                 records: &[],
                 reference_epoch_years: 0.0,
             },
@@ -57,6 +57,38 @@ impl Catalog<'static> {
 }
 
 impl<'a> Catalog<'a> {
+    /// The catalogue in `bytes`, a file in format version 1, the format of
+    /// the embedded table. The catalogue borrows the bytes and does not copy
+    /// them, so a file in flash or in a memory map needs no RAM for its
+    /// records.
+    ///
+    /// The function checks the header, the length, the CRC-32 of the
+    /// records, a finite reference epoch, and the magnitude order that
+    /// [`Catalog::brighter_than`] needs. The `bsc5_table` example writes a
+    /// file and documents the format.
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, FormatError> {
+        let catalog = parse(bytes)?;
+        let stored = bytes
+            .get(24..28)
+            .and_then(|word| word.try_into().ok())
+            .map_or(0, u32::from_le_bytes);
+        let computed = crc32(bytes.get(HEADER_BYTES..).unwrap_or_default());
+        if stored != computed {
+            return Err(FormatError::Checksum { stored, computed });
+        }
+        if !catalog.reference_epoch_years.is_finite() {
+            return Err(FormatError::Epoch);
+        }
+        let order = catalog.records.windows(2).position(|pair| match pair {
+            [first, second] => magnitude(second) < magnitude(first),
+            _ => false,
+        });
+        if let Some(index) = order {
+            return Err(FormatError::Order { index: index + 1 });
+        }
+        Ok(catalog)
+    }
+
     /// The number of stars.
     pub const fn len(&self) -> usize {
         self.records.len()
@@ -192,43 +224,51 @@ impl Star {
 }
 
 /// The catalogue of a format version 1 file, if the header and the length
-/// agree. The build script checks the CRC-32.
-const fn parse(bytes: &[u8]) -> Option<Catalog<'_>> {
+/// agree. The build script and [`Catalog::from_bytes`] check the CRC-32.
+const fn parse(bytes: &[u8]) -> Result<Catalog<'_>, FormatError> {
     let Some((header, body)) = bytes.split_at_checked(HEADER_BYTES) else {
-        return None;
+        return Err(FormatError::TooShort {
+            length: bytes.len(),
+        });
     };
     let mut index = 0;
     while index < MAGIC.len() {
         if header[index] != MAGIC[index] {
-            return None;
+            return Err(FormatError::Magic);
         }
         index += 1;
     }
     let version = u16::from_le_bytes([header[8], header[9]]);
-    let record_bytes = u16::from_le_bytes([header[10], header[11]]) as usize;
+    let record_bytes = u16::from_le_bytes([header[10], header[11]]);
     let count = u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
     let source = u32::from_le_bytes([header[28], header[29], header[30], header[31]]);
     let (records, rest) = body.as_chunks::<RECORD_BYTES>();
-    if version != FORMAT_VERSION
-        || record_bytes != RECORD_BYTES
-        || source != SOURCE_BSC5
-        || !rest.is_empty()
-        || records.len() != count
-    {
-        return None;
+    if version != FORMAT_VERSION || record_bytes as usize != RECORD_BYTES {
+        return Err(FormatError::Version {
+            version,
+            record_bytes,
+        });
+    }
+    if source != SOURCE_BSC5 {
+        return Err(FormatError::Source { source });
+    }
+    if !rest.is_empty() || records.len() != count {
+        return Err(FormatError::Length {
+            count,
+            record_bytes: body.len(),
+        });
     }
     let epoch = [
         header[16], header[17], header[18], header[19], header[20], header[21], header[22],
         header[23],
     ];
-    Some(Catalog {
+    Ok(Catalog {
         records,
         reference_epoch_years: f64::from_le_bytes(epoch),
     })
 }
 
 /// The CRC-32 (IEEE 802.3) of `bytes`.
-#[cfg(test)]
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     !bytes.iter().fold(u32::MAX, |crc, &byte| {
         (0..8).fold(crc ^ u32::from(byte), |crc, _| {

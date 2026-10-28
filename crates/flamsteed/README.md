@@ -216,6 +216,27 @@ prepared it. The `bsc5_table` example makes `data/bsc5.bin` from the CDS
 file and records its SHA-256. The example also gives the 34-byte record
 layout.
 
+The crate embeds this catalogue by default. To use other catalogue data,
+supply the bytes of a file in the same format to `Catalog::from_bytes`:
+
+```rust
+use flamsteed::Catalog;
+
+# let bytes: &[u8] = &[];
+// The bytes can come from a file, flash, or a memory map. The catalogue
+// borrows them and does not copy them.
+match Catalog::from_bytes(bytes) {
+    Ok(catalog) => { /* catalog.stars(), catalog.brighter_than(...) */ }
+    Err(error) => { /* a FormatError: header, length, CRC-32, or order */ }
+}
+```
+
+The function checks the header, the length, the CRC-32 of the records, the
+reference epoch, and the magnitude order. It reads format version 1, with
+HR numbers as identifiers. A later format version can add other catalogues;
+this release rejects such a file with `FormatError::Version` or
+`FormatError::Source`.
+
 ## Licence
 
 The code is under the GNU Affero General Public License, version 3 or later.

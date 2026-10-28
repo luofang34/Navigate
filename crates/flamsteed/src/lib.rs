@@ -22,8 +22,14 @@
 //!
 //! The stable API in 0.1 is [`Catalog`], the fields of [`Star`], [`StarId`],
 //! [`Motion`], and the `direction_at` functions. [`Star`] and [`StarId`] can gain fields and
-//! variants without a major version. The binary file format is internal: the
-//! crate does not read external files yet.
+//! variants without a major version.
+//!
+//! [`Catalog::bright_star_catalogue`] is the embedded Bright Star Catalogue.
+//! [`Catalog::from_bytes`] reads other catalogue data, in format version 1,
+//! from bytes that the caller supplies, for example a file in flash or a
+//! larger table that the features do not embed. A later format version can
+//! add other catalogues, and [`FormatError`] rejects a version that this
+//! release does not read.
 //!
 //! ```
 //! use flamsteed::Catalog;
@@ -49,11 +55,13 @@ extern crate std;
 
 mod catalog;
 mod float;
+mod format;
 mod motion;
 mod orbit;
 
 pub use catalog::{Catalog, Star, StarId};
 pub use float::Float;
+pub use format::FormatError;
 pub use motion::Motion;
 
 /// The README examples, compiled and run as documentation tests.
