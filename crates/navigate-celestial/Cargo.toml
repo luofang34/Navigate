@@ -9,7 +9,7 @@ publish.workspace = true
 [features]
 default = []
 anise = ["dep:anise"]
-# Sun and Moon from -2000 to 3000 with VSOP87B and ELP2000-82B.
+# Sun and Moon from -2000 to 3000 with VSOP87B and ELP2000-82B fitted to DE441.
 long-range = []
 
 [dependencies]
@@ -31,6 +31,10 @@ required-features = ["anise"]
 
 [[example]]
 name = "earth_fixed_reference_table"
+required-features = ["anise"]
+
+[[example]]
+name = "long_range_fit"
 required-features = ["anise"]
 
 [lints]

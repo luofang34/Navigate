@@ -1,4 +1,6 @@
-//! ELP2000-82B evaluation, after the IMCCE Fortran subroutine ELP82B_2.
+//! ELP2000-82B evaluation, after the IMCCE Fortran subroutine ELP82B_2, with
+//! the perturbation arguments to the same polynomial order as the main
+//! problem.
 
 use nalgebra::Vector3;
 
@@ -35,14 +37,18 @@ pub(super) fn geocentric_ecliptic(t: f64) -> Vector3<f64> {
             .map(|(c, p)| c * p)
             .sum::<f64>()
     };
-    let sum = |main: &[(f64, [f64; 5])], perturbation: &[(f64, i32, f64, f64)]| {
+    let sum = |main: &[&[(f64, [f64; 5])]], perturbation: &[&[(f64, i32, [f64; 5])]]| {
         main.iter()
+            .copied()
+            .flatten()
             .map(|(amplitude, phase)| amplitude * polynomial(phase).sin())
             .sum::<f64>()
             + perturbation
                 .iter()
-                .map(|(amplitude, power, phase, rate)| {
-                    amplitude * t.powi(*power) * (phase + rate * t).sin()
+                .copied()
+                .flatten()
+                .map(|(amplitude, power, phase)| {
+                    amplitude * t.powi(*power) * polynomial(phase).sin()
                 })
                 .sum::<f64>()
     };
