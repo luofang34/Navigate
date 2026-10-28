@@ -135,3 +135,68 @@ fn prepared_motions_have_the_documented_size() {
     assert_eq!(core::mem::size_of::<crate::Motion<f32>>(), 28);
     assert_eq!(core::mem::size_of::<crate::Motion<f64>>(), 56);
 }
+
+#[cfg(feature = "all-stars")]
+#[test]
+fn barycentric_positions_match_the_reference_from_minus_2000_to_3000() {
+    let stars: Vec<_> = Catalog::bright_star_catalogue().stars().collect();
+    let mut rows = 0;
+    for line in REFERENCE.lines().filter(|line| !line.starts_with('#')) {
+        let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
+        let star = stars
+            .iter()
+            .find(|star| star.hr().map(f64::from) == Some(v[0]))
+            .unwrap();
+        let position = star.barycentric_position_pc_at(v[1]);
+        if v[5].is_nan() {
+            assert_eq!(position, None, "HR {}", v[0]);
+            continue;
+        }
+        let position = position.unwrap();
+        let expected = [v[5], v[6], v[7]];
+        let error: f64 = position
+            .iter()
+            .zip(expected)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f64>()
+            .sqrt();
+        let length: f64 = expected.iter().map(|c| c * c).sum::<f64>().sqrt();
+        // The packed vectors round to about 1e-9 of the distance.
+        assert!(
+            error / length < 1e-8,
+            "HR {} at {}: {}",
+            v[0],
+            v[1],
+            error / length
+        );
+        rows += 1;
+    }
+    assert_eq!(rows, 135);
+}
+
+#[test]
+fn alpha_centauri_recedes_from_the_past_at_its_radial_velocity() {
+    let star = Catalog::bright_star_catalogue()
+        .stars()
+        .find(|star| star.hr() == Some(5459))
+        .unwrap();
+    let distance = star.distance_pc().unwrap();
+    assert!((distance - 1000.0 / 751.0).abs() < 1e-12);
+    let now = star.barycentric_position_pc_at(0.0).unwrap();
+    assert!((now.iter().map(|c| c * c).sum::<f64>().sqrt() - distance).abs() < 1e-8);
+    // -22 km/s for 4000 years is 0.090 pc; the transverse motion adds about
+    // 0.003 pc to the distance.
+    let then = star.barycentric_position_pc_at(-4000.0).unwrap();
+    let change = then.iter().map(|c| c * c).sum::<f64>().sqrt() - distance;
+    assert!((0.090..0.096).contains(&change), "{change}");
+}
+
+#[test]
+fn a_star_without_a_parallax_has_no_position() {
+    let star = Catalog::bright_star_catalogue()
+        .stars()
+        .find(|star| star.parallax_mas.is_none())
+        .unwrap();
+    assert_eq!(star.distance_pc(), None);
+    assert_eq!(star.barycentric_position_pc_at(0.0), None);
+}

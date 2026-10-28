@@ -139,6 +139,29 @@ impl Star {
         }
     }
 
+    /// The distance at the reference epoch, in parsecs, if the catalogue gives
+    /// a trigonometric parallax.
+    #[inline]
+    pub fn distance_pc(&self) -> Option<f64> {
+        self.parallax_mas
+            .filter(|parallax| *parallax > 0.0)
+            .map(|parallax| 1000.0 / parallax)
+    }
+
+    /// The position from the solar system barycentre `years` Julian years
+    /// (TT) after J2000, in parsecs, in J2000 equatorial axes, if the
+    /// catalogue gives a trigonometric parallax.
+    ///
+    /// The star moves on the straight line of [`Star::motion`]. Without a
+    /// radial velocity the line has no radial part. The catalogue parallax
+    /// limits the accuracy: format version 1 stores it to 1 milliarcsecond,
+    /// and the distance error grows as the square of the distance.
+    #[inline]
+    pub fn barycentric_position_pc_at(&self, years: f64) -> Option<[f64; 3]> {
+        let distance = self.distance_pc()?;
+        Some(self.motion().position_at(years).map(|c| c * distance))
+    }
+
     /// Right ascension at the reference epoch, in radians from 0 to 2 pi.
     pub fn right_ascension_rad(&self) -> f64 {
         let [x, y, _] = self.position;
