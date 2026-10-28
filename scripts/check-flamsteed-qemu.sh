@@ -25,10 +25,11 @@ for target in riscv:qemu-system-riscv32 arm:qemu-system-arm; do
     fi
 done
 # The nightly feature takes the f32 square root from core, which must compile to
-# the Cortex-M33 hardware instruction. CI installs this toolchain with
-# llvm-tools and the thumbv8m.main-none-eabihf target.
-nightly=nightly-2026-08-28
-if ! rustup toolchain list 2>/dev/null | grep -q "^$nightly" || ! command -v qemu-system-arm >/dev/null 2>&1; then
+# the Cortex-M33 hardware instruction. The weekly hardware workflow installs
+# the latest nightly with llvm-tools and the thumbv8m.main-none-eabihf target;
+# FLAMSTEED_NIGHTLY names another toolchain.
+nightly=${FLAMSTEED_NIGHTLY:-nightly}
+if ! rustup run "$nightly" rustc --version >/dev/null 2>&1 || ! command -v qemu-system-arm >/dev/null 2>&1; then
     echo "SKIPPED: flamsteed nightly feature — $nightly or qemu-system-arm is not installed"
     exit "$fail"
 fi
