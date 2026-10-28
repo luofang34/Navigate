@@ -8,9 +8,9 @@
 //! the square root from `core` (`core_float_math`), which uses the hardware
 //! instruction, for example `vsqrt.f32` on the Cortex-M33.
 //! Only [`Motion::direction_at`](crate::Motion::direction_at) needs a square
-//! root, and only the right ascension and declination accessors need an
-//! arctangent; [`Motion::position_at`](crate::Motion::position_at) needs
-//! neither.
+//! root, only the right ascension and declination accessors need an
+//! arctangent, and only the binary-star orbits need a sine and cosine;
+//! [`Motion::position_at`](crate::Motion::position_at) needs none of them.
 
 use core::ops::{Add, Div, Mul, Sub};
 
@@ -123,5 +123,18 @@ pub(crate) fn atan2(y: f64, x: f64) -> f64 {
     #[cfg(not(feature = "std"))]
     {
         libm::atan2(y, x)
+    }
+}
+
+/// The sine and cosine of `angle` in radians.
+#[inline]
+pub(crate) fn sin_cos(angle: f64) -> (f64, f64) {
+    #[cfg(feature = "std")]
+    {
+        angle.sin_cos()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        libm::sincos(angle)
     }
 }

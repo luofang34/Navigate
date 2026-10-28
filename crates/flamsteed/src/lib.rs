@@ -12,6 +12,10 @@
 //! 0.9 milliarcsecond per year. Aberration, the observer's
 //! parallax, and Earth axes belong to the caller.
 //!
+//! The straight line is the motion of a binary system. For 133 stars in
+//! binaries with an ORB6 orbit, [`Star::component_direction_at`] adds the
+//! orbital motion of the star itself.
+//!
 //! No ESA data is in this crate, in its tests, or in any step that makes its
 //! tables. ESA catalogues serve only for offline comparison, and the crate
 //! documentation states those comparisons as measured differences.
@@ -46,6 +50,7 @@ extern crate std;
 mod catalog;
 mod float;
 mod motion;
+mod orbit;
 
 pub use catalog::{Catalog, Star, StarId};
 pub use float::Float;
