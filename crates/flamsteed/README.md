@@ -59,6 +59,12 @@ position and velocity at the reference epoch, parallax, and radial velocity.
 A value that the catalogue does not give is `None`. The right ascension,
 declination, and proper motion are methods.
 
+`Star::barycentric_position_pc_at` gives the position in parsecs from the
+solar system barycentre, for an observer away from the Earth or for a
+parallax calculation. It needs a trigonometric parallax, which the catalogue
+gives for 2652 of the stars to magnitude 6.5. The positions agree with
+Skyfield to a relative 1e-8 from -2000 to 3000.
+
 ## Speed and precision
 
 The table stores each star as a J2000 unit vector and a space velocity in
