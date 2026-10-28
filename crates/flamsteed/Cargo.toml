@@ -13,6 +13,7 @@ publish = true
 include = [
     "build.rs",
     "src/**/*.rs",
+    "examples/*.rs",
     "data/bsc5.bin",
     "data/orbits.bin",
     "fixtures/orb6-ephemerides.txt",

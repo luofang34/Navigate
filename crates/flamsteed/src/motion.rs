@@ -11,7 +11,7 @@ use crate::{Float, Star};
 /// in `f32` for a single-precision FPU.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Motion<T: Float = f64> {
-    /// Unit direction at the reference epoch, in J2000 equatorial axes.
+    /// Unit direction at the reference epoch, in the axes of the catalogue.
     pub position: [T; 3],
     /// Velocity in reference distances per Julian year.
     pub velocity: [T; 3],
@@ -68,17 +68,13 @@ impl Star {
     }
 
     /// The unit direction `years` Julian years (TT) after J2000, from the solar
-    /// system barycentre, in J2000 equatorial axes.
+    /// system barycentre, in the axes of the catalogue.
     ///
     /// From -2000 to 3000 this matches Skyfield's star propagation to 0.01
     /// arcsecond. The catalogue proper motions limit the accuracy far from
-    /// J2000. Compared with the Hipparcos catalogue propagated the same way,
-    /// stars to magnitude 6.5 differ by a median of 1.4 arcseconds in 1700, 5
-    /// in 1000, 13 in -330, and 23 in -2000; 99 percent are within 9, 34, 81,
-    /// and 141 arcseconds. Hipparcos is not truth for long spans either,
-    /// because its proper motions come from three years of observations.
-    /// Close binaries, such as Alpha Centauri, can differ by several
-    /// arcminutes in the past, because their orbits are not modelled.
+    /// J2000. The direction follows the system motion of a binary;
+    /// [`Star::component_direction_at`](crate::Star::component_direction_at)
+    /// adds the orbit where the crate has one.
     #[inline]
     pub fn direction_at(&self, years: f64) -> [f64; 3] {
         self.motion().direction_at(years)

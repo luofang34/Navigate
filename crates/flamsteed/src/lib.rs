@@ -6,30 +6,27 @@
 //! `wasm32-unknown-unknown` and, without the standard library, for
 //! microcontrollers: use `default-features = false, features = ["libm"]`, so
 //! that `libm` gives the float functions. [`Motion`] evaluates in `f64` or, for
-//! a single-precision FPU, in `f32`. Directions are in J2000 equatorial axes as
-//! seen from the solar system barycentre. The axes are those of FK5, which
-//! differ from ICRS by less than 0.1 arcsecond at J2000 and turn by up to about
-//! 0.9 milliarcsecond per year. Aberration, the observer's
-//! parallax, and Earth axes belong to the caller.
+//! a single-precision FPU, in `f32`. Directions are as seen from the solar
+//! system barycentre, in the axes of the catalogue ([`Catalog::axes`]): for
+//! the embedded catalogue, those of FK5, which differ from ICRS by less than
+//! 0.1 arcsecond at J2000 and turn by up to about 0.9 milliarcsecond per year.
+//! Aberration, the observer's parallax, and Earth axes belong to the caller.
 //!
 //! The straight line is the motion of a binary system. For 133 stars in
 //! binaries with an ORB6 orbit, [`Star::component_direction_at`] adds the
 //! orbital motion of the star itself.
 //!
-//! No ESA data is in this crate, in its tests, or in any step that makes its
-//! tables. ESA catalogues serve only for offline comparison, and the crate
-//! documentation states those comparisons as measured differences.
-//!
-//! The stable API in 0.1 is [`Catalog`], the fields of [`Star`], [`StarId`],
-//! [`Motion`], and the `direction_at` functions. [`Star`] and [`StarId`] can gain fields and
-//! variants without a major version.
+//! The stable API in 0.1 is [`Catalog`], [`Catalog::from_bytes`] and the
+//! file formats 1 and 2, [`FormatError`], the fields of [`Star`], [`StarId`],
+//! [`Astrometry`], [`Axes`], [`Motion`], and the `direction_at` functions.
+//! [`Star`] can gain fields, and [`StarId`], [`Astrometry`], [`Axes`], and
+//! [`FormatError`] can gain variants, without a major version.
 //!
 //! [`Catalog::bright_star_catalogue`] is the embedded Bright Star Catalogue.
-//! [`Catalog::from_bytes`] reads other catalogue data, in format version 1,
-//! from bytes that the caller supplies, for example a file in flash or a
-//! larger table that the features do not embed. A later format version can
-//! add other catalogues, and [`FormatError`] rejects a version that this
-//! release does not read.
+//! [`Catalog::from_bytes`] reads other catalogue data from bytes that the
+//! caller supplies, for example a file in flash: format version 1, the
+//! embedded format, or format version 2, with `f64` astrometry in ICRS axes
+//! and the provenance of each star.
 //!
 //! ```
 //! use flamsteed::Catalog;
@@ -59,7 +56,7 @@ mod format;
 mod motion;
 mod orbit;
 
-pub use catalog::{Catalog, Star, StarId};
+pub use catalog::{Astrometry, Axes, Catalog, Star, StarId};
 pub use float::Float;
 pub use format::FormatError;
 pub use motion::Motion;
