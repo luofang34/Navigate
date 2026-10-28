@@ -5,7 +5,7 @@
 //! values assume a lunar tidal acceleration of -26 arcseconds per century
 //! squared. The Canon uses -25.858, so each value gets the Canon correction
 //! c = -0.91072 (-25.858 + 26) u^2 seconds, where u is centuries from 1955.
-//! The long-range Moon, fitted to DE441, is not the Canon Moon: before 1000
+//! The long-range Moon, fitted to DE431, is not the Canon Moon: before 1000
 //! its longitude differs, so these values do not match it exactly. Before -500 the uncertainty is
 //! 0.8 u^2 seconds with u in centuries from 1820, the fit of Morrison and
 //! Stephenson; from -500 to 1750 it interpolates their standard errors.

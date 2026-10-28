@@ -9,7 +9,7 @@
 //! The inputs are IMCCE `VSOP87B.ear` (SHA-256
 //! `30a05a74b8bf65aeffffea7d329934b648dfbe186a06f6cce12b0d9403f896bb`), the
 //! 36 files ELP1 to ELP36 of ELP2000-82B (IMCCE `/pub/ephem/moon/elp82b`,
-//! also CDS VI/79), and the corrections fitted to JPL DE441 in
+//! also CDS VI/79), and the corrections fitted to JPL DE431 in
 //! `long_range_fit.txt`, which `examples/long_range_fit.rs` writes. The range
 //! is -2000 to 3000, so |t| <= 40 Julian centuries. `long_range/theory.rs`
 //! describes the truncation and the changes to ELP82B_2.
@@ -148,7 +148,7 @@ fn write_earth(series: &theory::Vsop, fit: &Fit, out_dir: &Path) -> Result<(), E
     let correction: Vec<f64> = fit.sun.iter().map(|c| c / ARCSECONDS_PER_RADIAN).collect();
     writeln!(
         text,
-        "/// Correction to the VSOP87B longitude, fitted to DE441: radians by power\n\
+        "/// Correction to the VSOP87B longitude, fitted to DE431: radians by power\n\
          /// of TDB Julian centuries from J2000.\n#[rustfmt::skip]\n\
          pub(super) const LONGITUDE_CORRECTION: [f64; {}] = {};",
         correction.len(),
@@ -208,7 +208,7 @@ fn write_moon(elp: &Elp, fit: &Fit, out_dir: &Path) -> Result<(), Error> {
         if variable == 0 {
             writeln!(
                 text,
-                "/// Mean longitude W1 in radians, by power of `t`, fitted to DE441.\n{ATTRIBUTES}\
+                "/// Mean longitude W1 in radians, by power of `t`, fitted to DE431.\n{ATTRIBUTES}\
                  pub(super) const MEAN_LONGITUDE: [f64; 5] = {};\n",
                 floats(&elements.w[0])
             )?;

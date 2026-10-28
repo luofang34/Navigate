@@ -6,17 +6,17 @@
 //! cargo run -p navigate-celestial --features anise --example reference_table -- \
 //!     de440.bsp 1800 2200 crates/navigate-celestial/fixtures/de440-geocentric.txt
 //! cargo run -p navigate-celestial --features anise,long-range --example reference_table -- \
-//!     de441_part-1.bsp,de441_part-2.bsp -2000 3000 \
-//!     crates/navigate-celestial/fixtures/de441-geocentric.txt
+//!     de431_part-1.bsp,de431_part-2.bsp -2000 3000 \
+//!     crates/navigate-celestial/fixtures/de431-geocentric.txt
 //! ```
 //!
 //! The committed tables use NAIF `de421.bsp` with SHA-256
 //! `a20a7139da04cbc462454634918e9a9ca69127044e2cc9d4f9c16e238d2deedc` and
 //! `de440.bsp` with SHA-256
 //! `a4ce9bf9b3282becc9f4b2ac3cebe03a2ae7599981aabd7265fd8482fff7c4b5`, and
-//! `de441_part-1.bsp` and `de441_part-2.bsp` with SHA-256
-//! `13757827f5db41b835a24bbd637488636ce79a8ca754062fed17844f7d5b618e` and
-//! `3abb17dae2d78dd34880377544aacb54892104a0d4462b322cb9f4454d4887f6`. A
+//! `de431_part-1.bsp` and `de431_part-2.bsp` with SHA-256
+//! `dcf8041a435c62216321c836acdb7081afae0058a1c32d343475d732a94ecaed` and
+//! `a354082a26441d25dbeea252a41c00d5eaa2370daf39cb3239de039392b11ee4`. A
 //! comma-separated list loads several kernels. The
 //! epochs span 1 January 00:00 TDB of the first year to the same instant of
 //! the last year. Each row is one geocentric observer at rest in J2000 axes. It gives the

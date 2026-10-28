@@ -5,7 +5,7 @@ const CSPICE: &str = include_str!("../../fixtures/celestial-cspice.json");
 const DE421: &str = include_str!("../../fixtures/de421-geocentric.txt");
 const DE440: &str = include_str!("../../fixtures/de440-geocentric.txt");
 #[cfg(feature = "long-range")]
-const DE441: &str = include_str!("../../fixtures/de441-geocentric.txt");
+const DE431: &str = include_str!("../../fixtures/de431-geocentric.txt");
 const ARCSECOND: f64 = 1.0 / 3600.0;
 // About 1.5 times the largest error measured: 0.73 arcsecond for the Sun,
 // 12.1 arcseconds and 9.8 km for the Moon over the DE421 table, and 0.83
@@ -16,8 +16,8 @@ const SUN_BOUND_DEG: f64 = 1.5 * ARCSECOND;
 const MOON_BOUND_DEG: f64 = 18.0 * ARCSECOND;
 #[cfg(not(feature = "long-range"))]
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
-// With the series fitted to DE441: 0.18 arcsecond for the Sun, 0.27
-// arcsecond and 150 m for the Moon over DE421, and 0.21 arcsecond, 0.23
+// With the series fitted to DE431: 0.18 arcsecond for the Sun, 0.30
+// arcsecond and 150 m for the Moon over DE421, and 0.21 arcsecond, 0.28
 // arcsecond and 160 m over DE440.
 #[cfg(feature = "long-range")]
 const SUN_BOUND_DEG: f64 = 0.3 * ARCSECOND;
@@ -162,21 +162,21 @@ fn sun_and_moon_match_de421_from_1900_to_2050() {
 
 #[cfg(feature = "long-range")]
 #[test]
-fn long_range_sun_and_moon_match_de441_from_minus_2000_to_3000() {
+fn long_range_sun_and_moon_match_de431_from_minus_2000_to_3000() {
     // About 1.3 times the measured maximum of each millennium: Sun and Moon
     // directions and the Moon-Sun elongation in arcseconds, the Moon range
     // in metres. The elongation sets the time of an eclipse. The Moon error
-    // grows into the past, where the fit to DE441 leaves periodic terms
+    // grows into the past, where the fit to DE431 leaves periodic terms
     // that the cubic corrections do not reach.
     let eras = [
-        (-2000, -1000, 1.1, 5.6, 6.5, 1_000.0),
-        (-1000, 0, 0.5, 2.8, 3.2, 520.0),
-        (0, 1000, 0.4, 1.2, 1.4, 200.0),
-        (1000, 2000, 0.35, 0.4, 0.45, 180.0),
-        (2000, 3000, 0.25, 0.4, 0.35, 180.0),
+        (-2000, -1000, 1.15, 5.5, 6.5, 1_050.0),
+        (-1000, 0, 0.5, 2.9, 3.3, 520.0),
+        (0, 1000, 0.4, 1.2, 1.4, 190.0),
+        (1000, 2000, 0.32, 0.38, 0.4, 175.0),
+        (2000, 3000, 0.21, 0.48, 0.37, 180.0),
     ];
     for (first, last, sun_bound, moon_bound, elongation_bound, range_bound) in eras {
-        let rows: String = DE441
+        let rows: String = DE431
             .lines()
             .filter(|line| {
                 let tdb_s: f64 = line.split(' ').next().unwrap().parse().unwrap_or(f64::NAN);
