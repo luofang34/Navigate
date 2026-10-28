@@ -57,8 +57,7 @@ pub enum AnalyticError {
 /// By default the Earth comes from VSOP87D and the Moon from the ELP-2000/82
 /// series in Meeus, chapter 47, and IAU 1976 precession rotates both to
 /// J2000 axes. With the `long-range` feature the Earth comes from VSOP87B and
-/// the Moon from ELP2000-82B with the tidal acceleration of the NASA Five
-/// Millennium Canon, both in J2000 axes.
+/// the Moon from ELP2000-82B, both fitted to JPL DE441 and in J2000 axes.
 ///
 /// The origin is the centre of the Sun, not the solar system barycentre.
 /// The two are up to 1.5e9 m apart, so only differences between states of
@@ -73,11 +72,11 @@ pub enum AnalyticError {
 /// Sun and 18 arcseconds for the Moon, and the Moon range error at 15 km. The
 /// supported range is 1800 to 2200 TDB.
 ///
-/// With `long-range`, the same tests bound the Moon at 3 arcseconds and 2 km,
-/// and the range is -2000 to 3000 TDB. Relative to DE441 the tests bound the
-/// Sun at 4 arcseconds, and the Moon by millennium: 3.5 arcseconds from 2000
-/// to 3000, 6 from 1000, 12 from 0, 75 from -1000, and 210 from -2000. The
-/// Moon follows the Canon convention, which departs from DE441 in the past.
+/// With `long-range`, the same tests bound the Sun at 0.3 arcsecond and the
+/// Moon at 0.4 arcsecond and 250 m, and the range is -2000 to 3000 TDB.
+/// Relative to DE441 the tests bound the Sun, the Moon, and the Moon-Sun
+/// elongation by millennium: 0.25, 0.4, and 0.35 arcsecond from 2000 to
+/// 3000, and 1.1, 5.6, and 6.5 arcseconds from -2000 to -1000.
 ///
 /// Supported bodies are the Sun (10), the Earth (399), and the Moon (301).
 /// Caller states must use J2000 axes (orientation 1) and one of these bodies

@@ -10,17 +10,21 @@ const ARCSECOND: f64 = 1.0 / 3600.0;
 // About 1.5 times the largest error measured: 0.73 arcsecond for the Sun,
 // 12.1 arcseconds and 9.8 km for the Moon over the DE421 table, and 0.83
 // arcsecond, 10.1 arcseconds and 10.1 km over the DE440 table.
+#[cfg(not(feature = "long-range"))]
 const SUN_BOUND_DEG: f64 = 1.5 * ARCSECOND;
 #[cfg(not(feature = "long-range"))]
 const MOON_BOUND_DEG: f64 = 18.0 * ARCSECOND;
 #[cfg(not(feature = "long-range"))]
 const MOON_RANGE_BOUND_M: f64 = 15_000.0;
-// With ELP2000-82B: 1.1 arcseconds and 1.0 km over DE421, 1.8 arcseconds and
-// 1.2 km over DE440.
+// With the series fitted to DE441: 0.18 arcsecond for the Sun, 0.27
+// arcsecond and 150 m for the Moon over DE421, and 0.21 arcsecond, 0.23
+// arcsecond and 160 m over DE440.
 #[cfg(feature = "long-range")]
-const MOON_BOUND_DEG: f64 = 3.0 * ARCSECOND;
+const SUN_BOUND_DEG: f64 = 0.3 * ARCSECOND;
 #[cfg(feature = "long-range")]
-const MOON_RANGE_BOUND_M: f64 = 2_000.0;
+const MOON_BOUND_DEG: f64 = 0.4 * ARCSECOND;
+#[cfg(feature = "long-range")]
+const MOON_RANGE_BOUND_M: f64 = 250.0;
 
 fn geocentre(epoch: Epoch) -> State {
     State {
@@ -101,9 +105,9 @@ fn sun_matches_the_cspice_reception_fixture() {
     }
 }
 
-/// The largest Sun direction, Moon direction, and Moon range errors over a
-/// table that `examples/reference_table.rs` writes.
-fn worst_errors(table: &str) -> [f64; 3] {
+/// The largest Sun direction, Moon direction, Moon range, and Moon-Sun
+/// elongation errors over a table that `examples/reference_table.rs` writes.
+fn worst_errors(table: &str) -> [f64; 4] {
     let worst = worst_errors_of(table);
     assert_eq!(rows_in(table), 400);
     worst
@@ -114,8 +118,8 @@ fn rows_in(table: &str) -> usize {
 }
 
 /// The largest errors over the rows of `table`, which may be a subset.
-fn worst_errors_of(table: &str) -> [f64; 3] {
-    let mut worst = [0.0_f64; 3];
+fn worst_errors_of(table: &str) -> [f64; 4] {
+    let mut worst = [0.0_f64; 4];
     for line in table.lines().filter(|line| !line.starts_with('#')) {
         let v: Vec<f64> = line.split(' ').map(|x| x.parse().unwrap()).collect();
         let observer = geocentre(Epoch::from_tdb_seconds(v[0]));
@@ -125,6 +129,9 @@ fn worst_errors_of(table: &str) -> [f64; 3] {
             separation_deg(sun.direction, [v[1], v[2], v[3]]),
             separation_deg(moon.direction, [v[5], v[6], v[7]]),
             (moon.coordinate_range_m - v[8]).abs(),
+            (separation_deg(sun.direction, moon.direction)
+                - separation_deg([v[1], v[2], v[3]], [v[5], v[6], v[7]]))
+            .abs(),
         ];
         for (worst, error) in worst.iter_mut().zip(errors) {
             *worst = worst.max(error);
@@ -156,17 +163,19 @@ fn sun_and_moon_match_de421_from_1900_to_2050() {
 #[cfg(feature = "long-range")]
 #[test]
 fn long_range_sun_and_moon_match_de441_from_minus_2000_to_3000() {
-    // About 1.3 times the measured maximum of each millennium. The Moon
-    // error grows into the past: ELP2000-82B with the Canon tidal
-    // acceleration departs from the DE441 integration there.
+    // About 1.3 times the measured maximum of each millennium: Sun and Moon
+    // directions and the Moon-Sun elongation in arcseconds, the Moon range
+    // in metres. The elongation sets the time of an eclipse. The Moon error
+    // grows into the past, where the fit to DE441 leaves periodic terms
+    // that the cubic corrections do not reach.
     let eras = [
-        (-2000, -1000, 4.0, 210.0, 20_000.0),
-        (-1000, 0, 3.0, 75.0, 7_000.0),
-        (0, 1000, 1.5, 12.0, 2_000.0),
-        (1000, 2000, 1.5, 6.0, 2_000.0),
-        (2000, 3000, 1.0, 3.5, 1_500.0),
+        (-2000, -1000, 1.1, 5.6, 6.5, 1_000.0),
+        (-1000, 0, 0.5, 2.8, 3.2, 520.0),
+        (0, 1000, 0.4, 1.2, 1.4, 200.0),
+        (1000, 2000, 0.35, 0.4, 0.45, 180.0),
+        (2000, 3000, 0.25, 0.4, 0.35, 180.0),
     ];
-    for (first, last, sun_bound, moon_bound, range_bound) in eras {
+    for (first, last, sun_bound, moon_bound, elongation_bound, range_bound) in eras {
         let rows: String = DE441
             .lines()
             .filter(|line| {
@@ -189,6 +198,11 @@ fn long_range_sun_and_moon_match_de441_from_minus_2000_to_3000() {
             worst[1] * 3600.0
         );
         assert!(worst[2] < range_bound, "{first}: Moon range {} m", worst[2]);
+        assert!(
+            worst[3] < elongation_bound * ARCSECOND,
+            "{first}: elongation {}\"",
+            worst[3] * 3600.0
+        );
     }
 }
 
