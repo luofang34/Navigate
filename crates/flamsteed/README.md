@@ -150,7 +150,11 @@ the reference is less than 0.01 arcsecond.
 
 The catalogue proper motions limit the accuracy far from J2000. This table
 gives the measured differences between flamsteed and the Hipparcos
-catalogue, for the stars to magnitude 6.5, with the same model for both:
+catalogue, for the stars to magnitude 6.5, with the same model for both.
+`verify/compare.py` repeats the measurement on flamsteed's own output (the
+`directions` example) with a reference catalogue that you supply. It prints
+only aggregate statistics, and nothing that it prints goes into the
+catalogue:
 
 | Epoch | Median | 99 percent |
 |---|---|---|
