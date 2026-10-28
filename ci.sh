@@ -6,6 +6,9 @@ cd "$(dirname "$0")"
 echo "== structure checks =="
 ./scripts/check-structure.sh
 
+echo "== publishable crates =="
+./scripts/check-publishable-crates.sh
+
 echo "== cargo fmt --check =="
 cargo fmt --all --check
 
