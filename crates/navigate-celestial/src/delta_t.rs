@@ -4,8 +4,8 @@
 //! connects them. Before 1948.0, the spline of Stephenson, Morrison and
 //! Hohenkerk models it (see `delta_t/model.rs`). A table gives it from 1948.0
 //! to the last IERS prediction: historical values to 1972, IERS measurements
-//! from 1973, then the IERS predictions for about one year. `fixtures/delta_t_table.py` writes the
-//! table from the USNO files. After the last prediction, Delta T continues
+//! from 1973, then the IERS predictions for about one year.
+//! `examples/delta_t_table.rs` writes the table from the USNO files. After the last prediction, Delta T continues
 //! with the slope of the last year, and its uncertainty grows as a backtest of
 //! that rule on the table measured: from 1900 for up to 80 years, and from
 //! 1802 for up to 175 years, which reaches past 2200.
