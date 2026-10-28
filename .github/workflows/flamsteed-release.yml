@@ -57,7 +57,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "target/package/flamsteed-$VERSION.crate" \
+          # Attach the file that crates.io serves, after a check against the
+          # checksum that crates.io records for the version. cargo publish
+          # does not keep its package at a fixed path.
+          crate="flamsteed-$VERSION.crate"
+          agent="flamsteed-release (github.com/$GITHUB_REPOSITORY)"
+          want=$(curl -sSf -A "$agent" \
+            "https://crates.io/api/v1/crates/flamsteed/$VERSION" | jq -r .version.checksum)
+          curl -sSfL -A "$agent" -o "$crate" \
+            "https://static.crates.io/crates/flamsteed/$crate"
+          echo "$want  $crate" | sha256sum --check
+          gh release create "$GITHUB_REF_NAME" "$crate" \
+            --verify-tag \
             --title "flamsteed $VERSION" \
             --notes "flamsteed $VERSION on crates.io: https://crates.io/crates/flamsteed/$VERSION. The .crate file is the published package."
