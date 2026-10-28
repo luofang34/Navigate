@@ -16,11 +16,18 @@
 //! binaries with an ORB6 orbit, [`Star::component_direction_at`] adds the
 //! orbital motion of the star itself.
 //!
-//! The stable API in 0.1 is [`Catalog`], [`Catalog::from_bytes`] and the
-//! file formats 1 and 2, [`FormatError`], the fields of [`Star`], [`StarId`],
-//! [`Astrometry`], [`Axes`], [`Motion`], and the `direction_at` functions.
-//! [`Star`] can gain fields, and [`StarId`], [`Astrometry`], [`Axes`], and
-//! [`FormatError`] can gain variants, without a major version.
+//! The core API is meant to stay compatible into 1.0: [`Catalog`] with
+//! [`Catalog::bright_star_catalogue`], [`Catalog::brighter_than`],
+//! [`Catalog::stars`], and [`Catalog::from_bytes`] for file format 1, the
+//! fields of [`Star`], [`StarId`], [`FormatError`], and
+//! [`Star::direction_at`]. [`Star`] can gain fields, and [`StarId`] and
+//! [`FormatError`] can gain variants, without a breaking release.
+//!
+//! These parts can still change in a 0.x minor release: file format 2 with
+//! [`Astrometry`] and [`Axes`], [`Motion`], [`Float`], and
+//! [`Catalog::motions`], the binary-star orbits
+//! ([`Star::component_direction_at`], [`Star::orbital_offset_rad_at`]), and
+//! [`Star::barycentric_position_pc_at`].
 //!
 //! [`Catalog::bright_star_catalogue`] is the embedded Bright Star Catalogue.
 //! [`Catalog::from_bytes`] reads other catalogue data from bytes that the
