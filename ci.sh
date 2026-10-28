@@ -14,7 +14,7 @@ cargo clippy --all-targets -- -D warnings
 
 echo "== wasm32 (navigate-celestial) =="
 cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
-cargo clippy -p navigate-celestial --features long-range --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-celestial --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
 echo "== flamsteed (wasm32, no_std targets, QEMU, crates.io package) =="
 cargo clippy -p flamsteed --target wasm32-unknown-unknown -- -D warnings
@@ -32,9 +32,9 @@ done
 ./scripts/check-flamsteed-qemu.sh
 cargo package -p flamsteed --allow-dirty
 
-echo "== navigate-celestial long-range feature =="
-cargo clippy -p navigate-celestial --features long-range --all-targets -- -D warnings
-cargo test -p navigate-celestial --features long-range
+echo "== navigate-celestial without long-range (1800 to 2200 series) =="
+cargo clippy -p navigate-celestial --no-default-features --all-targets -- -D warnings
+cargo test -p navigate-celestial --no-default-features
 
 echo "== cargo test =="
 cargo test --all-targets

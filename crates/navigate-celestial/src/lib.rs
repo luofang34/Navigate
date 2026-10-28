@@ -9,10 +9,10 @@
 //! [`stars_ecef_tt`] give the bright stars. [`civil_time`] and
 //! [`delta_t`](fn@delta_t) give the TT and UT1 of a civil clock reading.
 //!
-//! The Sun, the Moon, and the stars cover 1800 to 2200. The `long-range`
-//! feature extends them to -2000 to 3000 with larger series tables fitted to
-//! JPL DE431, and it improves the Sun and the Moon to 0.3 arcsecond in the
-//! modern era.
+//! The Sun, the Moon, and the stars cover -2000 to 3000 with the default
+//! `long-range` feature: series tables fitted to JPL DE431, with the Sun and
+//! the Moon within 0.3 arcsecond in the modern era. Without default features,
+//! smaller series cover 1800 to 2200, with the Moon within 18 arcseconds.
 
 mod analytic;
 #[cfg(feature = "anise")]
