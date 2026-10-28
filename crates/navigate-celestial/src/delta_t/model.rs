@@ -12,8 +12,10 @@
 //!
 //! The spline comes from eclipse and occultation records reduced with the
 //! JPL DE430 Moon, or a Moon with a tidal acceleration near -25.82
-//! arcseconds per century squared. The long-range Moon follows DE441, which
-//! has the same tidal model, so the values need no tidal correction.
+//! arcseconds per century squared, so the values apply without a tidal
+//! correction only to a Moon of that class. JPL DE441 is not one: before
+//! 500 its Moon departs from DE431, the long version of DE430, by 65
+//! arcseconds at -762.
 //!
 //! The uncertainty is the standard error of Morrison and Stephenson (2004)
 //! to 1750: before -500 it is 0.8 u^2 seconds with u in centuries from 1820,
