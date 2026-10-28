@@ -46,9 +46,12 @@ fn tt_before_1972_is_ut1_plus_delta_t_not_the_utc_of_that_time() {
 
 #[test]
 fn the_basis_follows_measurement_prediction_and_extrapolation() {
-    let observed = civil_time(utc("1943-05-16T20:25:00 UTC")).delta_t;
+    let modelled = civil_time(utc("1943-05-16T20:25:00 UTC")).delta_t;
+    assert_eq!(modelled.basis, DeltaTBasis::Modelled);
+    assert!((modelled.seconds - 25.6).abs() < 1.0, "{modelled:?}");
+    let observed = civil_time(utc("1951-05-16T20:25:00 UTC")).delta_t;
     assert_eq!(observed.basis, DeltaTBasis::Observed);
-    assert!((observed.seconds - 25.6).abs() < 1.0, "{observed:?}");
+    assert!((observed.seconds - 29.7).abs() < 0.2, "{observed:?}");
     assert_eq!(
         delta_t(utc("2020-01-01T00:00:00 UTC")).basis,
         DeltaTBasis::Observed
@@ -118,8 +121,8 @@ fn the_model_meets_the_table_at_its_first_row() {
     assert_eq!(before.basis, DeltaTBasis::Modelled);
     assert_eq!(at.basis, DeltaTBasis::Observed);
     assert_eq!(at.seconds, first_seconds);
-    // Both estimates have about 2 s uncertainty here; they differ by about 1 s.
-    assert!((before.seconds - first_seconds).abs() < 2.0, "{before:?}");
+    // The spline meets the historical value within 0.02 s.
+    assert!((before.seconds - first_seconds).abs() < 0.02, "{before:?}");
 }
 
 #[test]
