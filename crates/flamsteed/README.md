@@ -69,7 +69,8 @@ Skyfield to a relative 1e-8 from -2000 to 3000.
 
 The table stores each star as a J2000 unit vector and a space velocity in
 fixed point. Thus no trigonometry runs when the crate reads a star or moves
-it. `Motion` holds the vectors in `f64` or `f32`:
+it. Only the binary orbits of `Star::component_direction_at` use a sine and a
+cosine. `Motion` holds the vectors in `f64` or `f32`:
 
 - `f64` keeps the precision of the table. Format version 1 stores a position
   to 0.1 milliarcsecond, a velocity to 0.0002 milliarcsecond per year, and a
@@ -160,9 +161,35 @@ catalogue, for the stars to magnitude 6.5, with the same model for both:
 | -2000 | 23 arcsec | 141 arcsec |
 
 Hipparcos is not the truth for long spans. Its proper motions come from three
-years of observations, and the orbits of binary stars change them. The model
-does not include the orbits of binary stars. Close binaries, for example
-Alpha Centauri, can differ by some arcminutes in the past.
+years of observations, and the orbits of binary stars change them. Close
+binaries, for example Alpha Centauri, can differ by some arcminutes in the
+past.
+
+## Binary stars
+
+The catalogue proper motion of a star in a binary is the motion of the
+system. `Star::direction_at` follows the system. `Star::component_direction_at`
+adds the orbital motion of the star itself, for the 133 stars in binaries
+with an ORB6 orbit of grade 1 to 3 that moves them by more than 0.1
+arcsecond. The offset is zero at J2000. From -2000 to 3000, the largest
+offsets are 11.0 arcseconds for Alpha Centauri A, 13.1 for Alpha Centauri B,
+4.1 for Sirius A, and 2.3 for Procyon A.
+
+The relative orbits agree with the USNO ORB6 ephemerides for 2025 to 2029
+within two times their rounding. The share of each star in the relative
+orbit needs the mass ratio, which ORB6 does not give:
+
+- For Alpha Centauri, Sirius, and Procyon, the share comes from published
+  dynamical masses.
+- For the other systems, the share is a model, not a measurement: a
+  main-sequence mass-luminosity relation applied to the magnitude difference.
+  For Alpha Centauri this model gives a mass fraction of 0.42, not 0.46. For
+  a giant or a white-dwarf companion it is wrong: it gives 0.09, not 0.33, for
+  Sirius.
+
+An orbit has an epoch range. Far from its observations, an error in the
+period moves the star to a different phase on its orbit, but the offset
+stays within the size of the star's orbit.
 
 The FK5 axes of the catalogue also turn slowly relative to ICRS, by up to
 about 0.9 milliarcsecond per year (Mignard and Froeschle 2000). The crate does

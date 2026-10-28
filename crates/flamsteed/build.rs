@@ -3,7 +3,8 @@
 //! The records are brightest first, so a magnitude limit keeps a prefix.
 //! Without a magnitude feature the limit is V = 4.0. The `magnitude-5`
 //! feature raises it to 5.0, and `all-stars` keeps every record. The output
-//! has a new header with the record count and CRC-32 of the prefix.
+//! has a new header with the record count and CRC-32 of the prefix. The
+//! binary-star orbit table is checked the same way and copied whole.
 
 use std::{io::Write as _, path::PathBuf};
 
@@ -61,8 +62,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     out.extend_from_slice(&crc32(prefix).to_le_bytes());
     out.extend_from_slice(header.get(28..32).ok_or("short header")?);
     out.extend_from_slice(prefix);
-    let path = PathBuf::from(std::env::var("OUT_DIR")?).join("stars.bin");
-    std::fs::write(path, out)?;
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
+    std::fs::write(out_dir.join("stars.bin"), out)?;
+    orbits(&out_dir)
+}
+
+/// Check the binary-star orbit table and copy it beside the stars.
+fn orbits(out_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    const ORBIT_RECORD_BYTES: usize = 68;
+    let mut stdout = std::io::stdout();
+    writeln!(stdout, "cargo:rerun-if-changed=data/orbits.bin")?;
+    let table = std::fs::read("data/orbits.bin")?;
+    let (header, body) = table
+        .split_at_checked(HEADER_BYTES)
+        .ok_or("data/orbits.bin is shorter than its header")?;
+    let word = |start: usize| -> Result<u32, String> {
+        let bytes = header.get(start..start + 4).ok_or("short header")?;
+        Ok(u32::from_le_bytes(
+            bytes.try_into().map_err(|_| "short header")?,
+        ))
+    };
+    if header.get(..8) != Some(b"FLAMORBT".as_slice()) || header.get(8..12) != Some(&[1, 0, 68, 0])
+    {
+        return Err("data/orbits.bin is not a format version 1 table with 68-byte records".into());
+    }
+    if usize::try_from(word(12)?)? * ORBIT_RECORD_BYTES != body.len() {
+        return Err("data/orbits.bin has a record count that does not match its length".into());
+    }
+    if word(24)? != crc32(body) {
+        return Err("data/orbits.bin fails its CRC-32".into());
+    }
+    std::fs::write(out_dir.join("orbits.bin"), table)?;
     Ok(())
 }
 
