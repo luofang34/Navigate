@@ -30,6 +30,10 @@ magnitude-5 = []
 all-stars = ["magnitude-5"]
 # Float functions from libm, for targets without the standard library.
 libm = ["dep:libm"]
+# Square roots from core on a nightly compiler (`core_float_math`), which use
+# the hardware instruction where the target has one, for example vsqrt.f32 on
+# the Cortex-M33. It needs a nightly toolchain.
+nightly = []
 
 [dependencies]
 libm = { version = "0.2.16", optional = true }

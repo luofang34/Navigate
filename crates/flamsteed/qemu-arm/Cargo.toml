@@ -15,6 +15,10 @@ cortex-m-rt = "0.7"
 semihosting = { version = "0.1", features = ["stdio"] }
 panic-halt = "1"
 
+[features]
+# Hardware square roots through flamsteed's nightly feature.
+nightly = ["flamsteed/nightly"]
+
 [profile.release]
 opt-level = "s"
 lto = true

@@ -3,7 +3,10 @@
 //!
 //! `core` has no square root or arctangent on stable Rust. With the `std`
 //! feature these come from the standard library, which uses the hardware
-//! instruction where the target has one. Without it they come from `libm`.
+//! instruction where the target has one. Without it they come from `libm`,
+//! which uses a software square root on Cortex-M. The `nightly` feature takes
+//! the square root from `core` (`core_float_math`), which uses the hardware
+//! instruction, for example `vsqrt.f32` on the Cortex-M33.
 //! Only [`Motion::direction_at`](crate::Motion::direction_at) needs a square
 //! root, and only the right ascension and declination accessors need an
 //! arctangent; [`Motion::position_at`](crate::Motion::position_at) needs
@@ -66,7 +69,11 @@ impl Float for f64 {
         {
             f64::sqrt(self)
         }
-        #[cfg(not(feature = "std"))]
+        #[cfg(all(not(feature = "std"), feature = "nightly"))]
+        {
+            core::f64::math::sqrt(self)
+        }
+        #[cfg(all(not(feature = "std"), not(feature = "nightly")))]
         {
             libm::sqrt(self)
         }
@@ -95,7 +102,11 @@ impl Float for f32 {
         {
             f32::sqrt(self)
         }
-        #[cfg(not(feature = "std"))]
+        #[cfg(all(not(feature = "std"), feature = "nightly"))]
+        {
+            core::f32::math::sqrt(self)
+        }
+        #[cfg(all(not(feature = "std"), not(feature = "nightly")))]
         {
             libm::sqrtf(self)
         }
