@@ -54,10 +54,10 @@ pub enum AnalyticError {
 /// Sun, Earth, and Moon states from truncated analytic series.
 ///
 /// This provider needs no kernel files, reads no clock, and does no I/O.
-/// By default the Earth comes from VSOP87D and the Moon from the ELP-2000/82
-/// series in Meeus, chapter 47, and IAU 1976 precession rotates both to
-/// J2000 axes. With the `long-range` feature the Earth comes from VSOP87B and
-/// the Moon from ELP2000-82B, both fitted to JPL DE431 and in J2000 axes.
+/// With the default `long-range` feature the Earth comes from VSOP87B and the
+/// Moon from ELP2000-82B, both fitted to JPL DE431 and in J2000 axes. Without
+/// it the Earth comes from VSOP87D and the Moon from the ELP-2000/82 series in
+/// Meeus, chapter 47, and IAU 1976 precession rotates both to J2000 axes.
 ///
 /// The origin is the centre of the Sun, not the solar system barycentre.
 /// The two are up to 1.5e9 m apart, so only differences between states of
@@ -68,12 +68,12 @@ pub enum AnalyticError {
 /// Through [`observe_body`](crate::observe_body) with
 /// [`Correction::VacuumReception`](crate::Correction::VacuumReception) for a
 /// geocentric observer, the tests bound the direction error relative to JPL
-/// DE421 (1900 to 2050) and DE440 (1800 to 2200) at 1.5 arcseconds for the
-/// Sun and 18 arcseconds for the Moon, and the Moon range error at 15 km. The
-/// supported range is 1800 to 2200 TDB.
+/// DE421 (1900 to 2050) and DE440 (1800 to 2200) at 0.3 arcsecond for the Sun
+/// and 0.4 arcsecond for the Moon, and the Moon range error at 250 m. The
+/// supported range is -2000 to 3000 TDB.
 ///
-/// With `long-range`, the same tests bound the Sun at 0.3 arcsecond and the
-/// Moon at 0.4 arcsecond and 250 m, and the range is -2000 to 3000 TDB.
+/// Without `long-range`, the same tests bound the Sun at 1.5 arcseconds and
+/// the Moon at 18 arcseconds and 15 km, and the range is 1800 to 2200 TDB.
 /// Relative to DE431 the tests bound the Sun, the Moon, and the Moon-Sun
 /// elongation by millennium: 0.21, 0.48, and 0.37 arcsecond from 2000 to
 /// 3000, and 1.15, 5.5, and 6.5 arcseconds from -2000 to -1000.

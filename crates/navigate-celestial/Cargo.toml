@@ -7,9 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+default = ["long-range"]
 anise = ["dep:anise"]
-# Sun and Moon from -2000 to 3000 with VSOP87B and ELP2000-82B fitted to DE431.
+# Sun and Moon from -2000 to 3000 with VSOP87B and ELP2000-82B fitted to DE431,
+# for historical and ancient use. Without it, smaller series cover 1800 to 2200.
 long-range = []
 
 [dependencies]
