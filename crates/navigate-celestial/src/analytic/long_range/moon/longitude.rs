@@ -4,10 +4,10 @@ mod main_1;
 mod perturbation_1;
 mod perturbation_2;
 
-/// Mean longitude W1 in radians, by power of `t`, fitted to DE441.
+/// Mean longitude W1 in radians, by power of `t`, fitted to DE431.
 #[rustfmt::skip]
 #[allow(clippy::approx_constant, reason = "theory coefficients; some phases are close to PI")]
-pub(super) const MEAN_LONGITUDE: [f64; 5] = [3.8103437622077596, 8399.684729799266, -3.315181061558742e-5, 4.9167457709282675e-8, -1.5363745554361197e-10];
+pub(super) const MEAN_LONGITUDE: [f64; 5] = [3.8103435902201577, 8399.684729778462, -3.316753787084427e-5, 3.3484699278858954e-8, -1.5363745554361197e-10];
 
 /// Main problem, in parts.
 #[rustfmt::skip]

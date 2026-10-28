@@ -33,7 +33,7 @@ pub(super) static B: [&[Term]; 6] = [&b0_1::TERMS, &b1_1::TERMS, &b2_1::TERMS, &
 #[rustfmt::skip]
 pub(super) static R: [&[Term]; 6] = [&r0_1::TERMS, &r1_1::TERMS, &r2_1::TERMS, &r3_1::TERMS, &r4_1::TERMS, &r5_1::TERMS];
 
-/// Correction to the VSOP87B longitude, fitted to DE441: radians by power
+/// Correction to the VSOP87B longitude, fitted to DE431: radians by power
 /// of TDB Julian centuries from J2000.
 #[rustfmt::skip]
-pub(super) const LONGITUDE_CORRECTION: [f64; 4] = [-8.123185493132213e-7, 3.540765252183834e-8, -5.507945266856043e-9, -1.167283895387438e-12];
+pub(super) const LONGITUDE_CORRECTION: [f64; 4] = [-8.115241519724915e-7, 3.872871432104137e-8, 1.7817141354631156e-10, -1.2438603081108988e-12];

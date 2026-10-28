@@ -6,20 +6,23 @@
 //! precession of date is necessary. `examples/long_range_tables.rs` writes the
 //! tables and describes the truncation.
 //!
-//! Both series are fitted to JPL DE441 (`examples/long_range_fit.rs`): cubic
+//! Both series are fitted to JPL DE431 (`examples/long_range_fit.rs`): cubic
 //! corrections to the mean longitudes of the Moon, its perigee and node, and
-//! the Sun, and to the VSOP87B longitude. The fit gives the tidal
-//! acceleration of the Moon, -25.79 arcseconds per century squared at T^2,
-//! with a small T^3 term. The largest errors against the DE441 fixture, in
-//! arcseconds and metres:
+//! the Sun, and to the VSOP87B longitude. DE431 is the long version of
+//! DE430, the lunar ephemeris that the Delta T of Stephenson, Morrison and
+//! Hohenkerk pairs with. JPL DE441 is not: before 500 its Moon departs from
+//! DE431 by 65 arcseconds at -762 and 200 at -2000, which would move an
+//! ancient eclipse by minutes. The fit gives the tidal acceleration of the
+//! Moon, -25.80 arcseconds per century squared. The largest errors against
+//! the DE431 fixture, in arcseconds and metres:
 //!
 //! | Millennium | Sun | Moon | Moon-Sun elongation | Moon range |
 //! |---|---|---|---|---|
-//! | -2000 | 0.85 | 4.3 | 5.0 | 780 |
-//! | -1000 | 0.36 | 2.2 | 2.4 | 400 |
-//! | 0 | 0.30 | 0.93 | 1.1 | 150 |
-//! | 1000 | 0.25 | 0.29 | 0.33 | 140 |
-//! | 2000 | 0.16 | 0.31 | 0.26 | 140 |
+//! | -2000 | 0.88 | 4.3 | 5.0 | 790 |
+//! | -1000 | 0.37 | 2.2 | 2.5 | 400 |
+//! | 0 | 0.30 | 0.92 | 1.1 | 140 |
+//! | 1000 | 0.25 | 0.29 | 0.31 | 130 |
+//! | 2000 | 0.16 | 0.37 | 0.29 | 140 |
 
 use super::{ASTRONOMICAL_UNIT_M, earth as vsop87};
 use crate::precession::frame_x;

@@ -10,7 +10,7 @@
 //! - The polynomials of the mean longitudes W1, W2, W3, the mean longitude of
 //!   the Earth-Moon barycentre, and its perihelion get the corrections of a
 //!   [`Fit`], and so does the VSOP87B longitude. The fit replaces the DE200
-//!   tidal acceleration of the theory: the T^2 term of W1 comes from DE441.
+//!   tidal acceleration of the theory: the T^2 term of W1 comes from DE431.
 
 use std::{collections::BTreeMap, f64::consts::PI, path::Path};
 
