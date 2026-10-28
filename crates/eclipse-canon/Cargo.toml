@@ -1,0 +1,26 @@
+[package]
+name = "eclipse-canon"
+description = "The Five Millennium Canon catalogues of solar and lunar eclipses, -1999 to 3000, as embedded data with no I/O"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/luofang34/Navigate"
+readme = "README.md"
+keywords = ["astronomy", "eclipse", "catalogue", "no_std"]
+categories = ["science", "no-std"]
+publish = true
+include = [
+    "src/**/*.rs",
+    "examples/*.rs",
+    "data/solar.bin",
+    "data/lunar.bin",
+    "LICENSE",
+    "README.md",
+]
+
+[dev-dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -2721,6 +2721,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
+name = "eclipse-canon"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5123,6 +5130,7 @@ name = "navigate-celestial"
 version = "0.1.0"
 dependencies = [
  "anise",
+ "eclipse-canon",
  "erfa",
  "flamsteed",
  "hifitime",

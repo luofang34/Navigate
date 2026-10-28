@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/eclipse-canon",
     "crates/flamsteed",
     "crates/navigate-celestial",
     "crates/navigate-contract",
@@ -42,6 +43,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
+eclipse-canon = { path = "crates/eclipse-canon" }
 flamsteed = { path = "crates/flamsteed", version = "0.1.0" }
 navigate-contract = { path = "crates/navigate-contract" }
 navigate-geodesy = { path = "crates/navigate-geodesy" }

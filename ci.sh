@@ -37,9 +37,19 @@ done
 # flamsteed changes.
 cargo package -p flamsteed --allow-dirty
 
+echo "== eclipse-canon without the standard library =="
+for target in thumbv8m.main-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
+    cargo clippy -p eclipse-canon --target "$target" -- -D warnings
+done
+cargo package -p eclipse-canon --allow-dirty
+
 echo "== navigate-celestial without long-range (1800 to 2200 series) =="
 cargo clippy -p navigate-celestial --no-default-features --all-targets -- -D warnings
 cargo test -p navigate-celestial --no-default-features
+
+echo "== navigate-celestial against every eclipse of the Canon (release) =="
+# cargo test checks a sample in the debug build; this checks every eclipse.
+cargo test --release -p navigate-celestial --test eclipse_canon
 
 echo "== cargo test =="
 cargo test --all-targets
