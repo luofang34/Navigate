@@ -87,3 +87,28 @@ fn uncertainty_covers_the_usno_historical_values_from_1800() {
     assert_eq!(uncertainty(1850.0), 3.3);
     assert_eq!(uncertainty(1900.0), 1.3);
 }
+
+#[test]
+fn spline_meets_the_untimed_eclipses_that_constrain_it() {
+    // Table S10 (version 2020) of the addendum supplement: total and annular
+    // solar eclipses seen but not timed, which bound Delta T from below and
+    // above. These are the records that the authors weighted most. The
+    // table gives the year only, so the test takes the middle of the year
+    // and allows 20 s, about half a year of change at -700.
+    let bounds = [
+        (-708.0, 20_160.0, 21_100.0),
+        (-135.0, 11_220.0, 12_140.0),
+        (71.0, 9_440.0, 9_830.0),
+        (454.0, 6_030.0, 7_800.0),
+        (761.0, 1_700.0, 3_260.0),
+        (1241.0, 625.0, 1_005.0),
+        (1567.0, 145.0, 165.0),
+    ];
+    for (year, lower, upper) in bounds {
+        let seconds = value(year + 0.5);
+        assert!(
+            (lower - 20.0..=upper + 20.0).contains(&seconds),
+            "{year}: {seconds} outside {lower}..{upper}"
+        );
+    }
+}
