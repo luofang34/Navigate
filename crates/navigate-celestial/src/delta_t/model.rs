@@ -10,12 +10,14 @@
 //! from -1520 to -720 joins the two with the value and the slope of each,
 //! as in Skyfield, because the parabola is 360 s above the spline at -720.
 //!
-//! The spline comes from eclipse and occultation records reduced with the
-//! JPL DE430 Moon, or a Moon with a tidal acceleration near -25.82
-//! arcseconds per century squared, so the values apply without a tidal
-//! correction only to a Moon of that class. JPL DE441 is not one: before
-//! 500 its Moon departs from DE431, the long version of DE430, by 65
-//! arcseconds at -762.
+//! The spline comes from eclipse records before 1600 reduced with the
+//! analytical lunar ephemeris j=2 (tidal acceleration -26.00 arcseconds per
+//! century squared) and from occultations after 1600 reduced with JPL DE430.
+//! The authors found DE430 within about 10 arcseconds of j=2 back to 700 BC,
+//! about 20 s of Delta T, and give the values for use with DE430 or a Moon
+//! with a tidal acceleration near -25.82 arcseconds per century squared,
+//! without a tidal correction. JPL DE441 is not such a Moon: before 500 it
+//! departs from DE431, the long version of DE430, by 65 arcseconds at -762.
 //!
 //! The uncertainty is the standard error of Morrison and Stephenson (2004)
 //! to 1750: before -500 it is 0.8 u^2 seconds with u in centuries from 1820,
