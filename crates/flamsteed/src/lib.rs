@@ -35,6 +35,7 @@
 //! ```
 
 #![no_std]
+#![cfg_attr(feature = "nightly", feature(core_float_math))]
 
 #[cfg(not(any(feature = "std", feature = "libm")))]
 compile_error!("flamsteed needs the `std` feature or the `libm` feature for float functions");

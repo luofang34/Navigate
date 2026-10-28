@@ -78,6 +78,15 @@ it. `Motion` holds the vectors in `f64` or `f32`:
 direction before normalization, with only multiplications and additions, for
 a GPU or a microcontroller that normalizes itself.
 
+On stable Rust, `core` has no square root, so a build without the standard
+library takes it from `libm`, which calculates it in software on Cortex-M.
+For a microcontroller with an FPU, use a nightly compiler and the `nightly`
+feature: the `f32` square root is then the hardware instruction, for example
+`vsqrt.f32` on the Cortex-M33. On the QEMU Cortex-M33 this reduces the `f32`
+read and `direction_at` from 161 to 101 instructions, and the prepared
+`direction_at` from 97 to 35. CI checks the instruction in the
+disassembly.
+
 These are measured costs for each star:
 
 | Path | Laptop CPU (Apple silicon) | Cortex-M33 with FPU | RV32IMAC, no FPU |
@@ -102,6 +111,7 @@ All 9096 stars in `f32` use 255 KB.
 |---|---|
 | `std` (default) | float functions from the standard library |
 | `libm` | float functions from `libm`, for targets without the standard library |
+| `nightly` | square roots from `core` on a nightly compiler, which use the hardware instruction |
 | `all-stars` (default) | embed all 9096 stars: 309 KB |
 | `magnitude-5` | embed the 1630 stars to magnitude 5.0: 55 KB |
 | neither | embed the 518 stars to magnitude 4.0: 18 KB |
