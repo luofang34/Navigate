@@ -15,6 +15,7 @@ COMMANDS = {
     'publish': 'photo_publication',
     'import-video': 'import-video',
     'prepare-video-overlay': 'prepare-video-overlay',
+    'live-prior': 'live_prior',
     'prepare-navigate-debrief': 'prepare-navigate-debrief',
     'compose-survey': 'compose-survey',
 }
