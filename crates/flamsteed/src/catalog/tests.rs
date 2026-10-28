@@ -70,8 +70,16 @@ fn malformed_files_are_rejected() {
     ));
 }
 
+/// The records of the embedded table.
+fn embedded_records() -> &'static [v1::Record] {
+    match Catalog::bright_star_catalogue().records {
+        Records::V1(records) => records,
+        Records::V2(_) => &[],
+    }
+}
+
 /// A format version 1 file of `records`, with a correct header.
-fn file_of(records: &[[u8; RECORD_BYTES]], epoch: f64) -> Vec<u8> {
+fn file_of(records: &[v1::Record], epoch: f64) -> Vec<u8> {
     let body: Vec<u8> = records.concat();
     let mut file = STARS[..HEADER_BYTES].to_vec();
     file[12..16].copy_from_slice(&u32::try_from(records.len()).unwrap().to_le_bytes());
@@ -89,7 +97,8 @@ fn from_bytes_reads_imported_data_without_copying() {
     assert_eq!(imported.len(), embedded.len());
 
     // A subset written by another tool, at another epoch, keeps its records.
-    let records: Vec<[u8; RECORD_BYTES]> = embedded.records[..3].to_vec();
+    assert_eq!(embedded.axes(), Axes::Fk5J2000);
+    let records: Vec<v1::Record> = embedded_records()[..3].to_vec();
     let file = file_of(&records, 16.0);
     let subset = Catalog::from_bytes(&file).unwrap();
     assert_eq!(subset.len(), 3);
@@ -114,7 +123,7 @@ fn from_bytes_reads_imported_data_without_copying() {
 
 #[test]
 fn from_bytes_needs_magnitude_order_and_a_finite_epoch() {
-    let records = &Catalog::bright_star_catalogue().records;
+    let records = embedded_records();
     let reversed = [records[1], records[0]];
     assert_eq!(
         Catalog::from_bytes(&file_of(&reversed, 0.0)).err(),

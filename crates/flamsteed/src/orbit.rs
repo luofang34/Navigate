@@ -91,13 +91,19 @@ pub(crate) fn orbit_of(hr: u16) -> Option<Orbit> {
 impl Star {
     /// The offset of the star from its straight-line motion caused by its
     /// binary orbit, east and north in radians, zero at J2000. `None` if the
-    /// orbit table has no orbit for the star.
+    /// orbit table has no orbit for the star, or if the star's astrometry is
+    /// not from the Bright Star Catalogue: the system motion of that
+    /// catalogue is what the orbit corrects, and another catalogue's
+    /// position already includes the orbit.
     ///
     /// The orbits come from ORB6 (grades 1 to 3). The star's share of the
     /// relative orbit uses a mass fraction from the magnitude difference and a
     /// main-sequence mass-luminosity relation, which is uncertain by about 0.1
     /// of the semi-major axis and wrong for giants.
     pub fn orbital_offset_rad_at(&self, years: f64) -> Option<[f64; 2]> {
+        if self.astrometry != crate::Astrometry::BrightStarCatalogue {
+            return None;
+        }
         let orbit = orbit_of(self.hr()?)?;
         let [east, north] = orbit.relative_arcsec(years);
         let [east0, north0] = orbit.relative_arcsec(0.0);

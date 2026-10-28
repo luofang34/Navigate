@@ -14,15 +14,17 @@ pub enum FormatError {
     /// The file does not start with the magic `FLAMSTED`.
     Magic,
     /// The format version or the record size is not one that this release
-    /// reads. Format version 1 has 34-byte records.
+    /// reads. Format version 1 has 34-byte records and version 2 has 72-byte
+    /// records.
     Version {
         /// The format version in the header.
         version: u16,
         /// The record size in the header.
         record_bytes: u16,
     },
-    /// The identifiers come from a catalogue that this release does not
-    /// know. Source 1 is the Bright Star Catalogue.
+    /// The source does not match the format version. Version 1 needs source
+    /// 1, the Bright Star Catalogue; version 2 needs source 3, HR identifiers
+    /// with the astrometry that each record's provenance names.
     Source {
         /// The source in the header.
         source: u32,
@@ -42,6 +44,12 @@ pub enum FormatError {
         stored: u32,
         /// The CRC-32 of the records.
         computed: u32,
+    },
+    /// A format version 2 record has a position that is not a unit vector or
+    /// a velocity that is not finite.
+    Record {
+        /// The index of the record.
+        index: usize,
     },
     /// A record is brighter than the record before it. The records must be
     /// in magnitude order, brightest first.
@@ -80,6 +88,10 @@ impl fmt::Display for FormatError {
             Self::Checksum { stored, computed } => write!(
                 f,
                 "catalogue CRC-32 is {computed:#010x}, but the header gives {stored:#010x}"
+            ),
+            Self::Record { index } => write!(
+                f,
+                "catalogue record {index} has a position that is not a unit vector or a velocity that is not finite"
             ),
             Self::Order { index } => {
                 write!(
