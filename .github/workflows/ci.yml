@@ -18,7 +18,8 @@ jobs:
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
+          # The no_std targets are the RP2350 Arm and RISC-V cores and the RP2040.
+          targets: wasm32-unknown-unknown, thumbv8m.main-none-eabihf, riscv32imac-unknown-none-elf, thumbv6m-none-eabi
 
       # The visual tools build against the sibling MapLibre fork at the pinned commit.
       - name: Check out the pinned MapLibre fork
@@ -28,8 +29,9 @@ jobs:
 
       # The imagery provider and the visual service link the system GDAL library.
       # The MapLibre fork's build script compiles protobuf schemas with protoc.
-      - name: Install GDAL and protoc
-        run: sudo apt-get update && sudo apt-get install -y libgdal-dev protobuf-compiler
+      # QEMU runs flamsteed on bare-metal RISC-V and Cortex-M33 cores.
+      - name: Install GDAL, protoc, and QEMU
+        run: sudo apt-get update && sudo apt-get install -y libgdal-dev protobuf-compiler qemu-system-misc qemu-system-arm
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

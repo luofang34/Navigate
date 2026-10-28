@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# Build output of the flamsteed QEMU harnesses, which are outside the workspace.
+crates/flamsteed/qemu-*/target/

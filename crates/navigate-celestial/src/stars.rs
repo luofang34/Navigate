@@ -26,7 +26,8 @@ pub struct StarSight {
     pub b_minus_v: Option<f64>,
 }
 
-/// The catalogue stars at least as bright as `faintest_v_magnitude`.
+/// The catalogue stars at least as bright as `faintest_v_magnitude`,
+/// brightest first. Every star of the embedded catalogue has an HR number.
 ///
 /// `epoch` is a civil clock reading, as for [`sun_ecef`](crate::sun_ecef).
 ///
@@ -67,19 +68,21 @@ pub fn stars_ecef_tt(
         Vector3::from(AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s) / LIGHT_SPEED_M_S;
     let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch);
     let years = epoch.to_tdb_centuries_since_j2000() * 100.0;
-    Ok(Catalog::bright_star_catalogue()
-        .stars()
-        .filter(|star| star.v_magnitude <= faintest_v_magnitude)
-        .map(|star| {
-            let apparent = observation::aberrate(Vector3::from(star.direction_at(years)), beta);
-            StarSight {
-                hr: star.hr,
-                direction: (to_earth_fixed * apparent).normalize().into(),
-                v_magnitude: star.v_magnitude,
-                b_minus_v: star.b_minus_v,
-            }
-        })
-        .collect())
+    let stars = Catalog::bright_star_catalogue()
+        .brighter_than(faintest_v_magnitude)
+        .stars();
+    let mut sights = Vec::with_capacity(stars.len());
+    for star in stars {
+        let Some(hr) = star.hr() else { continue };
+        let apparent = observation::aberrate(Vector3::from(star.direction_at(years)), beta);
+        sights.push(StarSight {
+            hr,
+            direction: (to_earth_fixed * apparent).normalize().into(),
+            v_magnitude: star.v_magnitude,
+            b_minus_v: star.b_minus_v,
+        });
+    }
+    Ok(sights)
 }
 
 #[cfg(test)]

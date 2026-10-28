@@ -1,11 +1,38 @@
 # flamsteed
 
-Bright stars and their motion in space, from public-domain catalogue data.
+Bright stars and their motion in space, from public-domain data, as free
+software.
 
-The crate embeds the Yale Bright Star Catalogue, 5th revised edition: 9096
-stars, which is about every star to visual magnitude 6.5. It moves each star
-on a straight line in space to an epoch that you supply. It reads no file and
-no clock, and it builds for `wasm32-unknown-unknown`.
+flamsteed gives the direction of each naked-eye star at an epoch that you
+supply. The tests cover -2000 to 3000. It embeds the Yale Bright Star
+Catalogue: 9096 stars, about every star to visual magnitude 6.5. It reads no
+file and no clock, and it does not allocate. It builds for
+`wasm32-unknown-unknown` and, without the standard library, for
+microcontrollers such as the RP2350.
+
+The crate has its name from John Flamsteed (1646-1719), the first Astronomer
+Royal. He measured the positions of about 3000 stars. In 1712 his data was
+printed without his consent, and he burned the copies that he could get.
+His own catalogue, the *Historia Coelestis Britannica*, came out after his
+death. This crate keeps his data principle: the data and the method are open,
+and each claim about accuracy has a measurement.
+
+## Principles
+
+- **Free software.** The code is under the GNU AGPL, version 3 or later.
+- **Free data.** The catalogue is a United States government work in the
+  public domain. The crate does not contain data with a non-commercial
+  clause.
+- **No ESA dependency.** The crate does not contain ESA data. Its tests and
+  the steps that make its tables do not use ESA data. ESA catalogues serve
+  only for offline comparison, and this README gives those comparisons as
+  measured differences.
+- **Measured claims.** Each accuracy statement comes from a test or a
+  measurement that this repository can repeat.
+- **No I/O.** The crate reads no file and no clock, and it does not
+  allocate. You supply the epoch.
+- **Small dependencies.** With the standard library the crate has no
+  dependencies. Without it, `libm` (MIT) gives the float functions.
 
 ## Use
 
@@ -14,14 +41,82 @@ use flamsteed::Catalog;
 
 // Julian years (TT) from J2000: -2330.0 is 331 BC.
 let bright: Vec<[f64; 3]> = Catalog::bright_star_catalogue()
+    .brighter_than(2.0)
     .stars()
-    .filter(|star| star.v_magnitude <= 2.0)
     .map(|star| star.direction_at(-2330.0))
     .collect();
 ```
 
 Each direction is a unit vector in J2000 equatorial axes, from the solar
-system barycentre. For an observer, apply aberration and Earth axes.
+system barycentre. The axes are those of FK5, which differ from ICRS by less
+than 0.1 arcsecond. For an observer on the Earth, apply aberration and Earth
+axes. The `navigate-celestial` crate does these steps.
+
+The catalogue keeps the stars in magnitude order, brightest first.
+`brighter_than` gives a smaller catalogue, a prefix, and reads only the stars
+that it keeps. Each `Star` gives its identifier, V magnitude, B-V colour,
+position and velocity at the reference epoch, parallax, and radial velocity.
+A value that the catalogue does not give is `None`. The right ascension,
+declination, and proper motion are methods.
+
+## Speed and precision
+
+The table stores each star as a J2000 unit vector and a space velocity in
+fixed point. Thus no trigonometry runs when the crate reads a star or moves
+it. `Motion` holds the vectors in `f64` or `f32`:
+
+- `f64` keeps the precision of the table. Format version 1 stores a position
+  to 0.1 milliarcsecond, a velocity to 0.0002 milliarcsecond per year, and a
+  parallax to 1 milliarcsecond.
+- `f32` keeps a direction within 0.03 arcsecond of `f64` for every star from
+  -4000 to 1000 years from J2000 (measured maximum 0.021 arcsecond). A
+  single-precision FPU, for example the Cortex-M33 FPU of the RP2350,
+  calculates it natively. `catalog.motions::<f32>()` reads the table to `f32`
+  with no double-precision operation.
+
+`Motion::direction_at` needs one square root. `Motion::position_at` gives the
+direction before normalization, with only multiplications and additions, for
+a GPU or a microcontroller that normalizes itself.
+
+These are measured costs for each star:
+
+| Path | Laptop CPU (Apple silicon) | Cortex-M33 with FPU | RV32IMAC, no FPU |
+|---|---|---|---|
+| read and `direction_at`, `f64` | 2.1 ns | 1,940 instructions | 3,014 instructions |
+| `motions::<f32>()` and `direction_at` | 1.7 ns | 161 instructions | 1,974 instructions |
+| prepared `Motion::direction_at` (`f64` on the laptop, `f32` on the microcontrollers) | 1.6 ns | 97 instructions | 1,202 instructions |
+
+`scripts/check-flamsteed-qemu.sh` gives the microcontroller values. It runs
+the crate in QEMU on a Cortex-M33 (`mps2-an505`, as the RP2350 Arm cores)
+and on an RV32IMAC core (as the RP2350 RISC-V cores), and it compares each
+checksum with the host. QEMU counts instructions, not clock cycles. CI builds
+the crate for the RP2040 (Cortex-M0+, no FPU) but does not run it there; the
+RV32IMAC column, which also has no FPU, is the nearest measurement.
+
+A prepared `Motion<f32>` uses 28 bytes of RAM and a `Motion<f64>` 56 bytes.
+All 9096 stars in `f32` use 255 KB.
+
+## Targets and features
+
+| Feature | Effect |
+|---|---|
+| `std` (default) | float functions from the standard library |
+| `libm` | float functions from `libm`, for targets without the standard library |
+| `all-stars` (default) | embed all 9096 stars: 309 KB |
+| `magnitude-5` | embed the 1630 stars to magnitude 5.0: 55 KB |
+| neither | embed the 518 stars to magnitude 4.0: 18 KB |
+
+For a microcontroller, use `default-features = false, features = ["libm"]`
+and add a magnitude feature if the flash has space. Cargo unifies features
+across the dependency graph: if another crate depends on flamsteed with its
+default features, the full table comes back. CI builds the crate for
+`thumbv8m.main-none-eabihf` (RP2350 Arm cores),
+`riscv32imac-unknown-none-elf` (RP2350 RISC-V cores), and
+`thumbv6m-none-eabi` (RP2040). The code is about 32 KB on RV32IMAC, with the
+QEMU runtime.
+
+The build script checks the table and its CRC-32, and a constant check in
+the crate rejects a bad header, so a damaged table stops the build.
 
 ## Model
 
@@ -29,14 +124,17 @@ Each star moves on a straight line in space from its J2000 position. The
 motion has two parts: the proper motion, and the radial velocity where the
 catalogue gives a trigonometric parallax. The light-time factor
 1 / (1 - v_r / c) turns the observed rates into space motion, as in SOFA
-`eraStarpv`. The tests compare the motion with Skyfield from -2000 to 3000.
-The difference is less than 0.01 arcsecond.
+`eraStarpv`. A star without a parallax has no radial term.
+
+The tests compare 40 stars at five epochs from -2000 to 3000 with a
+reference that agrees with Skyfield to 0.002 arcsecond. The difference from
+the reference is less than 0.01 arcsecond.
 
 ## Accuracy
 
-The catalogue proper motions limit the accuracy far from J2000. These are
-measured differences between this crate and the Hipparcos catalogue, for the
-stars to magnitude 6.5, with the same model for both:
+The catalogue proper motions limit the accuracy far from J2000. This table
+gives the measured differences between flamsteed and the Hipparcos
+catalogue, for the stars to magnitude 6.5, with the same model for both:
 
 | Epoch | Median | 99 percent |
 |---|---|---|
@@ -46,19 +144,36 @@ stars to magnitude 6.5, with the same model for both:
 | -2000 | 23 arcsec | 141 arcsec |
 
 Hipparcos is not the truth for long spans. Its proper motions come from three
-years of observations. The orbits of binary stars are not in the model. Close
-binaries, for example Alpha Centauri, can differ by some arcminutes in the
-past.
+years of observations, and the orbits of binary stars change them. The model
+does not include the orbits of binary stars. Close binaries, for example
+Alpha Centauri, can differ by some arcminutes in the past.
 
-## Data and licence
+The FK5 axes of the catalogue also turn slowly relative to ICRS, by up to
+about 0.9 milliarcsecond per year (Mignard and Froeschle 2000). The crate does
+not correct this rotation. At -2000 it is about 3.6 arcseconds, and the
+measured differences above include it.
 
-The data comes from CDS catalogue V/50 (Hoffleit and Warren 1991). The NASA
-Astronomical Data Center prepared it. It is a United States government work
-and is in the public domain. The `bsc5_table` example makes `data/bsc5.bin`
-from the CDS file. The example also gives the record layout.
+## Comparison with ESA catalogues
 
-The crate does not contain ESA data. Its tests and the steps that make its
-tables do not use ESA data. ESA catalogues serve only for offline comparison.
+| Property | flamsteed | Hipparcos, Gaia DR3 |
+|---|---|---|
+| Licence of the data | public domain | CC BY-NC 3.0 IGO; commercial use needs ESA permission |
+| Bright stars | all naked-eye stars | Gaia DR3 does not have about 20 percent of the stars brighter than G = 3, for example Polaris |
+| Proper motions | differ from Hipparcos by a median of 2.6 mas/yr (FK5 stars) to 5.7 mas/yr (all stars), measured | formal errors of about 1 mas/yr (Hipparcos) or less (Gaia) |
+| Package | embedded, no I/O, wasm32 | archive files or queries |
+
+The ESA catalogues have more precise proper motions. flamsteed gives a free
+licence, every bright star, and a small package with no I/O.
+
+## Data
+
+The data comes from CDS catalogue V/50, the Bright Star Catalogue, 5th
+revised edition (Hoffleit and Warren 1991). The NASA Astronomical Data Center
+prepared it. The `bsc5_table` example makes `data/bsc5.bin` from the CDS
+file and records its SHA-256. The example also gives the 34-byte record
+layout.
+
+## Licence
 
 The code is under the GNU Affero General Public License, version 3 or later.
-Refer to `LICENSE`.
+Refer to `LICENSE`. The catalogue data is in the public domain.
