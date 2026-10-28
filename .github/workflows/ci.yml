@@ -29,13 +29,8 @@ jobs:
 
       # The imagery provider and the visual service link the system GDAL library.
       # The MapLibre fork's build script compiles protobuf schemas with protoc.
-      # QEMU runs flamsteed on bare-metal RISC-V and Cortex-M33 cores.
-      - name: Install GDAL, protoc, and QEMU
-        run: sudo apt-get update && sudo apt-get install -y libgdal-dev protobuf-compiler qemu-system-misc qemu-system-arm
-
-      # The pinned nightly toolchain checks the flamsteed nightly feature.
-      - name: Install the pinned nightly toolchain
-        run: rustup toolchain install nightly-2026-08-28 --profile minimal --component llvm-tools,clippy --target thumbv8m.main-none-eabihf
+      - name: Install GDAL and protoc
+        run: sudo apt-get update && sudo apt-get install -y libgdal-dev protobuf-compiler
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3

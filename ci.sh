@@ -16,7 +16,7 @@ echo "== wasm32 (navigate-celestial) =="
 cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-celestial --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
-echo "== flamsteed (wasm32, no_std targets, QEMU, crates.io package) =="
+echo "== flamsteed (wasm32, no_std targets, crates.io package) =="
 cargo clippy -p flamsteed --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p flamsteed --no-default-features --features libm --all-targets -- -D warnings
 for features in libm libm,magnitude-5 libm,all-stars std std,magnitude-5; do
@@ -29,7 +29,9 @@ for harness in qemu-riscv qemu-arm; do
     cargo fmt --manifest-path "crates/flamsteed/$harness/Cargo.toml" --check
     (cd "crates/flamsteed/$harness" && cargo clippy --release --locked -- -D warnings)
 done
-./scripts/check-flamsteed-qemu.sh
+# The QEMU runs and the nightly feature are in the weekly hardware workflow
+# (.github/workflows/flamsteed-hardware.yml); run the script directly when
+# flamsteed changes.
 cargo package -p flamsteed --allow-dirty
 
 echo "== navigate-celestial without long-range (1800 to 2200 series) =="

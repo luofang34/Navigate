@@ -1,0 +1,51 @@
+# Run flamsteed without the standard library in QEMU on RV32IMAC and Cortex-M33
+# cores, and check its nightly feature with the latest nightly toolchain. The
+# job runs every week, on a change to flamsteed, and on request, so that a new
+# nightly cannot block the main quality gates.
+name: flamsteed hardware
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/flamsteed/**"
+      - "scripts/check-flamsteed-qemu.sh"
+      - ".github/workflows/flamsteed-hardware.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/flamsteed/**"
+      - "scripts/check-flamsteed-qemu.sh"
+      - ".github/workflows/flamsteed-hardware.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  qemu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: thumbv8m.main-none-eabihf, riscv32imac-unknown-none-elf
+
+      - name: Install the latest nightly toolchain
+        run: rustup toolchain install nightly --profile minimal --component llvm-tools,clippy --target thumbv8m.main-none-eabihf
+
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-misc qemu-system-arm
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Run flamsteed in QEMU
+        run: ./scripts/check-flamsteed-qemu.sh
