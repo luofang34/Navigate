@@ -32,18 +32,99 @@ fn embedded_file_has_a_valid_header_and_checksum() {
 
 #[test]
 fn malformed_files_are_rejected() {
-    assert!(parse(STARS).is_some());
+    assert!(parse(STARS).is_ok());
+    let rejected = |file: &[u8]| Catalog::from_bytes(file).err();
     let mut file = STARS.to_vec();
     file[0] = b'X';
-    assert!(parse(&file).is_none(), "magic");
+    assert_eq!(rejected(&file), Some(FormatError::Magic));
     let mut file = STARS.to_vec();
     file[8] = 2;
-    assert!(parse(&file).is_none(), "format version");
+    assert_eq!(
+        rejected(&file),
+        Some(FormatError::Version {
+            version: 2,
+            record_bytes: 34
+        })
+    );
+    let mut file = STARS.to_vec();
+    file[28] = 3;
+    assert_eq!(rejected(&file), Some(FormatError::Source { source: 3 }));
     let mut file = STARS.to_vec();
     file[12] ^= 1;
-    assert!(parse(&file).is_none(), "record count");
-    assert!(parse(&STARS[..STARS.len() - 1]).is_none(), "partial record");
-    assert!(parse(&STARS[..HEADER_BYTES - 1]).is_none(), "short header");
+    assert!(matches!(rejected(&file), Some(FormatError::Length { .. })));
+    assert!(matches!(
+        rejected(&STARS[..STARS.len() - 1]),
+        Some(FormatError::Length { .. })
+    ));
+    assert_eq!(
+        rejected(&STARS[..HEADER_BYTES - 1]),
+        Some(FormatError::TooShort {
+            length: HEADER_BYTES - 1
+        })
+    );
+    let mut file = STARS.to_vec();
+    file[HEADER_BYTES + 5] ^= 1;
+    assert!(matches!(
+        rejected(&file),
+        Some(FormatError::Checksum { .. })
+    ));
+}
+
+/// A format version 1 file of `records`, with a correct header.
+fn file_of(records: &[[u8; RECORD_BYTES]], epoch: f64) -> Vec<u8> {
+    let body: Vec<u8> = records.concat();
+    let mut file = STARS[..HEADER_BYTES].to_vec();
+    file[12..16].copy_from_slice(&u32::try_from(records.len()).unwrap().to_le_bytes());
+    file[16..24].copy_from_slice(&epoch.to_le_bytes());
+    file[24..28].copy_from_slice(&crc32(&body).to_le_bytes());
+    file.extend_from_slice(&body);
+    file
+}
+
+#[test]
+fn from_bytes_reads_imported_data_without_copying() {
+    let embedded = Catalog::bright_star_catalogue();
+    let imported = Catalog::from_bytes(STARS).unwrap();
+    assert!(imported.stars().eq(embedded.stars()));
+    assert_eq!(imported.len(), embedded.len());
+
+    // A subset written by another tool, at another epoch, keeps its records.
+    let records: Vec<[u8; RECORD_BYTES]> = embedded.records[..3].to_vec();
+    let file = file_of(&records, 16.0);
+    let subset = Catalog::from_bytes(&file).unwrap();
+    assert_eq!(subset.len(), 3);
+    assert!(
+        subset
+            .stars()
+            .all(|star| star.reference_epoch_years == 16.0)
+    );
+    assert!(
+        subset
+            .stars()
+            .zip(embedded.stars())
+            .all(|(a, b)| a.position == b.position && a.id == b.id)
+    );
+    assert_eq!(
+        subset
+            .brighter_than(subset.stars().nth(1).unwrap().v_magnitude)
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn from_bytes_needs_magnitude_order_and_a_finite_epoch() {
+    let records = &Catalog::bright_star_catalogue().records;
+    let reversed = [records[1], records[0]];
+    assert_eq!(
+        Catalog::from_bytes(&file_of(&reversed, 0.0)).err(),
+        Some(FormatError::Order { index: 1 })
+    );
+    assert_eq!(
+        Catalog::from_bytes(&file_of(&records[..2], f64::NAN)).err(),
+        Some(FormatError::Epoch)
+    );
+    assert!(Catalog::from_bytes(&file_of(&[], 0.0)).unwrap().is_empty());
 }
 
 #[test]
