@@ -1,10 +1,10 @@
 //! Delta T (TT - UT1), and the TT and UT1 that a civil clock reading gives.
 //!
 //! The Earth rotation angle follows UT1. The ephemeris uses TT. Delta T
-//! connects them. Before 1799.5, polynomials model it (see `delta_t/model.rs`). A
-//! table gives it from 1799.5 to the last IERS prediction:
-//! historical values to 1972, IERS measurements from 1973, then the IERS
-//! predictions for about one year. `fixtures/delta_t_table.py` writes the
+//! connects them. Before 1948.0, the spline of Stephenson, Morrison and
+//! Hohenkerk models it (see `delta_t/model.rs`). A table gives it from 1948.0
+//! to the last IERS prediction: historical values to 1972, IERS measurements
+//! from 1973, then the IERS predictions for about one year. `fixtures/delta_t_table.py` writes the
 //! table from the USNO files. After the last prediction, Delta T continues
 //! with the slope of the last year, and its uncertainty grows as a backtest of
 //! that rule on the table measured: from 1900 for up to 80 years, and from
@@ -28,10 +28,11 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// How a value of Delta T is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeltaTBasis {
-    /// Before the table: the Espenak and Meeus polynomials for the Morrison
-    /// and Stephenson (2004) values, with the Canon tidal correction.
+    /// Before the table: the spline of Stephenson, Morrison and Hohenkerk
+    /// (2016, with the 2020 addendum), and before -720 their long-term
+    /// parabola.
     Modelled,
-    /// A historical value before 1973, or an IERS measurement from 1973.
+    /// A historical value from 1948 to 1972, or an IERS measurement from 1973.
     Observed,
     /// An IERS prediction, for about one year after the last measurement.
     Predicted,
