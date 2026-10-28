@@ -34,6 +34,15 @@ model, runtime library, and acquisition prior. The worker accepts JSON Lines on
 standard input. It writes one result per input line. The `navigate-worker` command
 processes recording evidence. The `match-worker` command computes image matches.
 
+`live-prior LIVE_REPLAY_DIR ORIGINAL.MP4 acquisition.json --map PACK.json --size 640x360 --terrain-m ELEVATION --offset-s SECONDS`
+writes that acquisition prior from a live survey replay. The registered frame nearest
+the video start gives the position prior and the search pose. The registered frames
+inside the video span form a per-frame prior track, written to `--track PATH`
+(default `prior_track.json` beside the output). `prepare-navigate-debrief` searches
+each video frame from the track entry within `--prior-track-gap-s`. The track is a
+prior; every frame still needs independent map evidence. The camera-versus-host
+clock offset is the operator's.
+
 ## Airframe segmentation model
 
 `video_masks.py` makes sky, propeller, and ground masks for each video frame.

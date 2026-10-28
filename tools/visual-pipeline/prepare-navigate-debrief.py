@@ -18,6 +18,7 @@ import cv2
 
 from navigation_reference import ReferenceMap, rotation
 from navigation_retrieval import Retrieval
+from prior_track import PriorTrack, rotation_from_heading
 from ground_mosaic import mosaic as compose_mosaic, suitability
 
 
@@ -68,17 +69,19 @@ class Preparation:
         position = self.map.local(lat, lon, 0)
         if acquisition:
             self.prior = acquisition["pose"]
+            self.track = PriorTrack.from_acquisition(acquisition)
         else:
             position[2] = self.map.terrain(position) + self.source["agl_m"]
-            angle = math.radians(-self.source["heading_deg"]) / 2
-            self.prior = {"position": position, "rotation": [0, 0, math.sin(angle), math.cos(angle)]}
+            self.prior = {"position": position, "rotation": rotation_from_heading(self.source["heading_deg"])}
+            self.track = None
         digest = hashlib.sha256(args.model.read_bytes()).hexdigest()
         configuration = {"camera": self.camera, "anchor": self.map.anchor,
             "map_release": self.map.manifest["release_id"], "map_sha256": self.map.manifest["pack_id"],
             "prior": self.prior, "position_radius_m": 1500, "map_sigma_m": [3, 5], "object_height_m": 20,
             "capture_error_ns": 33366667,
             "clock_description": "Media-derived recording-local clock; absolute exposure time unavailable.",
-            "matcher": f"Navigate LoFTR {digest} / CPU map matches; cpu-pyramidal-lk-v1 relative tracking"}
+            "matcher": f"Navigate LoFTR {digest} / CPU map matches; cpu-pyramidal-lk-v1 relative tracking"
+                       + ("; per-frame flight-controller prior track" if self.track else "")}
         configuration_file = self.output / "configuration.json"
         if configuration_file.exists() and json.loads(configuration_file.read_text()) != configuration:
             raise ValueError("resume configuration differs from the recorded configuration")
@@ -115,13 +118,9 @@ class Preparation:
                 proposal = self.navigation.call(proposal_input, "propose ")
                 if proposal:
                     candidates.append(proposal)
-        ordinary = self.navigation.call({"relocate": True})
-        base = copy.deepcopy(ordinary[0] if ordinary else self.prior)
-        ordinary = ordinary or [base]
-        if self.args.candidate_limit:
-            ordinary = ordinary[:self.args.candidate_limit]
-        candidates.extend(ordinary)
-        if self.pose is None and not self.retrieval:
+        poses, base = self.hypotheses(observation)
+        candidates.extend(poses)
+        if base is not None and self.pose is None and not self.retrieval:
             for height in [150, 90, 210]:
                 candidate = copy.deepcopy(base)
                 candidate["position"][2] = self.map.terrain(candidate["position"]) + height
@@ -138,6 +137,32 @@ class Preparation:
                 if pose is None:
                     break
         return False
+
+    def tracked_pose(self, time_s):
+        """The flight controller's pose at video time `time_s` from the prior track, when near enough."""
+        if self.track is None:
+            return None
+        return self.track.pose(time_s, self.map, self.args.prior_track_gap_s)
+
+    def hypotheses(self, observation):
+        """Map search poses for this frame, best first, and the pose the height sweep
+        varies; `None` when the flight controller already gives the height."""
+        tracked = self.tracked_pose(observation["media_ns"] / 1e9)
+        ordinary = self.navigation.call({"relocate": True}) or []
+        if self.args.candidate_limit:
+            ordinary = ordinary[:self.args.candidate_limit]
+        poses = []
+        if tracked is not None and self.pose is None:
+            poses.append(tracked)
+        poses.extend(ordinary)
+        if tracked is not None and self.pose is not None:
+            poses.append(tracked)
+        if ordinary:
+            return poses, copy.deepcopy(ordinary[0])
+        if tracked is not None:
+            return poses, None
+        base = copy.deepcopy(self.prior)
+        return [base], base
 
     def revisits(self):
         """Evidence that the preceding frame sees an earlier keyframe again; Navigate verifies it."""
@@ -190,7 +215,7 @@ class Preparation:
         observation = {"sequence": index, "capture_ns": timestamp, "media_ns": timestamp,
             "image": gray_name, "map_reference": None, "map_matches": [],
             "tracking_reference": None, "tracking_matches": [],
-            "terrain_m": self.map.terrain((self.pose or self.prior)["position"])}
+            "terrain_m": self.map.terrain((self.pose or self.tracked_pose(source["time_s"]) or self.prior)["position"])}
         if self.previous is not None and self.pose is not None:
             observation["tracking_reference"] = self.reference(f"depth-{index:06}", self.pose)
             observation["tracking_matches"] = self.matches(self.previous, gray_name, False)
@@ -319,7 +344,10 @@ def main():
     parser.add_argument("map", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--acquisition", type=Path,
-                        help="Verified initial search candidate, including camera and map identity; all frames still require session admission")
+                        help="Verified initial search candidate, including camera and map identity and an optional "
+                             "per-frame prior track; all frames still require session admission")
+    parser.add_argument("--prior-track-gap-s", type=float, default=5.0,
+                        help="Largest time distance at which a prior track entry serves a video frame")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--worker", type=Path, default=Path(__file__).resolve().parents[2] / "target/release/navigate-recording-worker")
@@ -336,8 +364,8 @@ def main():
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if not 10 <= args.sensor_fov <= 170 or args.map_interval <= 0 or args.revisit_interval < 0 or args.candidate_limit < 0 \
-            or (args.duration is not None and args.duration <= 0):
-        parser.error("invalid FOV, interval or duration")
+            or args.prior_track_gap_s <= 0 or (args.duration is not None and args.duration <= 0):
+        parser.error("invalid FOV, interval, gap or duration")
     preparation = Preparation(args)
     try:
         preparation.run()
