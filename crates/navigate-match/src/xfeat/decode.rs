@@ -49,6 +49,7 @@ pub(super) fn decode(
     maps: &DenseMaps,
     prepared: &input::InputImage,
     image: &GrayImage,
+    valid_mask: Option<&GrayImage>,
     limit: usize,
 ) -> Result<SparseFeatures, MatchError> {
     let grid = Grid {
@@ -75,6 +76,16 @@ pub(super) fn decode(
     }
     let heatmap = build_heatmap(&maps.keypoint_logits, grid);
     let mut candidates = find_peaks(&heatmap, &maps.reliability, grid);
+    if let Some(mask) = valid_mask {
+        candidates.retain(|&(x, y, _)| {
+            let model = [
+                x as f32,
+                y as f32 * PREPARE_HEIGHT as f32 / grid.height as f32,
+            ];
+            let pixel = prepared.source([f64::from(model[0]), f64::from(model[1])]);
+            input::inside(pixel, image) && mask_allows(pixel, mask)
+        });
+    }
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
     let mut out = SparseFeatures::empty();
     for (x, y, score) in candidates.into_iter().take(4096) {
@@ -105,6 +116,24 @@ pub(super) fn decode(
         }
     }
     Ok(out)
+}
+
+fn mask_allows(pixel: [f64; 2], mask: &GrayImage) -> bool {
+    let (width, height) = mask.dimensions();
+    if width == 0
+        || height == 0
+        || !pixel[0].is_finite()
+        || !pixel[1].is_finite()
+        || pixel[0] < 0.0
+        || pixel[1] < 0.0
+    {
+        return false;
+    }
+    let fx = (pixel[0].floor() as u32).min(width - 1);
+    let fy = (pixel[1].floor() as u32).min(height - 1);
+    let rx = (pixel[0].round() as u32).min(width - 1);
+    let ry = (pixel[1].round() as u32).min(height - 1);
+    mask.get_pixel(fx, fy)[0] >= 128 && mask.get_pixel(rx, ry)[0] >= 128
 }
 
 fn build_heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
