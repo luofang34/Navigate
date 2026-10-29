@@ -20,6 +20,7 @@ pub const KASHIN_SIGMA: f32 = 0.125;
 
 const RAW_2BIT_LEVELS: [f32; 4] = [-3.0, -1.0, 1.0, 3.0];
 const SCALED_2BIT_LEVELS: [f32; 4] = [-0.1875, -0.0625, 0.0625, 0.1875];
+const KASHIN_I8_CLIP: f32 = 3.5 * KASHIN_SIGMA;
 const EVEN_BITS_U128: u128 = 0x5555_5555_5555_5555_5555_5555_5555_5555;
 
 /// Apply one normalized 64-point Fast Walsh-Hadamard Transform in place (`scale = 0.125`).
@@ -240,6 +241,56 @@ impl KashinDescriptor {
             polytope_vertices,
         })
     }
+}
+
+pub(crate) fn pack_kashin_i8(rotated: &[f32; 64]) -> [u8; 64] {
+    std::array::from_fn(|i| {
+        (((rotated[i] / KASHIN_I8_CLIP) * 127.0)
+            .round()
+            .clamp(-127.0, 127.0) as i8) as u8
+    })
+}
+
+pub(crate) fn unpack_kashin_i8(bytes: &[u8; 64]) -> [f32; 64] {
+    std::array::from_fn(|i| f32::from(bytes[i] as i8) * (KASHIN_I8_CLIP / 127.0))
+}
+
+pub(crate) fn reconstruct_sparse_features(
+    image_size: [u32; 2],
+    pixels_f32: &[[f32; 2]],
+    descs: &[KashinDescriptor],
+    kashin_i8: &[[u8; 64]],
+    projector: &HadamardProjector,
+) -> SparseFeatures {
+    let n = pixels_f32.len().min(descs.len());
+    let (iw, ih) = (
+        f64::from(image_size[0].max(1)),
+        f64::from(image_size[1].max(1)),
+    );
+    let scale = (800.0 / iw).min(600.0 / ih);
+    let ox = (800.0 - iw * scale) * 0.5 + (scale - 1.0) * 0.5;
+    let oy = (600.0 - ih * scale) * 0.5 + (scale - 1.0) * 0.5;
+    let mut out = SparseFeatures {
+        pixels: Vec::with_capacity(n),
+        model_pixels: Vec::with_capacity(n),
+        scores: Vec::with_capacity(n),
+        descriptors: Vec::with_capacity(n * 64),
+    };
+    let denom = (n.max(1)) as f32;
+    for i in 0..n {
+        let p = [f64::from(pixels_f32[i][0]), f64::from(pixels_f32[i][1])];
+        out.pixels.push(p);
+        out.model_pixels
+            .push([(p[0] * scale + ox) as f32, (p[1] * scale + oy) as f32]);
+        out.scores.push(1.0 - (i as f32) / denom);
+        let rot = kashin_i8
+            .get(i)
+            .map_or_else(|| descs[i].unpack_levels(), unpack_kashin_i8);
+        let unit = try_normalize64(&rot).unwrap_or([0.0_f32; 64]);
+        out.descriptors
+            .extend_from_slice(&projector.unproject(&unit));
+    }
+    out
 }
 
 /// Compact 160-byte summary of one [`SparseFeatures`] set for pose pre-screening.

@@ -56,11 +56,11 @@ impl FastMatchConfig {
     /// Return the preset configuration for balanced map search.
     pub fn balanced_search() -> Self {
         Self {
-            max_keypoints: 768,
-            min_layers: 3,
+            max_keypoints: 1024,
+            min_layers: 4,
             max_layers: 6,
             early_exit_mutual_fraction: 0.35,
-            prune_after_layer: Some(2),
+            prune_after_layer: None,
             ..Self::default()
         }
     }

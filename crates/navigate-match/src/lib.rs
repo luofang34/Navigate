@@ -28,7 +28,7 @@ pub use kashin::{
     DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,
     PrecomputedReferenceBank, PrecomputedViewEntry, ViewSketch,
 };
-pub use lighterglue::LighterGlue;
+pub use lighterglue::{FastMatchConfig, FastMatchStats, LighterGlue};
 pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
 #[cfg(not(target_arch = "wasm32"))]

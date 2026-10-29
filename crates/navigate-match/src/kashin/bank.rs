@@ -1,6 +1,9 @@
 //! Offline reference feature bank and fast Kashin 3D-2D matcher.
 
-use super::{HadamardProjector, KashinDescriptor, ViewSketch, sign_bits64, try_normalize64};
+use super::{
+    HadamardProjector, KashinDescriptor, ViewSketch, pack_kashin_i8, reconstruct_sparse_features,
+    sign_bits64, try_normalize64,
+};
 use crate::{MatchError, SparseFeatures};
 use navigate_visual::PixelMatch;
 use sha2::{Digest, Sha256};
@@ -69,6 +72,8 @@ pub struct PrecomputedViewEntry {
     pub world_points_enu: Vec<[f64; 3]>,
     /// Compressed 28-byte [`KashinDescriptor`] list (`pixels.len()` elements).
     pub descriptors: Vec<KashinDescriptor>,
+    /// Optional bounded 64-byte rotated Kashin `i8` codes (`4x` compressed vs `f32`).
+    pub kashin_i8: Vec<[u8; 64]>,
 }
 
 impl PrecomputedViewEntry {
@@ -90,9 +95,12 @@ impl PrecomputedViewEntry {
         let px = |p: &[f64; 2]| p.map(|v| v as f32);
         let pixels = features.pixels.iter().map(px).collect();
         let mut descriptors = Vec::with_capacity(n);
+        let mut kashin_i8 = Vec::with_capacity(n);
         for chunk in features.descriptors.as_chunks::<64>().0 {
             let u = try_normalize64(chunk).ok_or(MatchError::Output("invalid descriptor"))?;
-            descriptors.push(KashinDescriptor::from_rotated(&projector.project(&u)));
+            let rotated = projector.project(&u);
+            descriptors.push(KashinDescriptor::from_rotated(&rotated));
+            kashin_i8.push(pack_kashin_i8(&rotated));
         }
         let sketch = ViewSketch::from_features(projector, features);
         let entry = Self {
@@ -104,8 +112,21 @@ impl PrecomputedViewEntry {
             pixels,
             world_points_enu,
             descriptors,
+            kashin_i8,
         };
         entry.validate().map(|()| entry)
+    }
+
+    /// Reconstruct [`SparseFeatures`] from Kashin codes for [`LighterGlue`](crate::LighterGlue).
+    #[must_use]
+    pub fn to_sparse_features(&self, projector: &HadamardProjector) -> SparseFeatures {
+        reconstruct_sparse_features(
+            self.image_size,
+            &self.pixels,
+            &self.descriptors,
+            &self.kashin_i8,
+            projector,
+        )
     }
 
     fn validate(&self) -> Result<(), MatchError> {
@@ -116,6 +137,7 @@ impl PrecomputedViewEntry {
             .chain(&self.world_to_cam)
             .all(|v| v.is_finite());
         let world_ok = self.world_points_enu.is_empty() || self.world_points_enu.len() == n;
+        let i8_ok = self.kashin_i8.is_empty() || self.kashin_i8.len() == n;
         let pix_ok = self.pixels.iter().flatten().all(|v| v.is_finite());
         let v_ok = self
             .descriptors
@@ -124,7 +146,7 @@ impl PrecomputedViewEntry {
             .all(|&v| v < 32);
         let geom_ok = self.image_size[0] > 0 && self.image_size[1] > 0 && pose_ok && pix_ok;
         ensure(
-            geom_ok && n <= MAX_KPS && self.descriptors.len() == n && world_ok && v_ok,
+            geom_ok && n <= MAX_KPS && self.descriptors.len() == n && world_ok && i8_ok && v_ok,
             "bad entry",
         )
     }
@@ -179,6 +201,8 @@ impl PrecomputedReferenceBank {
         for e in self.entries.iter().take(count) {
             let n = e.pixels.len().min(e.descriptors.len()).min(MAX_KPS);
             let has_w = n > 0 && e.world_points_enu.len() >= n;
+            let has_i8 = n > 0 && e.kashin_i8.len() >= n;
+            let flags = u8::from(has_w) | (u8::from(has_i8) << 1);
             out.extend_from_slice(&e.id.to_le_bytes());
             for &c in e.eye_enu.iter().chain(&e.world_to_cam) {
                 out.extend_from_slice(&c.to_le_bytes());
@@ -188,7 +212,7 @@ impl PrecomputedReferenceBank {
             }
             out.extend_from_slice(&e.sketch.to_bytes());
             out.extend_from_slice(&(n as u32).to_le_bytes());
-            out.push(u8::from(has_w));
+            out.push(flags);
             for &c in e.pixels.iter().take(n).flatten() {
                 out.extend_from_slice(&c.to_le_bytes());
             }
@@ -199,6 +223,11 @@ impl PrecomputedReferenceBank {
             }
             for desc in e.descriptors.iter().take(n) {
                 out.extend_from_slice(&desc.to_bytes());
+            }
+            if has_i8 {
+                for code in e.kashin_i8.iter().take(n) {
+                    out.extend_from_slice(code);
+                }
             }
         }
         let digest: [u8; 32] = Sha256::digest(&out).into();
@@ -384,17 +413,22 @@ fn read_entry(cur: &mut &[u8]) -> Result<PrecomputedViewEntry, MatchError> {
     let (id, eye_enu, world_to_cam) = (u32_le(cur)?, read_f64s::<3>(cur)?, read_f64s::<9>(cur)?);
     let image_size = [u32_le(cur)?, u32_le(cur)?];
     let sketch = ViewSketch::from_bytes(take(cur)?);
-    let (n, has_w) = (u32_le(cur)? as usize, take::<1>(cur)?[0]);
+    let (n, flags) = (u32_le(cur)? as usize, take::<1>(cur)?[0]);
     ensure(
-        n <= MAX_KPS && has_w <= 1 && (n > 0 || has_w == 0),
+        n <= MAX_KPS && flags <= 3 && (n > 0 || flags == 0),
         "bad header",
     )?;
-    let per_kp = 8 + KashinDescriptor::SERIALIZED_BYTES + if has_w == 1 { 24 } else { 0 };
+    let (has_w, has_i8) = (flags & 1 != 0, flags & 2 != 0);
+    let per_kp = 8
+        + KashinDescriptor::SERIALIZED_BYTES
+        + if has_w { 24 } else { 0 }
+        + if has_i8 { 64 } else { 0 };
     ensure(n.saturating_mul(per_kp) <= cur.len(), "truncated")?;
     let f32_le = |c: &mut &[u8]| take(c).map(f32::from_le_bytes);
     let pixels = many(n, || Ok([f32_le(cur)?, f32_le(cur)?]))?;
-    let world_points_enu = many(if has_w == 1 { n } else { 0 }, || read_f64s::<3>(cur))?;
+    let world_points_enu = many(if has_w { n } else { 0 }, || read_f64s::<3>(cur))?;
     let descriptors = many(n, || KashinDescriptor::from_bytes(take(cur)?))?;
+    let kashin_i8 = many(if has_i8 { n } else { 0 }, || take(cur))?;
     let entry = PrecomputedViewEntry {
         id,
         eye_enu,
@@ -404,6 +438,7 @@ fn read_entry(cur: &mut &[u8]) -> Result<PrecomputedViewEntry, MatchError> {
         pixels,
         world_points_enu,
         descriptors,
+        kashin_i8,
     };
     entry.validate().map(|()| entry)
 }

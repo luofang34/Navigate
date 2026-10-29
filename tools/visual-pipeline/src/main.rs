@@ -196,7 +196,7 @@ fn cli() -> Command {
         .subcommands(export_and_video_subcommands())
 }
 
-fn matcher_subcommands() -> [Command; 5] {
+fn matcher_subcommands() -> [Command; 7] {
     [
         matcher_args(
             Command::new("match")
@@ -226,6 +226,61 @@ fn matcher_subcommands() -> [Command; 5] {
                 )
                 .arg(Arg::new("only").long("only").action(ArgAction::Append)),
         ),
+        Command::new("bank-build")
+            .about("Precompute and save an NVKBANK1 Kashin reference feature bank")
+            .arg(path_arg("dataset", true))
+            .arg(path_arg("profile", true))
+            .arg(path_arg("catalog", true))
+            .arg(path_arg("model", true))
+            .arg(path_arg("output", true))
+            .arg(
+                Arg::new("attempts")
+                    .long("attempts")
+                    .default_value("12")
+                    .value_parser(value_parser!(usize)),
+            )
+            .arg(
+                Arg::new("heading-step")
+                    .long("heading-step")
+                    .default_value("0.0")
+                    .value_parser(value_parser!(f64)),
+            )
+            .arg(
+                Arg::new("max-keypoints")
+                    .long("max-keypoints")
+                    .default_value("2048")
+                    .value_parser(value_parser!(usize)),
+            )
+            .arg(
+                Arg::new("adaptive-stride")
+                    .long("adaptive-stride")
+                    .default_value("4")
+                    .value_parser(value_parser!(u32)),
+            )
+            .arg(Arg::new("only").long("only").action(ArgAction::Append)),
+        Command::new("bank-match")
+            .about("Match query photos in real time against an NVKBANK1 reference bank")
+            .arg(path_arg("dataset", true))
+            .arg(path_arg("profile", true))
+            .arg(path_arg("catalog", true))
+            .arg(path_arg("bank", true))
+            .arg(path_arg("model", true))
+            .arg(path_arg("lighterglue", false))
+            .arg(path_arg("output", true))
+            .arg(
+                Arg::new("shortlist")
+                    .long("shortlist")
+                    .default_value("4")
+                    .value_parser(value_parser!(usize)),
+            )
+            .arg(
+                Arg::new("query-keypoints")
+                    .long("query-keypoints")
+                    .default_value("2048")
+                    .value_parser(value_parser!(usize)),
+            )
+            .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue))
+            .arg(Arg::new("only").long("only").action(ArgAction::Append)),
         matcher_args(
             Command::new("track")
                 .about("Propagate poses from parent anchor runs")
