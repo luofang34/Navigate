@@ -1,8 +1,10 @@
 //! Spatial holdout PnP verification, pose scoring, and `.npz` candidate archives (`photo_pose`).
 
 mod archive;
+mod l1_gnc;
 
 pub use archive::{LoadedPose, load_candidate_pose, save_candidate_npz};
+pub use l1_gnc::{fit_pose_hybrid, fit_pose_l1_gnc};
 
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
 use serde::{Deserialize, Serialize};
@@ -93,12 +95,11 @@ pub fn fit_pose_ransac(
         return None;
     }
 
-    let inlier_px = INLIER_PX * (f64::from(size[0].max(size[1])) / 640.0).max(1.0);
+    let inlier_px = scaled_inlier_px(size);
     let ransac_px = inlier_px * 2.0;
     let mut best_pose = initial_pose;
-    let mut best_inliers = 0usize;
-    if let Some((eye0, rot0)) = best_pose {
-        best_inliers = count_inliers(
+    let mut best_inliers = best_pose.map_or(0, |(eye0, rot0)| {
+        count_inliers(
             world_points,
             image_pixels,
             &train_idx,
@@ -106,8 +107,8 @@ pub fn fit_pose_ransac(
             &rot0,
             k,
             ransac_px,
-        );
-    }
+        )
+    });
 
     let trials = 96usize.min(train_idx.len() * 3);
     for t in 0..trials {
@@ -168,21 +169,40 @@ pub fn fit_pose_ransac(
         }
     }
 
+    Some(score_pose_candidate(
+        world_points,
+        image_pixels,
+        &held,
+        (eye, rot),
+        k,
+        size,
+        inlier_px,
+    ))
+}
+
+pub(crate) fn scaled_inlier_px(size: [u32; 2]) -> f64 {
+    INLIER_PX * (f64::from(size[0].max(size[1])) / 640.0).max(1.0)
+}
+
+pub(crate) fn score_pose_candidate(
+    world_points: &[[f64; 3]],
+    image_pixels: &[[f64; 2]],
+    held: &[bool],
+    (eye, rot): ([f64; 3], Matrix3<f64>),
+    k: &Matrix3<f64>,
+    size: [u32; 2],
+    inlier_px: f64,
+) -> PoseCandidate {
+    let hold_count = held.iter().filter(|&&h| h).count();
     let mut inliers = vec![false; world_points.len()];
-    let mut pos_depth = 0usize;
-    let mut train_sq_sum = 0.0;
-    let mut train_inliers = 0usize;
-    let mut hold_errors = Vec::with_capacity(hold_idx.len());
-    let mut hold_inliers = 0usize;
+    let (mut pos_depth, mut train_sq_sum, mut train_inliers, mut hold_inliers) = (0, 0.0, 0, 0);
+    let mut hold_errors = Vec::with_capacity(hold_count);
     let mut cells = BTreeSet::new();
-    let w = f64::from(size[0].max(1));
-    let h = f64::from(size[1].max(1));
+    let (w, h) = (f64::from(size[0].max(1)), f64::from(size[1].max(1)));
 
     for i in 0..world_points.len() {
         let p_cam = rot * (Vector3::from(world_points[i]) - Vector3::from(eye));
-        if p_cam.z > 0.1 {
-            pos_depth += 1;
-        }
+        pos_depth += usize::from(p_cam.z > 0.1);
         let err = reproj_error(world_points[i], image_pixels[i], eye, &rot, k).unwrap_or(1e6);
         let ok = err <= inlier_px;
         inliers[i] = ok;
@@ -197,9 +217,7 @@ pub fn fit_pose_ransac(
         }
         if held[i] {
             hold_errors.push(err);
-            if ok {
-                hold_inliers += 1;
-            }
+            hold_inliers += usize::from(ok);
         } else if ok {
             train_inliers += 1;
             train_sq_sum += err * err;
@@ -207,17 +225,16 @@ pub fn fit_pose_ransac(
     }
 
     hold_errors.sort_by(f64::total_cmp);
-    let hold_median = if hold_errors.is_empty() {
-        1e6
-    } else {
-        hold_errors[hold_errors.len() / 2]
-    };
+    let hold_median = hold_errors
+        .get(hold_errors.len() / 2)
+        .copied()
+        .unwrap_or(1e6);
     let train_rms = if train_inliers > 0 {
         (train_sq_sum / (train_inliers as f64)).sqrt()
     } else {
         1e6
     };
-    let hold_frac = (hold_inliers as f64) / (hold_idx.len().max(1) as f64);
+    let hold_frac = (hold_inliers as f64) / (hold_count.max(1) as f64);
     let pos_frac = (pos_depth as f64) / (world_points.len() as f64);
     let support_frac = (cells.len() as f64) / f64::from(GRID_DIM * GRID_DIM);
     let total_inliers = train_inliers + hold_inliers;
@@ -232,7 +249,7 @@ pub fn fit_pose_ransac(
     let score = PoseScore {
         focal_px: k[(0, 0)],
         geometry_accepted,
-        holdout_count: hold_idx.len(),
+        holdout_count: hold_count,
         holdout_inlier_fraction: hold_frac,
         holdout_median_px: hold_median,
         image_support_fraction: support_frac,
@@ -243,7 +260,7 @@ pub fn fit_pose_ransac(
         train_rms_px: train_rms,
     };
 
-    Some(PoseCandidate {
+    PoseCandidate {
         eye,
         rotation: rot,
         k: *k,
@@ -252,7 +269,7 @@ pub fn fit_pose_ransac(
         pixels: image_pixels.to_vec(),
         inliers,
         score,
-    })
+    }
 }
 
 /// Priority tuple key used to rank competing [`PoseScore`] values (higher is better).
@@ -333,12 +350,8 @@ fn dlt_pnp(
     t /= scale;
     let p0 = r * Vector3::from(world[subset[0]]) + t;
     if p0.z < 0.0 {
-        r.row_mut(0).neg_mut();
-        r.row_mut(1).neg_mut();
-        t.x = -t.x;
-        t.y = -t.y;
-        t.z = -t.z;
-        r.row_mut(2).neg_mut();
+        r = -r;
+        t = -t;
         if r.determinant() < 0.0 {
             return None;
         }
@@ -347,7 +360,38 @@ fn dlt_pnp(
     Some(([eye.x, eye.y, eye.z], r))
 }
 
-fn refine_pose_lm(
+pub(crate) fn point_jacobian(
+    world: [f64; 3],
+    pixel: [f64; 2],
+    eye: Vector3<f64>,
+    rot: &Matrix3<f64>,
+    k: &Matrix3<f64>,
+) -> Option<(f64, f64, Vector6<f64>, Vector6<f64>)> {
+    let pc = rot * (Vector3::from(world) - eye);
+    if pc.z <= 0.1 || !pc.z.is_finite() {
+        return None;
+    }
+    let (fx, fy, cx, cy) = (k[(0, 0)], k[(1, 1)], k[(0, 2)], k[(1, 2)]);
+    let inv_z = 1.0 / pc.z;
+    let inv_z2 = inv_z * inv_z;
+    let ru = fx * pc.x * inv_z + cx - pixel[0];
+    let rv = fy * pc.y * inv_z + cy - pixel[1];
+    let du = Vector3::new(fx * inv_z, 0.0, -fx * pc.x * inv_z2);
+    let dv = Vector3::new(0.0, fy * inv_z, -fy * pc.y * inv_z2);
+    let j_rot_u = pc.cross(&du);
+    let j_rot_v = pc.cross(&dv);
+    let j_eye_u = -(rot.transpose() * du);
+    let j_eye_v = -(rot.transpose() * dv);
+    let ju = Vector6::new(
+        j_rot_u.x, j_rot_u.y, j_rot_u.z, j_eye_u.x, j_eye_u.y, j_eye_u.z,
+    );
+    let jv = Vector6::new(
+        j_rot_v.x, j_rot_v.y, j_rot_v.z, j_eye_v.x, j_eye_v.y, j_eye_v.z,
+    );
+    Some((ru, rv, ju, jv))
+}
+
+pub(crate) fn refine_pose_lm(
     indices: &[usize],
     world: &[[f64; 3]],
     pixels: &[[f64; 2]],
@@ -355,52 +399,17 @@ fn refine_pose_lm(
     mut rot: Matrix3<f64>,
     k: &Matrix3<f64>,
 ) -> ([f64; 3], Matrix3<f64>) {
-    let fx = k[(0, 0)];
-    let fy = k[(1, 1)];
-    let cx = k[(0, 2)];
-    let cy = k[(1, 2)];
     let mut lambda = 1e-2f64;
     let mut cur_cost = total_sq_err(indices, world, pixels, eye, &rot, k);
-
     for _ in 0..15 {
         let mut h = Matrix6::<f64>::zeros();
         let mut g = Vector6::<f64>::zeros();
         let eye_v = Vector3::from(eye);
         for &i in indices {
-            let pc = rot * (Vector3::from(world[i]) - eye_v);
-            if pc.z <= 0.1 {
-                continue;
+            if let Some((ru, rv, ju, jv)) = point_jacobian(world[i], pixels[i], eye_v, &rot, k) {
+                h += ju * ju.transpose() + jv * jv.transpose();
+                g += ju * ru + jv * rv;
             }
-            let inv_z = 1.0 / pc.z;
-            let inv_z2 = inv_z * inv_z;
-            let u = fx * pc.x * inv_z + cx;
-            let v = fy * pc.y * inv_z + cy;
-            let ru = u - pixels[i][0];
-            let rv = v - pixels[i][1];
-
-            let du_dpc = Vector3::new(fx * inv_z, 0.0, -fx * pc.x * inv_z2);
-            let dv_dpc = Vector3::new(0.0, fy * inv_z, -fy * pc.y * inv_z2);
-            let j_rot_u = Vector3::new(
-                -du_dpc.y * pc.z + du_dpc.z * pc.y,
-                du_dpc.x * pc.z - du_dpc.z * pc.x,
-                -du_dpc.x * pc.y + du_dpc.y * pc.x,
-            );
-            let j_rot_v = Vector3::new(
-                -dv_dpc.y * pc.z + dv_dpc.z * pc.y,
-                dv_dpc.x * pc.z - dv_dpc.z * pc.x,
-                -dv_dpc.x * pc.y + dv_dpc.y * pc.x,
-            );
-            let j_eye_u = -(rot.transpose() * du_dpc);
-            let j_eye_v = -(rot.transpose() * dv_dpc);
-
-            let ju = Vector6::new(
-                j_rot_u.x, j_rot_u.y, j_rot_u.z, j_eye_u.x, j_eye_u.y, j_eye_u.z,
-            );
-            let jv = Vector6::new(
-                j_rot_v.x, j_rot_v.y, j_rot_v.z, j_eye_v.x, j_eye_v.y, j_eye_v.z,
-            );
-            h += ju * ju.transpose() + jv * jv.transpose();
-            g += ju * ru + jv * rv;
         }
         for d in 0..6 {
             h[(d, d)] += lambda;
@@ -411,8 +420,7 @@ fn refine_pose_lm(
         if step.norm() < 1e-7 {
             break;
         }
-        let d_rot = Rotation3::new(Vector3::new(step[0], step[1], step[2])).into_inner();
-        let cand_rot = d_rot * rot;
+        let cand_rot = Rotation3::new(Vector3::new(step[0], step[1], step[2])).into_inner() * rot;
         let cand_eye = [eye[0] + step[3], eye[1] + step[4], eye[2] + step[5]];
         let cand_cost = total_sq_err(indices, world, pixels, cand_eye, &cand_rot, k);
         if cand_cost < cur_cost {
@@ -455,13 +463,14 @@ fn total_sq_err(
     indices
         .iter()
         .map(|&i| {
-            let e = reproj_error(world[i], pixels[i], eye, rot, k).unwrap_or(100.0);
-            e * e
+            reproj_error(world[i], pixels[i], eye, rot, k)
+                .unwrap_or(100.0)
+                .powi(2)
         })
         .sum()
 }
 
-fn reproj_error(
+pub(crate) fn reproj_error(
     world: [f64; 3],
     pixel: [f64; 2],
     eye: [f64; 3],

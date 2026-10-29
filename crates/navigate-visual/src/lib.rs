@@ -85,6 +85,7 @@ pub use matching::{AsyncImageMatcher, ImageMatcher, PixelMatch, PointTracker, Py
 pub use orthographic::{
     OrthographicEstimate, OrthographicReference, RasterGeometry, RawPixelQuality,
 };
+pub use pose_solver::{GncPoseConfig, GncPoseSolution, solve_pose_l1_gnc};
 pub use rectification::{RectificationError, RectificationMap};
 pub use reference::{ReferenceRenderer, RendererIdentity};
 pub use retrieval::{

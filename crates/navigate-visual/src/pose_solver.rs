@@ -4,7 +4,7 @@ use crate::{CameraModel, CameraPose, VisualError};
 use nalgebra::{SMatrix, SVector, Vector2, Vector3};
 
 pub(crate) type Matrix6 = SMatrix<f64, 6, 6>;
-type Vector6 = SVector<f64, 6>;
+pub(super) type Vector6 = SVector<f64, 6>;
 
 #[derive(Clone)]
 pub(crate) struct Correspondence {
@@ -13,6 +13,8 @@ pub(crate) struct Correspondence {
 }
 
 mod consensus;
+mod gnc_l1;
+pub use gnc_l1::{GncPoseConfig, GncPoseSolution, solve_pose_l1_gnc};
 #[derive(Clone, Copy, Default)]
 pub(crate) enum Motion {
     #[default]
@@ -121,34 +123,56 @@ pub(crate) fn normal_equations(
     let mut b = Vector6::zeros();
     let world_to_eye = pose.orientation.inverse().to_rotation_matrix();
     for point in points {
-        let Some(projected) = camera.project(pose, point.world) else {
+        let Some((error, jacobian)) = point_jacobian(
+            camera,
+            &world_to_eye,
+            pose.position,
+            point.world,
+            point.pixel,
+        ) else {
             continue;
         };
-        let error = point.pixel - projected;
-        let eye = world_to_eye * (point.world - pose.position);
-        let depth = -eye.z;
-        let projection = SMatrix::<f64, 2, 3>::new(
-            camera.fx / depth,
-            0.0,
-            camera.fx * eye.x / depth.powi(2),
-            0.0,
-            -camera.fy / depth,
-            -camera.fy * eye.y / depth.powi(2),
-        );
-        let mut motion = SMatrix::<f64, 3, 6>::zeros();
-        motion
-            .fixed_view_mut::<3, 3>(0, 0)
-            .copy_from(&(-world_to_eye.matrix()));
-        // Rotation increments use milliradians in the eye frame.
-        motion
-            .fixed_view_mut::<3, 3>(0, 3)
-            .copy_from(&(eye.cross_matrix() * 0.001));
-        let jacobian = projection * motion;
         let weight = 3.0 / error.norm().max(3.0);
         h += jacobian.transpose() * jacobian * weight;
         b += jacobian.transpose() * error * weight;
     }
     (h, b)
+}
+
+pub(super) fn point_jacobian(
+    camera: &CameraModel,
+    world_to_eye: &nalgebra::Rotation3<f64>,
+    position: Vector3<f64>,
+    world: Vector3<f64>,
+    pixel: Vector2<f64>,
+) -> Option<(Vector2<f64>, SMatrix<f64, 2, 6>)> {
+    let eye = world_to_eye * (world - position);
+    let depth = -eye.z;
+    if depth <= 0.01 || !depth.is_finite() {
+        return None;
+    }
+    let projected = Vector2::new(
+        camera.fx * eye.x / depth + camera.cx,
+        camera.cy - camera.fy * eye.y / depth,
+    );
+    let error = pixel - projected;
+    let projection = SMatrix::<f64, 2, 3>::new(
+        camera.fx / depth,
+        0.0,
+        camera.fx * eye.x / depth.powi(2),
+        0.0,
+        -camera.fy / depth,
+        -camera.fy * eye.y / depth.powi(2),
+    );
+    let mut motion = SMatrix::<f64, 3, 6>::zeros();
+    motion
+        .fixed_view_mut::<3, 3>(0, 0)
+        .copy_from(&(-world_to_eye.matrix()));
+    // Rotation increments use milliradians in the eye frame.
+    motion
+        .fixed_view_mut::<3, 3>(0, 3)
+        .copy_from(&(eye.cross_matrix() * 0.001));
+    Some((error, projection * motion))
 }
 
 pub(crate) fn residual(camera: &CameraModel, pose: &CameraPose, point: &Correspondence) -> f64 {
