@@ -1,10 +1,12 @@
 //! Spherical terrain surface and ray-marching renderer (`photo_surface`).
 
 mod catalog;
+mod sparse;
 
 pub use catalog::{
     ContextSurface, build_reference_catalog, build_reference_catalog_zoom, horizon_attitude,
 };
+pub use sparse::{SurfaceAdaptiveStats, SurfaceRayHit};
 
 use crate::{
     PipelineError,
@@ -309,7 +311,7 @@ impl Surface {
         (rgb, depth, points)
     }
 
-    fn intersect_ray(
+    pub(crate) fn intersect_ray(
         &self,
         eye: Vector3<f64>,
         dir: Vector3<f64>,
@@ -378,3 +380,6 @@ pub(crate) fn mercator_tile_coords(lat_deg: f64, lon_deg: f64, zoom: u32) -> (u3
         (y - f64::from(ty)).clamp(0.0, 0.999_999),
     )
 }
+
+#[cfg(test)]
+mod tests;
