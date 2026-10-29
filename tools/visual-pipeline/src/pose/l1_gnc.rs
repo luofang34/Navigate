@@ -234,13 +234,137 @@ pub fn fit_pose_hybrid(
     size: [u32; 2],
     initial_pose: Option<([f64; 3], Matrix3<f64>)>,
 ) -> Option<PoseCandidate> {
-    if let Some(init) = initial_pose
-        && let Some(cand) = fit_pose_l1_gnc(world_points, image_pixels, k, size, init)
-        && cand.score.geometry_accepted
-    {
-        return Some(cand);
+    let gnc =
+        initial_pose.and_then(|init| fit_pose_l1_gnc(world_points, image_pixels, k, size, init));
+    if gnc.as_ref().is_some_and(|c| c.score.geometry_accepted) {
+        return gnc;
     }
-    fit_pose_ransac(world_points, image_pixels, k, size, initial_pose)
+    let ransac = fit_pose_ransac(world_points, image_pixels, k, size, initial_pose);
+    match (gnc, ransac) {
+        (Some(g), Some(r)) => {
+            if super::candidate_priority(&g.score) >= super::candidate_priority(&r.score) {
+                Some(g)
+            } else {
+                Some(r)
+            }
+        }
+        (Some(g), None) => Some(g),
+        (None, r) => r,
+    }
+}
+
+/// Triangulate a 6-DoF `(eye, rotation)` seed from 2-ray bundles and symmetric triad alignment.
+pub(crate) fn refine_seed_eye_2pt(
+    world_pts: &[[f64; 3]],
+    pixels: &[[f64; 2]],
+    (hyp_eye, hyp_rot): ([f64; 3], Matrix3<f64>),
+    k: &Matrix3<f64>,
+) -> Option<([f64; 3], Matrix3<f64>)> {
+    let n = world_pts.len().min(pixels.len());
+    if n < 12 {
+        return None;
+    }
+    let (fx, fy, cx, cy) = (k[(0, 0)], k[(1, 1)], k[(0, 2)], k[(1, 2)]);
+    let rt = hyp_rot.transpose();
+    let cam_rays: Vec<Vector3<f64>> = pixels[..n]
+        .iter()
+        .map(|uv| Vector3::new((uv[0] - cx) / fx, (uv[1] - cy) / fy, 1.0).normalize())
+        .collect();
+    let world_rays: Vec<Vector3<f64>> = cam_rays.iter().map(|c| rt * c).collect();
+    let hyp_v = Vector3::from(hyp_eye);
+    let max_pt_z = world_pts[..n]
+        .iter()
+        .map(|w| w[2])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_att_cos = 28.0_f64.to_radians().cos();
+    let mut best_pose = (hyp_eye, hyp_rot);
+    let mut best_cnt = 0_usize;
+    let total_pairs = n * (n - 1) / 2;
+    let stride = (total_pairs / 360).max(1);
+    let mut pair_idx = 0_usize;
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            pair_idx += 1;
+            if !pair_idx.is_multiple_of(stride) {
+                continue;
+            }
+            let dx_px = pixels[i][0] - pixels[j][0];
+            let dy_px = pixels[i][1] - pixels[j][1];
+            if dx_px * dx_px + dy_px * dy_px < 3_600.0
+                || cam_rays[i].dot(&cam_rays[j]).abs() > 0.995
+            {
+                continue;
+            }
+            let p_i = Matrix3::identity() - world_rays[i] * world_rays[i].transpose();
+            let p_j = Matrix3::identity() - world_rays[j] * world_rays[j].transpose();
+            let wi = Vector3::from(world_pts[i]);
+            let wj = Vector3::from(world_pts[j]);
+            let Some(chol) = (p_i + p_j).cholesky() else {
+                continue;
+            };
+            let eye_v = chol.solve(&(p_i * wi + p_j * wj));
+            let di_raw = wi - eye_v;
+            let dj_raw = wj - eye_v;
+            let horiz_shift = (eye_v.x - hyp_v.x).hypot(eye_v.y - hyp_v.y);
+            if horiz_shift > 1_800.0
+                || (eye_v.z - hyp_v.z).abs() > 650.0
+                || eye_v.z < max_pt_z + 80.0
+                || di_raw.dot(&world_rays[i]) <= 80.0
+                || dj_raw.dot(&world_rays[j]) <= 80.0
+            {
+                continue;
+            }
+            let Some(rot_ij) = triad_rotation(cam_rays[i], cam_rays[j], di_raw, dj_raw) else {
+                continue;
+            };
+            let att_cos = ((rot_ij * rt).trace() - 1.0) * 0.5;
+            if att_cos < min_att_cos {
+                continue;
+            }
+            let mut cells = 0_u64;
+            let mut cnt = 0_usize;
+            for m in 0..n {
+                let pc = rot_ij * (Vector3::from(world_pts[m]) - eye_v);
+                if pc.z > 80.0 {
+                    let du = fx * (pc.x / pc.z) + cx - pixels[m][0];
+                    let dv = fy * (pc.y / pc.z) + cy - pixels[m][1];
+                    if du * du + dv * dv <= 784.0 {
+                        cnt += 1;
+                        let bx =
+                            ((pixels[m][0] / (cx * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
+                        let by =
+                            ((pixels[m][1] / (cy * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
+                        cells |= 1_u64 << (by * 8 + bx);
+                    }
+                }
+            }
+            if cells.count_ones() >= 4 && cnt > best_cnt {
+                best_cnt = cnt;
+                best_pose = ([eye_v.x, eye_v.y, eye_v.z], rot_ij);
+            }
+        }
+    }
+    (best_cnt >= 8).then_some(best_pose)
+}
+
+fn triad_rotation(
+    ci: Vector3<f64>,
+    cj: Vector3<f64>,
+    di_raw: Vector3<f64>,
+    dj_raw: Vector3<f64>,
+) -> Option<Matrix3<f64>> {
+    let di = di_raw.try_normalize(1e-6)?;
+    let dj = dj_raw.try_normalize(1e-6)?;
+    let bc1 = (ci + cj).try_normalize(1e-6)?;
+    let bc2 = ci.cross(&cj).try_normalize(1e-6)?;
+    let bc3 = bc1.cross(&bc2);
+    let bw1 = (di + dj).try_normalize(1e-6)?;
+    let bw2 = di.cross(&dj).try_normalize(1e-6)?;
+    let bw3 = bw1.cross(&bw2);
+    let c_mat = Matrix3::from_columns(&[bc1, bc2, bc3]);
+    let w_mat = Matrix3::from_columns(&[bw1, bw2, bw3]);
+    Some(c_mat * w_mat.transpose())
 }
 
 #[cfg(test)]

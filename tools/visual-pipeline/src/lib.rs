@@ -2,6 +2,7 @@
 //! video tracking, semantic segmentation, and `sokoly-debrief` v1 publication.
 
 pub mod clock;
+pub mod corridor;
 pub mod error;
 pub mod matcher_client;
 pub mod metadata;
@@ -18,6 +19,9 @@ pub mod video_ops;
 
 pub use clock::{
     PriorTrack, capture_anchor, movie_duration_s, rotation_from_heading, seed_live_prior,
+};
+pub use corridor::{
+    CorridorBuildOptions, CorridorTrackOptions, build_corridor_bank, run_corridor_track,
 };
 pub use error::PipelineError;
 pub use matcher_client::PipelineMatcher;

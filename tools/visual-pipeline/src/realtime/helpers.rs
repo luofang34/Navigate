@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
-pub(super) fn polish_pose_sparse(
+pub(crate) fn polish_pose_sparse(
     surface: &Surface,
     xfeat: &XFeat,
     lighterglue: Option<&LighterGlue>,
@@ -57,7 +57,7 @@ pub(super) fn polish_pose_sparse(
     Ok(cand.map(|c| (c, render_stats.rays_cast + ref_pixels.len(), layers)))
 }
 
-pub(super) fn filter_terrain_features(
+pub(crate) fn filter_terrain_features(
     raw: &SparseFeatures,
     hits: &[Option<SurfaceRayHit>],
 ) -> (SparseFeatures, Vec<[f64; 3]>) {
@@ -105,7 +105,7 @@ pub(super) fn lookup_indexed_3d_matches(
     (world, px)
 }
 
-pub(super) fn log_attempt(
+pub(crate) fn log_attempt(
     log: &mut Vec<Value>,
     backend: &str,
     seed: usize,
@@ -142,7 +142,7 @@ pub(super) fn log_attempt(
     }
 }
 
-pub(super) fn raw_file_sha256(path: &Path) -> Result<[u8; 32], PipelineError> {
+pub(crate) fn raw_file_sha256(path: &Path) -> Result<[u8; 32], PipelineError> {
     let bytes = fs::read(path).map_err(|source| PipelineError::Io {
         path: path.to_path_buf(),
         source,
@@ -150,7 +150,7 @@ pub(super) fn raw_file_sha256(path: &Path) -> Result<[u8; 32], PipelineError> {
     Ok(Sha256::digest(&bytes).into())
 }
 
-pub(super) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), PipelineError> {
+pub(crate) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), PipelineError> {
     let bytes = fs::read(path).map_err(|source| PipelineError::Io {
         path: path.to_path_buf(),
         source,
@@ -161,7 +161,7 @@ pub(super) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), Pipelin
     Ok((XFeat::load(weights, &device)?, digest))
 }
 
-pub(super) fn load_lighterglue_model(
+pub(crate) fn load_lighterglue_model(
     path: &Path,
     device: &burn::tensor::Device,
 ) -> Result<LighterGlue, PipelineError> {
@@ -173,7 +173,7 @@ pub(super) fn load_lighterglue_model(
     Ok(LighterGlue::load(weights, device)?)
 }
 
-pub(super) fn warmup_gpu_pipelines(
+pub(crate) fn warmup_gpu_pipelines(
     xfeat: &XFeat,
     lighterglue: Option<&LighterGlue>,
 ) -> Result<f64, PipelineError> {
@@ -200,7 +200,7 @@ pub(super) fn warmup_gpu_pipelines(
     }
 }
 
-pub(super) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
+pub(crate) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
     [
         r[(0, 0)],
         r[(0, 1)],
@@ -214,6 +214,6 @@ pub(super) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
     ]
 }
 
-pub(super) fn rot_from_row_major(m: [f64; 9]) -> Matrix3<f64> {
+pub(crate) fn rot_from_row_major(m: [f64; 9]) -> Matrix3<f64> {
     Matrix3::new(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
 }

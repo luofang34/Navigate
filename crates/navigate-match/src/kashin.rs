@@ -7,7 +7,7 @@
 
 mod bank;
 mod codec;
-mod query;
+pub(crate) mod query;
 
 pub use bank::{
     BANK_MAGIC, BANK_VERSION, PrecomputedMatch, PrecomputedReferenceBank, PrecomputedViewEntry,
