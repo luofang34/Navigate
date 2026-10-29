@@ -56,11 +56,16 @@ pub enum Progress {
     Refining,
 }
 
+/// Maximum number of candidate views held in host memory per matching batch.
+const CANDIDATE_BATCH_SIZE: usize = 8;
+
 /// The located camera.
 #[derive(Clone)]
 pub struct Located {
     /// Accepted estimate, in the local frame of the target.
     pub estimate: Estimate,
+    /// Other accepted candidate estimates sorted by descending inlier count.
+    pub alternatives: Vec<Estimate>,
     /// Latitude, longitude and height (terrain datum) of the camera.
     pub geodetic: [f64; 3],
     /// Heading, downward pitch and roll of the optical axis, degrees.
@@ -118,14 +123,10 @@ pub async fn locate<S: TileSource, M: AsyncImageMatcher>(
     };
     let mut renderer = GpuRenderer::new(scene, request.camera, limits).await?;
     let candidates = request.look_at.poses(target);
-    let mut views = Vec::with_capacity(candidates.len());
-    for (index, candidate) in candidates.iter().enumerate() {
-        views.push(renderer.render(candidate.pose).await?);
-        progress(Progress::Rendering {
-            done: index + 1,
-            total: candidates.len(),
-        });
-    }
+    let central = candidates
+        .get(candidates.len() / 2)
+        .map(|c| c.pose)
+        .ok_or(LocateError::Request("no candidates"))?;
     let query = Frame {
         stamp: FrameStamp {
             sequence: 0,
@@ -135,42 +136,53 @@ pub async fn locate<S: TileSource, M: AsyncImageMatcher>(
         image: request.image,
     };
     let pixels = (request.camera.width * request.camera.height) as usize;
+    let batch_cap = candidates.len().clamp(1, CANDIDATE_BATCH_SIZE);
     let resource = ResourceLimits {
         image_pixels: pixels,
         features_per_image: 1,
-        candidates: views.len().max(1),
+        candidates: batch_cap,
         // Each view holds one byte of image and four bytes of depth per pixel.
-        reference_bytes: views.len().max(1) * pixels * 5,
+        reference_bytes: batch_cap * pixels * 5,
         query_feature_bytes: 1,
     };
     let mut localizer = PairLocalizer::new(matcher, LocalizerConfig::default(), resource)?;
-    let central = candidates
-        .get(candidates.len() / 2)
-        .map(|c| c.pose)
-        .ok_or(LocateError::Request("no candidates"))?;
     let prior = PosePrior {
         pose: central,
         position_radius_m: request.position_radius_m,
         attitude_radius_rad: request.attitude_radius_rad,
     };
-    progress(Progress::Matching { total: views.len() });
-    let calibrated: Vec<(&ReferenceView, &CameraModel)> =
-        views.iter().map(|v| (v, &request.camera)).collect();
-    let report = localizer
-        .estimate_calibrated(&query, &prior, &calibrated)
-        .await?;
-    let Some(first) = best(&report.candidates) else {
-        let best_matches = report
-            .candidates
-            .iter()
-            .map(|c| c.matches)
-            .max()
-            .unwrap_or(0);
+    let total_candidates = candidates.len();
+    let mut rendered_done = 0_usize;
+    let mut all_reports = Vec::with_capacity(total_candidates);
+    for chunk in candidates.chunks(CANDIDATE_BATCH_SIZE) {
+        let mut batch_views = Vec::with_capacity(chunk.len());
+        for candidate in chunk {
+            batch_views.push(renderer.render(candidate.pose).await?);
+            rendered_done += 1;
+            progress(Progress::Rendering {
+                done: rendered_done,
+                total: total_candidates,
+            });
+        }
+        progress(Progress::Matching {
+            total: total_candidates,
+        });
+        let calibrated: Vec<(&ReferenceView, &CameraModel)> =
+            batch_views.iter().map(|v| (v, &request.camera)).collect();
+        let batch_report = localizer
+            .estimate_calibrated(&query, &prior, &calibrated)
+            .await?;
+        all_reports.extend(batch_report.candidates);
+    }
+    let mut accepted = accepted_sorted(&all_reports);
+    let Some(first) = accepted.first().cloned() else {
+        let best_matches = all_reports.iter().map(|c| c.matches).max().unwrap_or(0);
         return Ok(Outcome::NotFound {
-            candidates: report.candidates.len(),
+            candidates: all_reports.len(),
             best_matches,
         });
     };
+    let alternatives = accepted.split_off(1);
     progress(Progress::Refining);
     let view = renderer.render(first.pose).await?;
     let refine_prior = PosePrior {
@@ -180,7 +192,7 @@ pub async fn locate<S: TileSource, M: AsyncImageMatcher>(
     let refined = localizer
         .estimate_calibrated(&query, &refine_prior, &[(&view, &request.camera)])
         .await?;
-    let (estimate, confirmed) = match best(&refined.candidates) {
+    let (estimate, confirmed) = match accepted_sorted(&refined.candidates).into_iter().next() {
         Some(better) => (better, true),
         None => (first, false),
     };
@@ -188,17 +200,25 @@ pub async fn locate<S: TileSource, M: AsyncImageMatcher>(
     let angles_deg = angles(&estimate.pose.orientation);
     Ok(Outcome::Found(Box::new(Located {
         estimate,
+        alternatives,
         geodetic,
         angles_deg,
         refined: confirmed,
     })))
 }
 
-/// The accepted estimate with the most inliers.
-fn best(candidates: &[CandidateReport]) -> Option<Estimate> {
-    candidates
+/// Accepted candidate estimates sorted by descending inliers and ascending RMS error.
+fn accepted_sorted(candidates: &[CandidateReport]) -> Vec<Estimate> {
+    let mut list: Vec<Estimate> = candidates
         .iter()
-        .filter_map(|c| c.decision.as_ref().ok())
-        .max_by_key(|e| e.quality.inliers)
-        .cloned()
+        .filter_map(|c| c.decision.as_ref().ok().cloned())
+        .collect();
+    list.sort_by(|a, b| {
+        b.quality.inliers.cmp(&a.quality.inliers).then_with(|| {
+            a.quality
+                .reprojection_rms_px
+                .total_cmp(&b.quality.reprojection_rms_px)
+        })
+    });
+    list
 }

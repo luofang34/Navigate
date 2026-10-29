@@ -10,11 +10,10 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-navigate-contract = { path = "../navigate-contract", features = ["serde"] }
-navigate-locate = { path = "../navigate-locate" }
-navigate-match = { path = "../navigate-match", default-features = false, features = ["webgpu"] }
+navigate-locate = { path = "../navigate-locate", features = ["serde"] }
+navigate-match = { path = "../navigate-match", default-features = false, features = ["webgpu", "flex"] }
 navigate-visual = { path = "../navigate-visual" }
-burn = { version = "0.22.1", default-features = false, features = ["std", "webgpu"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "webgpu", "flex"] }
 image = { workspace = true, features = ["jpeg", "png"] }
 serde_json = "1"
 thiserror.workspace = true

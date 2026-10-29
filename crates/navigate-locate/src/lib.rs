@@ -14,6 +14,7 @@ mod error;
 #[cfg(feature = "http")]
 mod http;
 mod locate;
+pub mod messages;
 mod metadata;
 mod scene;
 

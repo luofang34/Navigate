@@ -3,17 +3,7 @@
 @group(0) @binding(2) var terrain: texture_2d<f32>;
 @group(0) @binding(3) var<storage, read_write> output: array<vec2<u32>>;
 
-// Keep offsets relative to the anchor: subtracting two f32 Earth positions
-// would discard the sub-metre terrain and image precision needed by matching.
-fn geographic(point: vec3<f32>) -> vec3<f32> {
-    if p[35] == 0.0 { return point; }
-    let r = p[34];
-    let radial = r + point.z;
-    let a = radial * p[33] - point.y * p[32];
-    let h = sqrt(a * a + point.x * point.x);
-    let dh = point.x * point.x / (h + a);
-    let dlat = atan2(point.y - dh * p[32], radial + dh * p[33]);
-    let dlon = atan2(point.x, a);
+fn mercator_delta_y(dlat: f32) -> f32 {
     let half_sin = sin(0.5 * dlat);
     let ds = sin(dlat) * p[33] - 2.0 * half_sin * half_sin * p[32];
     let t = ds / (p[33] * p[33] - p[32] * ds);
@@ -22,10 +12,57 @@ fn geographic(point: vec3<f32>) -> vec3<f32> {
     let t2 = t * t;
     let small = t * (1.0 + t2 * (1.0 / 3.0 + t2 * (1.0 / 5.0
         + t2 * (1.0 / 7.0 + t2 / 9.0))));
-    let dm = select(atanh(t), small, abs(t) <= 0.125);
+    return select(atanh(t), small, abs(t) <= 0.125);
+}
+
+// Keep offsets relative to the anchor: subtracting two f32 Earth positions
+// would discard the sub-metre terrain and image precision needed by matching.
+fn geographic(point: vec3<f32>) -> vec3<f32> {
+    if p[35] == 0.0 { return point; }
+    if p[35] == 2.0 {
+        let s0 = p[32];
+        let c0 = p[33];
+        let n0 = p[34];
+        let e2 = p[36];
+        let d0_sqrt = p[37];
+        let a_one_minus_e2 = p[38];
+        let ax = n0 * c0 - s0 * point.y + c0 * point.z;
+        let h_cyl = sqrt(ax * ax + point.x * point.x);
+        let dlon = atan2(point.x, ax);
+        let dp = -s0 * point.y + c0 * point.z + (point.x * point.x) / (h_cyl + ax);
+        let dz = c0 * point.y + s0 * point.z;
+        var dlat = 0.0;
+        var altitude = 0.0;
+        for (var iter = 0u; iter < 3u; iter += 1u) {
+            let sigma = sin(dlat);
+            let half = sin(0.5 * dlat);
+            let gamma = 2.0 * half * half;
+            let delta_s = c0 * sigma - s0 * gamma;
+            let delta_c = -s0 * sigma - c0 * gamma;
+            let s_lat = s0 + delta_s;
+            let c_lat = c0 + delta_c;
+            let delta_s2 = delta_s * (2.0 * s0 + delta_s);
+            let d_val = max(d0_sqrt * d0_sqrt - e2 * delta_s2, 1.0e-6);
+            let d_sqrt = sqrt(d_val);
+            let delta_n = n0 * (e2 * delta_s2) / (d_sqrt * (d0_sqrt + d_sqrt));
+            let qp = dp - (delta_n * c_lat + n0 * delta_c);
+            let qz = dz - (1.0 - e2) * (delta_n * s_lat + n0 * delta_s);
+            altitude = qp * c_lat + qz * s_lat;
+            let m_curv = a_one_minus_e2 / (d_val * d_sqrt);
+            dlat += (-qp * s_lat + qz * c_lat) / (m_curv + altitude);
+        }
+        return vec3<f32>(dlon, mercator_delta_y(dlat), altitude);
+    }
+    let r = p[34];
+    let radial = r + point.z;
+    let a = radial * p[33] - point.y * p[32];
+    let h = sqrt(a * a + point.x * point.x);
+    let dh = point.x * point.x / (h + a);
+    let dlat = atan2(point.y - dh * p[32], radial + dh * p[33]);
+    let dlon = atan2(point.x, a);
     let altitude = (dot(point.xy, point.xy) + point.z * (2.0 * r + point.z))
         / (length(vec3<f32>(point.xy, radial)) + r);
-    return vec3<f32>(dlon, dm, altitude);
+    return vec3<f32>(dlon, mercator_delta_y(dlat), altitude);
 }
 
 fn coordinates(point: vec3<f32>, offset: u32) -> vec2<f32> {

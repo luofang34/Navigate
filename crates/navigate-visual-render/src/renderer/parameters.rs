@@ -26,11 +26,26 @@ pub(super) fn make(renderer: &GpuRenderer, pose: CameraPose) -> [f32; 64] {
     let (s, c) = renderer.frame.anchor()[0].to_radians().sin_cos();
     p[32] = s as f32;
     p[33] = c as f32;
-    p[34] = navigate_visual::MERCATOR_SPHERE_RADIUS_M as f32;
-    p[35] = if matches!(renderer.frame, LocalFrame::SphericalEnu { .. }) {
-        1.0
-    } else {
-        0.0
-    };
+    match renderer.frame {
+        LocalFrame::Wgs84Enu { .. } => {
+            let a = navigate_geodesy::wgs84::SEMI_MAJOR_AXIS_M;
+            let e2 = navigate_geodesy::wgs84::FIRST_ECCENTRICITY_SQUARED;
+            let d0_sqrt = (1.0 - e2 * s * s).sqrt();
+            let n0 = a / d0_sqrt;
+            p[34] = n0 as f32;
+            p[35] = 2.0;
+            p[36] = e2 as f32;
+            p[37] = d0_sqrt as f32;
+            p[38] = (a * (1.0 - e2)) as f32;
+        }
+        LocalFrame::SphericalEnu { .. } => {
+            p[34] = navigate_visual::MERCATOR_SPHERE_RADIUS_M as f32;
+            p[35] = 1.0;
+        }
+        _ => {
+            p[34] = navigate_visual::MERCATOR_SPHERE_RADIUS_M as f32;
+            p[35] = 0.0;
+        }
+    }
     p
 }

@@ -7,7 +7,7 @@ mod backbone;
 mod coarse;
 mod fine;
 mod interpolate;
-mod layers;
+pub(crate) mod layers;
 mod position;
 mod transformer;
 

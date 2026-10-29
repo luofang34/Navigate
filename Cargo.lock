@@ -5145,8 +5145,6 @@ dependencies = [
 name = "navigate-contract"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "thiserror 2.0.19",
 ]
 
@@ -5237,6 +5235,7 @@ dependencies = [
  "navigate-visual-render",
  "navigate-visual-workflow",
  "pollster",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.19",
@@ -5253,7 +5252,6 @@ dependencies = [
  "burn",
  "image",
  "js-sys",
- "navigate-contract",
  "navigate-locate",
  "navigate-match",
  "navigate-visual",
@@ -5275,15 +5273,20 @@ dependencies = [
  "getrandom 0.4.3",
  "half",
  "image",
+ "js-sys",
  "nalgebra 0.34.2",
  "navigate-match-kernels",
  "navigate-visual",
+ "navigate-visual-workflow",
  "pollster",
  "safetensors 0.8.0",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -5297,9 +5300,11 @@ dependencies = [
 name = "navigate-model"
 version = "0.1.0"
 dependencies = [
+ "burn",
  "clap",
  "navigate-match",
  "ort",
+ "pollster",
  "prost 0.12.6",
  "pytorch-reader",
  "sha2 0.10.9",
@@ -5337,6 +5342,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-segment"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "flate2",
+ "image",
+ "navigate-visual",
+ "rand 0.10.3",
+ "safetensors 0.8.0",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+ "zip 9.1.0",
+]
+
+[[package]]
 name = "navigate-visual"
 version = "0.1.0"
 dependencies = [
@@ -5370,6 +5394,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-visual-pipeline"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "clap",
+ "image",
+ "kamadak-exif",
+ "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-geodesy",
+ "navigate-match",
+ "navigate-recording",
+ "navigate-segment",
+ "navigate-visual",
+ "navigate-visual-session",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "navigate-visual-render"
 version = "0.1.0"
 dependencies = [
@@ -5377,6 +5426,7 @@ dependencies = [
  "futures-channel",
  "image",
  "nalgebra 0.34.2",
+ "navigate-geodesy",
  "navigate-visual",
  "pollster",
  "sha2 0.10.9",
@@ -9409,6 +9459,7 @@ dependencies = [
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
+ "zopfli",
 ]
 
 [[package]]
@@ -9422,6 +9473,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zstd"

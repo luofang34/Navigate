@@ -54,15 +54,21 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-fpl` | Flight-plan validation and leg-sequencing execution |
 | `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
 | `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
-| `navigate-visual` | Camera pose observations from calibrated images, a pose prior, and rendered map references |
+| `navigate-visual` | Camera pose observations, model-inference traits, and local scene refinement |
+| `navigate-visual-render` | Terrain and orthoimagery reference renderer on CPU and `wgpu` |
+| `navigate-match` | Rust `LoFTR`, `XFeat`, and `LighterGlue` matchers with native and `wasm32` dual-engine dispatch |
+| `navigate-locate` | Bounded multi-hypothesis terrain pose search on rendered reference views |
+| `navigate-locate-web` | Browser `wasm32` visual locator that uses WebNN with `burn` WebGPU and CPU fallback |
+| `navigate-segment` | Rust SegFormer-B0 occlusion masks, propeller detection, and 4-class training |
 | `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
 | `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
 | `navigate-data` | Read interface for immutable navigation data on native and web hosts |
 | `navigate-data-fs` | File system implementation of the `navigate-data` read interface |
 | `navigate-imagery` | Coverage plans and content-addressed imagery packages |
 | `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
+| `tools/visual-model` | Deterministic ONNX-to-SafeTensors weight converter for `LoFTR`, `XFeat`, and `LighterGlue` |
 | `tools/recording-worker` | JSON Lines worker for image matching and recording processing |
-| `tools/visual-pipeline` | Photo and video preprocessing, pose search, validation, and recording export |
+| `tools/visual-pipeline` | Rust photo and video preprocessing, pose search, segmentation training, and `sokoly-debrief` export |
 | `tools/navrun` | Deterministic scripted scenario runner exercising fusion → plan → guidance end to end |
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision

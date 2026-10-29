@@ -3,7 +3,7 @@ use std::io::Cursor;
 
 fn request(max_width_px: u32) -> LocateRequest {
     LocateRequest {
-        version: navigate_contract::locate::LOCATE_MESSAGES_VERSION,
+        version: LOCATE_MESSAGES_VERSION,
         target_latitude_rad: 0.9247,
         target_longitude_rad: 0.6293,
         heading_rad: 4.8,

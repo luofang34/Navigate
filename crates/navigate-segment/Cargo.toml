@@ -1,0 +1,36 @@
+[package]
+name = "navigate-segment"
+description = "Pure-Rust SegFormer semantic segmentation, mask policies, and 4-class fine-tuning on burn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["flex", "optim"]
+flex = ["burn/flex"]
+optim = ["burn/optim"]
+wgpu = ["burn/wgpu"]
+metal = ["burn/metal"]
+vulkan = ["burn/vulkan"]
+cuda = ["burn/cuda"]
+
+[dependencies]
+navigate-visual = { path = "../navigate-visual" }
+burn = { version = "0.22.1", default-features = false, features = ["std"] }
+safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+flate2 = "1.1"
+zip = { version = "9.1.0", default-features = false, features = ["deflate"] }
+rand = "0.10"
+image = { workspace = true, features = ["png", "jpeg"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

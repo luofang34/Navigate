@@ -42,6 +42,16 @@ pub struct FusionConfig {
     /// Horizontal 1-sigma at or below which quality is at least
     /// `Degraded`; beyond it the solution is `Unusable`. Default: 50.0 m.
     pub degraded_horizontal_1sigma_m: f64,
+    /// Vertical 1-sigma limit in meters for `Good` solution quality.
+    /// Default: 15.0 m.
+    pub good_vertical_1sigma_m: f64,
+    /// Vertical 1-sigma limit in meters for `Degraded` solution quality.
+    /// Values above this limit produce `Unusable` quality. Default: 75.0 m.
+    pub degraded_vertical_1sigma_m: f64,
+    /// Horizontal offset threshold in meters that triggers tangent-plane
+    /// re-anchoring. A non-positive value disables re-anchoring.
+    /// Default: 50_000.0 m.
+    pub reanchor_distance_m: f64,
     /// Observation silence at or beyond which quality degrades to at
     /// least `Degraded`. Default: 2 s.
     pub quality_silence_degraded: DurationNanos,
@@ -61,6 +71,9 @@ impl Default for FusionConfig {
             initial_velocity_variance_m2_per_s2: 100.0,
             good_horizontal_1sigma_m: 10.0,
             degraded_horizontal_1sigma_m: 50.0,
+            good_vertical_1sigma_m: 15.0,
+            degraded_vertical_1sigma_m: 75.0,
+            reanchor_distance_m: 50_000.0,
             quality_silence_degraded: DurationNanos::from_millis(2_000),
             quality_silence_unusable: DurationNanos::from_millis(5_000),
         }
@@ -83,6 +96,9 @@ mod tests {
         assert!((config.initial_velocity_variance_m2_per_s2 - 100.0).abs() < 1e-12);
         assert!((config.good_horizontal_1sigma_m - 10.0).abs() < 1e-12);
         assert!((config.degraded_horizontal_1sigma_m - 50.0).abs() < 1e-12);
+        assert!((config.good_vertical_1sigma_m - 15.0).abs() < 1e-12);
+        assert!((config.degraded_vertical_1sigma_m - 75.0).abs() < 1e-12);
+        assert!((config.reanchor_distance_m - 50_000.0).abs() < 1e-12);
         assert_eq!(
             config.quality_silence_degraded,
             DurationNanos::from_millis(2_000)

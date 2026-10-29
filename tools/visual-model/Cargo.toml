@@ -18,7 +18,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-22", "load-dynamic"] }
+pollster = "0.3"
 
 [lints]
 workspace = true

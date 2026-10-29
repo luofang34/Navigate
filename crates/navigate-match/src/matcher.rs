@@ -12,6 +12,7 @@ const LIMIT: usize = 4096;
 ///
 /// Each image has its own letterbox transform. Output pixels refer to the source
 /// images. The shared geometry verifier must use each camera's calibration.
+#[derive(Clone)]
 pub struct LoftrMatcher {
     model: Loftr,
     identity: String,
@@ -24,6 +25,11 @@ impl LoftrMatcher {
             model,
             identity: format!("loftr-dual-softmax-640x480/burn/{weights_sha256}"),
         }
+    }
+
+    /// Wrap a loaded model with an explicit engine identity string.
+    pub fn with_identity(model: Loftr, identity: String) -> Self {
+        Self { model, identity }
     }
 
     /// Stable backend and model identity for reports and derived caches.

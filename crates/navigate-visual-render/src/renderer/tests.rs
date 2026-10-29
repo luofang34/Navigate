@@ -270,12 +270,104 @@ fn hardware_small_geographic_offsets_preserve_image_sample_positions() {
 }
 
 #[test]
-fn ellipsoid_frames_cannot_use_spherical_or_flat_terrain_rays() {
-    let scene = scene(LocalFrame::wgs84_enu(0.0, 0.0).unwrap());
-    assert!(matches!(
-        validate(&scene, camera(), limits()),
-        Err(RenderError::Invalid(
-            "WGS84 frames require ellipsoid terrain rays"
-        ))
-    ));
+fn wgs84_ellipsoid_frames_pass_validation_and_relative_f32_solver_matches_geodesy() {
+    let frame = LocalFrame::wgs84_enu(47.0, 8.0).unwrap();
+    let scene = scene(frame);
+    assert!(validate(&scene, camera(), limits()).is_ok());
+
+    let (s, c) = 47.0_f64.to_radians().sin_cos();
+    let a = navigate_geodesy::wgs84::SEMI_MAJOR_AXIS_M;
+    let e2 = navigate_geodesy::wgs84::FIRST_ECCENTRICITY_SQUARED;
+    let d0_sqrt = (1.0 - e2 * s * s).sqrt();
+    let n0 = (a / d0_sqrt) as f32;
+    let s0 = s as f32;
+    let c0 = c as f32;
+    let e2_f = e2 as f32;
+    let d0_f = d0_sqrt as f32;
+    let a_1me2 = (a * (1.0 - e2)) as f32;
+
+    for [east, north, up] in [
+        [0.0_f32, 0.0, 1000.0],
+        [4500.0, -3200.0, 1200.0],
+        [-25_000.0, 30_000.0, 2500.0],
+    ] {
+        let ax = n0 * c0 - s0 * north + c0 * up;
+        let h_cyl = (ax * ax + east * east).sqrt();
+        let dlon = east.atan2(ax);
+        let dp = -s0 * north + c0 * up + (east * east) / (h_cyl + ax);
+        let dz = c0 * north + s0 * up;
+        let mut dlat = 0.0_f32;
+        let mut altitude = 0.0_f32;
+        for _ in 0..3 {
+            let sigma = dlat.sin();
+            let half = (0.5 * dlat).sin();
+            let gamma = 2.0 * half * half;
+            let delta_s = c0 * sigma - s0 * gamma;
+            let delta_c = -s0 * sigma - c0 * gamma;
+            let s_lat = s0 + delta_s;
+            let c_lat = c0 + delta_c;
+            let delta_s2 = delta_s * (2.0 * s0 + delta_s);
+            let d_val = (d0_f * d0_f - e2_f * delta_s2).max(1.0e-6);
+            let d_sqrt = d_val.sqrt();
+            let delta_n = n0 * (e2_f * delta_s2) / (d_sqrt * (d0_f + d_sqrt));
+            let qp = dp - (delta_n * c_lat + n0 * delta_c);
+            let qz = dz - (1.0 - e2_f) * (delta_n * s_lat + n0 * delta_s);
+            altitude = qp * c_lat + qz * s_lat;
+            let m_curv = a_1me2 / (d_val * d_sqrt);
+            dlat += (-qp * s_lat + qz * c_lat) / (m_curv + altitude);
+        }
+        let exact = frame.geodetic(Vector3::new(
+            f64::from(east),
+            f64::from(north),
+            f64::from(up),
+        ));
+        let exact_dlat = (exact[0] - 47.0).to_radians();
+        let exact_dlon = (exact[1] - 8.0).to_radians();
+        assert!((f64::from(dlat) - exact_dlat).abs() * a < 0.05);
+        assert!((f64::from(dlon) - exact_dlon).abs() * a * c < 0.05);
+        assert!((f64::from(altitude) - exact[2]).abs() < 0.05);
+    }
+}
+
+#[test]
+#[ignore = "requires a hardware GPU"]
+fn hardware_wgs84_ellipsoid_depth_agrees_with_analytic_ray_intersection() {
+    let camera = camera();
+    let frame = LocalFrame::wgs84_enu(47.0, 8.0).unwrap();
+    let xy = frame.mercator_xy(Vector3::zeros());
+    let mut test_scene = scene(frame);
+    let centered = AtlasLayout {
+        zoom: 14,
+        origin_tile: [
+            (xy[0] * f64::from(1_u32 << 14)) as u32 - 1,
+            (xy[1] * f64::from(1_u32 << 14)) as u32 - 1,
+        ],
+        tile_pixels: 256,
+        size: [512, 512],
+    };
+    test_scene.imagery.layout = centered;
+    test_scene.terrain.layout = centered;
+    let mut renderer = pollster::block_on(GpuRenderer::new(test_scene, camera, limits())).unwrap();
+    let pose = CameraPose {
+        position: Vector3::new(700.0, 300.0, 1000.0),
+        orientation: UnitQuaternion::identity(),
+    };
+    let view = renderer.render_blocking(pose).unwrap();
+    for y in 0..camera.height {
+        for x in 0..camera.width {
+            let ray = Vector3::new(
+                (f64::from(x) - camera.cx) / camera.fx,
+                (camera.cy - f64::from(y)) / camera.fy,
+                -1.0,
+            );
+            let actual = f64::from(view.depth_m[(y * camera.width + x) as usize]);
+            assert!(actual > 900.0, "expected terrain hit at ({x}, {y})");
+            let hit = pose.position + ray * actual;
+            let [_, _, hit_alt_m] = frame.geodetic(hit);
+            assert!(
+                hit_alt_m.abs() < 0.02,
+                "ellipsoid surface hit altitude {hit_alt_m} m at ({x}, {y})"
+            );
+        }
+    }
 }

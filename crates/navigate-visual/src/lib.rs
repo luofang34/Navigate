@@ -22,21 +22,12 @@
 //!     Localizer, LocalizerConfig, MapRevision, PosePrior, PyramidalMatcher,
 //!     ReferenceView, VisualError};
 //!
-//! let camera = CameraModel {
-//!     width: 64, height: 64, fx: 55.0, fy: 55.0, cx: 31.5, cy: 31.5,
-//! };
-//! let pose = CameraPose {
-//!     position: Vector3::new(0.0, 0.0, 1000.0),
-//!     orientation: UnitQuaternion::identity(),
-//! };
+//! let camera = CameraModel { width: 64, height: 64, fx: 55.0, fy: 55.0, cx: 31.5, cy: 31.5 };
+//! let pose = CameraPose { position: Vector3::new(0.0, 0.0, 1000.0), orientation: UnitQuaternion::identity() };
 //! let prior = PosePrior { pose, position_radius_m: 100.0, attitude_radius_rad: 0.1 };
-//! let frame = Frame {
-//!     stamp: FrameStamp { sequence: 0, capture_time_ns: 1 },
-//!     camera, image: GrayImage::new(64, 64),
-//! };
+//! let frame = Frame { stamp: FrameStamp { sequence: 0, capture_time_ns: 1 }, camera, image: GrayImage::new(64, 64) };
 //! let reference = ReferenceView {
-//!     map: MapRevision { release_id: "selected-release".into(),
-//!         manifest_sha256: "a".repeat(64) },
+//!     map: MapRevision { release_id: "selected-release".into(), manifest_sha256: "a".repeat(64) },
 //!     frame: LocalFrame::anchor_mercator(47.0, 11.0)?,
 //!     pose, image: GrayImage::new(64, 64), depth_m: vec![1000.0; 64 * 64],
 //! };
@@ -53,6 +44,7 @@ mod frame;
 mod geometry;
 #[cfg(feature = "gpu")]
 mod gpu;
+mod inference;
 mod local_frame;
 mod local_scene;
 mod localizer;
@@ -78,6 +70,9 @@ pub use geometry::{
 };
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;
+pub use inference::{
+    AsyncModelInference, EngineKind, GenericTensor, HostTensor, ModelInference, NamedTensor,
+};
 pub use local_frame::{LocalFrame, MERCATOR_SPHERE_RADIUS_M};
 pub use local_scene::{
     LocalScene, LocalSceneCamera, LocalSceneError, LocalScenePoint, LocalScenePose,

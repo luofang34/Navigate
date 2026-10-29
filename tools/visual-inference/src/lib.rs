@@ -14,6 +14,7 @@ mod features;
 mod lighterglue;
 mod lightglue;
 mod loftr;
+mod model_session;
 mod native_runtime;
 mod preprocessing;
 #[cfg(all(feature = "rustnn-coreml", target_os = "macos"))]
@@ -30,6 +31,7 @@ pub use camp::{CampIndex, CampRetriever};
 pub use diagnostics::TensorIoStatistics;
 pub use lightglue::LightGlueMatcher;
 pub use loftr::LoFtrMatcher;
+pub use model_session::OrtModelSession;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
 
 pub use staged::{ScoredPixelMatch, XFeatFeatures, XFeatGraph, XFeatStages};
