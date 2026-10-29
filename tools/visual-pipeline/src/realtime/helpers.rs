@@ -9,8 +9,8 @@ use crate::{
 use image::DynamicImage;
 use nalgebra::Matrix3;
 use navigate_match::{
-    FastMatchConfig, LighterGlue, PrecomputedMatch, PrecomputedViewEntry, SparseFeatures, Weights,
-    XFeat,
+    FastMatchConfig, IndexedMatch, LighterGlue, PrecomputedMatch, PrecomputedViewEntry,
+    SparseFeatures, Weights, XFeat,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -77,9 +77,7 @@ pub(super) fn filter_terrain_features(
 }
 
 pub(super) fn collect_bank_correspondences(
-    _entry: &PrecomputedViewEntry,
     matches: &[PrecomputedMatch],
-    _render_size: [u32; 2],
 ) -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
     let mut world = Vec::with_capacity(matches.len());
     let mut px = Vec::with_capacity(matches.len());
@@ -92,21 +90,16 @@ pub(super) fn collect_bank_correspondences(
     (world, px)
 }
 
-pub(super) fn lookup_entry_3d_matches(
+pub(super) fn lookup_indexed_3d_matches(
     entry: &PrecomputedViewEntry,
-    matches: &[navigate_visual::PixelMatch],
-    _render_size: [u32; 2],
+    matches: &[IndexedMatch],
 ) -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
     let mut world = Vec::with_capacity(matches.len());
     let mut px = Vec::with_capacity(matches.len());
     for m in matches {
-        if let Some(idx) = entry.pixels.iter().position(|p| {
-            (f64::from(p[0]) - m.reference.x).abs() < 1e-3
-                && (f64::from(p[1]) - m.reference.y).abs() < 1e-3
-        }) && let Some(&w) = entry.world_points_enu.get(idx)
-        {
+        if let Some(&w) = entry.world_points_enu.get(m.ref_index) {
             world.push(w);
-            px.push([m.query.x, m.query.y]);
+            px.push([m.pixel_match.query.x, m.pixel_match.query.y]);
         }
     }
     (world, px)

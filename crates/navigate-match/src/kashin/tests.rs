@@ -423,4 +423,28 @@ fn precomputed_bank_roundtrip_corruption_rejection_and_3d_matching() {
     let single: PixelMatch = matches[0].into();
     assert_eq!(single.reference, pixel_matches[0].reference);
     assert_eq!(single.query, pixel_matches[0].query);
+
+    let prepared = PreparedKashinQuery::from_features(&projector, &query).expect("prepared query");
+    assert_eq!(
+        *prepared.sketch(),
+        ViewSketch::from_features(&projector, &query)
+    );
+    assert_eq!(decoded.shortlist_prepared(&prepared, 5), shortlist);
+    let prepared_matches = decoded
+        .match_prepared(true_index, &prepared, 20, 0.72, 0.80)
+        .expect("prepared match");
+    assert_eq!(prepared_matches, matches);
+
+    let prefix_query = query.truncate_top(60);
+    let prefix_prepared = decoded
+        .match_prepared_limit(true_index, &prepared, 60, 20, 0.72, 0.80)
+        .expect("prefix prepared match");
+    let prefix_direct = decoded
+        .match_entry(true_index, &prefix_query, 20, 0.72, 0.80)
+        .expect("prefix direct match");
+    assert_eq!(prefix_prepared, prefix_direct);
+
+    // Compact 92 B/kp check: 16 odd entries with 3D (92 B/kp) + 17 even entries without 3D (80 B/kp).
+    let expected_bytes = 88 + 32 + 33 * 273 + 16 * 96 * 92 + 17 * 96 * 80;
+    assert_eq!(encoded.len(), expected_bytes);
 }

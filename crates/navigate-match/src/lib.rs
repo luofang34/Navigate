@@ -26,9 +26,9 @@ pub use convert::loftr_from_checkpoint;
 pub use error::MatchError;
 pub use kashin::{
     DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,
-    PrecomputedReferenceBank, PrecomputedViewEntry, ViewSketch,
+    PrecomputedReferenceBank, PrecomputedViewEntry, PreparedKashinQuery, ViewSketch,
 };
-pub use lighterglue::{FastMatchConfig, FastMatchStats, LighterGlue};
+pub use lighterglue::{FastMatchConfig, FastMatchStats, IndexedMatch, LighterGlue};
 pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
 #[cfg(not(target_arch = "wasm32"))]

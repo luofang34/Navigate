@@ -1,7 +1,13 @@
-//! Sparse subpixel keypoint ray-casting and adaptive rendering on [`Surface`].
+//! Sparse subpixel keypoint ray-casting and parallel adaptive rendering on [`Surface`].
 
+mod adaptive;
+
+use adaptive::{
+    BlockCell, SmoothQuad, build_axis_locs, grid_axis, smooth_surface_corners, worker_count,
+};
 use image::{Rgb, RgbImage};
 use nalgebra::{Matrix3, Vector3};
+use std::thread;
 
 use super::{Surface, SurfaceRender};
 
@@ -25,7 +31,7 @@ pub struct SurfaceAdaptiveStats {
     pub rays_cast: usize,
 }
 
-struct RayProjector {
+pub(super) struct RayProjector {
     eye: Vector3<f64>,
     world_to_cam: Matrix3<f64>,
     cam_to_world: Matrix3<f64>,
@@ -59,10 +65,25 @@ impl Surface {
         pixels: &[[f64; 2]],
     ) -> Vec<Option<SurfaceRayHit>> {
         let proj = RayProjector::new(eye, world_to_cam, k);
-        let mut hits = Vec::with_capacity(pixels.len());
-        for &[u, v] in pixels {
-            hits.push(self.raycast_one(&proj, u, v));
+        let workers = worker_count(pixels.len() / 64);
+        if workers <= 1 {
+            return pixels
+                .iter()
+                .map(|&[u, v]| self.raycast_one(&proj, u, v))
+                .collect();
         }
+        let mut hits = vec![None; pixels.len()];
+        let chunk_len = pixels.len().div_ceil(workers);
+        thread::scope(|scope| {
+            for (px_chunk, out_chunk) in pixels.chunks(chunk_len).zip(hits.chunks_mut(chunk_len)) {
+                let proj_ref = &proj;
+                scope.spawn(move || {
+                    for (&[u, v], dst) in px_chunk.iter().zip(out_chunk.iter_mut()) {
+                        *dst = self.raycast_one(proj_ref, u, v);
+                    }
+                });
+            }
+        });
         hits
     }
 
@@ -93,23 +114,16 @@ impl Surface {
             );
         }
 
-        let mut rgb = RgbImage::from_pixel(w, h, Rgb([0, 0, 0]));
-        let mut depth = vec![0.0_f32; total_pixels];
-        let mut points = vec![[0.0_f64; 3]; total_pixels];
         let proj = RayProjector::new(eye, world_to_cam, k);
         let width = w as usize;
+        let height = h as usize;
+        let mut rgb_raw = vec![0_u8; total_pixels * 3];
+        let mut depth = vec![0.0_f32; total_pixels];
+        let mut points = vec![[0.0_f64; 3]; total_pixels];
 
-        if stride <= 1 {
-            for y in 0..h {
-                for x in 0..w {
-                    if let Some(hit) = self.raycast_one(&proj, f64::from(x), f64::from(y)) {
-                        let idx = (y as usize) * width + (x as usize);
-                        rgb.put_pixel(x, y, hit.rgb);
-                        depth[idx] = hit.depth_m;
-                        points[idx] = hit.world_enu;
-                    }
-                }
-            }
+        if stride <= 1 || w <= 1 || h <= 1 {
+            self.render_dense_rows(&proj, w, height, &mut rgb_raw, &mut depth, &mut points);
+            let rgb = RgbImage::from_raw(w, h, rgb_raw).unwrap_or_else(|| RgbImage::new(w, h));
             return (
                 (rgb, depth, points),
                 SurfaceAdaptiveStats {
@@ -121,89 +135,90 @@ impl Surface {
 
         let xs = grid_axis(w, stride);
         let ys = grid_axis(h, stride);
-        let nx = xs.len();
-        let mut state = vec![0_u8; total_pixels];
-        let mut grid_hits = Vec::with_capacity(nx * ys.len());
-        let mut rays_cast = 0_usize;
-
-        for &gy in &ys {
-            for &gx in &xs {
-                let hit = self.raycast_one(&proj, f64::from(gx), f64::from(gy));
-                let idx = (gy as usize) * width + (gx as usize);
-                state[idx] = 2;
-                rays_cast += 1;
-                if let Some(c) = hit {
-                    rgb.put_pixel(gx, gy, c.rgb);
-                    depth[idx] = c.depth_m;
-                    points[idx] = c.world_enu;
+        let (nx, ny) = (xs.len(), ys.len());
+        let mut grid_hits = vec![None; nx * ny];
+        let grid_workers = worker_count(ny / 2);
+        if grid_workers <= 1 {
+            for (gy_idx, &gy) in ys.iter().enumerate() {
+                for (gx_idx, &gx) in xs.iter().enumerate() {
+                    grid_hits[gy_idx * nx + gx_idx] =
+                        self.raycast_one(&proj, f64::from(gx), f64::from(gy));
                 }
-                grid_hits.push(hit);
             }
+        } else {
+            let rows_per_worker = ny.div_ceil(grid_workers);
+            thread::scope(|scope| {
+                for (y_slice, out_slice) in ys
+                    .chunks(rows_per_worker)
+                    .zip(grid_hits.chunks_mut(rows_per_worker * nx))
+                {
+                    let proj_ref = &proj;
+                    let xs_ref = &xs;
+                    scope.spawn(move || {
+                        for (row_idx, &gy) in y_slice.iter().enumerate() {
+                            let row_out = &mut out_slice[row_idx * nx..(row_idx + 1) * nx];
+                            for (&gx, dst) in xs_ref.iter().zip(row_out.iter_mut()) {
+                                *dst = self.raycast_one(proj_ref, f64::from(gx), f64::from(gy));
+                            }
+                        }
+                    });
+                }
+            });
         }
 
+        let bx_count = nx - 1;
+        let mut blocks = Vec::with_capacity(bx_count * (ny - 1));
+        let mut smooth_quads = Vec::new();
         for (by, y_pair) in ys.windows(2).enumerate() {
-            let [y0, y1] = [y_pair[0], y_pair[1]];
             for (bx, x_pair) in xs.windows(2).enumerate() {
-                let [x0, x1] = [x_pair[0], x_pair[1]];
                 let corners = [
                     grid_hits[by * nx + bx],
                     grid_hits[by * nx + bx + 1],
                     grid_hits[(by + 1) * nx + bx],
                     grid_hits[(by + 1) * nx + bx + 1],
                 ];
-                if corners.iter().all(Option::is_none) {
-                    for y in y0..=y1 {
-                        for x in x0..=x1 {
-                            let idx = (y as usize) * width + (x as usize);
-                            if state[idx] == 0 {
-                                state[idx] = 1;
-                            }
-                        }
-                    }
+                let cell = if corners.iter().all(Option::is_none) {
+                    BlockCell::Empty
                 } else if let Some(c) =
                     smooth_surface_corners(corners, rgb_grad_threshold, depth_rel_threshold)
                 {
-                    let mut out = BlockBuffers {
-                        state: &mut state,
-                        rgb: &mut rgb,
-                        depth: &mut depth,
-                        points: &mut points,
-                    };
-                    interpolate_surface_block(&c, [x0, x1], [y0, y1], width, &mut out);
+                    let q_idx = smooth_quads.len();
+                    smooth_quads.push(SmoothQuad::from_corners(
+                        c,
+                        [x_pair[0], x_pair[1]],
+                        [y_pair[0], y_pair[1]],
+                    ));
+                    BlockCell::Smooth(q_idx)
                 } else {
-                    for y in y0..=y1 {
-                        for x in x0..=x1 {
-                            let idx = (y as usize) * width + (x as usize);
-                            if state[idx] == 2 {
-                                continue;
-                            }
-                            state[idx] = 2;
-                            rays_cast += 1;
-                            if let Some(hit) = self.raycast_one(&proj, f64::from(x), f64::from(y)) {
-                                rgb.put_pixel(x, y, hit.rgb);
-                                depth[idx] = hit.depth_m;
-                                points[idx] = hit.world_enu;
-                            } else {
-                                rgb.put_pixel(x, y, Rgb([0, 0, 0]));
-                                depth[idx] = 0.0;
-                                points[idx] = [0.0; 3];
-                            }
-                        }
-                    }
-                }
+                    BlockCell::Refine
+                };
+                blocks.push(cell);
             }
         }
 
+        let x_loc = build_axis_locs(w, &xs);
+        let y_loc = build_axis_locs(h, &ys);
+        let refine_rays = self.fill_adaptive_rows(
+            &proj,
+            (&x_loc, &y_loc),
+            (&grid_hits, nx),
+            (&blocks, &smooth_quads, bx_count),
+            width,
+            &mut rgb_raw,
+            &mut depth,
+            &mut points,
+        );
+        let rgb = RgbImage::from_raw(w, h, rgb_raw).unwrap_or_else(|| RgbImage::new(w, h));
         (
             (rgb, depth, points),
             SurfaceAdaptiveStats {
                 total_pixels,
-                rays_cast,
+                rays_cast: (nx * ny) + refine_rays,
             },
         )
     }
 
-    fn raycast_one(&self, proj: &RayProjector, u: f64, v: f64) -> Option<SurfaceRayHit> {
+    pub(super) fn raycast_one(&self, proj: &RayProjector, u: f64, v: f64) -> Option<SurfaceRayHit> {
         if !u.is_finite() || !v.is_finite() {
             return None;
         }
@@ -216,103 +231,5 @@ impl Surface {
             depth_m: rel_cam.z as f32,
             rgb,
         })
-    }
-}
-
-struct BlockBuffers<'a> {
-    state: &'a mut [u8],
-    rgb: &'a mut RgbImage,
-    depth: &'a mut [f32],
-    points: &'a mut [[f64; 3]],
-}
-
-fn grid_axis(len: u32, stride: u32) -> Vec<u32> {
-    let mut coords: Vec<u32> = (0..len).step_by(stride as usize).collect();
-    if coords.last().copied() != Some(len - 1) {
-        coords.push(len - 1);
-    }
-    coords
-}
-
-fn smooth_surface_corners(
-    corners: [Option<SurfaceRayHit>; 4],
-    rgb_grad_threshold: u8,
-    depth_rel_threshold: f32,
-) -> Option<[SurfaceRayHit; 4]> {
-    if !depth_rel_threshold.is_finite() || depth_rel_threshold < 0.0 {
-        return None;
-    }
-    let hit = [corners[0]?, corners[1]?, corners[2]?, corners[3]?];
-    let mut c_min = [u8::MAX; 3];
-    let mut c_max = [u8::MIN; 3];
-    let mut d_min = f32::INFINITY;
-    let mut d_max = 0.0_f32;
-    for h in hit {
-        if h.depth_m <= 0.0 {
-            return None;
-        }
-        for ch in 0..3 {
-            c_min[ch] = c_min[ch].min(h.rgb.0[ch]);
-            c_max[ch] = c_max[ch].max(h.rgb.0[ch]);
-        }
-        d_min = d_min.min(h.depth_m);
-        d_max = d_max.max(h.depth_m);
-    }
-    for ch in 0..3 {
-        if c_max[ch] - c_min[ch] > rgb_grad_threshold {
-            return None;
-        }
-    }
-    if (d_max - d_min) > depth_rel_threshold * d_min {
-        return None;
-    }
-    Some(hit)
-}
-
-fn interpolate_surface_block(
-    c: &[SurfaceRayHit; 4],
-    [x0, x1]: [u32; 2],
-    [y0, y1]: [u32; 2],
-    width: usize,
-    out: &mut BlockBuffers<'_>,
-) {
-    let dx = f64::from(x1 - x0);
-    let dy = f64::from(y1 - y0);
-    let inv_d = c.map(|h| 1.0 / f64::from(h.depth_m));
-    let w_over_d = [0, 1, 2, 3].map(|i| c[i].world_enu.map(|v| v * inv_d[i]));
-    for y in y0..=y1 {
-        let ty = if dy > 0.0 {
-            f64::from(y - y0) / dy
-        } else {
-            0.0
-        };
-        for x in x0..=x1 {
-            let idx = (y as usize) * width + (x as usize);
-            if out.state[idx] != 0 {
-                continue;
-            }
-            let tx = if dx > 0.0 {
-                f64::from(x - x0) / dx
-            } else {
-                0.0
-            };
-            let bilerp = |v: [f64; 4]| -> f64 {
-                let top = v[0] * (1.0 - tx) + v[1] * tx;
-                let bot = v[2] * (1.0 - tx) + v[3] * tx;
-                top * (1.0 - ty) + bot * ty
-            };
-            let id = bilerp(inv_d);
-            let d = 1.0 / id;
-            let mut ch_out = [0_u8; 3];
-            for (ch, slot) in ch_out.iter_mut().enumerate() {
-                let vals = c.map(|h| f64::from(h.rgb.0[ch]));
-                *slot = bilerp(vals).round().clamp(0.0, 255.0) as u8;
-            }
-            let world = [0, 1, 2].map(|axis| bilerp(w_over_d.map(|w| w[axis])) * d);
-            out.state[idx] = 1;
-            out.rgb.put_pixel(x, y, Rgb(ch_out));
-            out.depth[idx] = d as f32;
-            out.points[idx] = world;
-        }
     }
 }

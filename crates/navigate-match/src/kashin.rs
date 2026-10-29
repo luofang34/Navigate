@@ -6,10 +6,13 @@
 //! [`PrecomputedReferenceBank`] stores offline reference views and 3D terrain points.
 
 mod bank;
+mod codec;
+mod query;
 
 pub use bank::{
     BANK_MAGIC, BANK_VERSION, PrecomputedMatch, PrecomputedReferenceBank, PrecomputedViewEntry,
 };
+pub use query::PreparedKashinQuery;
 
 use crate::{MatchError, SparseFeatures};
 
@@ -456,7 +459,7 @@ pub(crate) fn try_normalize64(descriptor: &[f32; 64]) -> Option<[f32; 64]> {
     (norm_sq > 1e-24).then(|| descriptor.map(|v| v / norm_sq.sqrt()))
 }
 
-fn octahedron_vertex(slice: &[f32]) -> (usize, f32) {
+pub(crate) fn octahedron_vertex(slice: &[f32]) -> (usize, f32) {
     let (mut best_k, mut best_abs, mut neg) = (0usize, -1.0_f32, 0usize);
     for (k, &val) in slice.iter().enumerate() {
         if val.abs() > best_abs {
@@ -468,7 +471,7 @@ fn octahedron_vertex(slice: &[f32]) -> (usize, f32) {
     ((best_k << 1) | neg, best_abs)
 }
 
-fn hadamard_moment_signature(seed: u64, moments: &mut [[f32; 64]; 4]) -> [u64; 4] {
+pub(crate) fn hadamard_moment_signature(seed: u64, moments: &mut [[f32; 64]; 4]) -> [u64; 4] {
     let mut state = seed ^ 0x534B_4554_4348_3235;
     for block in moments.iter_mut() {
         let (next, mask) = splitmix64(state);

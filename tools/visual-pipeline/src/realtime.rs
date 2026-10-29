@@ -14,13 +14,13 @@ use crate::{
 };
 use helpers::{
     collect_bank_correspondences, filter_terrain_features, load_lighterglue_model,
-    load_xfeat_model, log_attempt, lookup_entry_3d_matches, polish_pose_sparse, raw_file_sha256,
+    load_xfeat_model, log_attempt, lookup_indexed_3d_matches, polish_pose_sparse, raw_file_sha256,
     rot_from_row_major, rot_to_row_major, warmup_gpu_pipelines,
 };
 use image::{DynamicImage, imageops::FilterType};
 use navigate_match::{
     DEFAULT_KASHIN_SEED, FastMatchConfig, HadamardProjector, PrecomputedReferenceBank,
-    PrecomputedViewEntry,
+    PrecomputedViewEntry, PreparedKashinQuery,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf, time::Instant};
@@ -279,11 +279,16 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         let query_xfeat_ms = t_xfeat.elapsed().as_secs_f64() * 1000.0;
 
         let t_short = Instant::now();
-        let ranked = bank.shortlist(&qry_feat, top_k);
+        let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;
+        let ranked = bank.shortlist_prepared(&prepared, top_k);
         let shortlist_us = t_short.elapsed().as_secs_f64() * 1_000_000.0;
 
         let t_match = Instant::now();
-        let qry_probe = qry_feat.truncate_top(640);
+        let kashin_limit = if lighterglue.is_some() {
+            640
+        } else {
+            usize::MAX
+        };
         let mut attempts_log = Vec::new();
         let mut best: Option<(usize, usize, PoseCandidate)> = None;
         let mut lg_layers_total = 0usize;
@@ -293,15 +298,10 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             let init_eye = entry.eye_enu;
             let init_rot = rot_from_row_major(entry.world_to_cam);
 
-            let kashin_src = if lighterglue.is_some() {
-                &qry_probe
-            } else {
-                &qry_feat
-            };
-            let kashin_matches = bank.match_entry(entry_idx, kashin_src, 24, 0.60, 0.92)?;
-            let (mut world_pts, img_px) =
-                collect_bank_correspondences(entry, &kashin_matches, render_size);
-            let mut backend_label = "kashin-2bit";
+            let kashin_matches =
+                bank.match_prepared_limit(entry_idx, &prepared, kashin_limit, 24, 0.60, 0.92)?;
+            let (mut world_pts, img_px) = collect_bank_correspondences(&kashin_matches);
+            let mut backend_label = "kashin-i8";
             let mut cand = fit_pose_hybrid(
                 &world_pts,
                 &img_px,
@@ -318,10 +318,11 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
                     max_keypoints: kp_limit,
                     ..FastMatchConfig::balanced_search()
                 };
-                let (lg_matches, stats) =
-                    pollster::block_on(lg.match_features_fast(&ref_feat, &qry_feat, &fast_cfg))?;
+                let (lg_matches, stats) = pollster::block_on(
+                    lg.match_features_indexed_fast(&ref_feat, &qry_feat, &fast_cfg),
+                )?;
                 lg_layers_total += stats.layers_executed;
-                let (lg_world, lg_px) = lookup_entry_3d_matches(entry, &lg_matches, render_size);
+                let (lg_world, lg_px) = lookup_indexed_3d_matches(entry, &lg_matches);
                 if let Some(lg_cand) = fit_pose_hybrid(
                     &lg_world,
                     &lg_px,

@@ -253,6 +253,20 @@ fn match_features_fast_early_exits_at_min_layers_on_high_agreement() {
     assert!(rt_stats.early_exited);
     assert_eq!(rt_stats.layers_executed, tracking.min_layers);
     assert_eq!(pair_coords(&rt_matches), pair_coords(&matches));
+
+    let masked_exit = FastMatchConfig {
+        min_layers: 2,
+        max_layers: 6,
+        exit_check_layers: 1 << 3,
+        early_exit_mutual_fraction: 0.0,
+        prune_after_layer: None,
+        ..FastMatchConfig::default()
+    };
+    let (_, masked_stats) =
+        pollster::block_on(model.match_features_fast(&reference, &query, &masked_exit))
+            .expect("masked exit check");
+    assert!(masked_stats.early_exited);
+    assert_eq!(masked_stats.layers_executed, 4);
 }
 
 #[test]
@@ -310,14 +324,19 @@ fn match_features_fast_prunes_tokens_and_preserves_original_pixel_mapping() {
         max_keypoints: 512,
         min_layers: 4,
         max_layers: 4,
+        exit_check_layers: 0,
         early_exit_mutual_fraction: 1.0,
         prune_after_layer: Some(2),
         min_matchability_logit: -1.5,
         score_threshold: 0.1_f32.ln(),
     };
-    let (matches, stats) =
+    let (indexed, stats) =
+        pollster::block_on(model.match_features_indexed_fast(&reference, &query, &config))
+            .expect("pruned indexed match");
+    let (matches, fast_stats) =
         pollster::block_on(model.match_features_fast(&reference, &query, &config))
             .expect("pruned match");
+    assert_eq!(stats, fast_stats);
     assert_eq!(stats.layers_executed, 4);
     assert!(!stats.early_exited);
     assert_eq!(stats.initial_ref_tokens, 30);
@@ -325,11 +344,19 @@ fn match_features_fast_prunes_tokens_and_preserves_original_pixel_mapping() {
     assert_eq!(stats.pruned_ref_tokens, 10);
     assert_eq!(stats.pruned_query_tokens, 8);
     assert_eq!(matches.len(), 20);
-    for (slot, m) in matches.iter().enumerate() {
-        let expected_ref = reference.pixels[10 + slot];
-        let expected_qry = query.pixels[8 + (19 - slot)];
-        assert_eq!([m.reference.x, m.reference.y], expected_ref);
-        assert_eq!([m.query.x, m.query.y], expected_qry);
+    assert_eq!(indexed.len(), 20);
+    for (slot, (m, idx_m)) in matches.iter().zip(&indexed).enumerate() {
+        let expected_ref_idx = 10 + slot;
+        let expected_qry_idx = 8 + (19 - slot);
+        assert_eq!(idx_m.ref_index, expected_ref_idx);
+        assert_eq!(idx_m.query_index, expected_qry_idx);
+        assert!(idx_m.log_score.is_finite());
+        assert_eq!(idx_m.pixel_match, *m);
+        assert_eq!(
+            [m.reference.x, m.reference.y],
+            reference.pixels[expected_ref_idx]
+        );
+        assert_eq!([m.query.x, m.query.y], query.pixels[expected_qry_idx]);
     }
 
     // Verify the min(16, len) floor when every token falls below min_matchability_logit.

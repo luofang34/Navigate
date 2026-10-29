@@ -7,6 +7,19 @@ use navigate_visual::PixelMatch;
 const MIN_EARLY_EXIT_MATCHES: usize = 16;
 const MIN_RETAINED_TOKENS: usize = 16;
 
+/// Mutual correspondence with source keypoint indices and log-assignment score.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndexedMatch {
+    /// Index of the matched keypoint in the input `reference` [`SparseFeatures`].
+    pub ref_index: usize,
+    /// Index of the matched keypoint in the input `query` [`SparseFeatures`].
+    pub query_index: usize,
+    /// Matched pixel coordinates in the reference and query images.
+    pub pixel_match: PixelMatch,
+    /// Mutual log-assignment score from [`LighterGlue`].
+    pub log_score: f32,
+}
+
 /// Configuration for adaptive [`LighterGlue::match_features_fast`] execution.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FastMatchConfig {
@@ -16,6 +29,8 @@ pub struct FastMatchConfig {
     pub min_layers: usize,
     /// Maximum transformer layers executed (`min_layers..=6`).
     pub max_layers: usize,
+    /// Bitmask of 1-based layers (`bit (l - 1)`) eligible for early-exit head checks.
+    pub exit_check_layers: u8,
     /// Minimum mutual-match fraction of `min(active_n, active_m)` required for early exit.
     pub early_exit_mutual_fraction: f32,
     /// Optional 1-based layer count after which the matcher prunes low-matchability tokens.
@@ -32,6 +47,7 @@ impl Default for FastMatchConfig {
             max_keypoints: 512,
             min_layers: 2,
             max_layers: 6,
+            exit_check_layers: 0b0001_1110,
             early_exit_mutual_fraction: 0.30,
             prune_after_layer: Some(2),
             min_matchability_logit: -1.5,
@@ -47,6 +63,7 @@ impl FastMatchConfig {
             max_keypoints: 384,
             min_layers: 2,
             max_layers: 4,
+            exit_check_layers: 1 << 1,
             early_exit_mutual_fraction: 0.25,
             prune_after_layer: Some(2),
             ..Self::default()
@@ -59,6 +76,7 @@ impl FastMatchConfig {
             max_keypoints: 1024,
             min_layers: 4,
             max_layers: 6,
+            exit_check_layers: 1 << 3,
             early_exit_mutual_fraction: 0.35,
             prune_after_layer: None,
             ..Self::default()
@@ -164,6 +182,23 @@ impl LighterGlue {
         query: &SparseFeatures,
         config: &FastMatchConfig,
     ) -> Result<(Vec<PixelMatch>, FastMatchStats), MatchError> {
+        let (indexed, stats) = self
+            .match_features_indexed_fast(reference, query, config)
+            .await?;
+        Ok((indexed.into_iter().map(|m| m.pixel_match).collect(), stats))
+    }
+
+    /// Match two [`SparseFeatures`] sets and return [`IndexedMatch`] records with source indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when `config` or feature shapes are invalid or device read-back fails.
+    pub async fn match_features_indexed_fast(
+        &self,
+        reference: &SparseFeatures,
+        query: &SparseFeatures,
+        config: &FastMatchConfig,
+    ) -> Result<(Vec<IndexedMatch>, FastMatchStats), MatchError> {
         config.validate()?;
         let (kp0, desc0, idx_a) = select_input(reference, config.max_keypoints)?;
         let (kp1, desc1, idx_b) = select_input(query, config.max_keypoints)?;
@@ -193,7 +228,9 @@ impl LighterGlue {
             (ref_side.tokens, qry_side.tokens) =
                 layer.cross_attn.forward(ref_side.tokens, qry_side.tokens);
             let done = idx + 1;
-            let check_exit = done >= config.min_layers && done < config.max_layers;
+            let check_exit = done >= config.min_layers
+                && done < config.max_layers
+                && (config.exit_check_layers & (1u8 << (done - 1))) != 0;
             let do_prune = config.prune_after_layer == Some(done) && done < config.max_layers;
             if check_exit {
                 let (matches, logits_a, logits_b) = self
@@ -262,7 +299,7 @@ impl LighterGlue {
         (ref_pixels, qry_pixels): (&[[f64; 2]], &[[f64; 2]]),
         threshold: f32,
         with_logits: bool,
-    ) -> Result<(Vec<PixelMatch>, Vec<f32>, Vec<f32>), MatchError> {
+    ) -> Result<(Vec<IndexedMatch>, Vec<f32>, Vec<f32>), MatchError> {
         let (n, m) = (ref_side.len(), qry_side.len());
         let (scores, ma, mb) =
             self.assignment_with_logits(ref_side.tokens.clone(), qry_side.tokens.clone());
@@ -405,7 +442,7 @@ fn decode_mutual(
     (idx_a, ref_pixels): (&[usize], &[[f64; 2]]),
     (idx_b, qry_pixels): (&[usize], &[[f64; 2]]),
     threshold: f32,
-) -> Result<Vec<PixelMatch>, MatchError> {
+) -> Result<Vec<IndexedMatch>, MatchError> {
     if row_scores.iter().any(|v| !v.is_finite()) {
         return Err(MatchError::Output("non-finite LighterGlue row score"));
     }
@@ -420,9 +457,16 @@ fn decode_mutual(
             if !(score > threshold && mutual) {
                 return None;
             }
-            Some(PixelMatch {
-                reference: (*ref_pixels.get(*idx_a.get(i)?)?).into(),
-                query: (*qry_pixels.get(*idx_b.get(j)?)?).into(),
+            let ref_index = *idx_a.get(i)?;
+            let query_index = *idx_b.get(j)?;
+            Some(IndexedMatch {
+                ref_index,
+                query_index,
+                pixel_match: PixelMatch {
+                    reference: (*ref_pixels.get(ref_index)?).into(),
+                    query: (*qry_pixels.get(query_index)?).into(),
+                },
+                log_score: score,
             })
         })
         .collect())

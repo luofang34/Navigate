@@ -5,7 +5,7 @@
 //! (`input_dim = 64`, `descriptor_dim = 96`, `num_heads = 1`).
 mod fast;
 
-pub use fast::{FastMatchConfig, FastMatchStats};
+pub use fast::{FastMatchConfig, FastMatchStats, IndexedMatch};
 
 use crate::{
     MatchError, SparseFeatures, Weights,
