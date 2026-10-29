@@ -14,7 +14,7 @@ fn converts_real_lighterglue_onnx_and_loads_in_burn() {
 
     let weights = Weights::from_safetensors(&f32_bytes).expect("parse safetensors");
     assert_eq!(weights.len(), 139);
-    let device = Device::default();
+    let device = Device::flex();
     let model = LighterGlue::load(weights, &device).expect("load LighterGlue");
 
     let kp0 = vec![-0.4, -0.3, 0.2, 0.1, 0.5, -0.2, -0.1, 0.4];

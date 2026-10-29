@@ -183,10 +183,10 @@ impl PipelineMatcher {
             })?;
             return Self::spawn_onnx_worker(worker, path, rt);
         }
-        let device = Device::default();
+        let (device, engine) = default_burn_device();
         match backend {
-            "loftr" => Self::load_loftr(path, &device, EngineKind::BurnCpu),
-            "xfeat" => Self::load_xfeat(path, lighterglue_path, 2048, &device, EngineKind::BurnCpu),
+            "loftr" => Self::load_loftr(path, &device, engine),
+            "xfeat" => Self::load_xfeat(path, lighterglue_path, 2048, &device, engine),
             other => Err(PipelineError::Invalid(format!(
                 "unsupported matcher backend '{other}'; use loftr, xfeat, or pyramidal"
             ))),
@@ -303,5 +303,16 @@ impl Drop for PipelineMatcher {
             drop(child.kill());
             drop(child.wait());
         }
+    }
+}
+
+pub(crate) fn default_burn_device() -> (Device, EngineKind) {
+    #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
+    {
+        (Device::default(), EngineKind::BurnGpu)
+    }
+    #[cfg(not(any(feature = "wgpu", feature = "metal", feature = "cuda")))]
+    {
+        (Device::flex(), EngineKind::BurnCpu)
     }
 }

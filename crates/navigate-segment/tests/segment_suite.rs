@@ -8,7 +8,7 @@ use navigate_segment::{
     class_masks, compose_labels, drop_specks, finetune, frame_masks, parse_object, read_npy,
     read_npz, split_name, surface_mask, write_npy, write_npz,
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::PathBuf};
 
 #[test]
 fn object_labels_and_speck_filtering_match_airframe_labels_contract() {
@@ -229,16 +229,14 @@ fn pure_rust_segformer_finetuning_decreases_loss_and_round_trips_safetensors() {
             .collect()
     };
 
-    let scratch_seg = Path::new(
-        "/Users/claw/.gemini/antigravity-cli/brain/25d2bd9e-b8e2-456a-bd46-6725f71bea84/scratch/models/segmentation",
-    );
-    let device = Device::default();
+    let checkpoint_dir = std::env::var_os("NAVIGATE_SEGFORMER_CHECKPOINT").map(PathBuf::from);
+    let device = Device::flex();
 
-    // If the real ADE20K SegFormer-B0 checkpoint is available in scratch, also verify pretrained
-    // sky/grass inference before running fine-tuning!
-    if scratch_seg.join("model.safetensors").is_file() {
+    if let Some(ref seg_dir) = checkpoint_dir
+        && seg_dir.join("model.safetensors").is_file()
+    {
         let (ade_model, _cfg, mut ade_prep) =
-            Segformer::load_pretrained(scratch_seg, None, &device).expect("load ADE20K SegFormer");
+            Segformer::load_pretrained(seg_dir, None, &device).expect("load ADE20K SegFormer");
         ade_prep.size = serde_json::json!(128);
         let mut sky_ground = RgbImage::new(128, 128);
         for y in 0..128 {
@@ -254,7 +252,6 @@ fn pure_rust_segformer_finetuning_decreases_loss_and_round_trips_safetensors() {
         let pred = ade_model
             .predict_image(&sky_ground, &ade_prep, ColorMode::Color, &[2], &device)
             .expect("predict ADE20K");
-        // ADE20K class 2 is `sky` — top centre should have much higher sky probability than bottom!
         let top_sky = pred.selected_probs[0][16 * 128 + 64];
         let bot_sky = pred.selected_probs[0][108 * 128 + 64];
         assert!(
@@ -263,10 +260,9 @@ fn pure_rust_segformer_finetuning_decreases_loss_and_round_trips_safetensors() {
         );
     }
 
-    let base = scratch_seg
-        .join("model.safetensors")
-        .is_file()
-        .then_some(scratch_seg);
+    let base = checkpoint_dir
+        .as_deref()
+        .filter(|dir| dir.join("model.safetensors").is_file());
     let policy = TrainPolicy {
         size: 64,
         batch_size: 2,

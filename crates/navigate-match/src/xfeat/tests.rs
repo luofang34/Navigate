@@ -57,7 +57,7 @@ fn synthetic_xfeat_weights() -> Weights {
 
 #[test]
 fn xfeat_loads_and_executes_dense_forward_pass() {
-    let device = Device::default();
+    let device = Device::flex();
     let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load synthetic XFeat");
     let mut image = GrayImage::new(160, 120);
     for (x, y, p) in image.enumerate_pixels_mut() {
@@ -74,7 +74,7 @@ fn xfeat_loads_and_executes_dense_forward_pass() {
 
 #[test]
 fn flat_image_returns_empty_features() {
-    let device = Device::default();
+    let device = Device::flex();
     let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load synthetic XFeat");
     let flat = GrayImage::from_pixel(64, 64, image::Luma([128]));
     let features = pollster::block_on(model.extract(&flat, 64)).expect("flat extract");

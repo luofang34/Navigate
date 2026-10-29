@@ -66,7 +66,7 @@ fn synthetic_lighterglue_weights() -> Weights {
 
 #[test]
 fn lighterglue_produces_finite_log_assignments_and_matches() {
-    let device = Device::default();
+    let device = Device::flex();
     let model = LighterGlue::load(synthetic_lighterglue_weights(), &device).expect("load model");
     let kp0 = vec![-0.5, -0.2, 0.1, 0.3, 0.4, -0.1];
     let kp1 = vec![-0.4, -0.2, 0.2, 0.3, 0.5, 0.0, -0.1, 0.4];

@@ -224,7 +224,7 @@ async fn open_burn_device() -> Result<(Device, EngineKind), MatchError> {
     }
     #[cfg(feature = "flex")]
     {
-        Ok((Device::default(), EngineKind::BurnCpu))
+        Ok((Device::flex(), EngineKind::BurnCpu))
     }
     #[cfg(not(any(feature = "webgpu", feature = "flex")))]
     Err(MatchError::Device {

@@ -2,10 +2,10 @@
 
 use crate::{
     PipelineError,
+    matcher_client::default_burn_device,
     testset::PhotoCase,
     util::{bytes_sha256, file_sha256, read_json, write_json},
 };
-use burn::tensor::Device;
 use image::{GrayImage, Luma};
 use navigate_segment::{
     ColorMode, MaskPolicy, PropellerDetector, Segformer, TrainPolicy, compose_labels,
@@ -29,7 +29,7 @@ pub fn run_photo_masks(
     margin_px: usize,
 ) -> Result<Value, PipelineError> {
     let policy = MaskPolicy::parse(policy_str)?;
-    let device = Device::default();
+    let (device, _) = default_burn_device();
     let (model, cfg, preproc) = Segformer::load_pretrained(model_dir, None, &device)?;
     let model_sha = file_sha256(&model_dir.join("model.safetensors"))?;
     let tag =
@@ -155,7 +155,7 @@ pub fn run_video_masks(
         path: output_dir.to_path_buf(),
         source,
     })?;
-    let device = Device::default();
+    let (device, _) = default_burn_device();
     let (model, cfg, preproc) = Segformer::load_pretrained(model_dir, None, &device)?;
 
     let mut frame_paths: Vec<_> = fs::read_dir(frames_dir)
@@ -224,7 +224,7 @@ pub fn run_segment_finetune(
 ) -> Result<Value, PipelineError> {
     let train_samples = discover_split(dataset_dir, "train")?;
     let val_samples = discover_split(dataset_dir, "val")?;
-    let device = Device::default();
+    let (device, _) = default_burn_device();
     let report = finetune(
         base_model_dir,
         &train_samples,

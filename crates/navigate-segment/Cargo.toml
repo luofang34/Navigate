@@ -30,6 +30,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
 tempfile = "3"
 
 [lints]
