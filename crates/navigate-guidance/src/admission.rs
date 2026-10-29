@@ -51,6 +51,7 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 /// [`GuidanceRefusal::ClockDomainMismatch`],
 /// [`GuidanceRefusal::IntegrityBelowFloor`],
 /// [`GuidanceRefusal::ClockInversion`], [`GuidanceRefusal::SolutionStale`],
+/// [`GuidanceRefusal::VerticalUncertaintyExceeded`],
 /// then [`GuidanceRefusal::ImplausibleTarget`].
 pub(crate) fn admit_leg(
     solution: &NavigationSolution,
@@ -61,6 +62,17 @@ pub(crate) fn admit_leg(
     config: &GuidanceConfig,
 ) -> Result<AdmittedLeg, GuidanceRefusal> {
     admit_solution(solution, now, now_clock, config)?;
+    let vertical_1sigma_m = solution.integrity.vertical_1sigma_m;
+    if leg_to.altitude.is_some()
+        && (!vertical_1sigma_m.is_finite()
+            || !config.max_vertical_1sigma_m.is_finite()
+            || vertical_1sigma_m > config.max_vertical_1sigma_m)
+    {
+        return Err(GuidanceRefusal::VerticalUncertaintyExceeded {
+            vertical_1sigma_m,
+            bound_m: config.max_vertical_1sigma_m,
+        });
+    }
     if !leg_to.position.is_plausible() {
         return Err(GuidanceRefusal::ImplausibleTarget {
             ident: leg_to.ident.clone(),

@@ -20,16 +20,30 @@ pub struct GuidanceConfig {
     /// Maximum solution age at guidance time (`now` minus the stamp's
     /// `solved_at`). Defaults to one second.
     pub max_solution_age: DurationNanos,
+    /// Maximum vertical 1-sigma uncertainty in meters accepted when the
+    /// target waypoint carries an altitude constraint. Defaults to 50.0 m.
+    pub max_vertical_1sigma_m: f64,
 }
 
 impl GuidanceConfig {
-    /// Builds a config from its parts.
+    /// Default ceiling on vertical 1-sigma uncertainty in meters.
+    pub const DEFAULT_MAX_VERTICAL_1SIGMA_M: f64 = 50.0;
+
+    /// Builds a config from its parts with [`Self::DEFAULT_MAX_VERTICAL_1SIGMA_M`].
     #[must_use]
     pub const fn new(minimum_quality: SolutionQuality, max_solution_age: DurationNanos) -> Self {
         Self {
             minimum_quality,
             max_solution_age,
+            max_vertical_1sigma_m: Self::DEFAULT_MAX_VERTICAL_1SIGMA_M,
         }
+    }
+
+    /// Sets the vertical 1-sigma uncertainty ceiling in meters.
+    #[must_use]
+    pub const fn with_max_vertical_1sigma_m(mut self, max_vertical_1sigma_m: f64) -> Self {
+        self.max_vertical_1sigma_m = max_vertical_1sigma_m;
+        self
     }
 }
 
@@ -132,6 +146,7 @@ mod tests {
         let config = GuidanceConfig::default();
         assert_eq!(config.minimum_quality, SolutionQuality::Degraded);
         assert_eq!(config.max_solution_age, DurationNanos::from_millis(1_000));
+        assert!((config.max_vertical_1sigma_m - 50.0).abs() < f64::EPSILON);
     }
 
     #[test]

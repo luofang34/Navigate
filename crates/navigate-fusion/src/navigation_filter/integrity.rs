@@ -35,7 +35,7 @@ pub(crate) fn derive(
         Redundancy::None => FaultDetection::Unavailable,
         _ => FaultDetection::Monitoring,
     };
-    let quality = quality_of(horizontal_1sigma_m, silence, config);
+    let quality = quality_of(horizontal_1sigma_m, vertical_1sigma_m, silence, config);
     IntegrityAssessment::new(
         quality,
         contributing,
@@ -84,16 +84,21 @@ fn per_source_compositions(records: &[AdmittedContribution]) -> Vec<(SourceId, S
 
 fn quality_of(
     horizontal_1sigma_m: f64,
+    vertical_1sigma_m: f64,
     silence: Option<DurationNanos>,
     config: &FusionConfig,
 ) -> SolutionQuality {
-    let mut quality = if horizontal_1sigma_m <= config.good_horizontal_1sigma_m {
-        SolutionQuality::Good
-    } else if horizontal_1sigma_m <= config.degraded_horizontal_1sigma_m {
-        SolutionQuality::Degraded
-    } else {
-        SolutionQuality::Unusable
-    };
+    let horizontal = axis_quality(
+        horizontal_1sigma_m,
+        config.good_horizontal_1sigma_m,
+        config.degraded_horizontal_1sigma_m,
+    );
+    let vertical = axis_quality(
+        vertical_1sigma_m,
+        config.good_vertical_1sigma_m,
+        config.degraded_vertical_1sigma_m,
+    );
+    let mut quality = worse_quality(horizontal, vertical);
     if let Some(silence) = silence {
         if silence >= config.quality_silence_unusable {
             quality = SolutionQuality::Unusable;
@@ -104,4 +109,24 @@ fn quality_of(
         }
     }
     quality
+}
+
+fn axis_quality(sigma_m: f64, good_m: f64, degraded_m: f64) -> SolutionQuality {
+    if sigma_m <= good_m {
+        SolutionQuality::Good
+    } else if sigma_m <= degraded_m {
+        SolutionQuality::Degraded
+    } else {
+        SolutionQuality::Unusable
+    }
+}
+
+const fn worse_quality(a: SolutionQuality, b: SolutionQuality) -> SolutionQuality {
+    match (a, b) {
+        (SolutionQuality::Good, SolutionQuality::Good) => SolutionQuality::Good,
+        (SolutionQuality::Unusable, _) | (_, SolutionQuality::Unusable) => {
+            SolutionQuality::Unusable
+        }
+        _ => SolutionQuality::Degraded,
+    }
 }

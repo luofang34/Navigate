@@ -1,7 +1,9 @@
 //! Photo preparation and the response message, independent of the browser.
 use image::{GrayImage, imageops::FilterType};
-use navigate_contract::locate::{LocateRequest, LocateResponse, LocatedCamera, PhotoInfo};
-use navigate_locate::{Outcome, PhotoMetadata};
+use navigate_locate::{
+    Outcome, PhotoMetadata,
+    messages::{LOCATE_MESSAGES_VERSION, LocateRequest, LocateResponse, LocatedCamera, PhotoInfo},
+};
 use navigate_visual::CameraModel;
 
 /// A photo at its working size, with the calibration at that size.
@@ -20,7 +22,7 @@ pub struct PreparedPhoto {
 /// Returns a reason for a person when the photo cannot be decoded or a value is
 /// out of range.
 pub fn prepare_photo(request: &LocateRequest, photo: &[u8]) -> Result<PreparedPhoto, String> {
-    if request.version != navigate_contract::locate::LOCATE_MESSAGES_VERSION {
+    if request.version != LOCATE_MESSAGES_VERSION {
         return Err(format!("unsupported request version {}", request.version));
     }
     if !(request.focal_px.is_finite() && request.focal_px > 0.0)
@@ -106,6 +108,8 @@ pub fn response_of(outcome: Outcome, camera: &CameraModel) -> LocateResponse {
                     inliers: u32::try_from(located.estimate.quality.inliers).unwrap_or(u32::MAX),
                     reprojection_rms_px: located.estimate.quality.reprojection_rms_px,
                     confirmed: located.refined,
+                    competing_candidates: u32::try_from(located.alternatives.len())
+                        .unwrap_or(u32::MAX),
                     map_sha256: located.estimate.map.manifest_sha256.clone(),
                 },
             }

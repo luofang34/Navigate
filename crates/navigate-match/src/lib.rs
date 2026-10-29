@@ -1,23 +1,39 @@
-//! Learned image matchers in pure Rust on burn.
+//! Learned image matchers and dual-engine inference traits in pure Rust on burn.
 //!
-//! One implementation runs on WebGPU in a browser, on native GPUs through wgpu
-//! (Vulkan, Metal) or CUDA, and on the CPU. The host chooses the runtime with the
-//! burn device that it gives to the model; Cargo features compile runtimes in.
-//!
-//! [`Loftr`] is LoFTR-DS with the outdoor dual-softmax weights. [`LoftrMatcher`]
-//! puts it behind the Navigate matcher port with the input transform of the ONNX
-//! adapter. [`loftr_from_checkpoint`] converts the training checkpoint into the
-//! weight file that [`Loftr::load`] reads.
+//! One implementation runs on WebGPU or CPU in a browser, on native GPUs through wgpu
+//! (Vulkan, Metal) or CUDA, and on native CPUs. [`ModelInference`] and
+//! [`AsyncModelInference`] define the unified tensor session contract across browser,
+//! native, and embedded neural processing unit backends.
 mod convert;
 mod error;
 mod input;
 mod kernels;
+mod lighterglue;
 mod loftr;
 mod matcher;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_engine;
+mod staged;
+mod traits;
+mod vendor_npu;
+#[cfg(target_arch = "wasm32")]
+mod web_engine;
 mod weights;
+mod xfeat;
 
 pub use convert::loftr_from_checkpoint;
 pub use error::MatchError;
+pub use lighterglue::LighterGlue;
 pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_engine::{NativeMlEngine, XFeatDenseSession};
+pub use staged::{BurnXFeatFeatures, XFeatLighterGlueMatcher};
+pub use traits::{
+    AsyncModelInference, EngineKind, GenericTensor, HostTensor, ModelInference, NamedTensor,
+};
+pub use vendor_npu::{VendorNpuBackend, VendorNpuSession};
+#[cfg(target_arch = "wasm32")]
+pub use web_engine::{WebMlEngine, WebNnAvailability, probe_webnn};
 pub use weights::{WeightTensor, Weights};
+pub use xfeat::{DenseMaps, SparseFeatures, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat};

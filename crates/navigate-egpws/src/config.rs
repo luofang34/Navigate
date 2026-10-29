@@ -26,19 +26,26 @@ pub struct EgpwsConfig {
     /// [`crate::EgpwsUnavailable::SolutionStale`] rather than scored
     /// against terrain. Defaults to one second.
     pub max_solution_age: DurationNanos,
+    /// Maximum vertical 1-sigma uncertainty in meters accepted for terrain
+    /// clearance scoring. A larger uncertainty is refused with
+    /// [`crate::EgpwsUnavailable::VerticalUncertaintyExceeded`].
+    /// Defaults to 30.0 m.
+    pub max_vertical_1sigma_m: f64,
 }
 
 impl Default for EgpwsConfig {
     /// Caution below 150 m above terrain, warning below 60 m, `Degraded`
     /// solutions admitted — terrain proximity is worth stating even from
     /// a degraded solution, while `Unusable` is not a position at all —
-    /// and solutions older than one second refused as stale.
+    /// vertical 1-sigma bounded at 30 m, and solutions older than one
+    /// second refused as stale.
     fn default() -> Self {
         Self {
             caution_floor_m: 150.0,
             warning_floor_m: 60.0,
             minimum_quality: SolutionQuality::Degraded,
             max_solution_age: DurationNanos::from_millis(1_000),
+            max_vertical_1sigma_m: 30.0,
         }
     }
 }

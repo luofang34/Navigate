@@ -4,6 +4,7 @@ mod error;
 mod graph;
 mod loftr;
 mod masked;
+mod onnx_burn;
 mod recipe;
 mod xfeat;
 use clap::{Arg, Command, value_parser};
@@ -51,9 +52,13 @@ fn command() -> Command {
         .arg(Arg::new("recipe").long("recipe").value_parser([
             "lighterglue",
             "lighterglue-masked",
+            "lighterglue-burn-f16",
+            "lighterglue-burn-f32",
             "xfeat-dense",
             "xfeat-gray",
             "xfeat-gray-2x",
+            "xfeat-burn-f16",
+            "xfeat-burn-f32",
             "loftr-coarse",
             "loftr-fine",
             "loftr-burn-f16",
@@ -115,6 +120,20 @@ fn prepare_blocking(
             ));
         }
         burn_weights::prepare(input, &bytes, dtype == "f16")?
+    } else if let Some(dtype) = recipe.strip_prefix("xfeat-burn-") {
+        if count.is_some() || batch.is_some() || !compact {
+            return Err(Error::Invalid(
+                "burn weights do not accept budgets, batches or probability outputs",
+            ));
+        }
+        onnx_burn::prepare_xfeat(&bytes, dtype == "f16")?
+    } else if let Some(dtype) = recipe.strip_prefix("lighterglue-burn-") {
+        if count.is_some() || batch.is_some() || !compact {
+            return Err(Error::Invalid(
+                "burn weights do not accept budgets, batches or probability outputs",
+            ));
+        }
+        onnx_burn::prepare_lighterglue(&bytes, dtype == "f16")?
     } else if recipe.starts_with("loftr-") {
         if count.is_some() || !compact {
             return Err(Error::Invalid(

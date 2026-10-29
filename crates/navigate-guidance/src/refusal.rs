@@ -62,6 +62,17 @@ pub enum GuidanceRefusal {
         /// Solution reference time from the stamp.
         solved_at: MonotonicNanos,
     },
+    /// Vertical 1-sigma uncertainty exceeds the configured bound on an
+    /// altitude-constrained leg.
+    #[error(
+        "vertical 1-sigma uncertainty {vertical_1sigma_m} m exceeds the configured bound {bound_m} m"
+    )]
+    VerticalUncertaintyExceeded {
+        /// Vertical 1-sigma uncertainty of the refused solution in meters.
+        vertical_1sigma_m: f64,
+        /// Configured vertical 1-sigma bound in meters.
+        bound_m: f64,
+    },
     /// The target waypoint cannot anchor a leg: its position fails the
     /// geodetic plausibility screen (non-finite component or
     /// latitude/longitude out of range), or the leg's endpoints coincide

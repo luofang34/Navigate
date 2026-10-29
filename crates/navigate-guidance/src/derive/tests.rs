@@ -427,3 +427,62 @@ fn implausible_target_is_refused_by_name() {
         }
     );
 }
+
+#[test]
+fn constrained_leg_refuses_excessive_vertical_uncertainty_while_lateral_only_admits() {
+    use navigate_contract::{
+        FaultDetection, IntegrityAssessment, NavigationSolution, NedVelocity, Redundancy,
+        SensorClass, SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3,
+        WrappingSequence,
+    };
+
+    let (from, to_lateral) = equator_leg();
+    let to_vertical = to_lateral
+        .clone()
+        .with_altitude(AltitudeConstraint::At(100.0));
+    let composition = SourceComposition::of(SensorClass::Gnss);
+    let weak_vertical = NavigationSolution::new(
+        SolutionStamp::new(SourceEpoch::new(1), WrappingSequence::new(42), now(), CLOCK),
+        deg(0.0, 0.5, 100.0),
+        NedVelocity::new(0.0, 0.0, 0.0),
+        SymmetricCov3::from_diagonal(1.0, 1.0, 3_600.0),
+        SymmetricCov3::from_diagonal(0.1, 0.1, 0.1),
+        IntegrityAssessment::new(
+            SolutionQuality::Degraded,
+            composition,
+            Redundancy::None,
+            1.0,
+            60.0,
+            FaultDetection::Unavailable,
+        ),
+        composition,
+    );
+    let config = GuidanceConfig::default();
+    let err = guide(
+        &weak_vertical,
+        LateralReference::track(from),
+        &to_vertical,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect_err("constrained leg must refuse weak vertical sigma");
+    assert_eq!(
+        err,
+        GuidanceRefusal::VerticalUncertaintyExceeded {
+            vertical_1sigma_m: 60.0,
+            bound_m: 50.0,
+        }
+    );
+    assert!(
+        guide(
+            &weak_vertical,
+            LateralReference::track(from),
+            &to_lateral,
+            now(),
+            CLOCK,
+            &config,
+        )
+        .is_ok()
+    );
+}

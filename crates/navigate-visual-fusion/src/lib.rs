@@ -27,7 +27,10 @@ mod capture;
 mod error;
 mod prior;
 
-pub use adapter::{EvidenceIndependence, VisualFix, VisualFixSource, VisualSourceIdentity};
+pub use adapter::{
+    DEFAULT_MAX_RETAINED_DIGESTS, EvidenceIndependence, VisualFix, VisualFixSource,
+    VisualSourceIdentity,
+};
 pub use budget::{VerticalDatum, VisualErrorBudget};
 pub use error::VisualFusionError;
 pub use prior::{FrameCapture, PropagationBudget, search_prior};

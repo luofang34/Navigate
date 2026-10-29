@@ -166,6 +166,8 @@ fn silence_degrades_quality_through_degraded_to_unusable() {
         // horizons from covariance growth.
         good_horizontal_1sigma_m: 1.0e9,
         degraded_horizontal_1sigma_m: 2.0e9,
+        good_vertical_1sigma_m: 1.0e9,
+        degraded_vertical_1sigma_m: 2.0e9,
         ..FusionConfig::default()
     };
     let mut f = NavigationFilter::new(config, CLOCK);
@@ -266,4 +268,82 @@ fn identical_observation_scripts_yield_field_identical_solutions() {
         published
     }
     assert_eq!(run(), run());
+}
+
+#[test]
+fn vertical_uncertainty_degrades_quality_even_when_horizontal_is_tight() {
+    use crate::observation::{Observation, ObservationValue};
+    use navigate_contract::SymmetricCov3;
+
+    let mut f = filter();
+    let degraded_vertical = Observation::new(
+        stamp(1, 1, 1, 0),
+        ObservationValue::PositionFix {
+            position: origin(),
+            covariance: SymmetricCov3::from_diagonal(4.0, 4.0, 900.0),
+        },
+        SourceComposition::of(SensorClass::Gnss),
+    );
+    assert_accepted(f.ingest(&degraded_vertical, t(0)));
+    let s1 = f.tick(t(0)).expect("initialized");
+    assert!(s1.integrity.horizontal_1sigma_m <= 2.5);
+    assert!((s1.integrity.vertical_1sigma_m - 30.0).abs() < 1e-9);
+    assert!(matches!(s1.integrity.quality, SolutionQuality::Degraded));
+
+    f.reset();
+    let unusable_vertical = Observation::new(
+        stamp(1, 1, 1, 0),
+        ObservationValue::PositionFix {
+            position: origin(),
+            covariance: SymmetricCov3::from_diagonal(4.0, 4.0, 10_000.0),
+        },
+        SourceComposition::of(SensorClass::Gnss),
+    );
+    assert_accepted(f.ingest(&unusable_vertical, t(0)));
+    let s2 = f.tick(t(0)).expect("initialized");
+    assert!(matches!(s2.integrity.quality, SolutionQuality::Unusable));
+}
+
+#[test]
+fn long_range_flight_reanchors_tangent_plane_without_losing_track() {
+    use navigate_geodesy::{LocalTangentPlane, NedOffset};
+
+    let config = FusionConfig {
+        initial_velocity_variance_m2_per_s2: 10_000.0,
+        reanchor_distance_m: 50_000.0,
+        ..FusionConfig::default()
+    };
+    let mut f = NavigationFilter::new(config, CLOCK);
+    let mut current = origin();
+    assert_accepted(f.ingest(&gnss_fix(1, 1, 0, current), t(0)));
+    assert_accepted(f.ingest(
+        &velocity_fix(1, 2, 0, NedVelocity::new(250.0, 0.0, 0.0)),
+        t(0),
+    ));
+
+    // Fly 200 km north at 250 m/s in 1-second steps across 4 re-anchors.
+    for step in 1_u32..=800 {
+        let now_ms = u64::from(step) * 1_000;
+        let local = LocalTangentPlane::new(current).expect("valid");
+        current = local.from_ned(&NedOffset::new(250.0, 0.0, 0.0));
+        let seq = step * 2 + 1;
+        assert_accepted(f.ingest(&gnss_fix(1, seq, now_ms, current), t(now_ms)));
+        assert_accepted(f.ingest(
+            &velocity_fix(1, seq + 1, now_ms, NedVelocity::new(250.0, 0.0, 0.0)),
+            t(now_ms),
+        ));
+    }
+    let final_sol = f.tick(t(800_000)).expect("solution after 200 km");
+    let residual = LocalTangentPlane::new(current)
+        .expect("valid")
+        .to_ned(&final_sol.position);
+    assert!(
+        residual.north_m.hypot(residual.east_m) < 5.0,
+        "200 km horizontal error: {residual:?}"
+    );
+    assert!(
+        residual.down_m.abs() < 5.0,
+        "200 km vertical error: {residual:?}"
+    );
+    assert!(matches!(final_sol.integrity.quality, SolutionQuality::Good));
 }

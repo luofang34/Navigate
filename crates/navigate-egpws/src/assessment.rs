@@ -104,6 +104,17 @@ pub enum EgpwsUnavailable {
         /// Configured minimum quality the solution failed to meet.
         minimum: SolutionQuality,
     },
+    /// Vertical 1-sigma uncertainty exceeds the configured bound.
+    #[error(
+        "terrain assessment unavailable: vertical 1-sigma {vertical_1sigma_m} m \
+         exceeds the configured bound {bound_m} m"
+    )]
+    VerticalUncertaintyExceeded {
+        /// Vertical 1-sigma uncertainty of the refused solution in meters.
+        vertical_1sigma_m: f64,
+        /// Configured vertical 1-sigma bound in meters.
+        bound_m: f64,
+    },
     /// The bound database has no coverage at the solution position.
     #[error("terrain assessment unavailable: no terrain coverage at the solution position")]
     NoCoverage,
@@ -136,6 +147,9 @@ pub enum EgpwsUnavailable {
 ///   `config.max_solution_age`;
 /// - [`EgpwsUnavailable::SolutionIntegrity`] when the solution's quality
 ///   is below `config.minimum_quality`;
+/// - [`EgpwsUnavailable::VerticalUncertaintyExceeded`] when
+///   `solution.integrity.vertical_1sigma_m` exceeds
+///   `config.max_vertical_1sigma_m`;
 /// - [`EgpwsUnavailable::NoCoverage`] when the database has no elevation
 ///   at the solution position.
 pub fn assess(
@@ -172,6 +186,16 @@ pub fn assess(
             minimum: config.minimum_quality,
         });
     }
+    let vertical_1sigma_m = solution.integrity.vertical_1sigma_m;
+    if !vertical_1sigma_m.is_finite()
+        || !config.max_vertical_1sigma_m.is_finite()
+        || vertical_1sigma_m > config.max_vertical_1sigma_m
+    {
+        return Err(EgpwsUnavailable::VerticalUncertaintyExceeded {
+            vertical_1sigma_m,
+            bound_m: config.max_vertical_1sigma_m,
+        });
+    }
     let Some(elevation_m) = database.elevation_m(&solution.position) else {
         return Err(EgpwsUnavailable::NoCoverage);
     };
@@ -199,260 +223,4 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use navigate_contract::{
-        ClockDomainId, DurationNanos, FaultDetection, GeodeticPosition, IntegrityAssessment,
-        MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
-        SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, WrappingSequence,
-    };
-
-    use super::{AlertSeverity, EgpwsUnavailable, assess};
-    use crate::config::EgpwsConfig;
-    use crate::terrain::TerrainDatabase;
-
-    /// The single clock domain of these tests: solutions are stamped on
-    /// it and `now` is read from it unless a test probes the mismatch.
-    const CLOCK: ClockDomainId = ClockDomainId::new(0);
-
-    /// Flat terrain at one elevation with global coverage.
-    struct FlatTerrain {
-        elevation_m: f64,
-    }
-
-    impl TerrainDatabase for FlatTerrain {
-        fn elevation_m(&self, _position: &GeodeticPosition) -> Option<f64> {
-            Some(self.elevation_m)
-        }
-    }
-
-    /// A database with no coverage anywhere.
-    struct NoCoverageTerrain;
-
-    impl TerrainDatabase for NoCoverageTerrain {
-        fn elevation_m(&self, _position: &GeodeticPosition) -> Option<f64> {
-            None
-        }
-    }
-
-    fn solution(
-        quality: SolutionQuality,
-        altitude_m: f64,
-        solved_at: MonotonicNanos,
-    ) -> NavigationSolution {
-        let composition = SourceComposition::of(SensorClass::Gnss);
-        NavigationSolution::new(
-            SolutionStamp::new(
-                SourceEpoch::new(0),
-                WrappingSequence::new(0),
-                solved_at,
-                CLOCK,
-            ),
-            GeodeticPosition::new(0.0, 0.0, altitude_m),
-            NedVelocity::new(0.0, 0.0, 0.0),
-            SymmetricCov3::from_diagonal(1.0, 1.0, 1.0),
-            SymmetricCov3::from_diagonal(0.1, 0.1, 0.1),
-            IntegrityAssessment::new(
-                quality,
-                composition,
-                Redundancy::None,
-                1.0,
-                1.5,
-                FaultDetection::Unavailable,
-            ),
-            composition,
-        )
-    }
-
-    fn t0() -> MonotonicNanos {
-        MonotonicNanos::from_nanos(0)
-    }
-
-    fn flat_assess(
-        quality: SolutionQuality,
-        altitude_m: f64,
-        terrain_m: f64,
-    ) -> Result<super::EgpwsAssessment, EgpwsUnavailable> {
-        let db = FlatTerrain {
-            elevation_m: terrain_m,
-        };
-        assess(
-            &solution(quality, altitude_m, t0()),
-            t0(),
-            CLOCK,
-            Some(&db),
-            &EgpwsConfig::default(),
-        )
-    }
-
-    #[test]
-    fn no_database_is_refused_before_anything_else() {
-        // Even a mismatched clock domain reports NoDatabase: the seam's
-        // first question is whether terrain data exists at all.
-        let result = assess(
-            &solution(SolutionQuality::Good, 500.0, t0()),
-            t0(),
-            ClockDomainId::new(9),
-            None,
-            &EgpwsConfig::default(),
-        );
-        assert_eq!(result, Err(EgpwsUnavailable::NoDatabase));
-    }
-
-    #[test]
-    fn now_read_on_another_clock_domain_is_refused_before_age_arithmetic() {
-        let db = FlatTerrain { elevation_m: 0.0 };
-        let solved_at = MonotonicNanos::from_nanos(1_000);
-        let own = solution(SolutionQuality::Good, 500.0, solved_at);
-        let foreign = ClockDomainId::new(9);
-        // `now` precedes `solved_at`, so if age arithmetic ran first this
-        // would be ClockInversion; the mismatch refusal proves the domain
-        // is judged before any age arithmetic.
-        let earlier = MonotonicNanos::from_nanos(0);
-        let result = assess(&own, earlier, foreign, Some(&db), &EgpwsConfig::default());
-        assert_eq!(
-            result,
-            Err(EgpwsUnavailable::ClockDomainMismatch {
-                expected: CLOCK,
-                got: foreign,
-            })
-        );
-    }
-
-    #[test]
-    fn clock_inversion_is_refused_not_zeroed() {
-        let db = FlatTerrain { elevation_m: 0.0 };
-        let solved_at = MonotonicNanos::from_nanos(10);
-        let earlier = MonotonicNanos::from_nanos(5);
-        let own = solution(SolutionQuality::Good, 500.0, solved_at);
-        let result = assess(&own, earlier, CLOCK, Some(&db), &EgpwsConfig::default());
-        assert_eq!(
-            result,
-            Err(EgpwsUnavailable::ClockInversion {
-                now: earlier,
-                solved_at,
-            })
-        );
-    }
-
-    #[test]
-    fn stale_solution_is_refused_and_the_bound_is_inclusive() {
-        let db = FlatTerrain { elevation_m: 0.0 };
-        let config = EgpwsConfig::default();
-        let solved_at = MonotonicNanos::from_nanos(1_000);
-        let own = solution(SolutionQuality::Good, 500.0, solved_at);
-        let at_bound = MonotonicNanos::from_nanos(1_000 + config.max_solution_age.as_nanos());
-        assert!(assess(&own, at_bound, CLOCK, Some(&db), &config).is_ok());
-        let past_bound = MonotonicNanos::from_nanos(at_bound.as_nanos() + 1);
-        let result = assess(&own, past_bound, CLOCK, Some(&db), &config);
-        assert_eq!(
-            result,
-            Err(EgpwsUnavailable::SolutionStale {
-                age: DurationNanos::from_nanos(config.max_solution_age.as_nanos() + 1),
-                bound: config.max_solution_age,
-            })
-        );
-        // Staleness is judged before integrity: a stale Unusable
-        // solution reports staleness, not the quality floor.
-        let unusable = solution(SolutionQuality::Unusable, 500.0, solved_at);
-        let result = assess(&unusable, past_bound, CLOCK, Some(&db), &config);
-        assert!(matches!(
-            result,
-            Err(EgpwsUnavailable::SolutionStale { .. })
-        ));
-    }
-
-    #[test]
-    fn unusable_quality_is_refused_and_carries_quality_and_floor() {
-        let result = flat_assess(SolutionQuality::Unusable, 500.0, 0.0);
-        assert_eq!(
-            result,
-            Err(EgpwsUnavailable::SolutionIntegrity {
-                quality: SolutionQuality::Unusable,
-                minimum: SolutionQuality::Degraded,
-            })
-        );
-    }
-
-    #[test]
-    fn raised_minimum_quality_refuses_degraded() {
-        let db = FlatTerrain { elevation_m: 0.0 };
-        let config = EgpwsConfig {
-            minimum_quality: SolutionQuality::Good,
-            ..EgpwsConfig::default()
-        };
-        let result = assess(
-            &solution(SolutionQuality::Degraded, 500.0, t0()),
-            t0(),
-            CLOCK,
-            Some(&db),
-            &config,
-        );
-        assert_eq!(
-            result,
-            Err(EgpwsUnavailable::SolutionIntegrity {
-                quality: SolutionQuality::Degraded,
-                minimum: SolutionQuality::Good,
-            })
-        );
-    }
-
-    #[test]
-    fn degraded_meets_the_default_floor() {
-        let result = flat_assess(SolutionQuality::Degraded, 500.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, 400.0);
-        assert_eq!(assessment.severity, None);
-    }
-
-    #[test]
-    fn no_coverage_is_refused() {
-        let result = assess(
-            &solution(SolutionQuality::Good, 500.0, t0()),
-            t0(),
-            CLOCK,
-            Some(&NoCoverageTerrain),
-            &EgpwsConfig::default(),
-        );
-        assert_eq!(result, Err(EgpwsUnavailable::NoCoverage));
-    }
-
-    #[test]
-    fn caution_band_raises_caution() {
-        let result = flat_assess(SolutionQuality::Good, 210.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, 110.0);
-        assert_eq!(assessment.severity, Some(AlertSeverity::Caution));
-    }
-
-    #[test]
-    fn warning_band_raises_warning() {
-        let result = flat_assess(SolutionQuality::Good, 150.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, 50.0);
-        assert_eq!(assessment.severity, Some(AlertSeverity::Warning));
-    }
-
-    #[test]
-    fn height_exactly_at_the_caution_floor_is_clear() {
-        let result = flat_assess(SolutionQuality::Good, 250.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, 150.0);
-        assert_eq!(assessment.severity, None);
-    }
-
-    #[test]
-    fn height_exactly_at_the_warning_floor_is_caution() {
-        let result = flat_assess(SolutionQuality::Good, 160.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, 60.0);
-        assert_eq!(assessment.severity, Some(AlertSeverity::Caution));
-    }
-
-    #[test]
-    fn below_terrain_is_a_warning_with_negative_height() {
-        let result = flat_assess(SolutionQuality::Good, 50.0, 100.0);
-        let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
-        assert_eq!(assessment.height_above_terrain_m, -50.0);
-        assert_eq!(assessment.severity, Some(AlertSeverity::Warning));
-    }
-}
+mod tests;

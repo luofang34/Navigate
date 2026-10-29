@@ -78,6 +78,33 @@ impl GpuRenderer {
         device::upload(scene, camera, limits, bytes, device, queue, identity).await
     }
 
+    /// Upload map textures and compile the ray kernel on a caller-supplied GPU device.
+    ///
+    /// # Errors
+    /// Rejects invalid inputs, scenes that exceed `device` limits, and GPU validation failures.
+    pub async fn with_device(
+        scene: RenderScene,
+        camera: CameraModel,
+        limits: RenderLimits,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_label: impl Into<String>,
+    ) -> Result<Self, RenderError> {
+        let bytes = validate(&scene, camera, limits)?;
+        let identity = format!("wgpu-terrain-v1/{}", adapter_label.into());
+        device::upload(scene, camera, limits, bytes, device, queue, identity).await
+    }
+
+    /// Borrow the underlying `wgpu::Device` so another pipeline can share it.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Borrow the underlying `wgpu::Queue` so another pipeline can share it.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     /// Bytes occupied by scene textures, excluding output buffers and driver overhead.
     pub fn resident_texture_bytes(&self) -> usize {
         self.resident_texture_bytes
@@ -144,11 +171,6 @@ fn validate(
     limits: RenderLimits,
 ) -> Result<usize, RenderError> {
     camera.validate()?;
-    if matches!(scene.frame, LocalFrame::Wgs84Enu { .. }) {
-        return Err(RenderError::Invalid(
-            "WGS84 frames require ellipsoid terrain rays",
-        ));
-    }
     let [lat, lon] = scene.frame.anchor();
     scene.frame.local([lat, lon, 0.0])?;
     let image = scene.imagery.validate()?;

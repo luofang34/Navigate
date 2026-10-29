@@ -27,6 +27,8 @@ members = [
     "crates/navigate-data",
     "crates/navigate-data-fs",
     "crates/navigate-imagery",
+    "crates/navigate-segment",
+    "tools/visual-pipeline",
 ]
 exclude = [
     "tools/imagery-provider",

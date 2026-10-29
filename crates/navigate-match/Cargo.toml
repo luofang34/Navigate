@@ -20,11 +20,13 @@ gpu = ["dep:burn-cubecl", "dep:cubecl", "dep:navigate-match-kernels"]
 
 [dependencies]
 navigate-visual = { path = "../navigate-visual" }
+navigate-visual-workflow = { path = "../navigate-visual-workflow" }
 burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
 burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
 cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
 navigate-match-kernels = { path = "../navigate-match-kernels", optional = true }
 safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
+sha2 = "0.10"
 half = "2.7.1"
 image.workspace = true
 nalgebra.workspace = true
@@ -33,6 +35,11 @@ tracing.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 # burn draws random seeds through getrandom; in a browser it must use the JavaScript source.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

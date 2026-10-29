@@ -1,15 +1,18 @@
 //! Conversion of one visual estimate into one fusion observation.
 
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
     ClockDomainId, GeodeticPosition, MonotonicNanos, ObservationStamp, SensorClass,
     SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{Observation, ObservationValue};
 use navigate_visual::{Estimate, LocalFrame, MapRevision};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::{VisualErrorBudget, VisualFusionError};
+
+/// Default maximum count of frame digests retained in the duplicate screen.
+pub const DEFAULT_MAX_RETAINED_DIGESTS: usize = 16_384;
 
 /// Host-assigned identity of one camera capture stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +75,8 @@ pub struct VisualFixSource {
     budget: VisualErrorBudget,
     last: Option<u64>,
     admitted: HashSet<String>,
+    admitted_order: VecDeque<String>,
+    max_retained_digests: usize,
 }
 
 impl VisualFixSource {
@@ -83,12 +88,32 @@ impl VisualFixSource {
         identity: VisualSourceIdentity,
         budget: VisualErrorBudget,
     ) -> Result<Self, VisualFusionError> {
+        Self::with_capacity(identity, budget, DEFAULT_MAX_RETAINED_DIGESTS)
+    }
+
+    /// Declare a capture stream with an explicit duplicate-digest window size.
+    ///
+    /// # Errors
+    /// Refuses a zero `max_retained_digests` or a budget with a term that is
+    /// not finite and positive.
+    pub fn with_capacity(
+        identity: VisualSourceIdentity,
+        budget: VisualErrorBudget,
+        max_retained_digests: usize,
+    ) -> Result<Self, VisualFusionError> {
+        if max_retained_digests == 0 {
+            return Err(VisualFusionError::InvalidBudget {
+                field: "max_retained_digests",
+            });
+        }
         budget.validate()?;
         Ok(Self {
             identity,
             budget,
             last: None,
             admitted: HashSet::new(),
+            admitted_order: VecDeque::new(),
+            max_retained_digests,
         })
     }
 
@@ -139,12 +164,22 @@ impl VisualFixSource {
             SourceComposition::of(SensorClass::VisualLandmark),
         );
         self.last = Some(estimate.stamp.capture_time_ns);
-        self.admitted.insert(estimate.observation_sha256.clone());
+        self.record_digest(estimate.observation_sha256.clone());
         Ok(VisualFix {
             observation,
             map: estimate.map.clone(),
             observation_sha256: estimate.observation_sha256.clone(),
         })
+    }
+
+    fn record_digest(&mut self, digest: String) {
+        if self.admitted.len() >= self.max_retained_digests
+            && let Some(oldest) = self.admitted_order.pop_front()
+        {
+            self.admitted.remove(&oldest);
+        }
+        self.admitted.insert(digest.clone());
+        self.admitted_order.push_back(digest);
     }
 
     fn check_order(&self, estimate: &Estimate) -> Result<(), VisualFusionError> {
@@ -202,10 +237,15 @@ fn ned_covariance(
     }
     let point_displacement_m = estimate.frame.model_error_m(estimate.pose.position);
     let (horizontal, vertical) = budget.variances_m2(point_displacement_m);
-    // Cauchy bounds the error second moment without independence, including bias.
-    // The trace bounds the largest eigenvalue of the external error second moment.
-    let external_bound = 2.0 * horizontal + vertical;
-    let ned = 2.0 * geometric + Matrix3::identity() * (2.0 * external_bound);
+    // Bound E[(G + B)(G + B)^T] in Loewner order without independence assumptions:
+    // (a + b + c)^2 <= 2 a^2 + 4 b^2 + 4 c^2 keeps horizontal and vertical budgets
+    // strictly separated onto their own axes.
+    let external = Matrix3::from_diagonal(&Vector3::new(
+        8.0 * horizontal,
+        8.0 * horizontal,
+        4.0 * vertical,
+    ));
+    let ned = 2.0 * geometric + external;
     let usable = ned.iter().all(|v| v.is_finite())
         && ned.symmetric_eigen().eigenvalues.iter().all(|v| *v >= 0.0);
     if !usable {

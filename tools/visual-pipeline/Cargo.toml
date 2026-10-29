@@ -1,0 +1,44 @@
+[package]
+name = "navigate-visual-pipeline"
+description = "Pure-Rust photo and video preprocessing, pose search, verification, segmentation, and Sokoly debrief export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "navigate-visual-pipeline"
+path = "src/main.rs"
+
+[features]
+default = ["flex"]
+flex = ["navigate-match/flex", "navigate-segment/flex"]
+wgpu = ["navigate-match/wgpu", "navigate-segment/wgpu"]
+metal = ["navigate-match/metal", "navigate-segment/metal"]
+cuda = ["navigate-match/cuda", "navigate-segment/cuda"]
+
+[dependencies]
+navigate-contract.workspace = true
+navigate-geodesy.workspace = true
+navigate-visual = { path = "../../crates/navigate-visual" }
+navigate-visual-session = { path = "../../crates/navigate-visual-session" }
+navigate-recording = { path = "../../crates/navigate-recording" }
+navigate-match = { path = "../../crates/navigate-match", default-features = false }
+navigate-segment = { path = "../../crates/navigate-segment", default-features = false, features = ["optim"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
+clap = "4"
+kamadak-exif = "0.6.1"
+nalgebra.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = { workspace = true, features = ["std"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

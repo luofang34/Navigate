@@ -96,9 +96,11 @@ fn curved_frame_covariance_is_expressed_in_the_camera_location_ned_axes() {
         .fixed_view_mut::<3, 3>(0, 0)
         .copy_from(&local);
     let actual = ned_covariance(&estimate, &budget()).unwrap();
+    let (h_var, v_var) =
+        budget().variances_m2(estimate.frame.model_error_m(estimate.pose.position));
     let (n, e, d) = actual.diagonal();
     assert!((n - e - 10.0).abs() < 1e-8);
-    assert!((d - e - 24.0).abs() < 1e-8);
+    assert!(((d - 4.0 * v_var) - (e - 8.0 * h_var) - 24.0).abs() < 1e-8);
 }
 
 #[test]
@@ -118,10 +120,11 @@ fn fix_axes_move_to_ned_and_carry_the_budget() {
         panic!("position fix expected");
     };
     let (n, e, d) = covariance.diagonal();
-    // North takes the frame's north variance (9), east the east variance (4).
-    assert!((n - (2.0 * 9.0 + 344.0)).abs() < 1e-9);
-    assert!((e - (2.0 * 4.0 + 344.0)).abs() < 1e-9);
-    assert!((d - (2.0 * 16.0 + 344.0)).abs() < 1e-9);
+    // North takes the frame's north variance (9), east the east variance (4),
+    // horizontal budget H = 36 -> 8H = 288, vertical budget V = 100 -> 4V = 400.
+    assert!((n - (2.0 * 9.0 + 288.0)).abs() < 1e-9);
+    assert!((e - (2.0 * 4.0 + 288.0)).abs() < 1e-9);
+    assert!((d - (2.0 * 16.0 + 400.0)).abs() < 1e-9);
     assert!((position.altitude_m - 948.0).abs() < 1e-9);
     assert!((position.latitude_rad.to_degrees() - 47.0).abs() < 1e-9);
     assert!(
@@ -278,7 +281,7 @@ fn covariance_bounds_perfectly_correlated_error_terms() {
     };
     let [nn, ne, nd, ee, ed, dd] = covariance.upper_triangle();
     let bound = Matrix3::new(nn, ne, nd, ne, ee, ed, nd, ed, dd);
-    let total_error = Vector3::new(3.0 + 4.0, 2.0 + 4.0, 4.0 + 8.0);
+    let total_error = Vector3::new(3.0 + 6.0, 2.0 + 6.0, 4.0 + 10.0);
     let correlated = total_error * total_error.transpose();
     assert!(
         (bound - correlated)
@@ -287,6 +290,35 @@ fn covariance_bounds_perfectly_correlated_error_terms() {
             .iter()
             .all(|v| *v >= -1e-9)
     );
+}
+
+#[test]
+fn vertical_budget_does_not_leak_into_horizontal_and_digest_window_stays_bounded() {
+    let base = ned_covariance(&estimate(1, 100, "a", 0.0), &budget()).unwrap();
+    let mut taller = budget();
+    taller.map_vertical_m = 50.0;
+    let updated = ned_covariance(&estimate(1, 100, "a", 0.0), &taller).unwrap();
+    assert!((updated.diagonal().0 - base.diagonal().0).abs() < 1e-12);
+    assert!((updated.diagonal().1 - base.diagonal().1).abs() < 1e-12);
+    assert!(updated.diagonal().2 > base.diagonal().2 + 10_000.0);
+
+    let mut source = VisualFixSource::with_capacity(identity(), budget(), 3).expect("valid");
+    for seq in 1_u64..=5 {
+        source
+            .convert(
+                &estimate(seq, seq * 100, &format!("d-{seq}"), 0.0),
+                EvidenceIndependence::ValidatedIndependent,
+            )
+            .expect("admitted");
+    }
+    assert_eq!(source.admitted.len(), 3);
+    assert!(matches!(
+        source.convert(
+            &estimate(6, 600, "d-5", 0.0),
+            EvidenceIndependence::ValidatedIndependent
+        ),
+        Err(VisualFusionError::RepeatedEvidence { .. })
+    ));
 }
 
 #[test]

@@ -44,6 +44,9 @@ use crate::vertical;
 ///   solution's `solved_at`.
 /// - [`GuidanceRefusal::SolutionStale`] when the solution's age exceeds
 ///   `config.max_solution_age`.
+/// - [`GuidanceRefusal::VerticalUncertaintyExceeded`] when `leg_to` has
+///   an altitude constraint and `solution.integrity.vertical_1sigma_m`
+///   exceeds `config.max_vertical_1sigma_m`.
 /// - [`GuidanceRefusal::ImplausibleTarget`] when `leg_to`'s position
 ///   fails the geodetic plausibility screen, or when a track reference's
 ///   endpoints coincide (such a track cannot define a course). A course

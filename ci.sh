@@ -61,12 +61,9 @@ RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
 echo "== visual tools =="
 ./scripts/check-visual-tools.sh
 
-echo "== visual pipeline (Python) =="
-if command -v uv >/dev/null; then
-    uv run --locked --project tools/visual-pipeline python -m unittest discover -s tools/visual-pipeline -p 'test_*.py'
-else
-    echo "SKIPPED: visual pipeline tests — uv is not installed"
-fi
+echo "== visual pipeline and segmentation (Rust) =="
+cargo test -p navigate-segment -p navigate-visual-pipeline
+cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
 
 echo "== native tools =="
 ./scripts/check-native-tools.sh

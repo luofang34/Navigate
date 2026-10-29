@@ -112,6 +112,37 @@ impl LocalTangentPlane {
         };
         ecef_to_geodetic(&ecef)
     }
+
+    /// Computes the exact 3x3 rotation matrix that maps a North-East-Down
+    /// vector from `self` into `other`.
+    #[must_use]
+    pub fn ned_rotation_to(&self, other: &Self) -> [[f64; 3]; 3] {
+        let a = self.ecef_to_ned_rows();
+        let b = other.ecef_to_ned_rows();
+        let mut r = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                r[i][j] = b[i][0] * a[j][0] + b[i][1] * a[j][1] + b[i][2] * a[j][2];
+            }
+        }
+        r
+    }
+
+    const fn ecef_to_ned_rows(&self) -> [[f64; 3]; 3] {
+        [
+            [
+                -self.sin_lat * self.cos_lon,
+                -self.sin_lat * self.sin_lon,
+                self.cos_lat,
+            ],
+            [-self.sin_lon, self.cos_lon, 0.0],
+            [
+                -self.cos_lat * self.cos_lon,
+                -self.cos_lat * self.sin_lon,
+                -self.sin_lat,
+            ],
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +227,34 @@ mod tests {
             let error_m = (dn * dn + de * de + dd * dd).sqrt();
             assert!(error_m < 1e-6, "round trip error {error_m} m");
         }
+    }
+
+    #[test]
+    fn ned_rotation_between_planes_matches_ecef_transport() {
+        let a = plane_at_47n_8e();
+        let b = LocalTangentPlane::new(GeodeticPosition::new(
+            48.5_f64.to_radians(),
+            10.2_f64.to_radians(),
+            800.0,
+        ))
+        .expect("plausible origin");
+        let r = a.ned_rotation_to(&b);
+        let target = GeodeticPosition::new(48.0_f64.to_radians(), 9.0_f64.to_radians(), 1_200.0);
+        let delta_a = a.to_ned(&target);
+        let origin_b_in_a = a.to_ned(&b.origin());
+        let rel_a = [
+            delta_a.north_m - origin_b_in_a.north_m,
+            delta_a.east_m - origin_b_in_a.east_m,
+            delta_a.down_m - origin_b_in_a.down_m,
+        ];
+        let rotated = [
+            r[0][0] * rel_a[0] + r[0][1] * rel_a[1] + r[0][2] * rel_a[2],
+            r[1][0] * rel_a[0] + r[1][1] * rel_a[1] + r[1][2] * rel_a[2],
+            r[2][0] * rel_a[0] + r[2][1] * rel_a[1] + r[2][2] * rel_a[2],
+        ];
+        let direct_b = b.to_ned(&target);
+        assert!((rotated[0] - direct_b.north_m).abs() < 1e-8);
+        assert!((rotated[1] - direct_b.east_m).abs() < 1e-8);
+        assert!((rotated[2] - direct_b.down_m).abs() < 1e-8);
     }
 }

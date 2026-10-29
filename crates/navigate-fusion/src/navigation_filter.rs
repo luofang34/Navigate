@@ -4,6 +4,7 @@
 
 mod admission;
 mod integrity;
+mod reanchor;
 
 #[cfg(test)]
 mod tests;
@@ -44,8 +45,8 @@ pub(crate) struct AdmittedContribution {
 /// fix, the Kalman state, and the time the state refers to.
 #[derive(Debug, Clone)]
 struct Core {
-    plane: LocalTangentPlane,
-    state: KalmanState,
+    pub(super) plane: LocalTangentPlane,
+    pub(super) state: KalmanState,
     state_at: MonotonicNanos,
 }
 
@@ -302,11 +303,25 @@ impl NavigationFilter {
         let Some(core) = self.core.as_mut() else {
             return Err(RejectionReason::NotInitialized);
         };
-        let z = Vector3::new(velocity.north_mps, velocity.east_mps, velocity.down_mps);
+        let dt_s = acquired_at
+            .elapsed_since(core.state_at)
+            .map_or(0.0, seconds);
+        let prop = core
+            .state
+            .propagated(dt_s, self.config.process_noise_accel_psd);
+        let vehicle = core
+            .plane
+            .from_ned(&NedOffset::new(prop.x[0], prop.x[1], prop.x[2]));
+        let (z, r_plane) = reanchor::vehicle_to_plane(
+            &core.plane,
+            vehicle,
+            Vector3::new(velocity.north_mps, velocity.east_mps, velocity.down_mps),
+            r,
+        );
         update_core(
             core,
             &self.config,
-            &LinearBlock::velocity(z, r),
+            &LinearBlock::velocity(z, r_plane),
             self.config.innovation_gate_chi2,
             acquired_at,
         )
@@ -398,9 +413,16 @@ impl NavigationFilter {
         );
         let x = &state.x;
         let position = core.plane.from_ned(&NedOffset::new(x[0], x[1], x[2]));
-        let velocity = NedVelocity::new(x[3], x[4], x[5]);
-        let position_cov = filter::matrix_to_cov3(&state.p.fixed_view::<3, 3>(0, 0).into_owned());
-        let velocity_cov = filter::matrix_to_cov3(&state.p.fixed_view::<3, 3>(3, 3).into_owned());
+        let (v_local, p_cov_local, v_cov_local) = reanchor::plane_to_vehicle(
+            &core.plane,
+            position,
+            Vector3::new(x[3], x[4], x[5]),
+            state.p.fixed_view::<3, 3>(0, 0).into_owned(),
+            state.p.fixed_view::<3, 3>(3, 3).into_owned(),
+        );
+        let velocity = NedVelocity::new(v_local[0], v_local[1], v_local[2]);
+        let position_cov = filter::matrix_to_cov3(&p_cov_local);
+        let velocity_cov = filter::matrix_to_cov3(&v_cov_local);
         let sequence = self.next_solution_sequence;
         self.next_solution_sequence = sequence.next();
         let stamp = SolutionStamp::new(self.epoch, sequence, now, self.clock);
@@ -448,5 +470,6 @@ fn update_core<const M: usize>(
     if acquired_at > core.state_at {
         core.state_at = acquired_at;
     }
+    reanchor::reanchor_if_needed(core, config);
     Ok(())
 }
