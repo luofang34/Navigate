@@ -1,6 +1,6 @@
 //! Precomputed Kashin reference banks and real-time pose matching (`bank-build`, `bank-match`).
 
-mod helpers;
+pub(crate) mod helpers;
 
 use crate::{
     PipelineError,

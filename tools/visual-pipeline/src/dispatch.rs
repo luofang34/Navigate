@@ -112,6 +112,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             &req::<PathBuf>(args, "output")?,
             args.get_one::<PathBuf>("sheet").map(PathBuf::as_path),
         ),
+        "corridor-build" | "corridor-track" => crate::corridor_cli::dispatch(sub, args),
         "match" | "bank-build" | "bank-match" | "track" | "refine" | "terrain-bundle"
         | "pipeline" => dispatch_pose_stage(sub, args),
         _ => dispatch_export_or_video(sub, args),

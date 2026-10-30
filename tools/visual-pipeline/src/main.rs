@@ -1,5 +1,6 @@
 //! Command-line interface for the pure-Rust visual pipeline.
 
+mod corridor_cli;
 mod dispatch;
 
 use clap::{Arg, ArgAction, Command, value_parser};
@@ -193,6 +194,7 @@ fn cli() -> Command {
                 .arg(path_arg("sheet", false)),
         )
         .subcommands(matcher_subcommands())
+        .subcommands(corridor_cli::commands())
         .subcommands(export_and_video_subcommands())
 }
 

@@ -5,6 +5,7 @@
 //! [`AsyncModelInference`] define the unified tensor session contract across browser,
 //! native, and embedded neural processing unit backends.
 mod convert;
+pub mod corridor;
 mod error;
 mod input;
 pub mod kashin;
@@ -23,6 +24,10 @@ mod weights;
 mod xfeat;
 
 pub use convert::loftr_from_checkpoint;
+pub use corridor::{
+    ActiveTrackSet, CORRIDOR_MAGIC, CORRIDOR_VERSION, CorridorLandmarkBank, CorridorTileEntry,
+    CorridorTileKey, TrackMatchConfig, Tracked3dMatch, VirtualCorridorView, VirtualViewCamera,
+};
 pub use error::MatchError;
 pub use kashin::{
     DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,

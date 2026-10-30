@@ -4,6 +4,7 @@ mod archive;
 mod l1_gnc;
 
 pub use archive::{LoadedPose, load_candidate_pose, save_candidate_npz};
+pub(crate) use l1_gnc::refine_seed_eye_2pt;
 pub use l1_gnc::{fit_pose_hybrid, fit_pose_l1_gnc};
 
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};

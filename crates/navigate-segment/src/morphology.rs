@@ -34,9 +34,7 @@ pub struct LineSegment {
 
 /// Erode a binary mask (`width × height`) with a `(2 * radius + 1)` square structuring element.
 ///
-/// Out-of-bounds pixels are treated as `true` (matching OpenCV `BORDER_CONSTANT` replicate behavior
-/// for interior foreground erosion on image borders when `border_value = true`, or `false` when
-/// `border_value = false`).
+/// Out-of-bounds pixels equal `border_value`.
 pub fn erode_rect(
     mask: &[bool],
     width: usize,
@@ -44,56 +42,100 @@ pub fn erode_rect(
     radius: usize,
     border_value: bool,
 ) -> Vec<bool> {
+    rect_filter(mask, width, height, radius, border_value, false)
+}
+
+/// Dilate a binary mask (`width × height`) with a `(2 * radius + 1)` square structuring element.
+pub fn dilate_rect(mask: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
+    rect_filter(mask, width, height, radius, true, true)
+}
+
+fn rect_filter(
+    mask: &[bool],
+    width: usize,
+    height: usize,
+    radius: usize,
+    border_value: bool,
+    dilate: bool,
+) -> Vec<bool> {
     if radius == 0 || width == 0 || height == 0 {
         return mask.to_vec();
     }
     let mut horiz = vec![false; width * height];
+    let mut prefix = vec![0u32; width + 1];
     for y in 0..height {
         let row = &mask[y * width..(y + 1) * width];
-        let mut prefix = vec![0usize; width + 1];
+        let h_row = &mut horiz[y * width..(y + 1) * width];
+        prefix[0] = 0;
         for x in 0..width {
-            prefix[x + 1] = prefix[x] + usize::from(!row[x]);
+            let hit = if dilate { row[x] } else { !row[x] };
+            prefix[x + 1] = prefix[x] + u32::from(hit);
         }
-        for x in 0..width {
+        for (x, h_slot) in h_row.iter_mut().enumerate() {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius).min(width - 1);
-            let outside_missing = !border_value && (x < radius || x + radius >= width);
-            let zeros_in_bounds = prefix[x1 + 1] - prefix[x0];
-            horiz[y * width + x] = !outside_missing && zeros_in_bounds == 0;
+            let hits = prefix[x1 + 1] - prefix[x0];
+            *h_slot = if dilate {
+                hits > 0
+            } else {
+                let outside_missing = !border_value && (x < radius || x + radius >= width);
+                !outside_missing && hits == 0
+            };
         }
     }
+
     let mut out = vec![false; width * height];
-    for x in 0..width {
-        let mut prefix = vec![0usize; height + 1];
-        for y in 0..height {
-            prefix[y + 1] = prefix[y] + usize::from(!horiz[y * width + x]);
+    let mut col_hits = vec![0u32; width];
+    let init_y1 = radius.min(height - 1);
+    for ry in 0..=init_y1 {
+        let h_row = &horiz[ry * width..(ry + 1) * width];
+        for x in 0..width {
+            let hit = if dilate { h_row[x] } else { !h_row[x] };
+            col_hits[x] += u32::from(hit);
         }
-        for y in 0..height {
-            let y0 = y.saturating_sub(radius);
-            let y1 = (y + radius).min(height - 1);
-            let outside_missing = !border_value && (y < radius || y + radius >= height);
-            let zeros_in_bounds = prefix[y1 + 1] - prefix[y0];
-            out[y * width + x] = !outside_missing && zeros_in_bounds == 0;
+    }
+    for y in 0..height {
+        let y0 = y.saturating_sub(radius);
+        let y1 = (y + radius).min(height - 1);
+        let outside_missing = !dilate && !border_value && (y < radius || y + radius >= height);
+        if !outside_missing {
+            let out_row = &mut out[y * width..(y + 1) * width];
+            for x in 0..width {
+                out_row[x] = if dilate {
+                    col_hits[x] > 0
+                } else {
+                    col_hits[x] == 0
+                };
+            }
+        }
+        if y + 1 < height {
+            let next_y0 = (y + 1).saturating_sub(radius);
+            let next_y1 = (y + 1 + radius).min(height - 1);
+            if next_y1 > y1 {
+                let add_row = &horiz[next_y1 * width..(next_y1 + 1) * width];
+                for x in 0..width {
+                    let hit = if dilate { add_row[x] } else { !add_row[x] };
+                    col_hits[x] += u32::from(hit);
+                }
+            }
+            if next_y0 > y0 {
+                let sub_row = &horiz[y0 * width..(y0 + 1) * width];
+                for x in 0..width {
+                    let hit = if dilate { sub_row[x] } else { !sub_row[x] };
+                    col_hits[x] -= u32::from(hit);
+                }
+            }
         }
     }
     out
 }
 
-/// Dilate a binary mask (`width × height`) with a `(2 * radius + 1)` square structuring element.
-pub fn dilate_rect(mask: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
-    if radius == 0 || width == 0 || height == 0 {
-        return mask.to_vec();
-    }
-    let inverted: Vec<bool> = mask.iter().map(|&b| !b).collect();
-    erode_rect(&inverted, width, height, radius, true)
-        .into_iter()
-        .map(|b| !b)
-        .collect()
-}
-
 /// Morphological opening (`erode` then `dilate`) with a `(2 * radius + 1)` square kernel.
 pub fn morph_open(mask: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
     let eroded = erode_rect(mask, width, height, radius, true);
+    if !eroded.iter().any(|&b| b) {
+        return eroded;
+    }
     dilate_rect(&eroded, width, height, radius)
 }
 
@@ -114,7 +156,7 @@ pub fn connected_components_8(
 ) -> (Vec<u32>, Vec<ComponentStats>) {
     let mut labels = vec![0u32; width * height];
     let mut stats = Vec::new();
-    let mut queue = Vec::new();
+    let mut queue: Vec<(u32, u32)> = Vec::new();
     let mut next_label = 1u32;
 
     for sy in 0..height {
@@ -127,7 +169,7 @@ pub fn connected_components_8(
             next_label += 1;
             labels[start] = label;
             queue.clear();
-            queue.push((sx, sy));
+            queue.push((sx as u32, sy as u32));
 
             let mut min_x = sx;
             let mut max_x = sx;
@@ -137,8 +179,10 @@ pub fn connected_components_8(
             let mut head = 0usize;
 
             while head < queue.len() {
-                let (x, y) = queue[head];
+                let (xu, yu) = queue[head];
                 head += 1;
+                let x = xu as usize;
+                let y = yu as usize;
                 area += 1;
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
@@ -150,11 +194,12 @@ pub fn connected_components_8(
                 let x0 = x.saturating_sub(1);
                 let x1 = (x + 1).min(width - 1);
                 for ny in y0..=y1 {
+                    let row_off = ny * width;
                     for nx in x0..=x1 {
-                        let nidx = ny * width + nx;
+                        let nidx = row_off + nx;
                         if mask[nidx] && labels[nidx] == 0 {
                             labels[nidx] = label;
-                            queue.push((nx, ny));
+                            queue.push((nx as u32, ny as u32));
                         }
                     }
                 }
