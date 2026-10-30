@@ -3,7 +3,11 @@
 
 mod admission;
 mod anchor;
+mod anchor_worker;
+mod background;
+mod latency;
 pub mod masking;
+mod motion;
 mod tracker;
 
 pub use tracker::run_corridor_track;
@@ -99,6 +103,11 @@ pub struct CorridorTrackOptions {
     pub focal_35mm_override: Option<f64>,
     /// Optional case ID allow-list.
     pub only_cases: Option<BTreeSet<String>>,
+    /// Run `Segformer` refreshes and periodic map re-anchors on background threads.
+    ///
+    /// Warm tracking continues while they run, and their results take effect
+    /// on a later frame. Without this option they run inside the frame loop.
+    pub background_refresh: bool,
 }
 
 type BandVoxelMap = BTreeMap<u8, BTreeMap<(i32, i32), RawLandmark>>;
