@@ -140,8 +140,15 @@ impl PipelineMatcher {
             context: "match-worker banner".into(),
             source,
         })?;
+        if doc.get("status").and_then(Value::as_str) != Some("ready") {
+            return Err(PipelineError::Tool {
+                tool: "match-worker".into(),
+                message: format!("expected a ready banner, got {}", banner.trim_end()),
+            });
+        }
         let identity = doc
-            .get("matcher")
+            .get("backend")
+            .or_else(|| doc.get("matcher"))
             .and_then(Value::as_str)
             .unwrap_or("onnx-match-worker")
             .to_owned();
@@ -276,12 +283,13 @@ impl PipelineMatcher {
                         source,
                     })?;
                 let pairs: Vec<[[f64; 2]; 2]> = parsed
-                    .get("matches")
+                    .get("pairs")
+                    .or_else(|| parsed.get("matches"))
                     .cloned()
                     .map(serde_json::from_value)
                     .transpose()
                     .map_err(|source| PipelineError::Json {
-                        context: "match-worker matches".into(),
+                        context: "match-worker pairs".into(),
                         source,
                     })?
                     .unwrap_or_default();
