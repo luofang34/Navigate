@@ -5,11 +5,12 @@ use crate::{
     config::{AIRFRAME, PROPELLER, SKY, SegformerConfig},
     morphology::{connected_components_8, dilate_rect, erode_rect, morph_close, morph_open},
 };
-use image::{DynamicImage, GrayImage, RgbImage, imageops::FilterType};
+use image::{GrayImage, RgbImage, imageops::colorops::grayscale};
 use std::collections::VecDeque;
 
 const DETECTOR_WIDTH: u32 = 480;
 const HISTORY_LEN: usize = 8;
+const SCAN_CHUNK: usize = 64;
 
 /// Temporal transient-darkness detector for spinning propeller blades in video streams.
 #[derive(Clone, Debug)]
@@ -41,21 +42,26 @@ impl PropellerDetector {
     /// Requires at least three prior frames in `history` before claiming transient dark blades,
     /// so the first three frames always return an all-`false` mask.
     pub fn mask(&mut self, rgb: &RgbImage) -> Vec<bool> {
-        let orig_w = rgb.width() as usize;
-        let orig_h = rgb.height() as usize;
+        if rgb.width() == 0 || rgb.height() == 0 {
+            return Vec::new();
+        }
+        let gray_full = grayscale(rgb);
+        self.mask_luma(&gray_full)
+    }
+
+    /// Update history from a grayscale image `gray` and return a native-resolution blade mask.
+    ///
+    /// Returns an all-`false` mask until `history` holds at least three prior frames.
+    pub fn mask_luma(&mut self, gray: &GrayImage) -> Vec<bool> {
+        let orig_w = gray.width() as usize;
+        let orig_h = gray.height() as usize;
         let total = orig_w * orig_h;
         if total == 0 {
             return Vec::new();
         }
-        let gray_full: GrayImage = DynamicImage::ImageRgb8(rgb.clone()).to_luma8();
         let det_w = DETECTOR_WIDTH;
         let det_h = ((orig_h as f64 * f64::from(det_w) / orig_w as f64).round() as u32).max(1);
-        let resized = if gray_full.dimensions() == (det_w, det_h) {
-            gray_full
-        } else {
-            image::imageops::resize(&gray_full, det_w, det_h, FilterType::Triangle)
-        };
-        let cur = resized.into_raw();
+        let cur = resize_luma_u8(gray, det_w, det_h);
         let w = det_w as usize;
         let h = det_h as usize;
         let n = w * h;
@@ -65,24 +71,16 @@ impl PropellerDetector {
             return vec![false; total];
         }
 
-        let mut dark = vec![false; n];
-        for (i, &val) in cur.iter().enumerate() {
-            let mut top1 = 0u8;
-            let mut top2 = 0u8;
-            for past in &self.history {
-                let pv = past[i];
-                if pv >= top1 {
-                    top2 = top1;
-                    top1 = pv;
-                } else if pv > top2 {
-                    top2 = pv;
-                }
-            }
-            dark[i] = i32::from(val) < i32::from(top2) - 35 && val < 110;
-        }
+        let (dark, any_dark) = detect_transient_dark(&cur, &self.history);
         self.push_frame(cur);
+        if !any_dark {
+            return vec![false; total];
+        }
 
         let opened = morph_open(&dark, w, h, 1);
+        if !opened.iter().any(|&b| b) {
+            return vec![false; total];
+        }
         let min_area = ((n as f64) * self.min_area_fraction) as usize;
         let (comp_labels, stats) = connected_components_8(&opened, w, h);
         let mut keep_comp = vec![false; stats.len() + 1];
@@ -104,15 +102,7 @@ impl PropellerDetector {
         if (w, h) == (orig_w, orig_h) {
             return padded;
         }
-        let mut native = vec![false; total];
-        for y in 0..orig_h {
-            let sy = ((y * h) / orig_h).min(h - 1);
-            for x in 0..orig_w {
-                let sx = ((x * w) / orig_w).min(w - 1);
-                native[y * orig_w + x] = padded[sy * w + sx];
-            }
-        }
-        native
+        upsample_nearest_bool(&padded, w, h, orig_w, orig_h)
     }
 
     fn push_frame(&mut self, frame: Vec<u8>) {
@@ -121,6 +111,119 @@ impl PropellerDetector {
         }
         self.history.push_back(frame);
     }
+}
+
+fn detect_transient_dark(cur: &[u8], history: &VecDeque<Vec<u8>>) -> (Vec<bool>, bool) {
+    let n = cur.len();
+    let mut dark = vec![false; n];
+    let mut any_dark = false;
+    let mut base = 0usize;
+    while base + SCAN_CHUNK <= n {
+        let mut top1 = [0u8; SCAN_CHUNK];
+        let mut top2 = [0u8; SCAN_CHUNK];
+        for past in history {
+            let ps = &past[base..base + SCAN_CHUNK];
+            for k in 0..SCAN_CHUNK {
+                let pv = ps[k];
+                top2[k] = top2[k].max(top1[k].min(pv));
+                top1[k] = top1[k].max(pv);
+            }
+        }
+        let cs = &cur[base..base + SCAN_CHUNK];
+        let ds = &mut dark[base..base + SCAN_CHUNK];
+        let mut chunk_or = 0u8;
+        for k in 0..SCAN_CHUNK {
+            let is_dark = cs[k] < top2[k].saturating_sub(35) && cs[k] < 110;
+            ds[k] = is_dark;
+            chunk_or |= u8::from(is_dark);
+        }
+        any_dark |= chunk_or != 0;
+        base += SCAN_CHUNK;
+    }
+    for i in base..n {
+        let mut top1 = 0u8;
+        let mut top2 = 0u8;
+        for past in history {
+            let pv = past[i];
+            top2 = top2.max(top1.min(pv));
+            top1 = top1.max(pv);
+        }
+        let is_dark = cur[i] < top2.saturating_sub(35) && cur[i] < 110;
+        dark[i] = is_dark;
+        any_dark |= is_dark;
+    }
+    (dark, any_dark)
+}
+
+fn resize_luma_u8(gray: &GrayImage, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    if gray.dimensions() == (dst_w, dst_h) {
+        return gray.as_raw().clone();
+    }
+    let sw = gray.width() as usize;
+    let sh = gray.height() as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+    let src = gray.as_raw();
+    let build_axis = |src_len: usize, dst_len: usize| -> Vec<(usize, usize, u32)> {
+        let scale = (src_len as f64) / (dst_len as f64);
+        (0..dst_len)
+            .map(|d| {
+                let pos = ((d as f64) + 0.5) * scale - 0.5;
+                if pos <= 0.0 {
+                    (0, 0, 0)
+                } else if pos >= (src_len - 1) as f64 {
+                    (src_len - 1, src_len - 1, 0)
+                } else {
+                    let i0 = pos as usize;
+                    let i1 = (i0 + 1).min(src_len - 1);
+                    let frac = ((pos - (i0 as f64)) * 256.0).round() as u32;
+                    (i0, i1, frac.min(256))
+                }
+            })
+            .collect()
+    };
+    let x_tab = build_axis(sw, dw);
+    let y_tab = build_axis(sh, dh);
+    let mut out = vec![0u8; dw * dh];
+    for (dy, &(y0, y1, wy)) in y_tab.iter().enumerate() {
+        let r0 = &src[y0 * sw..(y0 + 1) * sw];
+        let r1 = &src[y1 * sw..(y1 + 1) * sw];
+        let w_y0 = 256 - wy;
+        let out_row = &mut out[dy * dw..(dy + 1) * dw];
+        for (dx, &(x0, x1, wx)) in x_tab.iter().enumerate() {
+            let w_x0 = 256 - wx;
+            let top = u32::from(r0[x0]) * w_x0 + u32::from(r0[x1]) * wx;
+            let bot = u32::from(r1[x0]) * w_x0 + u32::from(r1[x1]) * wx;
+            out_row[dx] = ((top * w_y0 + bot * wy + 32_768) >> 16) as u8;
+        }
+    }
+    out
+}
+
+fn upsample_nearest_bool(
+    padded: &[bool],
+    w: usize,
+    h: usize,
+    orig_w: usize,
+    orig_h: usize,
+) -> Vec<bool> {
+    let sx_lut: Vec<usize> = (0..orig_w).map(|x| ((x * w) / orig_w).min(w - 1)).collect();
+    let mut native = vec![false; orig_w * orig_h];
+    let mut prev_sy = usize::MAX;
+    for y in 0..orig_h {
+        let sy = ((y * h) / orig_h).min(h - 1);
+        if y > 0 && sy == prev_sy {
+            native.copy_within((y - 1) * orig_w..y * orig_w, y * orig_w);
+            continue;
+        }
+        prev_sy = sy;
+        let src_row = &padded[sy * w..(sy + 1) * w];
+        let dst_row = &mut native[y * orig_w..(y + 1) * orig_w];
+        for (dst, &sx) in dst_row.iter_mut().zip(&sx_lut) {
+            *dst = src_row[sx];
+        }
+    }
+    native
 }
 
 /// Decomposed per-class occlusion masks and final matchable-terrain mask for one video frame.

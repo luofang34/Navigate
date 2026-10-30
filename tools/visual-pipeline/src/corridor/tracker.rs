@@ -25,7 +25,7 @@ use crate::{
     util::write_json,
     video_ops::relative_rotation_ransac,
 };
-use image::{DynamicImage, imageops::FilterType};
+use image::imageops::{FilterType, colorops::grayscale};
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::{
     ActiveTrackSet, CorridorLandmarkBank, HadamardProjector, PreparedKashinQuery, TrackMatchConfig,
@@ -146,15 +146,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             image::imageops::resize(m, render_size[0], render_size[1], FilterType::Nearest)
         });
         let est_rot_for_mask = state.prev_rot.map(|r| state.prev_rot_step * r);
-        let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker.mask_frame(
+        let qry_gray = grayscale(&qry_small);
+        let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker.mask_frame_with_luma(
             &qry_small,
+            &qry_gray,
             fallback_small.as_ref(),
             est_rot_for_mask.as_ref(),
             &k_render,
         )?;
         seg_refreshes += usize::from(mask_tel.segformer_refreshed);
-
-        let qry_gray = DynamicImage::ImageRgb8(qry_small).into_luma8();
         let qry_kp_floor = 256_usize.min(kp_limit);
         let qry_kp_cap = (((kp_limit as f64) * mask_tel.valid_fraction.clamp(0.25, 1.0)).round()
             as usize)
