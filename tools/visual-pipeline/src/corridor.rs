@@ -19,7 +19,7 @@ use image::DynamicImage;
 use nalgebra::Matrix3;
 use navigate_match::{
     CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, DEFAULT_KASHIN_SEED,
-    HadamardProjector, SparseFeatures, XFeat,
+    HadamardProjector, SparseFeatures,
 };
 use serde_json::{Value, json};
 use std::{
@@ -274,7 +274,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
 
     let bank = CorridorLandmarkBank::new(
         catalog_digest,
-        XFeat::ENCODER_CONTRACT_V1,
+        xfeat.encoder_contract(),
         DEFAULT_KASHIN_SEED,
         tile_m as f32,
         tiles,
@@ -301,6 +301,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         "corridor_bank_path": opts.output_bank_path.display().to_string(),
         "bank_bytes": encoded.len(),
         "xfeat_weights_sha256": hex(&encoder_digest),
+        "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
         "tile_size_m": tile_m,
         "tiles": bank.tiles.len(),
         "canonical_views": canonical_views,

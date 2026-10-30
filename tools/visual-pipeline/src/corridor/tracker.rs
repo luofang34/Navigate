@@ -80,7 +80,12 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             "corridor bank catalog_sha256 does not match --catalog".into(),
         ));
     }
-    check_encoder_contract("corridor bank", &bank.encoder_contract, &encoder_digest)?;
+    check_encoder_contract(
+        "corridor bank",
+        &bank.encoder_contract,
+        &xfeat,
+        &encoder_digest,
+    )?;
 
     let mut masker = AmortizedMasker::new(
         opts.seg_model_dir.as_deref(),

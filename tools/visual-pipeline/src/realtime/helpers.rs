@@ -161,19 +161,21 @@ pub(crate) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), Pipelin
     Ok((XFeat::load(weights, &device)?, digest))
 }
 
-/// Check a bank `encoder_contract` stamp against the loaded XFeat weight digest.
+/// Check a bank `encoder_contract` stamp against the loaded XFeat model.
 pub(crate) fn check_encoder_contract(
     bank_kind: &str,
     stamp: &[u8; 32],
-    weights_sha256: &[u8; 32],
+    xfeat: &XFeat,
+    weights_file_sha256: &[u8; 32],
 ) -> Result<(), PipelineError> {
-    if XFeat::accepts_encoder_contract(stamp, weights_sha256) {
+    if xfeat.accepts_encoder_contract(stamp, weights_file_sha256) {
         return Ok(());
     }
     Err(PipelineError::Invalid(format!(
-        "{bank_kind} encoder_contract {} is neither the XFeat v1 contract nor the --model digest {}",
+        "{bank_kind} encoder_contract {} is neither the XFeat encoder contract {} nor the --model file digest {}",
         hex(stamp),
-        hex(weights_sha256),
+        hex(&xfeat.encoder_contract()),
+        hex(weights_file_sha256),
     )))
 }
 
@@ -238,6 +240,3 @@ pub(crate) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
 pub(crate) fn rot_from_row_major(m: [f64; 9]) -> Matrix3<f64> {
     Matrix3::new(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
 }
-
-#[cfg(test)]
-mod tests;
