@@ -191,6 +191,33 @@ pub struct XFeat {
 }
 
 impl XFeat {
+    /// Canonical description of the dense encoder output that banks depend on.
+    ///
+    /// Two weight files that give the same descriptors under this description
+    /// can share one reference bank.
+    pub const ENCODER_CONTRACT_V1_DESCRIPTION: &str =
+        "navigate-xfeat-v1:input=800x576:grid=100x72:dim=64:norm=instance:coord=half-pixel";
+
+    /// SHA-256 digest of [`Self::ENCODER_CONTRACT_V1_DESCRIPTION`].
+    ///
+    /// Bank builders write this value into the `encoder_contract` field of
+    /// [`PrecomputedReferenceBank`](crate::PrecomputedReferenceBank) and
+    /// [`CorridorLandmarkBank`](crate::CorridorLandmarkBank).
+    pub const ENCODER_CONTRACT_V1: [u8; 32] = [
+        0x84, 0x3a, 0x7a, 0xab, 0xc9, 0xc0, 0xd5, 0x94, 0x73, 0x92, 0xf6, 0x67, 0x54, 0x05, 0xd8,
+        0x68, 0xa7, 0x81, 0xdb, 0x64, 0x6f, 0x2a, 0x53, 0xfa, 0xe0, 0xeb, 0xf8, 0x98, 0x9c, 0xde,
+        0x77, 0xa4,
+    ];
+
+    /// Return `true` when a bank `encoder_contract` stamp is valid for a weight file.
+    ///
+    /// The stamp is valid when it is [`Self::ENCODER_CONTRACT_V1`] or the SHA-256
+    /// digest of the weight file. Banks that record the weight-file digest stay
+    /// valid only for that exact file.
+    pub fn accepts_encoder_contract(stamp: &[u8; 32], weights_sha256: &[u8; 32]) -> bool {
+        *stamp == Self::ENCODER_CONTRACT_V1 || stamp == weights_sha256
+    }
+
     /// Load named XFeat weights onto `device`.
     ///
     /// # Errors

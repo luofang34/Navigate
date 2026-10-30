@@ -60,6 +60,30 @@ pub(crate) fn synthetic_xfeat_weights() -> Weights {
     weights
 }
 
+#[test]
+fn encoder_contract_v1_is_the_digest_of_its_description() {
+    use sha2::{Digest, Sha256};
+    let digest: [u8; 32] = Sha256::digest(XFeat::ENCODER_CONTRACT_V1_DESCRIPTION).into();
+    assert_eq!(digest, XFeat::ENCODER_CONTRACT_V1);
+}
+
+#[test]
+fn encoder_contract_accepts_the_contract_or_the_exact_weight_file() {
+    let weights = [7_u8; 32];
+    let other_weights = [8_u8; 32];
+    assert!(XFeat::accepts_encoder_contract(
+        &XFeat::ENCODER_CONTRACT_V1,
+        &weights
+    ));
+    assert!(XFeat::accepts_encoder_contract(
+        &XFeat::ENCODER_CONTRACT_V1,
+        &other_weights
+    ));
+    assert!(XFeat::accepts_encoder_contract(&weights, &weights));
+    assert!(!XFeat::accepts_encoder_contract(&other_weights, &weights));
+    assert!(!XFeat::accepts_encoder_contract(&[0; 32], &weights));
+}
+
 fn textured_image(width: u32, height: u32) -> GrayImage {
     let mut image = GrayImage::new(width, height);
     for (x, y, p) in image.enumerate_pixels_mut() {

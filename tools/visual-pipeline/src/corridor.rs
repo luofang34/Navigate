@@ -10,7 +10,7 @@ pub use tracker::run_corridor_track;
 
 use crate::{
     PipelineError,
-    realtime::helpers::{load_xfeat_model, raw_file_sha256},
+    realtime::helpers::{hex, load_xfeat_model, raw_file_sha256},
     stages::{load_profile_cases, scale_k},
     surface::Surface,
     testset::PhotoCase,
@@ -19,7 +19,7 @@ use image::DynamicImage;
 use nalgebra::Matrix3;
 use navigate_match::{
     CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, DEFAULT_KASHIN_SEED,
-    HadamardProjector, SparseFeatures,
+    HadamardProjector, SparseFeatures, XFeat,
 };
 use serde_json::{Value, json};
 use std::{
@@ -274,7 +274,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
 
     let bank = CorridorLandmarkBank::new(
         catalog_digest,
-        encoder_digest,
+        XFeat::ENCODER_CONTRACT_V1,
         DEFAULT_KASHIN_SEED,
         tile_m as f32,
         tiles,
@@ -300,6 +300,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     Ok(json!({
         "corridor_bank_path": opts.output_bank_path.display().to_string(),
         "bank_bytes": encoded.len(),
+        "xfeat_weights_sha256": hex(&encoder_digest),
         "tile_size_m": tile_m,
         "tiles": bank.tiles.len(),
         "canonical_views": canonical_views,
