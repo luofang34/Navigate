@@ -1,5 +1,5 @@
 //! Host preprocessing and sparse peak/bicubic decoding for [`super::XFeat`].
-use super::{DenseMaps, SparseFeatures, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH};
+use super::{SparseFeatures, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, score::ScoredMaps};
 use crate::{MatchError, input};
 use image::GrayImage;
 
@@ -46,7 +46,7 @@ pub(super) fn normalize_resized(prepared: &[f32]) -> Vec<f32> {
 
 /// Decode dense maps into up to `limit` sparse keypoints and L2-normalized descriptors.
 pub(super) fn decode(
-    maps: &DenseMaps,
+    maps: &ScoredMaps,
     prepared: &input::InputImage,
     image: &GrayImage,
     valid_mask: Option<&GrayImage>,
@@ -57,10 +57,7 @@ pub(super) fn decode(
         height: XFEAT_INPUT_HEIGHT,
     };
     let cells = grid.cells();
-    if maps.descriptors.len() != 64 * cells
-        || maps.keypoint_logits.len() != 65 * cells
-        || maps.reliability.len() != cells
-    {
+    if maps.descriptors.len() != 64 * cells || maps.scores.len() != grid.width * grid.height {
         return Err(MatchError::Output("dense XFeat map dimensions mismatch"));
     }
     let mut descriptors = maps.descriptors.clone();
@@ -74,8 +71,7 @@ pub(super) fn decode(
             descriptors[c * cells + cell] /= norm;
         }
     }
-    let heatmap = build_heatmap(&maps.keypoint_logits, grid);
-    let mut candidates = find_peaks(&heatmap, &maps.reliability, grid);
+    let mut candidates = candidates(&maps.scores, grid);
     if let Some(mask) = valid_mask {
         candidates.retain(|&(x, y, _)| {
             let model = [
@@ -136,6 +132,33 @@ fn mask_allows(pixel: [f64; 2], mask: &GrayImage) -> bool {
     mask.get_pixel(fx, fy)[0] >= 128 && mask.get_pixel(rx, ry)[0] >= 128
 }
 
+/// Every positive device score in raster order, except at model pixel `(0, 0)`.
+fn candidates(scores: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
+    scores
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|&(_, &score)| score > 0.0)
+        .map(|(index, &score)| (index % grid.width, index / grid.width, score))
+        .collect()
+}
+
+/// Host reference of [`super::score::score_map`] for `[1, 65, 72, 100]` logits.
+#[cfg(test)]
+pub(super) fn reference_scores(logits: &[f32], reliability: &[f32]) -> Vec<f32> {
+    let grid = Grid {
+        width: XFEAT_INPUT_WIDTH,
+        height: XFEAT_INPUT_HEIGHT,
+    };
+    let heatmap = build_heatmap(logits, grid);
+    let mut scores = vec![0.0; grid.width * grid.height];
+    for (x, y, score) in find_peaks(&heatmap, reliability, grid) {
+        scores[y * grid.width + x] = score;
+    }
+    scores
+}
+
+#[cfg(test)]
 fn build_heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
     let cells = grid.cells();
     let mut heatmap = vec![0.0; grid.width * grid.height];
@@ -154,12 +177,13 @@ fn build_heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
     heatmap
 }
 
+#[cfg(test)]
 fn find_peaks(heatmap: &[f32], reliability: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
     let mut peaks = Vec::new();
     for y in 0..grid.height {
         for x in 0..grid.width {
             let value = heatmap[y * grid.width + x];
-            if value <= 0.05 || (x == 0 && y == 0) {
+            if value <= super::score::DETECTION_THRESHOLD || (x == 0 && y == 0) {
                 continue;
             }
             let mut maximum = true;
@@ -194,6 +218,7 @@ fn sample(data: &[f32], x: i32, y: i32, grid: Grid) -> f32 {
     }
 }
 
+#[cfg(test)]
 fn bilinear(data: &[f32], p: [f32; 2], grid: Grid) -> f32 {
     let x = p[0].floor() as i32;
     let y = p[1].floor() as i32;

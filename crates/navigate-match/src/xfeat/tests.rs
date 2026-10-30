@@ -184,3 +184,63 @@ fn truncate_top_keeps_highest_scoring_keypoints_deterministically() {
     assert_eq!(sorted.len(), 1);
     assert_eq!(sorted.pixels, vec![[20.0, 21.0]]);
 }
+
+#[test]
+fn device_score_map_matches_host_reference() {
+    let device = Device::flex();
+    let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load synthetic XFeat");
+    let image = textured_image(160, 120);
+    let prepared = input::prepare(&image, [PREPARE_WIDTH, PREPARE_HEIGHT]).expect("prepare");
+    let normalized = decode::normalize_resized(&prepared.values);
+
+    let dense = pollster::block_on(model.forward_dense(normalized.clone())).expect("dense");
+    let reference = decode::reference_scores(&dense.keypoint_logits, &dense.reliability);
+    let scored = pollster::block_on(model.forward_scored(normalized)).expect("scored");
+    assert_eq!(scored.descriptors, dense.descriptors);
+    assert_eq!(scored.scores.len(), reference.len());
+
+    let support = |scores: &[f32]| -> Vec<usize> {
+        let mut support: Vec<usize> = (1..scores.len()).filter(|&i| scores[i] > 0.0).collect();
+        support.sort_unstable();
+        support
+    };
+    let reference_support = support(&reference);
+    assert!(reference_support.len() > 10, "fixture must have peaks");
+    assert_eq!(support(&scored.scores), reference_support);
+    for &i in &reference_support {
+        let (device, host) = (scored.scores[i], reference[i]);
+        assert!(
+            (device - host).abs() <= 1e-5 * host.abs().max(1e-3),
+            "score {i}: device {device} host {host}"
+        );
+    }
+
+    let host_maps = score::ScoredMaps {
+        descriptors: dense.descriptors,
+        scores: reference,
+    };
+    let from_host = decode::decode(&host_maps, &prepared, &image, None, 256).expect("host decode");
+    let from_device = pollster::block_on(model.extract(&image, 256)).expect("device decode");
+    assert_eq!(from_device.pixels, from_host.pixels);
+    assert_eq!(from_device.descriptors, from_host.descriptors);
+}
+
+#[test]
+fn grid_point_weights_zero_pad_outside_the_grid() {
+    let weights = upsample::grid_point_weights(4, 32);
+    let rows: Vec<&[f32]> = weights.chunks(4).collect();
+    assert_eq!(rows[0], [0.5, 0.0, 0.0, 0.0]);
+    assert_eq!(rows[31], [0.0, 0.0, 0.0, 0.5]);
+    for (index, row) in rows.iter().enumerate() {
+        let sum: f32 = row.iter().sum();
+        assert!(sum <= 1.0 + 1e-6);
+        if (4..=27).contains(&index) {
+            assert!(
+                (sum - 1.0).abs() < 1e-6,
+                "interior row {index} sums to {sum}"
+            );
+        } else {
+            assert!(sum < 1.0, "edge row {index} must lose weight to padding");
+        }
+    }
+}
