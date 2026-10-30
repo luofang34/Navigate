@@ -6,7 +6,7 @@ use navigate_place::{
     decode_shard, describe, rank, refine,
 };
 
-/// Score difference that lowers a neighbour's weight by a factor of e, in [`refine`].
+/// Score difference that lowers a neighbor's weight by a factor of e, in [`refine`].
 const REFINE_TEMPERATURE: f32 = 0.02;
 
 /// The query head bytes of a scale, if it has one.

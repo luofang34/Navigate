@@ -3,7 +3,7 @@
 //! A photo from an aircraft often shows the horizon. Each sampled column gives the
 //! row where the bright, smooth sky that starts at the top of the photo ends. A line
 //! through those rows, fitted with a fixed-seed sample, gives the horizon row at the
-//! photo centre and the roll. A photo without sky above most columns gives no angle.
+//! photo center and the roll. A photo without sky above most columns gives no angle.
 use image::RgbImage;
 
 /// Sampled columns.
@@ -49,7 +49,7 @@ fn sky_end(photo: &RgbImage, x: u32) -> Option<f64> {
         if (value - previous).abs() > 18.0 || colour > 75.0 {
             return Some(f64::from(y));
         }
-        // Sky colour changes slowly towards the horizon; follow it.
+        // Sky color changes slowly towards the horizon; follow it.
         sky = std::array::from_fn(|i| 0.8 * sky[i] + 0.2 * f64::from(p[i]));
         previous = value;
         y += step;
@@ -97,7 +97,7 @@ pub fn horizon(photo: &RgbImage, focal_px: f64) -> Option<Horizon> {
     let (count, slope, centre_row) = best?;
     let support = count as f64 / f64::from(COLUMNS);
     (support >= SUPPORT).then(|| Horizon {
-        // A horizon above the photo centre means the camera looks down.
+        // A horizon above the photo center means the camera looks down.
         pitch_deg: ((f64::from(h) / 2.0 - centre_row) / focal_px)
             .atan()
             .to_degrees(),

@@ -14,9 +14,9 @@ const EARTH_M: f64 = 6_371_000.0;
 pub enum Region {
     /// All points within `radius_m` of `centre`.
     Circle {
-        /// Latitude and longitude of the centre.
+        /// Latitude and longitude of the center.
         centre: [f64; 2],
-        /// Radius in metres.
+        /// Radius in meters.
         radius_m: f64,
     },
     /// All points inside a closed outline. The last point connects to the first.
@@ -35,14 +35,14 @@ pub struct Cell {
     pub y: u32,
 }
 
-/// Metres east and north of `origin` to a point.
+/// Meters east and north of `origin` to a point.
 pub(crate) fn local([lat0, lon0]: [f64; 2], [lat, lon]: [f64; 2]) -> [f64; 2] {
     let north = (lat - lat0).to_radians() * EARTH_M;
     let east = (lon - lon0).to_radians() * EARTH_M * lat0.to_radians().cos();
     [east, north]
 }
 
-/// Ground distance in metres between two near points.
+/// Ground distance in meters between two near points.
 pub(crate) fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
     let [e, n] = local(a, b);
     e.hypot(n)

@@ -16,7 +16,7 @@ const CELL_VALID: f32 = 0.5;
 /// row by row, and which pixels hold imagery.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Canvas {
-    /// Colour of each pixel.
+    /// Color of each pixel.
     pub rgb: Vec<[f32; 3]>,
     /// True where the pixel holds imagery.
     pub valid: Vec<bool>,

@@ -8,13 +8,13 @@
 use crate::{Cell, Region, cells};
 use serde::{Deserialize, Serialize};
 
-/// Heights above the ground tried when the height is not known, metres.
+/// Heights above the ground tried when the height is not known, meters.
 const HEIGHTS_M: [f64; 4] = [100.0, 300.0, 700.0, 1_200.0];
 /// Camera angles below the horizon tried when the angle is not known, degrees.
 const PITCHES_DEG: [f64; 3] = [25.0, 55.0, 85.0];
 /// Heading steps when the heading is not known.
 const HEADINGS: usize = 8;
-/// Farthest ground that a view keeps, metres, and in heights above the ground.
+/// Farthest ground that a view keeps, meters, and in heights above the ground.
 const RANGE_M: f64 = 6_000.0;
 const RANGE_HEIGHTS: f64 = 10.0;
 /// Largest region for the dense candidate grid of the locate pipeline, square km.
@@ -29,12 +29,12 @@ pub struct HeadingPrior {
     pub sigma_deg: f64,
 }
 
-/// A height prior: camera height above the ground, metres.
+/// A height prior: camera height above the ground, meters.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HeightPrior {
-    /// Most likely height, metres.
+    /// Most likely height, meters.
     pub m: f64,
-    /// One standard deviation, metres.
+    /// One standard deviation, meters.
     pub sigma_m: f64,
 }
 
@@ -64,7 +64,7 @@ pub struct SearchRequest {
     pub pitch: Option<PitchPrior>,
 }
 
-/// The ground that one view sees on flat ground, metres along the heading from the
+/// The ground that one view sees on flat ground, meters along the heading from the
 /// point below the camera.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Footprint {
@@ -110,7 +110,7 @@ impl Footprint {
 /// The queries for one index crop size.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScalePlan {
-    /// Crop side, metres.
+    /// Crop side, meters.
     pub side_m: f64,
     /// Heights and camera angles to project the photo with: `(height_m, pitch_deg)`.
     pub views: Vec<(f64, f64)>,

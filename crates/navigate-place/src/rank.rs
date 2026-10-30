@@ -4,7 +4,7 @@ use crate::{Descriptor, Record, region::distance_m};
 /// One ranked place.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ranked {
-    /// Latitude and longitude of the crop centre, degrees.
+    /// Latitude and longitude of the crop center, degrees.
     pub centre: [f64; 2],
     /// Best cosine over the query descriptors.
     pub score: f32,
@@ -63,10 +63,10 @@ pub fn rank<'a>(
     kept
 }
 
-/// The centre of a ranked place moved to the score-weighted centre of the records
+/// The center of a ranked place moved to the score-weighted center of the records
 /// within `radius_m` of it, scored with query `query`. Crops overlap by half a side,
-/// so the neighbours of the true footprint score high too; their weighted centre is
-/// nearer the footprint than any one crop centre. `temperature` sets how fast the
+/// so the neighbours of the true footprint score high too; their weighted center is
+/// nearer the footprint than any one crop center. `temperature` sets how fast the
 /// weight falls with the score.
 pub fn refine<'a>(
     place: &Ranked,

@@ -8,7 +8,7 @@ use image::RgbImage;
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_place::{CANVAS_PX, Canvas};
 
-/// Farthest ground from the point below the camera that a projection keeps, metres,
+/// Farthest ground from the point below the camera that a projection keeps, meters,
 /// and in camera heights.
 const RANGE_M: f64 = 6_000.0;
 const RANGE_HEIGHTS: f64 = 10.0;
@@ -17,7 +17,7 @@ const RANGE_HEIGHTS: f64 = 10.0;
 /// and heading, and the photo calibration.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
-    /// Height above the ground, metres.
+    /// Height above the ground, meters.
     pub height_m: f64,
     /// Angle of the optical axis below the horizon, degrees.
     pub pitch_deg: f64,
@@ -36,7 +36,7 @@ impl View {
         RANGE_M.min(RANGE_HEIGHTS * self.height_m)
     }
 
-    /// Metres east and north of the point below the camera, of the ground that a
+    /// Meters east and north of the point below the camera, of the ground that a
     /// photo pixel shows, with the ground area of the pixel.
     fn ground(
         &self,
@@ -61,7 +61,7 @@ impl View {
         (point[0].hypot(point[1]) <= self.range_m()).then_some((point, t * t / -ray.z))
     }
 
-    /// The centre of the ground in view by area, metres east and north of the point
+    /// The center of the ground in view by area, meters east and north of the point
     /// below the camera.
     pub fn footprint_centre(&self, size: (u32, u32)) -> Option<[f64; 2]> {
         let rotation = self.rotation();
@@ -79,7 +79,7 @@ impl View {
         (weight > 0.0).then(|| [sum[0] / weight, sum[1] / weight])
     }
 
-    /// Photo pixel of a ground point, metres east and north of the point below the
+    /// Photo pixel of a ground point, meters east and north of the point below the
     /// camera, if the photo shows it.
     fn pixel(
         &self,
@@ -115,7 +115,7 @@ fn bilinear<const N: usize>(at: impl Fn(u32, u32) -> [f32; N], [x, y]: [f64; 2])
     })
 }
 
-/// The photo on the ground in a square of `side_m` centred at `centre`, metres east
+/// The photo on the ground in a square of `side_m` centered at `centre`, meters east
 /// and north of the point below the camera.
 pub fn canvas(photo: &RgbImage, view: &View, centre: [f64; 2], side_m: f64) -> Canvas {
     let size = photo.dimensions();

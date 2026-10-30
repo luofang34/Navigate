@@ -26,16 +26,16 @@ pub(super) fn working_size(gray: &image::GrayImage, focal_px: f64) -> (image::Gr
 }
 
 /// Where the locate step looks: a view hypothesis and the ground at its footprint
-/// centre.
+/// center.
 pub(super) struct Aim {
     /// The view hypothesis.
     pub view: View,
-    /// Latitude and longitude of the ground at the footprint centre.
+    /// Latitude and longitude of the ground at the footprint center.
     pub ground: [f64; 2],
-    /// Distance from the point below the camera to the footprint centre, metres.
+    /// Distance from the point below the camera to the footprint center, meters.
     pub centre_back_m: f64,
-    /// How far the true ground can be from `ground`, metres: a ranked crop centre is
-    /// up to about three quarters of a crop side from the footprint centre.
+    /// How far the true ground can be from `ground`, meters: a ranked crop center is
+    /// up to about three quarters of a crop side from the footprint center.
     pub slack_m: f64,
 }
 
@@ -115,7 +115,7 @@ pub(super) async fn locate_at<T: TileSource, M: AsyncImageMatcher>(
     Ok(outcome)
 }
 
-/// Metres east and north of a point to latitude and longitude.
+/// Meters east and north of a point to latitude and longitude.
 fn offset([lat, lon]: [f64; 2], [east, north]: [f64; 2]) -> [f64; 2] {
     const EARTH_M: f64 = 6_371_000.0;
     [

@@ -99,7 +99,7 @@ pub struct SearchSources<'a, T, I> {
     pub manifest: &'a IndexManifest,
 }
 
-/// One query hypothesis: the view, its crop size, and the footprint centre in metres
+/// One query hypothesis: the view, its crop size, and the footprint center in meters
 /// east and north of the point below the camera.
 struct Hypothesis {
     scale: usize,
@@ -249,7 +249,7 @@ impl Probes<'_> {
         for (checked, (place, h)) in self.ranked.iter().take(total).enumerate() {
             let hypothesis = &self.hypotheses[*h];
             // An unknown heading leaves up to half a heading step of error; the probe
-            // covers ten degrees each side, so try the neighbouring steps too.
+            // covers ten degrees each side, so try the neighboring steps too.
             let turns: &[f64] = if self.scales[hypothesis.scale].headings_deg.len() > 1 {
                 &[0.0, -20.0, 20.0]
             } else {

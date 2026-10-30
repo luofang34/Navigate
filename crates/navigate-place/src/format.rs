@@ -1,7 +1,7 @@
 //! The index files: a JSON manifest and binary shards of fixed-size records.
 //!
 //! A shard holds the records of one crop size in one [`Cell`]. It starts with a
-//! 32-byte header. Each record is the crop centre as two `i32` values in 1e-7
+//! 32-byte header. Each record is the crop center as two `i32` values in 1e-7
 //! degrees, then the descriptor as half-precision values. Records follow a Hilbert
 //! curve inside the cell, so that a small area is a few contiguous byte ranges.
 use crate::{CELL_ZOOM, Cell, PlaceError, region::tile_xy};
@@ -53,7 +53,7 @@ pub struct ModelEntry {
 /// One crop size of an index.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScaleEntry {
-    /// Side of a crop on the ground, metres. Crop centres are half a side apart.
+    /// Side of a crop on the ground, meters. Crop centres are half a side apart.
     pub side_m: f64,
     /// Descriptor width of the records.
     pub width: usize,
@@ -93,7 +93,7 @@ pub struct ShardEntry {
 /// One map crop of the index.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
-    /// Latitude and longitude of the crop centre, degrees.
+    /// Latitude and longitude of the crop center, degrees.
     pub centre: [f64; 2],
     /// Unit-length descriptor.
     pub descriptor: Vec<f32>,
