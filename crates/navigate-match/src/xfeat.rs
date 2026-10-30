@@ -69,6 +69,49 @@ impl SparseFeatures {
             .collect()
     }
 
+    /// Return up to `max_keypoints` keypoints with the highest confidence scores.
+    pub fn truncate_top(&self, max_keypoints: usize) -> Self {
+        let count = self
+            .pixels
+            .len()
+            .min(self.model_pixels.len())
+            .min(self.scores.len())
+            .min(self.descriptors.len() / 64);
+        if max_keypoints == 0 || count == 0 {
+            return Self::empty();
+        }
+        let keep = max_keypoints.min(count);
+        if self.scores[..count].windows(2).all(|w| w[0] >= w[1]) {
+            return Self {
+                pixels: self.pixels[..keep].to_vec(),
+                model_pixels: self.model_pixels[..keep].to_vec(),
+                scores: self.scores[..keep].to_vec(),
+                descriptors: self.descriptors[..keep * 64].to_vec(),
+            };
+        }
+        let mut indices: Vec<usize> = (0..count).collect();
+        indices.sort_by(|&a, &b| {
+            self.scores[b]
+                .total_cmp(&self.scores[a])
+                .then_with(|| a.cmp(&b))
+        });
+        indices.truncate(keep);
+        let mut out = Self {
+            pixels: Vec::with_capacity(keep),
+            model_pixels: Vec::with_capacity(keep),
+            scores: Vec::with_capacity(keep),
+            descriptors: Vec::with_capacity(keep * 64),
+        };
+        for idx in indices {
+            out.pixels.push(self.pixels[idx]);
+            out.model_pixels.push(self.model_pixels[idx]);
+            out.scores.push(self.scores[idx]);
+            out.descriptors
+                .extend_from_slice(&self.descriptors[idx * 64..(idx + 1) * 64]);
+        }
+        out
+    }
+
     /// Match two feature sets with distinct mutual cosine nearest neighbours.
     pub fn mutual_matches(&self, other: &Self) -> Vec<PixelMatch> {
         #[derive(Clone, Copy)]
@@ -224,8 +267,34 @@ impl XFeat {
         image: &GrayImage,
         limit: usize,
     ) -> Result<SparseFeatures, MatchError> {
+        self.extract_masked(image, None, limit).await
+    }
+
+    /// Extract up to `limit` sparse keypoints inside `valid_mask` from `image`.
+    ///
+    /// The decoder discards candidate keypoints where `valid_mask` has a pixel value below `128`.
+    /// The decoder ranks the remaining candidates and keeps up to `limit` keypoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when `valid_mask` dimensions do not match `image`.
+    /// Returns [`MatchError`] when `image` dimensions are outside `16..=8192` or `limit` is outside `1..=4096`.
+    /// Returns [`MatchError`] when device read-back fails.
+    pub async fn extract_masked(
+        &self,
+        image: &GrayImage,
+        valid_mask: Option<&GrayImage>,
+        limit: usize,
+    ) -> Result<SparseFeatures, MatchError> {
         if limit == 0 || limit > 4096 {
             return Err(MatchError::Output("feature limit must be 1 through 4096"));
+        }
+        if let Some(mask) = valid_mask
+            && mask.dimensions() != image.dimensions()
+        {
+            return Err(MatchError::Output(
+                "valid mask dimensions do not match image",
+            ));
         }
         let min = image.as_raw().iter().copied().min().unwrap_or(0);
         let max = image.as_raw().iter().copied().max().unwrap_or(0);
@@ -235,7 +304,7 @@ impl XFeat {
         let prepared = input::prepare(image, [PREPARE_WIDTH, PREPARE_HEIGHT])?;
         let normalized = decode::normalize_resized(&prepared.values);
         let maps = self.forward_dense(normalized).await?;
-        decode::decode(&maps, &prepared, image, limit)
+        decode::decode(&maps, &prepared, image, valid_mask, limit)
     }
 
     /// Run the dense convolutional network on a normalized `576 × 800` buffer.
@@ -359,4 +428,4 @@ fn half_pixel_weights(input: usize, output: usize) -> Vec<f32> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

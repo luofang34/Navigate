@@ -7,6 +7,7 @@
 mod convert;
 mod error;
 mod input;
+pub mod kashin;
 mod kernels;
 mod lighterglue;
 mod loftr;
@@ -23,7 +24,11 @@ mod xfeat;
 
 pub use convert::loftr_from_checkpoint;
 pub use error::MatchError;
-pub use lighterglue::LighterGlue;
+pub use kashin::{
+    DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,
+    PrecomputedReferenceBank, PrecomputedViewEntry, PreparedKashinQuery, ViewSketch,
+};
+pub use lighterglue::{FastMatchConfig, FastMatchStats, IndexedMatch, LighterGlue};
 pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
 #[cfg(not(target_arch = "wasm32"))]

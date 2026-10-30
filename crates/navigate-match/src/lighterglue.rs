@@ -3,6 +3,10 @@
 //! [`LighterGlue`] runs the six-layer rotary self-attention and bidirectional
 //! cross-attention transformer of `verlab/accelerated_features` and `cvg/LightGlue`
 //! (`input_dim = 64`, `descriptor_dim = 96`, `num_heads = 1`).
+mod fast;
+
+pub use fast::{FastMatchConfig, FastMatchStats, IndexedMatch};
+
 use crate::{
     MatchError, SparseFeatures, Weights,
     kernels::{Layout, product},
@@ -366,6 +370,16 @@ impl LighterGlue {
             b = layer.self_attn.forward(b, &cos1, &sin1);
             (a, b) = layer.cross_attn.forward(a, b);
         }
+        let (scores, _, _) = self.assignment_with_logits(a, b);
+        Ok(scores)
+    }
+
+    pub(super) fn assignment_with_logits(
+        &self,
+        a: Tensor<3>,
+        b: Tensor<3>,
+    ) -> (Tensor<3>, Tensor<3>, Tensor<3>) {
+        let [_, m, _] = b.dims();
         let scale = (MODEL_DIM as f64).powf(0.25);
         let d0 = self.final_proj.forward(a.clone()) / scale;
         let d1 = self.final_proj.forward(b.clone()) / scale;
@@ -374,10 +388,13 @@ impl LighterGlue {
             ..Layout::default()
         };
         let sim = product(d0, d1, Tensor::<1>::zeros([m], &self.device), trans_b);
-        Ok(log_softmax(sim.clone(), 2)
+        let ma = self.matchability.forward(a);
+        let mb = self.matchability.forward(b);
+        let scores = log_softmax(sim.clone(), 2)
             + log_softmax(sim, 1)
-            + log_sigmoid(self.matchability.forward(a))
-            + log_sigmoid(self.matchability.forward(b)).swap_dims(1, 2))
+            + log_sigmoid(ma.clone())
+            + log_sigmoid(mb.clone()).swap_dims(1, 2);
+        (scores, ma, mb)
     }
 
     fn encoding(&self, keypoints: Tensor<3>, count: usize) -> (Tensor<3>, Tensor<3>) {

@@ -14,6 +14,7 @@ It does not depend on Sokoly source code.
 - A **reference catalog** (`catalog.json`) is an immutable manifest of Web Mercator orthoimagery tiles and Mapzen Terrarium elevation tiles with SHA-256 digests.
 - A **valid-pixel mask** is a grayscale PNG where `255` marks matchable terrain and `0` marks sky, cabin, airframe, or propeller pixels.
 - A **pose candidate** (`candidate.npz`) is a 6-DoF camera pose and 3D-2D correspondence set that passed spatial holdout checks.
+- A **reference bank** (`NVKBANK1`) is a binary file of precomputed reference views, 3D terrain points, 160-byte `ViewSketch` summaries, and 28-byte `KashinDescriptor` codes with a SHA-256 checksum.
 - A **debrief archive** (`debrief.json`) is a `sokoly-debrief` version 1 output file for display and review.
 
 ## Build and run
@@ -50,6 +51,32 @@ cargo run --release -p navigate-visual-pipeline -- --help
 6. Run `preview` to write `debrief.json` (`sokoly-debrief` version 1) and `replay.json` (version 3).
 7. Run `freeze` to store accepted pose candidates.
 8. Run `publish` to write `publication.json`, and run `reproduce` to check SHA-256 digests.
+
+## Precomputed reference bank and real-time matching
+
+1. Run `bank-build` to render terrain seed views with adaptive ray-marching, extract `XFeat` keypoints, ray-cast 3D terrain points at keypoint pixels, and save a reference bank (`NVKBANK1`).
+2. Run `bank-match` to extract masked `XFeat` keypoints from each query photo, shortlist reference views by `ViewSketch` similarity, match 3D-2D correspondences from the reference bank, and solve 6-DoF camera poses with deterministic L1-GNC and spatial holdout checks.
+3. Supply `--lighterglue` when you want adaptive early-exit `LighterGlue` cross-attention on shortlisted reference bank entries.
+4. Supply `--polish` when you want one adaptive render and sparse keypoint ray-cast refinement step on the winning pose candidate.
+
+```sh
+cargo run --release -p navigate-visual-pipeline -- bank-build \
+  --dataset /path/to/dataset \
+  --profile /path/to/dataset/profiles/with-prior.json \
+  --catalog /path/to/catalog.json \
+  --model /path/to/xfeat-f32.safetensors \
+  --output /path/to/corridor.kashin
+
+cargo run --release -p navigate-visual-pipeline -- bank-match \
+  --dataset /path/to/dataset \
+  --profile /path/to/dataset/profiles/with-prior.json \
+  --catalog /path/to/catalog.json \
+  --bank /path/to/corridor.kashin \
+  --model /path/to/xfeat-f32.safetensors \
+  --lighterglue /path/to/lighterglue-f32.safetensors \
+  --polish \
+  --output /path/to/run-out
+```
 
 ## Semantic segmentation and Rust training
 

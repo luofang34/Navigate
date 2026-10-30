@@ -6,7 +6,9 @@ use navigate_visual_pipeline::{
     PipelineError, PipelineMatcher, build_reference_catalog_zoom,
     clock::seed_live_prior,
     compose_survey_debrief, export_preview, export_publication, freeze_anchors,
-    interpolate_flight_priors, prepare_photo_testset, reproduce_bundle,
+    interpolate_flight_priors, prepare_photo_testset,
+    realtime::{BankBuildOptions, BankMatchOptions, build_reference_bank, run_realtime_bank_match},
+    reproduce_bundle,
     segment_cli::{run_airframe_compose, run_photo_masks, run_segment_finetune, run_video_masks},
     stages::{
         MatchStageOptions, run_match_stage, run_pipeline_recipe, run_refine_stage,
@@ -110,20 +112,21 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             &req::<PathBuf>(args, "output")?,
             args.get_one::<PathBuf>("sheet").map(PathBuf::as_path),
         ),
-        "match" | "track" | "refine" | "terrain-bundle" | "pipeline" => {
-            dispatch_pose_stage(sub, args)
-        }
+        "match" | "bank-build" | "bank-match" | "track" | "refine" | "terrain-bundle"
+        | "pipeline" => dispatch_pose_stage(sub, args),
         _ => dispatch_export_or_video(sub, args),
     }
 }
 
 fn dispatch_pose_stage(sub: &str, args: &ArgMatches) -> Result<serde_json::Value, PipelineError> {
+    let only_cases = args
+        .try_get_many::<String>("only")
+        .ok()
+        .flatten()
+        .map(|it| it.cloned().collect::<std::collections::BTreeSet<_>>());
     match sub {
         "match" => {
             let mut matcher = matcher_from(args)?;
-            let only_cases = args
-                .get_many::<String>("only")
-                .map(|it| it.cloned().collect::<std::collections::BTreeSet<_>>());
             let opts = MatchStageOptions {
                 dataset_dir: req(args, "dataset")?,
                 profile_path: req(args, "profile")?,
@@ -138,6 +141,32 @@ fn dispatch_pose_stage(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             };
             run_match_stage(&opts, &mut matcher)
         }
+        "bank-build" => build_reference_bank(&BankBuildOptions {
+            dataset_dir: req(args, "dataset")?,
+            profile_path: req(args, "profile")?,
+            catalog_path: req(args, "catalog")?,
+            xfeat_weights_path: req(args, "model")?,
+            output_bank_path: req(args, "output")?,
+            attempts: req(args, "attempts")?,
+            heading_step_deg: req(args, "heading-step")?,
+            height_factors: vec![1.0],
+            max_keypoints: req(args, "max-keypoints")?,
+            adaptive_stride: req(args, "adaptive-stride")?,
+            only_cases,
+        }),
+        "bank-match" => run_realtime_bank_match(&BankMatchOptions {
+            dataset_dir: req(args, "dataset")?,
+            profile_path: req(args, "profile")?,
+            catalog_path: req(args, "catalog")?,
+            bank_path: req(args, "bank")?,
+            xfeat_weights_path: req(args, "model")?,
+            lighterglue_weights_path: args.get_one::<PathBuf>("lighterglue").cloned(),
+            output_dir: req(args, "output")?,
+            shortlist_k: req(args, "shortlist")?,
+            query_keypoints: req(args, "query-keypoints")?,
+            polish: args.get_flag("polish"),
+            only_cases,
+        }),
         "track" => {
             let mut matcher = matcher_from(args)?;
             let opts = MatchStageOptions {

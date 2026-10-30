@@ -1,4 +1,5 @@
 //! Staged XFeat feature extraction and LighterGlue matching behind Navigate ports.
+pub use crate::lighterglue::{FastMatchConfig, FastMatchStats};
 use crate::{LighterGlue, MatchError, SparseFeatures, XFeat, traits::EngineKind};
 use image::GrayImage;
 use navigate_visual::{AsyncImageMatcher, PixelMatch, VisualError};
@@ -115,10 +116,32 @@ impl XFeatLighterGlueMatcher {
         &self,
         image: &GrayImage,
     ) -> Result<BurnXFeatFeatures, MatchError> {
-        let features = self.detector.extract(image, self.limit).await?;
+        self.extract_features_masked(image, None).await
+    }
+
+    /// Extract reusable [`BurnXFeatFeatures`] inside `valid_mask` from `image`.
+    ///
+    /// When `valid_mask` is `Some`, this method hashes both `image` and `valid_mask` into the handle digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when `valid_mask` dimensions do not match `image` or extraction fails.
+    pub async fn extract_features_masked(
+        &self,
+        image: &GrayImage,
+        valid_mask: Option<&GrayImage>,
+    ) -> Result<BurnXFeatFeatures, MatchError> {
+        let features = self
+            .detector
+            .extract_masked(image, valid_mask, self.limit)
+            .await?;
+        let image_digest = match valid_mask {
+            Some(mask) => hash_masked_image(image, mask),
+            None => hash_image(image),
+        };
         Ok(BurnXFeatFeatures {
             contract: self.contract,
-            image_digest: hash_image(image),
+            image_digest,
             image_size: [image.width(), image.height()],
             features,
         })
@@ -142,6 +165,44 @@ impl XFeatLighterGlueMatcher {
                     .await
             }
             None => Ok(reference.features.mutual_matches(&query.features)),
+        }
+    }
+
+    /// Match two [`BurnXFeatFeatures`] handles with adaptive early exit and token pruning.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when `config` is invalid, feature contracts differ, or matching fails.
+    pub async fn match_extracted_fast(
+        &self,
+        reference: &BurnXFeatFeatures,
+        query: &BurnXFeatFeatures,
+        config: &FastMatchConfig,
+    ) -> Result<(Vec<PixelMatch>, FastMatchStats), MatchError> {
+        config.validate()?;
+        self.check_handle(reference)?;
+        self.check_handle(query)?;
+        match &self.matcher {
+            Some(lg) => {
+                lg.match_features_fast(&reference.features, &query.features, config)
+                    .await
+            }
+            None => {
+                let ref_top = reference.features.truncate_top(config.max_keypoints);
+                let query_top = query.features.truncate_top(config.max_keypoints);
+                let matches = ref_top.mutual_matches(&query_top);
+                Ok((
+                    matches,
+                    FastMatchStats {
+                        layers_executed: 0,
+                        initial_ref_tokens: ref_top.len(),
+                        initial_query_tokens: query_top.len(),
+                        pruned_ref_tokens: 0,
+                        pruned_query_tokens: 0,
+                        early_exited: false,
+                    },
+                ))
+            }
         }
     }
 
@@ -264,5 +325,17 @@ fn hash_image(image: &GrayImage) -> [u8; 32] {
     hasher.update(image.width().to_le_bytes());
     hasher.update(image.height().to_le_bytes());
     hasher.update(image.as_raw());
+    hasher.finalize().into()
+}
+
+fn hash_masked_image(image: &GrayImage, mask: &GrayImage) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(image.width().to_le_bytes());
+    hasher.update(image.height().to_le_bytes());
+    hasher.update(image.as_raw());
+    hasher.update(b"valid_mask");
+    hasher.update(mask.width().to_le_bytes());
+    hasher.update(mask.height().to_le_bytes());
+    hasher.update(mask.as_raw());
     hasher.finalize().into()
 }

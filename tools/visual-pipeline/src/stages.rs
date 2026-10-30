@@ -129,7 +129,7 @@ pub fn run_match_stage(
         for (seed_idx, (mut eye, mut rot)) in seeds.into_iter().enumerate() {
             let max_steps = opts.steps.max(1);
             for step_idx in 0..max_steps {
-                let render_size = scaled_size(case.size, 640);
+                let render_size = scaled_size(case.size, 800);
                 let scale_x = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
                 let scale_y = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
                 let k_render = scale_k(&k, scale_x, scale_y);
@@ -238,7 +238,7 @@ pub fn run_match_stage(
     }))
 }
 
-pub(super) fn load_profile_cases(profile_path: &Path) -> Result<Vec<PhotoCase>, PipelineError> {
+pub(crate) fn load_profile_cases(profile_path: &Path) -> Result<Vec<PhotoCase>, PipelineError> {
     let doc: Value = read_json(profile_path)?;
     serde_json::from_value(doc["cases"].clone()).map_err(|source| PipelineError::Json {
         context: format!("{}:cases", profile_path.display()),
@@ -246,14 +246,14 @@ pub(super) fn load_profile_cases(profile_path: &Path) -> Result<Vec<PhotoCase>, 
     })
 }
 
-pub(super) fn load_case_rgb(dataset_dir: &Path, rel: &str) -> Result<RgbImage, PipelineError> {
+pub(crate) fn load_case_rgb(dataset_dir: &Path, rel: &str) -> Result<RgbImage, PipelineError> {
     let p = dataset_dir.join(rel);
     Ok(image::open(&p)
         .map_err(|source| PipelineError::Image { path: p, source })?
         .to_rgb8())
 }
 
-pub(super) fn load_case_mask(
+pub(crate) fn load_case_mask(
     dataset_dir: &Path,
     rel: &str,
     size: [u32; 2],
@@ -282,14 +282,14 @@ pub(super) fn mask_allows(mask: &GrayImage, size: [u32; 2], x: f64, y: f64) -> b
         > 0
 }
 
-pub(super) fn estimate_intrinsics(case: &PhotoCase) -> Matrix3<f64> {
+pub(crate) fn estimate_intrinsics(case: &PhotoCase) -> Matrix3<f64> {
     let long = f64::from(case.size[0].max(case.size[1]).max(1));
     let f_px = case
         .prior
         .as_ref()
         .and_then(|p| p.focal_35mm_mm)
         .filter(|&f35| f35 > 5.0)
-        .map(|f35| long * f35 / 36.0)
+        .map(|f35| f64::from(case.size[0]).hypot(f64::from(case.size[1])) * f35 / 43.266_615_3)
         .unwrap_or(long * 1.1);
     Matrix3::new(
         f_px,
@@ -304,7 +304,7 @@ pub(super) fn estimate_intrinsics(case: &PhotoCase) -> Matrix3<f64> {
     )
 }
 
-fn load_horizon_attitude(
+pub(crate) fn load_horizon_attitude(
     dataset_dir: &Path,
     case: &PhotoCase,
     k: &Matrix3<f64>,
@@ -314,7 +314,7 @@ fn load_horizon_attitude(
     horizon_attitude(img.as_raw(), img.width(), img.height(), k)
 }
 
-fn generate_seeds(
+pub(crate) fn generate_seeds(
     surface: &Surface,
     case: &PhotoCase,
     opts: &MatchStageOptions,
@@ -375,7 +375,7 @@ fn generate_seeds(
     out
 }
 
-pub(super) fn scaled_size(size: [u32; 2], max_edge: u32) -> [u32; 2] {
+pub(crate) fn scaled_size(size: [u32; 2], max_edge: u32) -> [u32; 2] {
     let m = size[0].max(size[1]).max(1);
     if m <= max_edge {
         return size;
@@ -387,7 +387,7 @@ pub(super) fn scaled_size(size: [u32; 2], max_edge: u32) -> [u32; 2] {
     ]
 }
 
-pub(super) fn scale_k(k: &Matrix3<f64>, sx: f64, sy: f64) -> Matrix3<f64> {
+pub(crate) fn scale_k(k: &Matrix3<f64>, sx: f64, sy: f64) -> Matrix3<f64> {
     Matrix3::new(
         k[(0, 0)] * sx,
         0.0,
@@ -454,7 +454,7 @@ pub(super) fn collect_parent_anchors(
     Ok(map)
 }
 
-pub(super) fn write_case_report(
+pub(crate) fn write_case_report(
     output_dir: &Path,
     surface: &Surface,
     case_id: &str,

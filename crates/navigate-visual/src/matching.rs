@@ -9,7 +9,7 @@ mod refinement;
 mod tracking;
 
 /// One correspondence between reference and query pixels.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PixelMatch {
     /// Reference pixel centre.
     pub reference: Vector2<f64>,
