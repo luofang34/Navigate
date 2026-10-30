@@ -219,10 +219,37 @@ fn device_score_map_matches_host_reference() {
         descriptors: dense.descriptors,
         scores: reference,
     };
+    // Scores agree only within rounding, so peaks near the cutoff score can enter
+    // or leave the top 256 on one backend.
     let from_host = decode::decode(&host_maps, &prepared, &image, None, 256).expect("host decode");
     let from_device = pollster::block_on(model.extract(&image, 256)).expect("device decode");
-    assert_eq!(from_device.pixels, from_host.pixels);
-    assert_eq!(from_device.descriptors, from_host.descriptors);
+    assert_eq!(from_device.len(), from_host.len());
+    assert_same_keypoints(&from_device, &from_host);
+    assert_same_keypoints(&from_host, &from_device);
+}
+
+/// Assert that each keypoint of `a` is in `b` with the same descriptor, or that it
+/// scores within rounding of the lowest score of `b`.
+fn assert_same_keypoints(a: &SparseFeatures, b: &SparseFeatures) {
+    let close = |x: f32, y: f32| (x - y).abs() <= 1e-5 * y.abs().max(1e-3);
+    let cutoff = b.scores.iter().copied().fold(f32::INFINITY, f32::min);
+    for (i, pixel) in a.pixels.iter().enumerate() {
+        match b.pixels.iter().position(|p| p == pixel) {
+            Some(j) => {
+                assert_eq!(
+                    a.descriptors[i * 64..(i + 1) * 64],
+                    b.descriptors[j * 64..(j + 1) * 64],
+                    "descriptor at {pixel:?}"
+                );
+                assert!(close(a.scores[i], b.scores[j]), "score at {pixel:?}");
+            }
+            None => assert!(
+                close(a.scores[i], cutoff),
+                "keypoint {pixel:?} score {} is not at the cutoff {cutoff}",
+                a.scores[i]
+            ),
+        }
+    }
 }
 
 #[test]
