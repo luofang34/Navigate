@@ -197,7 +197,12 @@ pub(super) fn incidence_cosine(obs_i8: [i8; 3], eye_to_pt: [f64; 3]) -> f32 {
     ((dot / (n_norm * v_norm)) as f32).clamp(-1.0, 1.0)
 }
 
-pub(super) fn scale_similarity(ref_dist_m: u16, eye_to_pt: [f64; 3], fx: f64) -> Option<f32> {
+pub(super) fn scale_similarity(
+    ref_dist_m: u16,
+    eye_to_pt: [f64; 3],
+    fx: f64,
+    is_nadir: bool,
+) -> Option<f32> {
     if ref_dist_m == 0 {
         return Some(1.0);
     }
@@ -206,7 +211,8 @@ pub(super) fn scale_similarity(ref_dist_m: u16, eye_to_pt: [f64; 3], fx: f64) ->
             .sqrt();
     let d_ref = (f64::from(ref_dist_m) * (fx / 600.0).max(0.1)).max(1.0);
     let ratio = d_live / d_ref;
-    if !(0.35..=2.85).contains(&ratio) {
+    let bounds = if is_nadir { 0.15..=3.50 } else { 0.35..=2.85 };
+    if !bounds.contains(&ratio) {
         return None;
     }
     let ls = ratio.ln() as f32;

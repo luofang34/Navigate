@@ -134,7 +134,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
 
     let tile_m = opts.tile_size_m.clamp(100.0, 20_000.0);
-    let agl_m = opts.nominal_agl_m.clamp(120.0, 8_000.0);
+    let agl_m = opts.nominal_agl_m.clamp(25.0, 8_000.0);
     let max_per_tile = opts.max_landmarks_per_tile.clamp(16, 65_536);
     let stride = opts.adaptive_stride.max(1);
     let cases = opts
@@ -155,7 +155,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let mut total_pixels = 0_usize;
     let mut total_rays = 0_usize;
     let voxel_m = 1.5_f64;
-    let max_oblique_dist_m = (agl_m * 4.5).clamp(1_600.0, 2_400.0);
+    let max_oblique_dist_m = (agl_m * 8.0).clamp(2_400.0, 6_000.0);
 
     for &(tx, ty) in &tile_keys {
         let ce = (f64::from(tx) + 0.5) * tile_m;
@@ -193,7 +193,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
                 let dist_m =
                     ((eye[0] - w[0]).powi(2) + (eye[1] - w[1]).powi(2) + (eye[2] - w[2]).powi(2))
                         .sqrt();
-                if opts.include_obliques && !(180.0..=max_oblique_dist_m).contains(&dist_m) {
+                if opts.include_obliques && !(20.0..=max_oblique_dist_m).contains(&dist_m) {
                     continue;
                 }
                 let dst_tx = (w[0] / tile_m).floor() as i32;
@@ -360,22 +360,23 @@ fn select_corridor_tiles(
     selected.into_iter().collect()
 }
 
-fn canonical_tile_poses(
+pub(crate) fn canonical_tile_poses(
     surface: &Surface,
     (ce, cn, ground_msl): (f64, f64, f64),
     tile_m: f64,
     agl_m: f64,
     include_obliques: bool,
 ) -> Vec<(u8, [f64; 3], Matrix3<f64>)> {
+    let [clat, clon, _] = surface.geodetic([ce, cn, 0.0]);
+    let nadir_eye = surface.local(clat, clon, ground_msl + (tile_m * 0.9).max(agl_m));
+    let nadir_rot = surface.camera_rotation(clat, clon, 0.0, 89.0, 0.0);
     if !include_obliques {
-        let [clat, clon, _] = surface.geodetic([ce, cn, 0.0]);
-        let nadir_eye = surface.local(clat, clon, ground_msl + (tile_m * 0.9).max(agl_m));
-        let nadir_rot = surface.camera_rotation(clat, clon, 0.0, 89.0, 0.0);
         return vec![(0, nadir_eye, nadir_rot)];
     }
 
-    let mut out = Vec::with_capacity(24);
+    let mut out = Vec::with_capacity(25);
     let mut band = 0_u8;
+    let min_clear_m = agl_m.clamp(25.0, 140.0);
     for down_deg in [26.0_f64, 50.0_f64] {
         let horiz_back = agl_m / down_deg.to_radians().tan();
         for step in 0..12_u32 {
@@ -385,13 +386,14 @@ fn canonical_tile_poses(
             let eye_n = cn - h.cos() * horiz_back;
             let [elat, elon, _] = surface.geodetic([eye_e, eye_n, 0.0]);
             let base_dem = surface.sample_dem(elat, elon).unwrap_or(ground_msl);
-            let eye_alt = (ground_msl + agl_m).max(base_dem + 140.0);
+            let eye_alt = (ground_msl + agl_m).max(base_dem + min_clear_m);
             let eye = surface.local(elat, elon, eye_alt);
             let rot = surface.camera_rotation(elat, elon, heading_deg, down_deg, 0.0);
             out.push((band, eye, rot));
             band += 1;
         }
     }
+    out.push((band, nadir_eye, nadir_rot));
     out
 }
 

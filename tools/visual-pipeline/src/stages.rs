@@ -1,10 +1,12 @@
 //! Terrain pose search stage (`photo_match`) and shared stage helpers.
 
 mod followup;
+mod seeds;
 
 pub use followup::{
     run_pipeline_recipe, run_refine_stage, run_terrain_bundle_stage, run_track_stage,
 };
+pub(crate) use seeds::generate_seeds;
 
 use crate::{
     PipelineError,
@@ -312,67 +314,6 @@ pub(crate) fn load_horizon_attitude(
     let sem_rel = case.semantic_labels.as_deref()?;
     let img = image::open(dataset_dir.join(sem_rel)).ok()?.to_luma8();
     horizon_attitude(img.as_raw(), img.width(), img.height(), k)
-}
-
-pub(crate) fn generate_seeds(
-    surface: &Surface,
-    case: &PhotoCase,
-    opts: &MatchStageOptions,
-    attitude: Option<(f64, f64)>,
-) -> Vec<([f64; 3], Matrix3<f64>)> {
-    let (lat, lon, base_alt) = case
-        .prior
-        .as_ref()
-        .and_then(|p| p.position.as_ref())
-        .map(|pos| {
-            let dem = surface
-                .sample_dem(pos.latitude, pos.longitude)
-                .unwrap_or(100.0);
-            let alt = pos.altitude_m.unwrap_or(dem + 800.0).max(dem + 150.0);
-            (pos.latitude, pos.longitude, alt)
-        })
-        .unwrap_or((
-            surface.origin_lat,
-            surface.origin_lon,
-            surface.min_elev_m + 900.0,
-        ));
-    let pitches: Vec<(f64, f64)> = match attitude {
-        Some(att) => vec![att],
-        None => vec![(35.0, 0.0), (55.0, 0.0), (75.0, 0.0), (20.0, 0.0)],
-    };
-    let headings: Vec<f64> = if let Some(dir) = case.prior.as_ref().and_then(|p| p.direction_deg)
-        && opts.heading_step_deg <= 0.0
-    {
-        [
-            0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0, -150.0, 180.0,
-        ]
-        .into_iter()
-        .map(|d| (dir + d).rem_euclid(360.0))
-        .collect()
-    } else {
-        let step = opts.heading_step_deg.max(30.0);
-        let count = (360.0 / step).round().max(1.0) as usize;
-        (0..count).map(|i| (i as f64) * step).collect()
-    };
-
-    let dem_h = surface.sample_dem(lat, lon).unwrap_or(surface.min_elev_m);
-    let agl = (base_alt - dem_h).max(120.0);
-    let mut out = Vec::new();
-    for &hf in &opts.height_factors {
-        let eye = surface.local(lat, lon, dem_h + agl * hf.max(0.25));
-        for &(down_deg, roll_deg) in &pitches {
-            for &hdg in &headings {
-                if out.len() >= opts.attempts.max(1) {
-                    return out;
-                }
-                out.push((
-                    eye,
-                    surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
-                ));
-            }
-        }
-    }
-    out
 }
 
 pub(crate) fn scaled_size(size: [u32; 2], max_edge: u32) -> [u32; 2] {
