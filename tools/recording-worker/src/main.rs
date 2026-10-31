@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("match-worker") => matching::run_blocking(&args[1..]),
         None | Some("--help" | "-h") => {
             std::io::stdout().write_all(
-                b"navigate-recording-worker navigate-worker EVIDENCE_DIRECTORY CONFIGURATION_JSON\nnavigate-recording-worker match-worker LOFTR_MODEL ONNX_RUNTIME_LIBRARY\n",
+                b"navigate-recording-worker navigate-worker EVIDENCE_DIRECTORY CONFIGURATION_JSON\nnavigate-recording-worker match-worker LOFTR_MODEL ONNX_RUNTIME_LIBRARY\nnavigate-recording-worker match-worker --model LOFTR_MODEL --runtime ONNX_RUNTIME_LIBRARY\n",
             )?;
             Ok(())
         }
