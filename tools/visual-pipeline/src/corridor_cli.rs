@@ -116,6 +116,12 @@ pub(crate) fn commands() -> [Command; 2] {
                     .value_parser(value_parser!(usize)),
             )
             .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue))
+            .arg(
+                Arg::new("background-refresh")
+                    .long("background-refresh")
+                    .help("Run Segformer refreshes and periodic re-anchors on background threads")
+                    .action(ArgAction::SetTrue),
+            )
             .arg(float_arg("prior-lat", None))
             .arg(float_arg("prior-lon", None))
             .arg(float_arg("prior-alt", None))
@@ -184,6 +190,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 prior_override,
                 focal_35mm_override: args.get_one::<f64>("focal-35mm").copied(),
                 only_cases,
+                background_refresh: args.get_flag("background-refresh"),
             })
         }
         other => Err(PipelineError::Invalid(format!(

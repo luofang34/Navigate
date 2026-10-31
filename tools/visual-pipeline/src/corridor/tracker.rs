@@ -6,15 +6,17 @@ use super::{
         FusionAdmission, classify_anchor_cell, seed_tracks, top_up_tracks, write_corridor_report,
     },
     anchor::acquire_corridor_anchor,
+    anchor_worker::{AnchorArrival, AnchorContext, AnchorJob, BackgroundAnchor},
+    latency::StageLatencies,
     masking::{AmortizedMasker, MaskFrameTelemetry},
+    motion::{TrackState, predict_interframe_pose, try_warm_track, update_motion_state},
 };
 use crate::{
     PipelineError,
     metadata::PositionClaim,
-    pose::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc},
     realtime::helpers::{
-        check_encoder_contract, load_lighterglue_model, load_xfeat_model, log_attempt,
-        raw_file_sha256, rot_to_row_major, warmup_gpu_pipelines,
+        check_encoder_contract, load_lighterglue_model, load_xfeat_model, raw_file_sha256,
+        warmup_gpu_pipelines,
     },
     stages::{
         estimate_intrinsics, load_case_mask, load_case_rgb, load_profile_cases, scale_k,
@@ -23,42 +25,13 @@ use crate::{
     surface::Surface,
     testset::PhotoCase,
     util::write_json,
-    video_ops::relative_rotation_ransac,
 };
 use image::imageops::{FilterType, colorops::grayscale};
-use nalgebra::{Matrix3, Vector3};
 use navigate_match::{
-    ActiveTrackSet, CorridorLandmarkBank, HadamardProjector, PreparedKashinQuery, TrackMatchConfig,
+    ActiveTrackSet, CorridorLandmarkBank, HadamardProjector, PreparedKashinQuery,
 };
-use navigate_visual_session::MapCell;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, time::Instant};
-
-struct TrackState {
-    active_tracks: ActiveTrackSet,
-    prev_eye: Option<[f64; 3]>,
-    prev_vel: [f64; 3],
-    prev_rot: Option<Matrix3<f64>>,
-    prev_rot_step: Matrix3<f64>,
-    prev_prepared: Option<PreparedKashinQuery>,
-    frames_since_anchor: usize,
-    visited_cells: BTreeMap<MapCell, String>,
-}
-
-impl TrackState {
-    fn new() -> Self {
-        Self {
-            active_tracks: ActiveTrackSet::empty(),
-            prev_eye: None,
-            prev_vel: [0.0; 3],
-            prev_rot: None,
-            prev_rot_step: Matrix3::identity(),
-            prev_prepared: None,
-            frames_since_anchor: 0,
-            visited_cells: BTreeMap::new(),
-        }
-    }
-}
+use std::{fs, sync::Arc, time::Instant};
 
 /// Localize and track sequential frames against a [`CorridorLandmarkBank`] (`corridor-track`).
 ///
@@ -66,7 +39,7 @@ impl TrackState {
 ///
 /// Returns [`PipelineError`] when bank verification, masking, matching, or report writing fails.
 pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, PipelineError> {
-    let surface = Surface::from_catalog(&opts.catalog_path)?;
+    let surface = Arc::new(Surface::from_catalog(&opts.catalog_path)?);
     let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
     let (xfeat, encoder_digest) = load_xfeat_model(&opts.xfeat_weights_path)?;
     let lighterglue = opts
@@ -74,7 +47,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         .as_deref()
         .map(|p| load_lighterglue_model(p, xfeat.device()))
         .transpose()?;
-    let bank = CorridorLandmarkBank::load_file(&opts.corridor_bank_path)?;
+    let bank = Arc::new(CorridorLandmarkBank::load_file(&opts.corridor_bank_path)?);
     if bank.catalog_sha256 != catalog_digest {
         return Err(PipelineError::Invalid(
             "corridor bank catalog_sha256 does not match --catalog".into(),
@@ -94,6 +67,9 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         opts.mask_interval.max(1),
         xfeat.device(),
     )?;
+    if opts.background_refresh {
+        masker = masker.with_background_refresh()?;
+    }
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
         source,
@@ -105,6 +81,21 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
     let projector = HadamardProjector::new(bank.seed);
     let shader_warmup_ms = warmup_gpu_pipelines(&xfeat, lighterglue.as_ref())?;
+    let mut background_anchor = opts
+        .background_refresh
+        .then(|| {
+            BackgroundAnchor::spawn(AnchorContext {
+                surface: Arc::clone(&surface),
+                bank: Arc::clone(&bank),
+                projector,
+                xfeat: xfeat.clone(),
+                lighterglue: lighterglue.clone(),
+                opts: opts.clone(),
+            })
+        })
+        .transpose()?;
+    let mut latencies = StageLatencies::default();
+    let mut anchor_results = Vec::new();
     let cases = load_profile_cases(&opts.profile_path)?;
     let kp_limit = opts.query_keypoints.clamp(16, 4096);
     let cell_m = opts.map_cell_m.clamp(50.0, 20_000.0);
@@ -126,6 +117,19 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         evaluated += 1;
         let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
+        if let Some(worker) = background_anchor.as_mut()
+            && let Some(outcome) = worker.poll()?
+        {
+            AnchorArrival {
+                state: &mut state,
+                independent_fixes: &mut independent_fixes,
+                latencies: &mut latencies,
+                results: &mut anchor_results,
+                catalog_sha256: &surface.catalog_sha256,
+                cell_m,
+            }
+            .apply(outcome, Some(&case.id));
+        }
         let query_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
         let disk_mask = (!case.valid_mask.is_empty())
             .then(|| load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size))
@@ -156,6 +160,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &k_render,
         )?;
         seg_refreshes += usize::from(mask_tel.segformer_refreshed);
+        latencies.seg_refresh_ms.extend(mask_tel.segformer_ms);
         let qry_kp_floor = 256_usize.min(kp_limit);
         let qry_kp_cap = (((kp_limit as f64) * mask_tel.valid_fraction.clamp(0.25, 1.0)).round()
             as usize)
@@ -172,8 +177,25 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let mut lg_layers = 0_usize;
         let mut polish_rays = 0_usize;
         let pred_pose = predict_interframe_pose(&state, &prepared, &k_render);
-        let force_anchor =
+        let mut force_anchor =
             opts.anchor_interval > 0 && state.frames_since_anchor >= opts.anchor_interval;
+        if force_anchor
+            && !state.active_tracks.is_empty()
+            && let Some(worker) = background_anchor.as_mut()
+        {
+            // Warm tracking continues while the periodic re-anchor runs.
+            worker.submit_if_idle(|| AnchorJob {
+                case: case.clone(),
+                qry_feat: qry_feat.clone(),
+                prepared: prepared.clone(),
+                k,
+                k_render,
+                render_size,
+                pred_pose,
+                live_attitude: masker.horizon_attitude(&k_render),
+            })?;
+            force_anchor = false;
+        }
 
         let mut solved_warm = None;
         if !state.active_tracks.is_empty()
@@ -215,6 +237,21 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 },
             )
         } else {
+            // A lost track cannot wait for a stale anchor: finish it, then anchor this frame.
+            if let Some(worker) = background_anchor.as_mut()
+                && let Some(outcome) = worker.wait()?
+            {
+                AnchorArrival {
+                    state: &mut state,
+                    independent_fixes: &mut independent_fixes,
+                    latencies: &mut latencies,
+                    results: &mut anchor_results,
+                    catalog_sha256: &surface.catalog_sha256,
+                    cell_m,
+                }
+                .apply(outcome, Some(&case.id));
+            }
+            let t_anchor = Instant::now();
             let acq = acquire_corridor_anchor(
                 (&surface, &bank, &projector),
                 (&xfeat, lighterglue.as_ref()),
@@ -224,6 +261,9 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 (pred_pose, masker.horizon_attitude(&k_render)),
                 &mut attempts_log,
             )?;
+            latencies
+                .anchor_ms
+                .push(t_anchor.elapsed().as_secs_f64() * 1000.0);
             lg_layers += acq.lg_layers;
             polish_rays += acq.polish_rays;
             if let Some((_, _, ref cand)) = acq.best
@@ -261,13 +301,14 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         if let Some((_, _, ref cand)) = best
             && cand.score.geometry_accepted
         {
-            if mask_tel.segformer_refreshed {
-                masker.set_key_rotation(cand.rotation);
-            }
+            masker.note_solved_rotation(cand.rotation);
             update_motion_state(&mut state, cand, prepared);
         }
 
         let total_case_ms = case_t0.elapsed().as_secs_f64() * 1000.0;
+        if admission.tracking_mode == "warm_track" {
+            latencies.warm_track_ms.push(total_case_ms);
+        }
         let is_accepted = best
             .as_ref()
             .is_some_and(|(_, _, c)| c.score.geometry_accepted);
@@ -284,6 +325,8 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             "lighterglue_layers": lg_layers,
             "polish_rays_cast": polish_rays,
             "segformer_refreshed": mask_tel.segformer_refreshed,
+            "segformer_submitted": mask_tel.segformer_submitted,
+            "segformer_ms": mask_tel.segformer_ms,
             "valid_mask_fraction": mask_tel.valid_fraction,
             "propeller_pixels": mask_tel.propeller_pixels,
             "mask_ms": mask_tel.mask_ms,
@@ -303,7 +346,23 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         )?;
     }
 
-    Ok(json!({
+    if let Some(mut worker) = background_anchor.take() {
+        if let Some(outcome) = worker.wait()? {
+            AnchorArrival {
+                state: &mut state,
+                independent_fixes: &mut independent_fixes,
+                latencies: &mut latencies,
+                results: &mut anchor_results,
+                catalog_sha256: &surface.catalog_sha256,
+                cell_m,
+            }
+            .apply(outcome, None);
+        }
+        drop(worker);
+    }
+    drop(masker);
+
+    let mut summary = json!({
         "evaluated": evaluated,
         "accepted": accepted,
         "warm_tracked_frames": warm_tracked_frames,
@@ -314,26 +373,13 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         "shader_warmup_ms": shader_warmup_ms,
         "output": opts.output_dir.display().to_string(),
         "telemetry": telemetry,
-    }))
-}
-
-fn update_motion_state(
-    state: &mut TrackState,
-    cand: &PoseCandidate,
-    prepared: PreparedKashinQuery,
-) {
-    if let Some(pe) = state.prev_eye {
-        let dv = Vector3::from(cand.eye) - Vector3::from(pe);
-        if dv.norm() <= 500.0 {
-            state.prev_vel = [dv.x, dv.y, dv.z];
-        }
+        "background_refresh": opts.background_refresh,
+        "anchor_results": anchor_results,
+    });
+    if let Some(map) = summary.as_object_mut() {
+        latencies.write_summary(map);
     }
-    if let Some(pr) = state.prev_rot {
-        state.prev_rot_step = cand.rotation * pr.transpose();
-    }
-    state.prev_eye = Some(cand.eye);
-    state.prev_rot = Some(cand.rotation);
-    state.prev_prepared = Some(prepared);
+    Ok(summary)
 }
 
 fn apply_case_overrides(case: &PhotoCase, opts: &CorridorTrackOptions) -> PhotoCase {
@@ -361,115 +407,4 @@ fn apply_case_overrides(case: &PhotoCase, opts: &CorridorTrackOptions) -> PhotoC
     }
     out.prior = Some(claims);
     out
-}
-
-fn predict_interframe_pose(
-    state: &TrackState,
-    cur_q: &PreparedKashinQuery,
-    k: &Matrix3<f64>,
-) -> Option<([f64; 3], Matrix3<f64>)> {
-    let (prev_eye, prev_rot) = (state.prev_eye?, state.prev_rot?);
-    let pred_eye = [
-        prev_eye[0] + 0.85 * state.prev_vel[0],
-        prev_eye[1] + 0.85 * state.prev_vel[1],
-        prev_eye[2] + 0.85 * state.prev_vel[2],
-    ];
-    let mut pred_rot = state.prev_rot_step * prev_rot;
-    if let Some(prev_q) = &state.prev_prepared {
-        let (px_a, px_b) = match_interframe_top(prev_q, cur_q, 192);
-        if px_a.len() >= 12
-            && let Some((r_delta, inliers)) = relative_rotation_ransac(&px_a, &px_b, k, 4.0)
-        {
-            let inl_n = inliers.iter().filter(|&&b| b).count();
-            let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
-            if inl_n >= 10 && trace_cos >= 15.0_f64.to_radians().cos() {
-                pred_rot = r_delta * prev_rot;
-            }
-        }
-    }
-    Some((pred_eye, pred_rot))
-}
-
-fn match_interframe_top(
-    prev_q: &PreparedKashinQuery,
-    cur_q: &PreparedKashinQuery,
-    cap: usize,
-) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
-    let na = prev_q.valid_indices().len().min(cap);
-    let nb = cur_q.valid_indices().len().min(cap);
-    let (sa, sb) = (prev_q.sign_bits(), cur_q.sign_bits());
-    let (pa, pb) = (prev_q.pixels(), cur_q.pixels());
-    let (ia, ib) = (prev_q.valid_indices(), cur_q.valid_indices());
-    let mut out_a = Vec::new();
-    let mut out_b = Vec::new();
-    for a in 0..na {
-        let [ax, ay] = pa[ia[a]];
-        let mut best = (usize::MAX, 65_u32, 65_u32);
-        for b in 0..nb {
-            let [bx, by] = pb[ib[b]];
-            if (ax - bx).abs() > 96.0 || (ay - by).abs() > 96.0 {
-                continue;
-            }
-            let hd = (sa[a] ^ sb[b]).count_ones();
-            if hd < best.1 {
-                best = (b, hd, best.1);
-            } else if hd < best.2 {
-                best.2 = hd;
-            }
-        }
-        if best.0 != usize::MAX && best.1 <= 14 && best.1 + 3 <= best.2 {
-            out_a.push([ax, ay]);
-            out_b.push(pb[ib[best.0]]);
-        }
-    }
-    (out_a, out_b)
-}
-
-fn try_warm_track(
-    tracks: &ActiveTrackSet,
-    prepared: &PreparedKashinQuery,
-    pred: ([f64; 3], Matrix3<f64>),
-    k_render: &Matrix3<f64>,
-    render_size: [u32; 2],
-    min_inliers: usize,
-    attempts_log: &mut Vec<Value>,
-) -> Result<Option<PoseCandidate>, PipelineError> {
-    let cfg = TrackMatchConfig {
-        search_radius_px: 36.0,
-        hamming_gate: 22,
-        min_dot: 0.64,
-        ratio_limit: 0.90,
-    };
-    let intrinsics = [
-        k_render[(0, 0)],
-        k_render[(1, 1)],
-        k_render[(0, 2)],
-        k_render[(1, 2)],
-    ];
-    let matches = tracks.match_radius(
-        prepared,
-        pred.0,
-        &rot_to_row_major(&pred.1),
-        intrinsics,
-        render_size,
-        &cfg,
-    )?;
-    let mut world = Vec::with_capacity(matches.len());
-    let mut px = Vec::with_capacity(matches.len());
-    for m in &matches {
-        world.push(m.world_point_enu);
-        px.push(m.query_pixel);
-    }
-    let cand = fit_pose_l1_gnc(&world, &px, k_render, render_size, pred)
-        .or_else(|| fit_pose_hybrid(&world, &px, k_render, render_size, Some(pred)));
-    log_attempt(
-        attempts_log,
-        "kashin-3d-radius-track+l1-gnc",
-        0,
-        0,
-        1.0,
-        world.len(),
-        cand.as_ref(),
-    );
-    Ok(cand.filter(|c| c.score.geometry_accepted && c.score.inliers >= min_inliers))
 }

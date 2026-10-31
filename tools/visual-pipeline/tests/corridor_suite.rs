@@ -280,9 +280,58 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
         prior_override: None,
         focal_35mm_override: None,
         only_cases: None,
+        background_refresh: false,
     })?;
     assert_eq!(track_summary["evaluated"].as_u64(), Some(2));
     assert!(out_dir.join("run.json").is_file());
+    for key in [
+        "warm_track_p50_ms",
+        "warm_track_p95_ms",
+        "warm_track_p99_ms",
+        "anchor_p50_ms",
+        "seg_refresh_p50_ms",
+    ] {
+        assert!(
+            track_summary.get(key).is_some(),
+            "summary must report {key}"
+        );
+    }
+    assert!(track_summary["anchor_p50_ms"].as_f64().is_some());
+
+    let background_summary = run_corridor_track(&CorridorTrackOptions {
+        dataset_dir: ds_dir.clone(),
+        profile_path: profile_path.clone(),
+        catalog_path: catalog_path.clone(),
+        corridor_bank_path: bank_path.clone(),
+        xfeat_weights_path: xfeat_path.clone(),
+        lighterglue_weights_path: None,
+        seg_model_dir: None,
+        mask_policy: "airframe-occlusions".into(),
+        mask_interval: 5,
+        output_dir: tmp.path().join("background_out"),
+        anchor_interval: 10,
+        min_track_inliers: 24,
+        map_cell_m: 500.0,
+        anchor_attempts: 2,
+        heading_step_deg: 0.0,
+        height_factors: vec![1.0],
+        query_keypoints: 384,
+        polish_anchors: false,
+        prior_override: None,
+        focal_35mm_override: None,
+        only_cases: None,
+        background_refresh: true,
+    })?;
+    assert_eq!(background_summary["background_refresh"], true);
+    // Without a periodic re-anchor inside the sequence, both modes solve the same frames.
+    for key in [
+        "evaluated",
+        "accepted",
+        "warm_tracked_frames",
+        "independent_ekf_fixes",
+    ] {
+        assert_eq!(background_summary[key], track_summary[key], "{key}");
+    }
     let doc1: Value = read_json(&out_dir.join("f-0001.json"))?;
     assert_eq!(doc1["id"].as_str(), Some("f-0001"));
 
@@ -324,6 +373,7 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
             prior_override: None,
             focal_35mm_override: None,
             only_cases: None,
+            background_refresh: false,
         })?;
         assert_eq!(re_summary["independent_ekf_fixes"].as_u64(), Some(1));
         let r2: Value = read_json(&reanchor_dir.join("f-0002.json"))?;
@@ -363,6 +413,7 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
         prior_override: None,
         focal_35mm_override: None,
         only_cases: None,
+        background_refresh: false,
     });
     assert!(bad.is_err(), "mismatched catalog SHA-256 must fail");
     Ok(())
