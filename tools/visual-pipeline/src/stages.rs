@@ -2,12 +2,12 @@
 
 pub mod focal;
 mod followup;
-mod seeds;
+pub mod seeds;
 
 pub use followup::{
     run_pipeline_recipe, run_refine_stage, run_terrain_bundle_stage, run_track_stage,
 };
-pub(crate) use seeds::generate_seeds;
+pub use seeds::generate_seeds;
 
 use crate::{
     PipelineError,

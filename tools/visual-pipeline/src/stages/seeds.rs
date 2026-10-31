@@ -10,6 +10,7 @@ pub const GRAZING_PITCH_SEEDS_DEG: [f64; 6] = [-10.0, 8.0, 22.0, 38.0, 58.0, 88.
 /// Banked roll angle seeds in degrees.
 pub const BANKED_ROLL_SEEDS_DEG: [f64; 3] = [0.0, 25.0, -25.0];
 
+/// Generate seed camera poses across compass headings, pitches, and altitudes.
 pub fn generate_seeds(
     surface: &Surface,
     case: &PhotoCase,
