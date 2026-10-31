@@ -2,10 +2,12 @@
 //! and 4-class semantic fine-tuning on `burn`.
 
 pub mod airframe;
+pub mod amortized;
 pub mod config;
 pub mod error;
 #[cfg(feature = "optim")]
 pub mod finetune;
+pub mod horizon;
 pub mod labels;
 pub mod masks;
 pub mod model;
@@ -14,6 +16,7 @@ pub mod npy;
 pub mod video;
 
 pub use airframe::{border_support_mask, support_mask};
+pub use amortized::{AmortizedMasker, MaskFrameTelemetry, RefreshLayers, SegEngine};
 pub use config::{
     AIRFRAME, CLASSES, ColorMode, GROUND, IGNORE_INDEX, PROPELLER, PreprocessorConfig, SKY,
     SegformerConfig,
@@ -21,6 +24,7 @@ pub use config::{
 pub use error::SegmentError;
 #[cfg(feature = "optim")]
 pub use finetune::{DatasetSample, FinetuneReport, Score, TrainPolicy, evaluate, finetune};
+pub use horizon::{RansacHorizonEstimator, horizon_attitude, ransac_fit_line, theil_sen_fit_line};
 pub use labels::{
     ObjectClass, compose_labels, contact_sheet, drop_specks, parse_object, split_name,
 };

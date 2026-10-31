@@ -1,0 +1,396 @@
+//! Sans-IO inter-frame visual odometry and warm 3D landmark tracking.
+
+mod odometry;
+
+pub use odometry::{kabsch_3d, relative_rotation_ransac};
+
+use super::kinematics::{
+    KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile, can_update_vertical_velocity,
+    match_tracks_kashin, orthonormalize_so3,
+};
+use nalgebra::{Matrix3, Vector3};
+use navigate_match::{ActiveTrackSet, MatchError, PreparedKashinQuery, TrackMatchConfig};
+use navigate_visual::holdout_pnp::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc};
+use navigate_visual_session::MapCell;
+use odometry::{estimate_ground_vo_delta, match_interframe_top};
+use std::collections::{BTreeMap, VecDeque};
+
+const MAX_ODOMETRY_STEPS: usize = 256;
+
+/// One inter-frame odometry step stored for background anchor arrival propagation.
+#[derive(Clone, Copy, Debug)]
+pub struct OdometryStep {
+    /// Monotonic frame sequence index.
+    pub frame_seq: usize,
+    /// Relative camera rotation matrix for this step.
+    pub rot_step: Matrix3<f64>,
+    /// Translational position delta `[east, north, up]` in meters.
+    pub eye_delta: [f64; 3],
+}
+
+/// Diagnostic summary of one warm 3D landmark solve attempt.
+#[derive(Clone, Debug)]
+pub struct WarmTrackAttempt {
+    /// Matching and PnP solver label.
+    pub method: &'static str,
+    /// Number of 3D-2D correspondences fed into PnP.
+    pub matched_landmarks: usize,
+    /// Unfiltered PnP candidate before inlier threshold gating.
+    pub candidate: Option<PoseCandidate>,
+}
+
+/// Sans-IO 3D landmark and visual odometry tracker state machine.
+pub struct CorridorTracker {
+    /// Active 3D map landmarks tracked across frames.
+    pub active_tracks: ActiveTrackSet,
+    /// Previous camera optical center in `ENU` meters.
+    pub prev_eye: Option<[f64; 3]>,
+    /// Previous translational velocity in meters per second.
+    pub prev_vel: [f64; 3],
+    /// Previous camera rotation from world `ENU` to camera coordinates.
+    pub prev_rot: Option<Matrix3<f64>>,
+    /// Most recent inter-frame relative rotation step.
+    pub prev_rot_step: Matrix3<f64>,
+    /// Previous frame's Kashin-projected query features.
+    pub prev_prepared: Option<PreparedKashinQuery>,
+    /// Accumulated visual-odometry orientation estimate.
+    pub vo_rot: Option<Matrix3<f64>>,
+    /// Processed frame sequence counter.
+    pub frame_seq: usize,
+    /// Bounded history of inter-frame odometry steps.
+    pub pose_steps: VecDeque<OdometryStep>,
+    /// Frames elapsed since the last accepted map anchor.
+    pub frames_since_anchor: usize,
+    /// Visited map cells keyed by cell index.
+    pub visited_cells: BTreeMap<MapCell, String>,
+    /// Previous frame timestamp in seconds.
+    pub prev_time_s: Option<f64>,
+    /// Elapsed seconds since the last accepted map anchor.
+    pub time_since_anchor_s: f64,
+    /// Continuous-time kinematic state and covariance.
+    pub kinematic: Option<KinematicState>,
+}
+
+impl Default for CorridorTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CorridorTracker {
+    /// Create an empty corridor tracker.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            active_tracks: ActiveTrackSet::empty(),
+            prev_eye: None,
+            prev_vel: [0.0; 3],
+            prev_rot: None,
+            prev_rot_step: Matrix3::identity(),
+            prev_prepared: None,
+            vo_rot: None,
+            frame_seq: 0,
+            pose_steps: VecDeque::with_capacity(MAX_ODOMETRY_STEPS),
+            frames_since_anchor: 0,
+            visited_cells: BTreeMap::new(),
+            prev_time_s: None,
+            time_since_anchor_s: 0.0,
+            kinematic: None,
+        }
+    }
+
+    /// Record one inter-frame visual-odometry step for `cur_q`.
+    pub fn record_odometry_step(
+        &mut self,
+        cur_q: &PreparedKashinQuery,
+        k_render: &Matrix3<f64>,
+        prior_rot_hint: Option<Matrix3<f64>>,
+        nominal_agl_m: f64,
+        dt_s: f64,
+        profile: &VehicleDynamicsProfile,
+    ) {
+        self.frame_seq += 1;
+        let base_rot = self.prev_rot.or(self.vo_rot).or(prior_rot_hint);
+        let mut rot_step = Matrix3::identity();
+        let mut matched_pairs = (Vec::new(), Vec::new());
+
+        if let Some(prev_q) = &self.prev_prepared {
+            let fx = k_render[(0, 0)];
+            let fy = k_render[(1, 1)];
+            let max_px = profile
+                .max_pixel_displacement(dt_s, fx, fy, nominal_agl_m)
+                .clamp(96.0, 400.0);
+            matched_pairs = match_interframe_top(prev_q, cur_q, 192, max_px);
+            if matched_pairs.0.len() >= 12
+                && let Some((r_delta, inliers)) =
+                    relative_rotation_ransac(&matched_pairs.0, &matched_pairs.1, k_render, 4.0)
+            {
+                let inl_n = inliers.iter().filter(|&&b| b).count();
+                let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
+                let min_cos = profile
+                    .min_trace_cosine(dt_s)
+                    .min(18.0_f64.to_radians().cos());
+                if inl_n >= 8 && trace_cos >= min_cos {
+                    rot_step = orthonormalize_so3(&r_delta);
+                }
+            }
+        }
+
+        let eye_delta = if self.prev_eye.is_some() {
+            [
+                self.prev_vel[0] * dt_s,
+                self.prev_vel[1] * dt_s,
+                self.prev_vel[2] * dt_s,
+            ]
+        } else if let Some(r_world_to_cam) = base_rot {
+            estimate_ground_vo_delta(
+                &matched_pairs.0,
+                &matched_pairs.1,
+                &rot_step,
+                &r_world_to_cam,
+                k_render,
+                nominal_agl_m,
+                dt_s,
+                profile,
+            )
+        } else {
+            [0.0; 3]
+        };
+
+        self.vo_rot = base_rot.map(|r| orthonormalize_so3(&(rot_step * r)));
+        self.prev_rot_step = rot_step;
+        if self.pose_steps.len() >= MAX_ODOMETRY_STEPS {
+            let _ = self.pose_steps.pop_front();
+        }
+        self.pose_steps.push_back(OdometryStep {
+            frame_seq: self.frame_seq,
+            rot_step,
+            eye_delta,
+        });
+    }
+
+    /// Propagate an anchor pose forward across odometry steps recorded after `sent_frame_seq`.
+    #[must_use]
+    pub fn propagate_pose_from(
+        &self,
+        sent_frame_seq: usize,
+        init_eye: [f64; 3],
+        init_rot: Matrix3<f64>,
+    ) -> ([f64; 3], Matrix3<f64>) {
+        let mut eye = init_eye;
+        let mut rot = init_rot;
+        for step in &self.pose_steps {
+            if step.frame_seq > sent_frame_seq && step.frame_seq <= self.frame_seq {
+                eye[0] += step.eye_delta[0];
+                eye[1] += step.eye_delta[1];
+                eye[2] += step.eye_delta[2];
+                rot = orthonormalize_so3(&(step.rot_step * rot));
+            }
+        }
+        (eye, rot)
+    }
+
+    /// Update tracker motion and kinematic state from an accepted pose candidate.
+    pub fn update_motion_state(
+        &mut self,
+        cand: &PoseCandidate,
+        prepared: PreparedKashinQuery,
+        dt_s: f64,
+        profile: &VehicleDynamicsProfile,
+    ) {
+        let mut exact_delta = [
+            self.prev_vel[0] * dt_s,
+            self.prev_vel[1] * dt_s,
+            self.prev_vel[2] * dt_s,
+        ];
+        let allow_vert = can_update_vertical_velocity(cand.score.holdout_count, cand.score.inliers);
+        if let Some(pe) = self.prev_eye {
+            let dv = Vector3::from(cand.eye) - Vector3::from(pe);
+            let max_disp = profile.max_displacement(dt_s);
+            if dv.norm() <= (max_disp * 1.5).max(10.0) {
+                exact_delta = [dv.x, dv.y, dv.z];
+                let v_mps = dv / dt_s;
+                let vz = if allow_vert {
+                    v_mps.z
+                } else {
+                    self.prev_vel[2]
+                };
+                self.prev_vel = [v_mps.x, v_mps.y, vz];
+            }
+        }
+        let mut exact_rot = self.prev_rot_step;
+        if let Some(pr) = self.prev_rot {
+            exact_rot = orthonormalize_so3(&(cand.rotation * pr.transpose()));
+            self.prev_rot_step = exact_rot;
+        }
+        if self.prev_eye.is_some()
+            && let Some(last) = self.pose_steps.back_mut()
+            && last.frame_seq == self.frame_seq
+        {
+            last.eye_delta = exact_delta;
+            last.rot_step = exact_rot;
+        }
+        if let Some(kin) = self.kinematic.as_mut() {
+            kin.update_from_pose_gated(cand.eye, cand.rotation, dt_s, profile, allow_vert);
+        } else {
+            self.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
+        }
+        self.prev_eye = Some(cand.eye);
+        self.prev_rot = Some(cand.rotation);
+        self.vo_rot = Some(cand.rotation);
+        self.prev_prepared = Some(prepared);
+    }
+
+    /// Coast tracker state and inflate covariance across an unsolved frame.
+    pub fn advance_unsolved_prepared(
+        &mut self,
+        prepared: PreparedKashinQuery,
+        dt_s: f64,
+        profile: &VehicleDynamicsProfile,
+    ) {
+        if let Some(pe) = self.prev_eye {
+            let step_delta = self
+                .pose_steps
+                .back()
+                .filter(|s| s.frame_seq == self.frame_seq)
+                .map_or(
+                    [
+                        self.prev_vel[0] * dt_s,
+                        self.prev_vel[1] * dt_s,
+                        self.prev_vel[2] * dt_s,
+                    ],
+                    |s| s.eye_delta,
+                );
+            self.prev_eye = Some([
+                pe[0] + step_delta[0],
+                pe[1] + step_delta[1],
+                pe[2] + step_delta[2],
+            ]);
+        }
+        if let Some(pr) = self.prev_rot {
+            self.prev_rot = Some(orthonormalize_so3(&(self.prev_rot_step * pr)));
+        }
+        if let Some(kin) = self.kinematic.as_mut() {
+            kin.propagate_covariance(
+                dt_s,
+                profile.rms_accel_mps2,
+                profile.max_angular_rate_rad_s * 0.1,
+            );
+        }
+        self.prev_prepared = Some(prepared);
+    }
+
+    /// Predict the next frame camera pose from velocity and inter-frame rotation.
+    #[must_use]
+    pub fn predict_interframe_pose(
+        &self,
+        cur_q: &PreparedKashinQuery,
+        k: &Matrix3<f64>,
+        dt_s: f64,
+        profile: &VehicleDynamicsProfile,
+    ) -> Option<([f64; 3], Matrix3<f64>)> {
+        let (prev_eye, prev_rot) = (self.prev_eye?, self.prev_rot?);
+        let pred_eye = if let Some(kin) = &self.kinematic {
+            kin.predict_position(dt_s)
+        } else {
+            [
+                prev_eye[0] + self.prev_vel[0] * dt_s,
+                prev_eye[1] + self.prev_vel[1] * dt_s,
+                prev_eye[2] + self.prev_vel[2] * dt_s,
+            ]
+        };
+        let mut pred_rot = self.prev_rot_step * prev_rot;
+        if let Some(prev_q) = &self.prev_prepared {
+            let fx = k[(0, 0)];
+            let fy = k[(1, 1)];
+            let max_px = profile
+                .max_pixel_displacement(dt_s, fx, fy, 480.0)
+                .clamp(96.0, 400.0);
+            let (px_a, px_b) = match_interframe_top(prev_q, cur_q, 192, max_px);
+            if px_a.len() >= 12
+                && let Some((r_delta, inliers)) = relative_rotation_ransac(&px_a, &px_b, k, 4.0)
+            {
+                let inl_n = inliers.iter().filter(|&&b| b).count();
+                let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
+                let min_cos = profile
+                    .min_trace_cosine(dt_s)
+                    .min(15.0_f64.to_radians().cos());
+                if inl_n >= 10 && trace_cos >= min_cos {
+                    pred_rot = r_delta * prev_rot;
+                }
+            }
+        }
+        Some((pred_eye, orthonormalize_so3(&pred_rot)))
+    }
+}
+
+/// Match `tracks` against `prepared` and solve PnP around `pred`.
+///
+/// # Errors
+/// Returns [`MatchError`] when radius landmark projection or matching fails.
+pub fn try_warm_track(
+    tracks: &ActiveTrackSet,
+    prepared: &PreparedKashinQuery,
+    pred: ([f64; 3], Matrix3<f64>),
+    k_render: &Matrix3<f64>,
+    render_size: [u32; 2],
+    min_inliers: usize,
+    strategy: TrackingSearchStrategy,
+) -> Result<(WarmTrackAttempt, Option<PoseCandidate>), MatchError> {
+    let (world, px) = match strategy {
+        TrackingSearchStrategy::RadiusSearch { radius_px } => {
+            let cfg = TrackMatchConfig {
+                search_radius_px: radius_px as f32,
+                hamming_gate: 22,
+                min_dot: 0.64,
+                ratio_limit: 0.90,
+            };
+            let intrinsics = [
+                k_render[(0, 0)],
+                k_render[(1, 1)],
+                k_render[(0, 2)],
+                k_render[(1, 2)],
+            ];
+            let r = &pred.1;
+            let row_major = [
+                r[(0, 0)],
+                r[(0, 1)],
+                r[(0, 2)],
+                r[(1, 0)],
+                r[(1, 1)],
+                r[(1, 2)],
+                r[(2, 0)],
+                r[(2, 1)],
+                r[(2, 2)],
+            ];
+            let matches =
+                tracks.match_radius(prepared, pred.0, &row_major, intrinsics, render_size, &cfg)?;
+            let mut w = Vec::with_capacity(matches.len());
+            let mut p = Vec::with_capacity(matches.len());
+            for m in &matches {
+                w.push(m.world_point_enu);
+                p.push(m.query_pixel);
+            }
+            (w, p)
+        }
+        TrackingSearchStrategy::GlobalFrustumMatch => match_tracks_kashin(tracks, prepared, 384),
+    };
+    let cand = fit_pose_l1_gnc(&world, &px, k_render, render_size, pred)
+        .or_else(|| fit_pose_hybrid(&world, &px, k_render, render_size, Some(pred)));
+    let method = match strategy {
+        TrackingSearchStrategy::RadiusSearch { .. } => "kashin-3d-radius-track+l1-gnc",
+        TrackingSearchStrategy::GlobalFrustumMatch => "kashin-3d-global-frustum+l1-gnc",
+    };
+    let accepted = cand
+        .clone()
+        .filter(|c| c.score.geometry_accepted && c.score.inliers >= min_inliers);
+    let attempt = WarmTrackAttempt {
+        method,
+        matched_landmarks: world.len(),
+        candidate: cand,
+    };
+    Ok((attempt, accepted))
+}
+
+#[cfg(test)]
+mod tests;

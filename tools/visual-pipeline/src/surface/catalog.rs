@@ -1,6 +1,6 @@
 //! Context surface fallback, horizon attitude estimation, and reference catalog builder.
 
-use super::{CatalogTile, SPHERE_RADIUS_M, Surface, SurfaceRender, mercator_tile_coords};
+use super::{CatalogTile, Surface, SurfaceRender, mercator_tile_coords};
 use crate::{
     PipelineError,
     util::{bytes_sha256, read_json, run_tool, write_json},
@@ -115,7 +115,7 @@ pub fn build_reference_catalog_zoom(
                 pos.get("longitude").and_then(Value::as_f64),
             )
         {
-            let dlat = (radius_m / SPHERE_RADIUS_M).to_degrees();
+            let dlat = (radius_m / navigate_geodesy::wgs84::SEMI_MAJOR_AXIS_M).to_degrees();
             let dlon = dlat / lat.to_radians().cos().abs().max(0.1);
             west = west.min(lon - dlon);
             east = east.max(lon + dlon);

@@ -4,7 +4,7 @@ use crate::{LighterGlue, MatchError, SparseFeatures, XFeat, traits::EngineKind};
 use image::GrayImage;
 use navigate_visual::{AsyncImageMatcher, PixelMatch, VisualError};
 #[cfg(not(target_arch = "wasm32"))]
-use navigate_visual_workflow::{FeatureBackend, FeatureMetadata};
+use navigate_visual::{FeatureBackend, FeatureMetadata};
 use sha2::{Digest, Sha256};
 
 /// Immutable sparse feature handle bound to one encoder contract and source image.

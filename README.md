@@ -54,12 +54,12 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-fpl` | Flight-plan validation and leg-sequencing execution |
 | `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
 | `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
-| `navigate-visual` | Camera pose observations, model-inference traits, and local scene refinement |
+| `navigate-visual` | Camera pose observations, model-inference traits, holdout `L1-GNC` PnP solvers, and local scene refinement |
 | `navigate-visual-render` | Terrain and orthoimagery reference renderer on CPU and `wgpu` |
-| `navigate-match` | Rust `LoFTR`, `XFeat`, and `LighterGlue` matchers with native and `wasm32` dual-engine dispatch |
-| `navigate-locate` | Bounded multi-hypothesis terrain pose search on rendered reference views |
+| `navigate-match` | Rust `LoFTR`, `XFeat`, `LighterGlue`, and `DINOv2` matchers across `burn` and optional `ort` runtimes |
+| `navigate-locate` | Sans-IO single-photo pose search, pair/feature localizers, and real-time corridor tracking |
 | `navigate-locate-web` | Browser `wasm32` visual locator that uses WebNN with `burn` WebGPU and CPU fallback |
-| `navigate-segment` | Rust SegFormer-B0 occlusion masks, propeller detection, and 4-class training |
+| `navigate-segment` | Rust SegFormer-B0 occlusion masks, amortized homography warping, horizon estimation, propeller detection, and 4-class training |
 | `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
 | `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
 | `navigate-place` | Hilbert-sharded visual place index and bounded region search plans |

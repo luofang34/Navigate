@@ -1,4 +1,5 @@
 //! The locate pipeline: map scene, candidate views, matching, pose fit, refinement.
+use crate::workflow::{CandidateReport, PairLocalizer, ResourceLimits};
 use crate::{
     LocateError,
     candidates::{LookAt, angles},
@@ -10,7 +11,6 @@ use navigate_visual::{
     ReferenceView,
 };
 use navigate_visual_render::{GpuRenderer, RenderLimits};
-use navigate_visual_workflow::{CandidateReport, PairLocalizer, ResourceLimits};
 
 /// One photo and where to look for it.
 pub struct LocateRequest {

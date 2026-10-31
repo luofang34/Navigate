@@ -1,5 +1,5 @@
 //! Image-pair models use the same bounds and geometric acceptance policy.
-use crate::{CandidateReport, FrameReport, ResourceLimits, StageTimes, WorkflowError};
+use super::{CandidateReport, FrameReport, ResourceLimits, StageTimes, WorkflowError};
 use navigate_visual::{
     AsyncImageMatcher, CameraModel, Frame, ImageMatcher, LocalizerConfig, PixelMatch, PosePrior,
     PoseVerifier, ReferenceView, VisualError,

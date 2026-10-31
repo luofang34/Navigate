@@ -1,4 +1,4 @@
-//! Spherical terrain surface and ray-marching renderer (`photo_surface`).
+//! WGS84 terrain surface and ray-marching renderer (`photo_surface`).
 
 mod catalog;
 pub(crate) mod gpu;
@@ -16,12 +16,12 @@ use crate::{
 };
 use image::{Rgb, RgbImage};
 use nalgebra::{Matrix3, Vector3};
+use navigate_contract::GeodeticPosition;
+use navigate_geodesy::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
+use navigate_visual_render::RenderScene;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
-
-/// Mean spherical Earth radius in metres used by the offline pipeline ENU frame.
-pub const SPHERE_RADIUS_M: f64 = 6_371_008.8;
 
 /// Rendered view from [`Surface::render`] or [`ContextSurface::render`].
 pub type SurfaceRender = (RgbImage, Vec<f32>, Vec<[f64; 3]>);
@@ -206,24 +206,34 @@ impl Surface {
         }
     }
 
-    /// Convert `(lat_deg, lon_deg, alt_m)` to local ENU coordinates in metres.
+    /// Build a WGS84 [`RenderScene`] for [`navigate_visual_render::GpuRenderer`] or [`navigate_visual_render::SparseSceneSampler`].
+    #[must_use]
+    pub fn to_render_scene(&self) -> Option<RenderScene> {
+        gpu::SceneTemplate::from_surface(self).map(|t| t.to_render_scene())
+    }
+
+    /// Convert WGS84 `(lat_deg, lon_deg, alt_m)` to local `ENU` coordinates in meters.
     pub fn local(&self, lat_deg: f64, lon_deg: f64, alt_m: f64) -> [f64; 3] {
-        let r = SPHERE_RADIUS_M + alt_m;
-        let (slat, clat) = lat_deg.to_radians().sin_cos();
-        let (slon, clon) = lon_deg.to_radians().sin_cos();
-        let ecef = Vector3::new(r * clat * clon, r * clat * slon, r * slat);
+        let p = geodetic_to_ecef(&GeodeticPosition::new(
+            lat_deg.to_radians(),
+            lon_deg.to_radians(),
+            alt_m,
+        ));
+        let ecef = Vector3::new(p.x_m, p.y_m, p.z_m);
         let enu = self.enu_from_ecef * (ecef - self.origin_ecef);
         [enu.x, enu.y, enu.z]
     }
 
-    /// Convert local ENU coordinates in metres back to `(lat_deg, lon_deg, alt_m)`.
+    /// Convert local `ENU` coordinates in meters to WGS84 `(lat_deg, lon_deg, alt_m)`.
     pub fn geodetic(&self, local_enu: [f64; 3]) -> [f64; 3] {
         let enu = Vector3::new(local_enu[0], local_enu[1], local_enu[2]);
         let ecef = self.origin_ecef + self.enu_from_ecef.transpose() * enu;
-        let norm = ecef.norm().max(1e-9);
-        let lat = (ecef.z / norm).clamp(-1.0, 1.0).asin().to_degrees();
-        let lon = ecef.y.atan2(ecef.x).to_degrees();
-        [lat, lon, norm - SPHERE_RADIUS_M]
+        let geo = ecef_to_geodetic(&EcefPosition::new(ecef.x, ecef.y, ecef.z));
+        [
+            geo.latitude_rad.to_degrees(),
+            geo.longitude_rad.to_degrees(),
+            geo.altitude_m,
+        ]
     }
 
     /// Build a world-to-camera rotation matrix `R` at `(lat_deg, lon_deg)` for `(heading, down, roll)`.
@@ -354,13 +364,14 @@ impl Surface {
 }
 
 pub(crate) fn enu_frame(lat_deg: f64, lon_deg: f64) -> (Vector3<f64>, Matrix3<f64>) {
+    let p = geodetic_to_ecef(&GeodeticPosition::new(
+        lat_deg.to_radians(),
+        lon_deg.to_radians(),
+        0.0,
+    ));
+    let origin = Vector3::new(p.x_m, p.y_m, p.z_m);
     let (slat, clat) = lat_deg.to_radians().sin_cos();
     let (slon, clon) = lon_deg.to_radians().sin_cos();
-    let origin = Vector3::new(
-        SPHERE_RADIUS_M * clat * clon,
-        SPHERE_RADIUS_M * clat * slon,
-        SPHERE_RADIUS_M * slat,
-    );
     let east = Vector3::new(-slon, clon, 0.0);
     let north = Vector3::new(-slat * clon, -slat * slon, clat);
     let up = Vector3::new(clat * clon, clat * slon, slat);

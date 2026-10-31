@@ -1,10 +1,10 @@
-use super::{KeyLayers, RefreshLayers, Refresher, SegEngine, four_class_keep_layers};
+use super::{KeyLayers, RefreshLayers, Refresher, SegEngine};
 use burn::tensor::Device;
 use image::RgbImage;
 use nalgebra::{Matrix3, Rotation3};
 use navigate_segment::{
     AIRFRAME, CLASSES, GROUND, MaskPolicy, PROPELLER, PreprocessorConfig, SKY, Segformer,
-    SegformerConfig,
+    SegformerConfig, amortized::four_class_keep_layers,
 };
 use std::error::Error;
 use std::sync::mpsc;
@@ -170,8 +170,14 @@ fn four_class_ground_pixels_remain_valid_while_airframe_and_propeller_occlude()
         margin_px: 1,
     };
     let rgb = RgbImage::new(16, 12);
-    let (air, sky) = engine.eval(&rgb)?;
-    assert!(air.iter().all(|&v| v == 255), "GROUND must stay unoccluded");
-    assert!(sky.iter().all(|&v| v == 255), "GROUND must not become sky");
+    let refreshed = engine.refresh(&rgb)?;
+    assert!(
+        refreshed.airframe_keep.iter().all(|&v| v == 255),
+        "GROUND must stay unoccluded"
+    );
+    assert!(
+        refreshed.sky_keep.iter().all(|&v| v == 255),
+        "GROUND must not become sky"
+    );
     Ok(())
 }

@@ -1,8 +1,7 @@
+use super::super::test_scene::{limits, query, reference};
 use super::*;
-use crate::FeatureMetadata;
-use crate::test_scene::{limits, query, reference};
 use image::GrayImage;
-use navigate_visual::PixelMatch;
+use navigate_visual::{FeatureMetadata, PixelMatch};
 
 struct Backend {
     extractions: usize,

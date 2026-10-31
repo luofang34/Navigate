@@ -39,7 +39,7 @@ impl CameraKey {
 }
 
 #[derive(Clone)]
-struct SceneTemplate {
+pub(super) struct SceneTemplate {
     map: MapRevision,
     frame: LocalFrame,
     imagery_layout: AtlasLayout,
@@ -51,8 +51,8 @@ struct SceneTemplate {
 }
 
 impl SceneTemplate {
-    fn from_surface(surface: &Surface) -> Option<Self> {
-        let frame = LocalFrame::spherical_enu(surface.origin_lat, surface.origin_lon).ok()?;
+    pub(super) fn from_surface(surface: &Surface) -> Option<Self> {
+        let frame = LocalFrame::wgs84_enu(surface.origin_lat, surface.origin_lon).ok()?;
         let imagery = build_image_atlas(surface)?;
         let terrain = build_terrain_atlas(surface)?;
         Some(Self {
@@ -70,7 +70,7 @@ impl SceneTemplate {
         })
     }
 
-    fn to_render_scene(&self) -> RenderScene {
+    pub(super) fn to_render_scene(&self) -> RenderScene {
         RenderScene {
             map: self.map.clone(),
             frame: self.frame,
@@ -98,7 +98,7 @@ pub struct GpuSurfaceView {
     pub camera: CameraModel,
     /// Camera pose in `frame`.
     pub pose: CameraPose,
-    /// Spherical ENU frame of `pose`.
+    /// WGS84 `ENU` frame of `pose`.
     pub frame: LocalFrame,
 }
 

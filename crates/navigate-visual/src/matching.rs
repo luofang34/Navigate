@@ -249,3 +249,55 @@ pub(crate) fn validate_points(
 
 #[cfg(test)]
 mod tests;
+
+/// Resource bounds and count metadata for one feature handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeatureMetadata {
+    /// Bytes retained by the feature handle across host and device memory.
+    pub resident_bytes: usize,
+    /// Selected feature count in the handle.
+    pub count: usize,
+}
+
+/// Feature extraction and matching backend that supports explicit feature reuse.
+pub trait FeatureBackend {
+    /// Immutable feature handle owned by this backend.
+    type Features;
+
+    /// Return the model and execution identity for result records.
+    fn identity(&self) -> &str;
+
+    /// Extract features from one grayscale image.
+    ///
+    /// # Errors
+    /// Returns [`VisualError`] for invalid input, model failure, or device failure.
+    fn extract_features_blocking(
+        &mut self,
+        image: &GrayImage,
+    ) -> Result<Self::Features, VisualError>;
+
+    /// Validate that `features` match this encoder contract and `image`.
+    ///
+    /// # Errors
+    /// Returns [`VisualError`] for incompatible feature contracts or source images.
+    fn validate_features(
+        &self,
+        features: &Self::Features,
+        image: &GrayImage,
+    ) -> Result<FeatureMetadata, VisualError>;
+
+    /// Return `true` when two feature handles produce identical matches for any query.
+    fn equivalent_features(&self, _first: &Self::Features, _second: &Self::Features) -> bool {
+        false
+    }
+
+    /// Match two feature handles in their source image coordinates.
+    ///
+    /// # Errors
+    /// Returns [`VisualError`] for incompatible feature contracts or execution failure.
+    fn match_features_blocking(
+        &mut self,
+        reference: &Self::Features,
+        query: &Self::Features,
+    ) -> Result<Vec<PixelMatch>, VisualError>;
+}

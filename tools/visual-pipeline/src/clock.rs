@@ -14,7 +14,6 @@ use std::{
 };
 
 pub(crate) const SECONDS_1904_TO_1970: i64 = 2_082_844_800;
-pub(crate) const SPHERE_RADIUS_M: f64 = 6_371_008.8;
 
 /// Civil-clock anchor read from a QuickTime `moov/mvhd` atom.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -360,7 +359,10 @@ pub(crate) fn mercator_xy(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
 }
 
 pub(crate) fn mercator_local(anchor: [f64; 2], lat: f64, lon: f64, alt: f64) -> [f64; 3] {
-    let scale = 2.0 * std::f64::consts::PI * SPHERE_RADIUS_M * anchor[0].to_radians().cos();
+    let scale = 2.0
+        * std::f64::consts::PI
+        * navigate_visual::MERCATOR_SPHERE_RADIUS_M
+        * anchor[0].to_radians().cos();
     let (ox, oy) = mercator_xy(anchor[0], anchor[1]);
     let (x, y) = mercator_xy(lat, lon);
     [(x - ox) * scale, -(y - oy) * scale, alt]

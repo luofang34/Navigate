@@ -22,7 +22,6 @@ ort = ["dep:ort"]
 
 [dependencies]
 navigate-visual = { path = "../navigate-visual" }
-navigate-visual-workflow = { path = "../navigate-visual-workflow" }
 burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
 burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
 cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
