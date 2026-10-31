@@ -1,11 +1,13 @@
 //! Spherical terrain surface and ray-marching renderer (`photo_surface`).
 
 mod catalog;
+pub(crate) mod gpu;
 mod sparse;
 
 pub use catalog::{
     ContextSurface, build_reference_catalog, build_reference_catalog_zoom, horizon_attitude,
 };
+pub use gpu::{GpuSurfaceView, SurfaceGpuRenderer};
 pub use sparse::{SurfaceAdaptiveStats, SurfaceRayHit};
 
 use crate::{
@@ -62,9 +64,9 @@ pub struct Surface {
     pub max_elev_m: f64,
     pub(crate) origin_ecef: Vector3<f64>,
     pub(crate) enu_from_ecef: Matrix3<f64>,
-    imagery_tiles: HashMap<(u32, u32), RgbImage>,
-    dem_tiles: HashMap<(u32, u32), Vec<f32>>,
-    dem_tile_size: u32,
+    pub(super) imagery_tiles: HashMap<(u32, u32), RgbImage>,
+    pub(super) dem_tiles: HashMap<(u32, u32), Vec<f32>>,
+    pub(super) dem_tile_size: u32,
 }
 
 impl Surface {

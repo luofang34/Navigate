@@ -66,7 +66,7 @@ pub(super) fn decode(
             .map(|c| descriptors[c * cells + cell].powi(2))
             .sum::<f32>()
             .sqrt()
-            .max(1e-12);
+            .max(1e-6);
         for c in 0..64 {
             descriptors[c * cells + cell] /= norm;
         }
@@ -143,8 +143,7 @@ fn candidates(scores: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
         .collect()
 }
 
-/// Host reference of [`super::score::score_map`] for `[1, 65, 72, 100]` logits.
-#[cfg(test)]
+/// Host score map equivalent to [`super::score::score_map`] for `[1, 65, 72, 100]` logits.
 pub(super) fn reference_scores(logits: &[f32], reliability: &[f32]) -> Vec<f32> {
     let grid = Grid {
         width: XFEAT_INPUT_WIDTH,
@@ -158,7 +157,6 @@ pub(super) fn reference_scores(logits: &[f32], reliability: &[f32]) -> Vec<f32> 
     scores
 }
 
-#[cfg(test)]
 fn build_heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
     let cells = grid.cells();
     let mut heatmap = vec![0.0; grid.width * grid.height];
@@ -177,7 +175,6 @@ fn build_heatmap(logits: &[f32], grid: Grid) -> Vec<f32> {
     heatmap
 }
 
-#[cfg(test)]
 fn find_peaks(heatmap: &[f32], reliability: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
     let mut peaks = Vec::new();
     for y in 0..grid.height {
@@ -218,7 +215,6 @@ fn sample(data: &[f32], x: i32, y: i32, grid: Grid) -> f32 {
     }
 }
 
-#[cfg(test)]
 fn bilinear(data: &[f32], p: [f32; 2], grid: Grid) -> f32 {
     let x = p[0].floor() as i32;
     let y = p[1].floor() as i32;

@@ -120,7 +120,7 @@ pub(super) struct KeyLayers {
 }
 
 impl KeyLayers {
-    fn usable(&self, dims: [u32; 2]) -> bool {
+    pub(super) fn usable(&self, dims: [u32; 2]) -> bool {
         let total = (dims[0] as usize).saturating_mul(dims[1] as usize);
         self.dims == dims && self.airframe_keep.len() == total && self.sky_keep.len() == total
     }
@@ -164,10 +164,17 @@ pub(super) struct BackgroundRefresh {
 }
 
 impl Refresher {
-    /// Move the engine to a named worker thread.
+    /// Move the engine to a named worker thread and cap its input side to `256` pixels.
     pub(super) fn into_background(self) -> Result<Self, PipelineError> {
         match self {
-            Self::Inline(engine) => Self::spawn_background(move |rgb| engine.refresh(&rgb)),
+            Self::Inline(mut engine) => {
+                let (w, h) = engine.preproc.target_size();
+                engine.preproc.size = serde_json::json!({
+                    "width": w.min(256),
+                    "height": h.min(256),
+                });
+                Self::spawn_background(move |rgb| engine.refresh(&rgb))
+            }
             background @ Self::Background(_) => Ok(background),
         }
     }
@@ -219,28 +226,33 @@ impl Refresher {
                     }
                 }
                 if !key.usable(dims) {
-                    // Nothing to warp: wait for this frame's own layers.
-                    if pending.take().is_some() {
-                        drop(worker.recv_blocking()?);
+                    if pending.is_none() {
+                        worker.submit(rgb.clone())?;
+                        *pending = Some(Pending {
+                            submit_rot: cur_rot.copied(),
+                            solved_rot: None,
+                            frames_since_submit: 1,
+                        });
+                        key.role = KeyRole::Submitted;
+                        step.submitted = true;
                     }
-                    worker.submit(rgb.clone())?;
-                    step = installed(key, worker.recv_blocking()??, cur_rot.copied(), 1);
-                    key.role = KeyRole::Current;
-                } else if !step.refreshed {
-                    key.frames_since_refresh += 1;
-                }
-                if pending.is_none()
-                    && key.role != KeyRole::Current
-                    && key.frames_since_refresh >= interval
-                {
-                    worker.submit(rgb.clone())?;
-                    *pending = Some(Pending {
-                        submit_rot: cur_rot.copied(),
-                        solved_rot: None,
-                        frames_since_submit: 1,
-                    });
-                    key.role = KeyRole::Submitted;
-                    step.submitted = true;
+                } else {
+                    if !step.refreshed {
+                        key.frames_since_refresh += 1;
+                    }
+                    if pending.is_none()
+                        && key.role != KeyRole::Current
+                        && key.frames_since_refresh >= interval
+                    {
+                        worker.submit(rgb.clone())?;
+                        *pending = Some(Pending {
+                            submit_rot: cur_rot.copied(),
+                            solved_rot: None,
+                            frames_since_submit: 1,
+                        });
+                        key.role = KeyRole::Submitted;
+                        step.submitted = true;
+                    }
                 }
             }
         }

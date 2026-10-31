@@ -326,3 +326,106 @@ fn grid_point_weights_zero_pad_outside_the_grid() {
         }
     }
 }
+
+fn kaiming_xfeat_weights() -> Weights {
+    let mut weights = synthetic_xfeat_weights();
+    let specs: &[(&str, [usize; 3])] = &[
+        ("block1.0", [4, 1, 3]),
+        ("block1.1", [8, 4, 3]),
+        ("block1.2", [8, 8, 3]),
+        ("block1.3", [24, 8, 3]),
+        ("skip1.1", [24, 1, 1]),
+        ("block2.0", [24, 24, 3]),
+        ("block2.1", [24, 24, 3]),
+        ("block3.0", [64, 24, 3]),
+        ("block3.1", [64, 64, 3]),
+        ("block3.2", [64, 64, 1]),
+        ("block4.0", [64, 64, 3]),
+        ("block4.1", [64, 64, 3]),
+        ("block4.2", [64, 64, 3]),
+        ("block5.0", [128, 64, 3]),
+        ("block5.1", [128, 128, 3]),
+        ("block5.2", [128, 128, 3]),
+        ("block5.3", [64, 128, 1]),
+        ("block_fusion.0", [64, 64, 3]),
+        ("block_fusion.1", [64, 64, 3]),
+    ];
+    for &(name, [_, input, k]) in specs {
+        let key = format!("{name}.weight");
+        let mut tensor = weights.remove(&key).expect("conv weight");
+        let scale = (2.0 / ((input * k * k) as f32)).sqrt() / 0.0837;
+        for v in &mut tensor.values {
+            *v *= scale.min(1.0);
+        }
+        weights.insert(key, tensor);
+    }
+    weights
+}
+
+#[test]
+fn f16_backbone_preserves_encoder_contract_and_descriptor_cosine_above_0999() {
+    let device = Device::flex();
+    assert!(XFeat::supports_f16(&device));
+    let f32_model =
+        XFeat::load_with_precision(kaiming_xfeat_weights(), &device, XFeatPrecision::F32)
+            .expect("f32 model");
+    let f16_model =
+        XFeat::load_with_precision(kaiming_xfeat_weights(), &device, XFeatPrecision::F16)
+            .expect("f16 model");
+    assert_eq!(f32_model.encoder_contract(), f16_model.encoder_contract());
+    assert_eq!(f32_model.precision(), XFeatPrecision::F32);
+    assert_eq!(f16_model.precision(), XFeatPrecision::F16);
+
+    let image = textured_image(320, 240);
+    let prepared = XFeat::prepare_dense_input(&image)
+        .expect("prepare")
+        .expect("textured");
+    let d32 = pollster::block_on(f32_model.forward_dense(prepared.normalized.clone()))
+        .expect("dense f32");
+    let d16 = pollster::block_on(f16_model.forward_dense(prepared.normalized.clone()))
+        .expect("dense f16");
+
+    let cells = GRID_HEIGHT * GRID_WIDTH;
+    let mut cos_sum = 0.0_f64;
+    for cell in 0..cells {
+        let mut dot = 0.0_f64;
+        let mut n32 = 0.0_f64;
+        let mut n16 = 0.0_f64;
+        for c in 0..64 {
+            let a = f64::from(d32.descriptors[c * cells + cell]);
+            let b = f64::from(d16.descriptors[c * cells + cell]);
+            dot += a * b;
+            n32 += a * a;
+            n16 += b * b;
+        }
+        cos_sum += dot / (n32.sqrt() * n16.sqrt()).max(1e-12);
+    }
+    let mean_cos = cos_sum / (cells as f64);
+    assert!(
+        mean_cos > 0.999,
+        "expected mean F16 vs F32 descriptor cosine > 0.999, got {mean_cos:.6}"
+    );
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use crate::{
+            ModelSessionExtractor, SparseFeatureExtractor, XFeatDenseSession, traits::EngineKind,
+        };
+        let f16_feat = f16_model
+            .extract_masked_blocking(&image, None, 128)
+            .expect("f16 extract");
+        assert!(!f16_feat.is_empty());
+        let session = XFeatDenseSession::new(f32_model.clone(), EngineKind::BurnCpu);
+        let adapter =
+            ModelSessionExtractor::new(session, "image", f32_model.encoder_contract(), "ort-test");
+        assert_eq!(adapter.encoder_contract(), f32_model.encoder_contract());
+        assert_eq!(adapter.runtime_name(), "ort-test");
+        let via_session = adapter
+            .extract_masked_blocking(&image, None, 128)
+            .expect("session extract");
+        let via_burn = f32_model
+            .extract_masked_blocking(&image, None, 128)
+            .expect("burn extract");
+        assert_eq!(via_session.len(), via_burn.len());
+    }
+}

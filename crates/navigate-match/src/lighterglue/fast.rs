@@ -220,13 +220,15 @@ impl LighterGlue {
             ref_side.tokens =
                 layer
                     .self_attn
-                    .forward(ref_side.tokens, &ref_side.cos, &ref_side.sin);
+                    .forward(ref_side.tokens, &ref_side.cos, &ref_side.sin, None);
             qry_side.tokens =
                 layer
                     .self_attn
-                    .forward(qry_side.tokens, &qry_side.cos, &qry_side.sin);
+                    .forward(qry_side.tokens, &qry_side.cos, &qry_side.sin, None);
             (ref_side.tokens, qry_side.tokens) =
-                layer.cross_attn.forward(ref_side.tokens, qry_side.tokens);
+                layer
+                    .cross_attn
+                    .forward(ref_side.tokens, qry_side.tokens, None);
             let done = idx + 1;
             let check_exit = done >= config.min_layers
                 && done < config.max_layers
@@ -302,7 +304,7 @@ impl LighterGlue {
     ) -> Result<(Vec<IndexedMatch>, Vec<f32>, Vec<f32>), MatchError> {
         let (n, m) = (ref_side.len(), qry_side.len());
         let (scores, ma, mb) =
-            self.assignment_with_logits(ref_side.tokens.clone(), qry_side.tokens.clone());
+            self.assignment_with_logits(ref_side.tokens.clone(), qry_side.tokens.clone(), None);
         let (row_max, row_argmax) = scores.clone().max_dim_with_indices(2);
         let (_, col_argmax) = scores.max_dim_with_indices(1);
         let mut tx = Transaction::default()
@@ -394,9 +396,9 @@ fn build_stats(
     }
 }
 
-type SelectedInput = (Vec<f32>, Vec<f32>, Vec<usize>);
+pub(super) type SelectedInput = (Vec<f32>, Vec<f32>, Vec<usize>);
 
-fn select_input(
+pub(super) fn select_input(
     features: &SparseFeatures,
     max_keypoints: usize,
 ) -> Result<SelectedInput, MatchError> {
@@ -435,7 +437,7 @@ fn select_input(
     Ok((keypoints, descriptors, indices))
 }
 
-fn decode_mutual(
+pub(super) fn decode_mutual(
     row_scores: &[f32],
     row_indices: &[i64],
     col_indices: &[i64],

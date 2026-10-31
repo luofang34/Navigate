@@ -43,6 +43,9 @@ pub enum PipelineError {
     /// Visual geometry error.
     #[error("visual geometry error: {0}")]
     Visual(#[from] navigate_visual::VisualError),
+    /// GPU reference renderer error.
+    #[error("terrain renderer error: {0}")]
+    Render(#[from] navigate_visual_render::RenderError),
     /// External media tool (`ffmpeg`, `ffprobe`, `curl`, `magick`) failed.
     #[error("external tool '{tool}' failed: {message}")]
     Tool {

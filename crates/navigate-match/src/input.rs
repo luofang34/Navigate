@@ -6,6 +6,7 @@ use crate::MatchError;
 use image::GrayImage;
 
 /// A model input and the transform from input pixels to source pixels.
+#[derive(Clone, Debug)]
 pub(crate) struct InputImage {
     pub values: Vec<f32>,
     scale: f64,

@@ -21,6 +21,7 @@ cuda = ["navigate-match/cuda", "navigate-segment/cuda"]
 navigate-contract.workspace = true
 navigate-geodesy.workspace = true
 navigate-visual = { path = "../../crates/navigate-visual" }
+navigate-visual-render = { path = "../../crates/navigate-visual-render" }
 navigate-visual-session = { path = "../../crates/navigate-visual-session" }
 navigate-recording = { path = "../../crates/navigate-recording" }
 navigate-match = { path = "../../crates/navigate-match", default-features = false }
@@ -37,6 +38,9 @@ sha2 = "0.10"
 thiserror = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-22", "load-dynamic", "coreml", "cuda", "tensorrt"] }
 
 [dev-dependencies]
 tempfile = "3"

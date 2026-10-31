@@ -446,3 +446,35 @@ fn staged_matcher_runs_masked_extraction_and_fast_matching() {
     assert!(stats.layers_executed >= search_cfg.min_layers);
     assert!(pairs.iter().all(|m| m.query.y >= 60.0));
 }
+
+#[test]
+fn batched_match_features_indexed_fast_matches_single_pair_across_padded_lengths() {
+    let device = Device::flex();
+    let model = LighterGlue::load(high_agreement_lighterglue_weights(), &device).expect("lg");
+    let cfg = FastMatchConfig::balanced_search();
+    let (ref0, query) = synthetic_pair(28);
+    let ref1 = ref0.truncate_top(19);
+    let ref2 = SparseFeatures::empty();
+    let (ref3, _) = synthetic_pair(34);
+    let refs = [&ref0, &ref1, &ref2, &ref3];
+
+    let batched = pollster::block_on(model.match_features_batch_indexed_fast(&refs, &query, &cfg))
+        .expect("batched");
+    assert_eq!(batched.len(), refs.len());
+    for (reference, (batch_matches, batch_stats)) in refs.iter().zip(&batched) {
+        let (single_matches, single_stats) =
+            pollster::block_on(model.match_features_indexed_fast(reference, &query, &cfg))
+                .expect("single");
+        assert_eq!(batch_stats.layers_executed, single_stats.layers_executed);
+        assert_eq!(batch_stats.early_exited, single_stats.early_exited);
+        let b_idx: Vec<(usize, usize)> = batch_matches
+            .iter()
+            .map(|m| (m.ref_index, m.query_index))
+            .collect();
+        let s_idx: Vec<(usize, usize)> = single_matches
+            .iter()
+            .map(|m| (m.ref_index, m.query_index))
+            .collect();
+        assert_eq!(b_idx, s_idx);
+    }
+}

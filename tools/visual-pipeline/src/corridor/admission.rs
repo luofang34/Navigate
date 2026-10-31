@@ -1,12 +1,16 @@
 //! Track seeding, [`MapCell`] EKF independence gating, and report emission for `corridor-track`.
 
+use super::{CorridorTrackOptions, masking::AmortizedMasker, motion::TrackState};
 use crate::{
     PipelineError,
+    metadata::PositionClaim,
     pose::{PoseCandidate, save_candidate_npz},
     realtime::helpers::rot_to_row_major,
     surface::Surface,
+    testset::PhotoCase,
     util::write_json,
 };
+use nalgebra::Matrix3;
 use navigate_match::{ActiveTrackSet, PreparedKashinQuery, SparseFeatures, VirtualCorridorView};
 use navigate_visual_session::MapCell;
 use serde_json::{Value, json};
@@ -26,6 +30,127 @@ pub(super) struct FusionAdmission {
     pub fusion_eligibility: &'static str,
     pub map_cell: Option<[i64; 2]>,
     pub earlier_anchor_id: Option<String>,
+}
+
+impl FusionAdmission {
+    pub(super) fn warm_track() -> Self {
+        Self {
+            tracking_mode: "warm_track",
+            evidence_kind: "surface_track_odometry",
+            independent_ekf_fix: false,
+            fusion_eligibility: "correlated_track",
+            map_cell: None,
+            earlier_anchor_id: None,
+        }
+    }
+
+    pub(super) fn acquiring_anchor() -> Self {
+        Self {
+            tracking_mode: "acquiring_anchor",
+            evidence_kind: "visual_odometry",
+            independent_ekf_fix: false,
+            fusion_eligibility: "acquiring_anchor",
+            map_cell: None,
+            earlier_anchor_id: None,
+        }
+    }
+
+    pub(super) fn unresolved() -> Self {
+        Self {
+            tracking_mode: "unresolved",
+            evidence_kind: "corridor_map_anchor",
+            independent_ekf_fix: false,
+            fusion_eligibility: "rejected",
+            map_cell: None,
+            earlier_anchor_id: None,
+        }
+    }
+}
+
+pub(super) fn estimate_lookahead_enu(
+    surface: &Surface,
+    state: &TrackState,
+    case: &PhotoCase,
+) -> Option<[f64; 2]> {
+    if let Some(eye) = state.prev_eye {
+        let mut fwd = [state.prev_vel[0] * 2.0, state.prev_vel[1] * 2.0];
+        if let Some(rot) = state.prev_rot {
+            let look = (eye[2].abs() * 1.4).clamp(200.0, 2_000.0);
+            fwd[0] += rot[(2, 0)] * look;
+            fwd[1] += rot[(2, 1)] * look;
+        }
+        return Some([eye[0] + fwd[0], eye[1] + fwd[1]]);
+    }
+    let claims = case.prior.as_ref()?;
+    let pos = claims.position.as_ref()?;
+    let enu = surface.local(pos.latitude, pos.longitude, 0.0);
+    if let Some(hdg_deg) = claims.direction_deg {
+        let dem = surface
+            .sample_dem(pos.latitude, pos.longitude)
+            .unwrap_or(0.0);
+        let agl = pos
+            .altitude_m
+            .map_or(480.0, |alt| (alt - dem).clamp(25.0, 4_000.0));
+        let stand_off = (agl * 1.4).clamp(150.0, 2_000.0);
+        let rad = hdg_deg.to_radians();
+        return Some([
+            enu[0] + stand_off * rad.sin(),
+            enu[1] + stand_off * rad.cos(),
+        ]);
+    }
+    Some([enu[0], enu[1]])
+}
+
+pub(super) fn prior_odometry_hint(
+    surface: &Surface,
+    case: &PhotoCase,
+    masker: &AmortizedMasker,
+    k_render: &Matrix3<f64>,
+) -> (Option<Matrix3<f64>>, f64) {
+    let Some(claims) = case.prior.as_ref() else {
+        return (None, 480.0);
+    };
+    let Some(pos) = claims.position.as_ref() else {
+        return (None, 480.0);
+    };
+    let dem = surface
+        .sample_dem(pos.latitude, pos.longitude)
+        .unwrap_or(0.0);
+    let agl = pos
+        .altitude_m
+        .map_or(480.0, |alt| (alt - dem).clamp(25.0, 6_000.0));
+    let (down_deg, roll_deg) = masker.horizon_attitude(k_render).unwrap_or((55.0, 0.0));
+    let rot = claims
+        .direction_deg
+        .map(|hdg| surface.camera_rotation(pos.latitude, pos.longitude, hdg, down_deg, roll_deg));
+    (rot, agl)
+}
+
+pub(super) fn apply_case_overrides(case: &PhotoCase, opts: &CorridorTrackOptions) -> PhotoCase {
+    let mut out = case.clone();
+    if opts.prior_override.is_none() && opts.focal_35mm_override.is_none() {
+        return out;
+    }
+    let mut claims = out.prior.unwrap_or_default();
+    if let Some(([lat, lon, alt], heading)) = opts.prior_override {
+        claims.position = Some(PositionClaim {
+            latitude: lat,
+            longitude: lon,
+            reported_horizontal_error_m: None,
+            altitude_m: Some(alt),
+            unsigned_altitude_m: Some(alt.abs()),
+            altitude_reference_text: None,
+            altitude_datum: "override_unverified".into(),
+        });
+        if let Some(hdg) = heading {
+            claims.direction_deg = Some(hdg.rem_euclid(360.0));
+        }
+    }
+    if let Some(f35) = opts.focal_35mm_override {
+        claims.focal_35mm_mm = Some(f35);
+    }
+    out.prior = Some(claims);
+    out
 }
 
 pub(super) fn seed_tracks(
@@ -219,9 +344,17 @@ pub(super) fn write_corridor_report(
             },
         })
     } else {
+        let status = if adm.tracking_mode == "acquiring_anchor" {
+            "acquiring_anchor"
+        } else {
+            "unresolved"
+        };
         json!({
             "id": case_id,
-            "status": "unresolved",
+            "status": status,
+            "tracking_mode": adm.tracking_mode,
+            "evidence_kind": adm.evidence_kind,
+            "fusion_eligibility": adm.fusion_eligibility,
             "attempts": attempts,
             "candidate": null,
         })

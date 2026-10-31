@@ -154,6 +154,7 @@ fn dispatch_pose_stage(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             max_keypoints: req(args, "max-keypoints")?,
             adaptive_stride: req(args, "adaptive-stride")?,
             only_cases,
+            xfeat_runtime: crate::corridor_cli::parse_xfeat_runtime(args)?,
         }),
         "bank-match" => run_realtime_bank_match(&BankMatchOptions {
             dataset_dir: req(args, "dataset")?,
@@ -167,6 +168,7 @@ fn dispatch_pose_stage(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             query_keypoints: req(args, "query-keypoints")?,
             polish: args.get_flag("polish"),
             only_cases,
+            xfeat_runtime: crate::corridor_cli::parse_xfeat_runtime(args)?,
         }),
         "track" => {
             let mut matcher = matcher_from(args)?;

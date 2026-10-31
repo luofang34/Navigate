@@ -8,32 +8,35 @@ mod background;
 mod latency;
 pub mod masking;
 mod motion;
+mod tile_builder;
 mod tracker;
 
 pub use tracker::run_corridor_track;
 
 use crate::{
     PipelineError,
-    realtime::helpers::{hex, load_xfeat_model, raw_file_sha256},
+    realtime::helpers::{hex, raw_file_sha256},
     stages::{load_profile_cases, scale_k},
-    surface::Surface,
+    surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
+    xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };
 use image::DynamicImage;
 use nalgebra::Matrix3;
 use navigate_match::{
-    CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, DEFAULT_KASHIN_SEED,
-    HadamardProjector, SparseFeatures,
+    CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, CorridorTileStore,
+    DEFAULT_KASHIN_SEED, DEFAULT_WINDOW_TILES, HadamardProjector, SparseFeatures,
 };
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::Mutex,
     time::Instant,
 };
 
-/// Options that control offline [`CorridorLandmarkBank`] construction (`corridor-build`).
+/// Options that control offline [`CorridorLandmarkBank`] or sharded [`CorridorTileStore`] construction (`corridor-build`).
 #[derive(Clone, Debug)]
 pub struct CorridorBuildOptions {
     /// Primary terrain and orthoimagery `catalog.json` path.
@@ -42,7 +45,7 @@ pub struct CorridorBuildOptions {
     pub profile_path: Option<PathBuf>,
     /// Path to `XFeat` `.safetensors` weights.
     pub xfeat_weights_path: PathBuf,
-    /// Output `NVKTILE1` file path.
+    /// Output `.nvktile` file path or sharded `.nvktiledir` directory path.
     pub output_bank_path: PathBuf,
     /// Horizontal ENU tile edge length in metres (`>= 100.0`).
     pub tile_size_m: f64,
@@ -54,8 +57,10 @@ pub struct CorridorBuildOptions {
     pub max_landmarks_per_tile: usize,
     /// Coarse pixel stride for [`Surface::render_adaptive`].
     pub adaptive_stride: u32,
-    /// Include four cardinal oblique views per tile in addition to the nadir view.
+    /// Include canonical oblique rings alongside the nadir view per tile.
     pub include_obliques: bool,
+    /// Sparse `XFeat` runtime configuration (`burn-f32`, `burn-f16`, `coreml`, `tensorrt`).
+    pub xfeat_runtime: XFeatRuntimeConfig,
 }
 
 /// Options that control two-tier real-time corridor localization and `25-30 Hz` tracking (`corridor-track`).
@@ -67,7 +72,7 @@ pub struct CorridorTrackOptions {
     pub profile_path: PathBuf,
     /// Primary terrain and orthoimagery `catalog.json` path.
     pub catalog_path: PathBuf,
-    /// Input `NVKTILE1` corridor bank path.
+    /// Input `.nvktile` file path or sharded [`CorridorTileStore`] directory path.
     pub corridor_bank_path: PathBuf,
     /// Path to `XFeat` `.safetensors` weights.
     pub xfeat_weights_path: PathBuf,
@@ -95,7 +100,7 @@ pub struct CorridorTrackOptions {
     pub height_factors: Vec<f64>,
     /// Maximum `XFeat` keypoints extracted per query frame (`16..=4096`).
     pub query_keypoints: usize,
-    /// Run one parallel adaptive render and sparse-ray polish pass on map anchors.
+    /// Run one GPU (`wgpu-terrain-v1`) or adaptive CPU render and depth-unproject polish pass on map anchors.
     pub polish_anchors: bool,
     /// Optional `[lat_deg, lon_deg, alt_m]` and optional `heading_deg` prior override.
     pub prior_override: Option<([f64; 3], Option<f64>)>,
@@ -103,11 +108,10 @@ pub struct CorridorTrackOptions {
     pub focal_35mm_override: Option<f64>,
     /// Optional case ID allow-list.
     pub only_cases: Option<BTreeSet<String>>,
-    /// Run `Segformer` refreshes and periodic map re-anchors on background threads.
-    ///
-    /// Warm tracking continues while they run, and their results take effect
-    /// on a later frame. Without this option they run inside the frame loop.
+    /// Run `Segformer` refreshes, map anchors, and on-demand tile synthesis on background threads.
     pub background_refresh: bool,
+    /// Sparse `XFeat` runtime configuration (`burn-f32`, `burn-f16`, `coreml`, `tensorrt`).
+    pub xfeat_runtime: XFeatRuntimeConfig,
 }
 
 type BandVoxelMap = BTreeMap<u8, BTreeMap<(i32, i32), RawLandmark>>;
@@ -121,7 +125,7 @@ struct RawLandmark {
     descriptor: [f32; 64],
 }
 
-/// Build and save a [`CorridorLandmarkBank`] (`NVKTILE1`) across terrain corridor tiles.
+/// Build and save a [`CorridorLandmarkBank`] (`.nvktile`) or sharded [`CorridorTileStore`] directory (`corridor-build`).
 ///
 /// # Errors
 ///
@@ -130,7 +134,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let t0 = Instant::now();
     let surface = Surface::from_catalog(&opts.catalog_path)?;
     let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
-    let (xfeat, encoder_digest) = load_xfeat_model(&opts.xfeat_weights_path)?;
+    let xfeat = LoadedXFeat::load(&opts.xfeat_weights_path, &opts.xfeat_runtime)?;
     let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
 
     let tile_m = opts.tile_size_m.clamp(100.0, 20_000.0);
@@ -148,8 +152,8 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let render_size = [800_u32, 600_u32];
     let k_base = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
     let k_render = scale_k(&k_base, 1.0, 1.0);
+    let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(None);
 
-    // Key: (tile_x, tile_y) -> view_band -> (voxel_x, voxel_y) -> RawLandmark
     let mut tile_buckets: BTreeMap<(i32, i32), BandVoxelMap> = BTreeMap::new();
     let mut canonical_views = 0_usize;
     let mut total_pixels = 0_usize;
@@ -174,22 +178,44 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         );
         for (band, eye, rot) in views {
             canonical_views += 1;
-            let ((rgb, _, _), stats) =
-                surface.render_adaptive(eye, &rot, &k_render, render_size, stride, 8, 0.025);
-            total_pixels += stats.total_pixels;
-            total_rays += stats.rays_cast;
-            let gray = DynamicImage::ImageRgb8(rgb).into_luma8();
-            let raw = pollster::block_on(xfeat.extract(&gray, 2048))?;
-            let hits = surface.raycast_pixels(eye, &rot, &k_render, &raw.pixels);
+            let mut gpu_view_opt = None;
+            if let Ok(mut guard) = gpu_renderer.lock() {
+                if guard.is_none() {
+                    *guard = SurfaceGpuRenderer::try_new(&surface, &k_render, render_size);
+                }
+                if let Some(gpu) = guard.as_mut() {
+                    gpu_view_opt = gpu
+                        .render_view(&surface, eye, &rot, &k_render, render_size)
+                        .ok();
+                }
+            }
+            let (raw, world_hits) = if let Some(gv) = gpu_view_opt {
+                total_pixels += (render_size[0] as usize) * (render_size[1] as usize);
+                let feat = xfeat.extract(&gv.image, 2048)?;
+                let unproj = gv.unproject_pixels(&surface, &feat.pixels);
+                (feat, unproj)
+            } else {
+                let ((rgb, _, _), stats) =
+                    surface.render_adaptive(eye, &rot, &k_render, render_size, stride, 8, 0.025);
+                total_pixels += stats.total_pixels;
+                total_rays += stats.rays_cast;
+                let gray = DynamicImage::ImageRgb8(rgb).into_luma8();
+                let feat = xfeat.extract(&gray, 2048)?;
+                let hits = surface.raycast_pixels(eye, &rot, &k_render, &feat.pixels);
+                (
+                    feat,
+                    hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect(),
+                )
+            };
+
             let chunks = raw.descriptors.as_chunks::<64>().0;
             let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
-            let n_raw = (hits.len().max(1)) as f32;
+            let n_raw = (world_hits.len().max(1)) as f32;
 
-            for (idx, hit_opt) in hits.iter().enumerate() {
-                let Some(hit) = hit_opt else {
+            for (idx, w_opt) in world_hits.iter().enumerate() {
+                let Some(w) = *w_opt else {
                     continue;
                 };
-                let w = hit.world_enu;
                 let dist_m =
                     ((eye[0] - w[0]).powi(2) + (eye[1] - w[1]).powi(2) + (eye[2] - w[2]).powi(2))
                         .sqrt();
@@ -226,6 +252,77 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         }
     }
 
+    let tiles = assemble_tiles(tile_buckets, tile_m, max_per_tile, &projector)?;
+    let bank = CorridorLandmarkBank::new(
+        catalog_digest,
+        xfeat.encoder_contract(),
+        DEFAULT_KASHIN_SEED,
+        tile_m as f32,
+        tiles,
+    )?;
+
+    let sharded = should_write_sharded_dir(&opts.output_bank_path);
+    let bank_bytes = if sharded {
+        let _store =
+            CorridorTileStore::write_bank_dir(&bank, &opts.output_bank_path, DEFAULT_WINDOW_TILES)?;
+        bank.to_bytes().len()
+    } else {
+        if let Some(parent) = opts.output_bank_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|source| PipelineError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let encoded = bank.to_bytes();
+        fs::write(&opts.output_bank_path, &encoded).map_err(|source| PipelineError::Io {
+            path: opts.output_bank_path.clone(),
+            source,
+        })?;
+        encoded.len()
+    };
+
+    let ray_reduction = if total_rays > 0 {
+        (total_pixels as f64) / (total_rays as f64)
+    } else {
+        1.0
+    };
+    Ok(json!({
+        "corridor_bank_path": opts.output_bank_path.display().to_string(),
+        "sharded_store": sharded,
+        "bank_bytes": bank_bytes,
+        "xfeat_runtime": xfeat.runtime_name(),
+        "xfeat_weights_sha256": hex(xfeat.weights_sha256()),
+        "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
+        "tile_size_m": tile_m,
+        "tiles": bank.tiles.len(),
+        "canonical_views": canonical_views,
+        "landmarks_3d": bank.total_landmarks(),
+        "adaptive_rays_cast": total_rays,
+        "adaptive_ray_reduction": ray_reduction,
+        "elapsed_ms": t0.elapsed().as_secs_f64() * 1000.0,
+    }))
+}
+
+fn should_write_sharded_dir(path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    match path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => {
+            ext.eq_ignore_ascii_case("nvktiledir") || ext.eq_ignore_ascii_case("nvktstore")
+        }
+        None => true,
+    }
+}
+
+fn assemble_tiles(
+    tile_buckets: BTreeMap<(i32, i32), BandVoxelMap>,
+    tile_m: f64,
+    max_per_tile: usize,
+    projector: &HadamardProjector,
+) -> Result<Vec<CorridorTileEntry>, PipelineError> {
     let mut tiles = Vec::with_capacity(tile_buckets.len());
     for ((tx, ty), band_map) in tile_buckets {
         let num_bands = band_map.len().max(1);
@@ -274,51 +371,13 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
                 tile_y: ty,
             },
             anchor_enu,
-            &projector,
+            projector,
             &world_pts,
             (&obs_dirs, &cam_xs, &ref_dists),
             &feat,
         )?);
     }
-
-    let bank = CorridorLandmarkBank::new(
-        catalog_digest,
-        xfeat.encoder_contract(),
-        DEFAULT_KASHIN_SEED,
-        tile_m as f32,
-        tiles,
-    )?;
-    if let Some(parent) = opts.output_bank_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|source| PipelineError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    let encoded = bank.to_bytes();
-    fs::write(&opts.output_bank_path, &encoded).map_err(|source| PipelineError::Io {
-        path: opts.output_bank_path.clone(),
-        source,
-    })?;
-    let ray_reduction = if total_rays > 0 {
-        (total_pixels as f64) / (total_rays as f64)
-    } else {
-        1.0
-    };
-    Ok(json!({
-        "corridor_bank_path": opts.output_bank_path.display().to_string(),
-        "bank_bytes": encoded.len(),
-        "xfeat_weights_sha256": hex(&encoder_digest),
-        "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
-        "tile_size_m": tile_m,
-        "tiles": bank.tiles.len(),
-        "canonical_views": canonical_views,
-        "landmarks_3d": bank.total_landmarks(),
-        "adaptive_rays_cast": total_rays,
-        "adaptive_ray_reduction": ray_reduction,
-        "elapsed_ms": t0.elapsed().as_secs_f64() * 1000.0,
-    }))
+    Ok(tiles)
 }
 
 fn select_corridor_tiles(
@@ -397,7 +456,7 @@ pub(crate) fn canonical_tile_poses(
     out
 }
 
-fn unit_obs_dir(eye_enu: [f64; 3], world_enu: [f64; 3]) -> [f32; 3] {
+pub(crate) fn unit_obs_dir(eye_enu: [f64; 3], world_enu: [f64; 3]) -> [f32; 3] {
     let d = [
         (eye_enu[0] - world_enu[0]) as f32,
         (eye_enu[1] - world_enu[1]) as f32,

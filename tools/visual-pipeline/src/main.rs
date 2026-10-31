@@ -259,6 +259,9 @@ fn matcher_subcommands() -> [Command; 7] {
                     .default_value("4")
                     .value_parser(value_parser!(u32)),
             )
+            .arg(str_arg("xfeat-runtime", Some("burn-f32")))
+            .arg(path_arg("xfeat-onnx", false))
+            .arg(path_arg("onnx-runtime", false))
             .arg(Arg::new("only").long("only").action(ArgAction::Append)),
         Command::new("bank-match")
             .about("Match query photos in real time against an NVKBANK1 reference bank")
@@ -281,6 +284,9 @@ fn matcher_subcommands() -> [Command; 7] {
                     .default_value("2048")
                     .value_parser(value_parser!(usize)),
             )
+            .arg(str_arg("xfeat-runtime", Some("burn-f32")))
+            .arg(path_arg("xfeat-onnx", false))
+            .arg(path_arg("onnx-runtime", false))
             .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue))
             .arg(Arg::new("only").long("only").action(ArgAction::Append)),
         matcher_args(
