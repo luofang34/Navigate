@@ -23,7 +23,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Pinned in tools/visual-bench/model-assets/loftr.json and tools/visual-model/src/burn_weights.rs.
+  # Pinned in tools/visual-model/model-assets/loftr.json and tools/visual-model/src/burn_weights.rs.
   LOFTR_CHECKPOINT_URL: https://cmp.felk.cvut.cz/~mishkdmy/models/loftr_outdoor.ckpt
   LOFTR_CHECKPOINT_SHA256: 21f5bec5968178e8bc8b7633441836fe5de4f47d861dd2cd7dc38e271b0479ec
 

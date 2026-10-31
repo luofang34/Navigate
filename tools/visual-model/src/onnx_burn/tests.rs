@@ -5,8 +5,7 @@ use std::path::Path;
 
 #[test]
 fn converts_real_lighterglue_onnx_and_loads_in_burn() {
-    let asset =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../visual-bench/model-assets/lighterglue.onnx");
+    let asset = Path::new(env!("CARGO_MANIFEST_DIR")).join("model-assets/lighterglue.onnx");
     let bytes = std::fs::read(&asset).expect("read lighterglue.onnx");
     let f32_bytes = prepare_lighterglue(&bytes, false).expect("convert f32");
     let f16_bytes = prepare_lighterglue(&bytes, true).expect("convert f16");

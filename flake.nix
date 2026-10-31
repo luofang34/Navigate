@@ -15,7 +15,7 @@
             src = ./.;
             filter = path: type:
               !(builtins.elem (builtins.baseNameOf path)
-                [ ".git" "target" ".venv" "__pycache__" "webapp" "node_modules" ])
+                [ ".git" "target" ".venv" "__pycache__" ])
               && pkgs.lib.cleanSourceFilter path type;
           };
           workflow = pkgs.rustPlatform.buildRustPackage {
@@ -51,7 +51,6 @@
           default = workflow;
           inherit workflow model;
           runtime = pkgs.onnxruntime;
-          converter = import ./nix/onnx2webnn/package.nix { inherit pkgs; };
         } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin { inherit rustnn; });
       checks = eachSystem (system:
         builtins.removeAttrs self.packages.${system} [ "default" "runtime" ]);

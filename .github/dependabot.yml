@@ -1,6 +1,5 @@
 # Keeps the pinned workflow actions current. Each pin is a full commit SHA with its
-# release tag in a comment; Dependabot updates both. scripts/check-actions.mjs still
-# requires the pinned revisions to run on Node.js 24, composite or Docker.
+# release tag in a comment; Dependabot updates both.
 version: 2
 updates:
   - package-ecosystem: github-actions

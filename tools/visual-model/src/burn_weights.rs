@@ -5,7 +5,7 @@ use pytorch_reader::{DType, PytorchReader};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-/// SHA-256 of `loftr_outdoor.ckpt`, as `tools/visual-bench/model-assets/loftr.json` records.
+/// SHA-256 of `loftr_outdoor.ckpt`, as `tools/visual-model/model-assets/loftr.json` records.
 const CHECKPOINT_SHA256: &str = "21f5bec5968178e8bc8b7633441836fe5de4f47d861dd2cd7dc38e271b0479ec";
 
 /// Fold the batch normalizations and write safetensors, in F16 when `half` is set.

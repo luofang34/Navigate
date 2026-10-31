@@ -31,7 +31,7 @@ python tools/visual-inference/export_loftr.py \
 
 The tool checks output parity with the original model on the image pair and
 blank inputs. The public asset identity is in
-`tools/visual-bench/model-assets/loftr.json`. LoFTR and Kornia use Apache-2.0.
+`tools/visual-model/model-assets/loftr.json`. LoFTR and Kornia use Apache-2.0.
 The export uses dual softmax. It does not include optimal transport code from
 SuperGlue. Image-pair parity is not a camera-accuracy measurement.
 
