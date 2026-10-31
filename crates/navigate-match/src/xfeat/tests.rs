@@ -364,9 +364,6 @@ fn kaiming_xfeat_weights() -> Weights {
 
 #[test]
 fn f16_backbone_preserves_encoder_contract_and_descriptor_cosine_above_0999() {
-    #[cfg(feature = "gpu")]
-    let device = Device::default();
-    #[cfg(not(feature = "gpu"))]
     let device = Device::flex();
     assert!(XFeat::supports_f16(&device));
     let f32_model =
