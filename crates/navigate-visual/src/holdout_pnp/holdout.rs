@@ -1,14 +1,14 @@
-//! Mask-aware spatial holdout partitioning and ray domain conditioning.
+//! Mask-aware spatial holdout partitioning and ray-domain conditioning.
 
 use super::point_jacobian;
 use nalgebra::{Matrix3, Matrix6, Vector3};
 
-/// Deterministic 25% spatial holdout partitioner across occupied ground sub-cells.
+/// Deterministic spatial holdout partitioner across occupied ground sub-cells.
 #[derive(Debug, Clone)]
 pub struct MaskAwareSpatialHoldout {
-    /// Grid cell subdivisions across width and height [cols, rows].
+    /// Grid cell subdivisions `[columns, rows]` across width and height.
     pub subdivisions: [usize; 2],
-    /// Holdout percentage fraction (nominal 0.25).
+    /// Holdout fraction per occupied cell (`0.25` by default).
     pub holdout_fraction: f64,
 }
 
@@ -22,7 +22,7 @@ impl Default for MaskAwareSpatialHoldout {
 }
 
 impl MaskAwareSpatialHoldout {
-    /// Partitions candidate 2D point indices into fit and holdout sets.
+    /// Partition candidate 2D point indices into fit and holdout sets.
     #[must_use]
     pub fn partition(
         &self,
@@ -32,19 +32,21 @@ impl MaskAwareSpatialHoldout {
     ) -> (Vec<usize>, Vec<usize>) {
         let mut fit_indices = Vec::new();
         let mut holdout_indices = Vec::new();
+        let cols = self.subdivisions[0].max(1);
+        let rows = self.subdivisions[1].max(1);
         let w = f64::from(image_size[0].max(1));
         let h = f64::from(image_size[1].max(1));
-        let cell_w = w / self.subdivisions[0] as f64;
-        let cell_h = h / self.subdivisions[1] as f64;
+        let cell_w = w / (cols as f64);
+        let cell_h = h / (rows as f64);
 
-        let mut cell_buckets = vec![Vec::new(); self.subdivisions[0] * self.subdivisions[1]];
+        let mut cell_buckets = vec![Vec::new(); cols * rows];
         for (i, pt) in points.iter().enumerate() {
             if mask.is_some_and(|m| i < m.len() && !m[i]) {
                 continue;
             }
-            let col = ((pt[0] / cell_w).floor() as usize).min(self.subdivisions[0] - 1);
-            let row = ((pt[1] / cell_h).floor() as usize).min(self.subdivisions[1] - 1);
-            let cell_idx = row * self.subdivisions[0] + col;
+            let col = ((pt[0] / cell_w).floor() as usize).min(cols - 1);
+            let row = ((pt[1] / cell_h).floor() as usize).min(rows - 1);
+            let cell_idx = row * cols + col;
             cell_buckets[cell_idx].push(i);
         }
 
@@ -63,21 +65,21 @@ impl MaskAwareSpatialHoldout {
     }
 }
 
-/// Analysis of query rays across angular span and normal-matrix conditioning.
+/// Angular span and normal-matrix conditioning summary for query camera rays.
 #[derive(Debug, Clone)]
 pub struct QueryRayDomain {
-    /// Total occupied ground subcells.
+    /// Occupied ground sub-cell count.
     pub occupied_subcells: usize,
     /// Maximum ray-angle span in radians.
     pub ray_angle_span_rad: f64,
-    /// Condition number of 6-DoF normal matrix.
+    /// Condition number of the 6-DoF normal matrix.
     pub condition_number: f64,
-    /// Minimum eigenvalue of normal matrix.
+    /// Minimum eigenvalue of the 6-DoF normal matrix.
     pub min_eigenvalue: f64,
 }
 
 impl QueryRayDomain {
-    /// Computes ray domain metrics from 3D world points, 2D pixels, pose, and intrinsics.
+    /// Analyze ray-domain conditioning from 3D world points, 2D pixels, pose, and intrinsics.
     #[must_use]
     pub fn analyze(
         world_points: &[[f64; 3]],
@@ -91,7 +93,6 @@ impl QueryRayDomain {
             return None;
         }
 
-        // Count occupied subcells in 4x4 grid
         let w = f64::from(image_size[0].max(1));
         let h = f64::from(image_size[1].max(1));
         let mut occupied = [false; 16];
@@ -102,7 +103,6 @@ impl QueryRayDomain {
         }
         let occupied_subcells = occupied.iter().filter(|&&v| v).count();
 
-        // Compute ray angle span
         let fx = k[(0, 0)];
         let fy = k[(1, 1)];
         let cx = k[(0, 2)];
@@ -111,8 +111,7 @@ impl QueryRayDomain {
         for p in pixels {
             let rx = (p[0] - cx) / fx;
             let ry = (p[1] - cy) / fy;
-            let r = Vector3::new(rx, ry, 1.0).normalize();
-            rays.push(r);
+            rays.push(Vector3::new(rx, ry, 1.0).normalize());
         }
 
         let mut max_span = 0.0_f64;
@@ -126,7 +125,6 @@ impl QueryRayDomain {
             }
         }
 
-        // Compute 6-DoF normal matrix via point_jacobian
         let eye_v = Vector3::from(eye);
         let mut normal_matrix = Matrix6::<f64>::zeros();
         let mut valid_count = 0usize;
@@ -137,7 +135,6 @@ impl QueryRayDomain {
                 valid_count += 1;
             }
         }
-
         if valid_count < 6 {
             return None;
         }
@@ -159,7 +156,7 @@ impl QueryRayDomain {
         })
     }
 
-    /// Verifies if conditioning satisfies non-degeneracy criteria.
+    /// Return `true` when the ray domain satisfies non-degenerate conditioning limits.
     #[must_use]
     pub fn is_well_conditioned(&self) -> bool {
         self.occupied_subcells >= 4 && self.min_eigenvalue >= 1e-6 && self.condition_number <= 1e10

@@ -2,7 +2,9 @@
 
 use nalgebra::Matrix3;
 
-pub(super) fn compose_fallback_u8(
+/// Compose a valid-terrain mask from a fallback mask and propeller detections.
+#[must_use]
+pub fn compose_fallback_u8(
     total: usize,
     fb_raw: &[u8],
     prop_occluded: &[bool],
@@ -18,7 +20,9 @@ pub(super) fn compose_fallback_u8(
     (out, valid)
 }
 
-pub(super) fn compose_unmasked_u8(total: usize, prop_occluded: &[bool]) -> (Vec<u8>, usize) {
+/// Compose a valid-terrain mask from propeller detections alone.
+#[must_use]
+pub fn compose_unmasked_u8(total: usize, prop_occluded: &[bool]) -> (Vec<u8>, usize) {
     let mut out = vec![0u8; total];
     let mut valid = 0usize;
     for (dst, &blade) in out.iter_mut().zip(prop_occluded.iter().take(total)) {
@@ -53,7 +57,9 @@ fn compose_static_u8(
     (out, valid)
 }
 
-pub(super) fn compose_amortized_u8(
+/// Compose a valid-terrain mask by warping `sky_keep` with attitude delta and applying `airframe_keep`.
+#[must_use]
+pub fn compose_amortized_u8(
     [w, h]: [u32; 2],
     airframe_keep: &[u8],
     sky_keep: &[u8],
@@ -91,6 +97,10 @@ pub(super) fn compose_amortized_u8(
     );
     let hom = k_pix * delta_key_from_cur * k_inv;
     let mut out = vec![0u8; total];
+
+    #[cfg(target_arch = "wasm32")]
+    let workers = 1usize;
+    #[cfg(not(target_arch = "wasm32"))]
     let workers = if total >= 120_000 {
         std::thread::available_parallelism()
             .map(|n| n.get().min(8))
@@ -98,6 +108,7 @@ pub(super) fn compose_amortized_u8(
     } else {
         1
     };
+
     if workers <= 1 {
         let valid = warp_sky_rows(
             0,
@@ -111,35 +122,42 @@ pub(super) fn compose_amortized_u8(
         return (out, valid);
     }
 
-    let rows_per_band = height.div_ceil(workers).max(1);
-    let valid_total = std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        let mut rem = out.as_mut_slice();
-        let mut y0 = 0usize;
-        while !rem.is_empty() && y0 < height {
-            let band_rows = rows_per_band.min(height - y0);
-            let (band_out, rest) = rem.split_at_mut(band_rows * width);
-            rem = rest;
-            let start_y = y0;
-            y0 += band_rows;
-            handles.push(scope.spawn(move || {
-                warp_sky_rows(
-                    start_y,
-                    [width, height],
-                    &hom,
-                    airframe_keep,
-                    sky_keep,
-                    prop_occluded,
-                    band_out,
-                )
-            }));
-        }
-        handles
-            .into_iter()
-            .map(|h_join| h_join.join().unwrap_or(0))
-            .sum()
-    });
-    (out, valid_total)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let rows_per_band = height.div_ceil(workers).max(1);
+        let valid_total = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            let mut rem = out.as_mut_slice();
+            let mut y0 = 0usize;
+            while !rem.is_empty() && y0 < height {
+                let band_rows = rows_per_band.min(height - y0);
+                let (band_out, rest) = rem.split_at_mut(band_rows * width);
+                rem = rest;
+                let start_y = y0;
+                y0 += band_rows;
+                handles.push(scope.spawn(move || {
+                    warp_sky_rows(
+                        start_y,
+                        [width, height],
+                        &hom,
+                        airframe_keep,
+                        sky_keep,
+                        prop_occluded,
+                        band_out,
+                    )
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h_join| h_join.join().unwrap_or(0))
+                .sum()
+        });
+        (out, valid_total)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (out, 0)
+    }
 }
 
 fn warp_sky_rows(
@@ -189,6 +207,3 @@ fn warp_sky_rows(
     }
     valid
 }
-
-#[cfg(test)]
-mod tests;

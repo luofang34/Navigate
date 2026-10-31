@@ -1,8 +1,8 @@
-//! Deterministic L1 IRLS and graduated non-convexity pose solver with spatial holdout.
+//! Deterministic L1 IRLS and graduated non-convexity (GNC) pose solver with spatial holdout.
 
 use super::{
-    PoseCandidate, fit_pose_ransac, point_jacobian, refine_pose_lm, reproj_error, scaled_inlier_px,
-    score_pose_candidate, spatial_holdout,
+    PoseCandidate, fit_pose_ransac, refine_pose_lm, scaled_inlier_px, score_pose_candidate,
+    spatial_holdout,
 };
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
 
@@ -131,6 +131,7 @@ impl TrainOptimizer<'_> {
 /// This solver fits the pose on training correspondences outside [`spatial_holdout`].
 /// It rejects translations larger than `5,000` metres from `initial_pose`.
 /// It then scores the pose on held-out grid cells.
+#[must_use]
 pub fn fit_pose_l1_gnc(
     world_points: &[[f64; 3]],
     image_pixels: &[[f64; 2]],
@@ -226,7 +227,8 @@ pub fn fit_pose_l1_gnc(
 ///
 /// When `initial_pose` is `Some`, this function runs [`fit_pose_l1_gnc`] first.
 /// It returns the candidate immediately if `geometry_accepted` is `true`.
-/// Otherwise, it calls [`fit_pose_ransac`].
+/// Otherwise, it runs [`fit_pose_ransac`] and returns the higher-priority candidate.
+#[must_use]
 pub fn fit_pose_hybrid(
     world_points: &[[f64; 3]],
     image_pixels: &[[f64; 2]],
@@ -253,8 +255,9 @@ pub fn fit_pose_hybrid(
     }
 }
 
-/// Triangulate a 6-DoF `(eye, rotation)` seed from 2-ray bundles and symmetric triad alignment.
-pub(crate) fn refine_seed_eye_2pt(
+/// Triangulate a 6-DoF `(eye, rotation)` seed from 2-ray bundles and triad alignment.
+#[must_use]
+pub fn refine_seed_eye_2pt(
     world_pts: &[[f64; 3]],
     pixels: &[[f64; 2]],
     (hyp_eye, hyp_rot): ([f64; 3], Matrix3<f64>),
@@ -367,127 +370,53 @@ fn triad_rotation(
     Some(c_mat * w_mat.transpose())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct HoldoutScene {
-        world: Vec<[f64; 3]>,
-        pixels: Vec<[f64; 2]>,
-        k: Matrix3<f64>,
-        size: [u32; 2],
-        true_eye: [f64; 3],
-        true_rot: Matrix3<f64>,
+/// Compute pixel reprojection residuals and `6`-DoF pose Jacobians for one 3D-2D pair.
+#[must_use]
+pub fn point_jacobian(
+    world: [f64; 3],
+    pixel: [f64; 2],
+    eye: Vector3<f64>,
+    rot: &Matrix3<f64>,
+    k: &Matrix3<f64>,
+) -> Option<(f64, f64, Vector6<f64>, Vector6<f64>)> {
+    let pc = rot * (Vector3::from(world) - eye);
+    if pc.z <= 0.1 || !pc.z.is_finite() {
+        return None;
     }
+    let (fx, fy, cx, cy) = (k[(0, 0)], k[(1, 1)], k[(0, 2)], k[(1, 2)]);
+    let inv_z = 1.0 / pc.z;
+    let inv_z2 = inv_z * inv_z;
+    let ru = fx * pc.x * inv_z + cx - pixel[0];
+    let rv = fy * pc.y * inv_z + cy - pixel[1];
+    let du = Vector3::new(fx * inv_z, 0.0, -fx * pc.x * inv_z2);
+    let dv = Vector3::new(0.0, fy * inv_z, -fy * pc.y * inv_z2);
+    let j_rot_u = pc.cross(&du);
+    let j_rot_v = pc.cross(&dv);
+    let j_eye_u = -(rot.transpose() * du);
+    let j_eye_v = -(rot.transpose() * dv);
+    let ju = Vector6::new(
+        j_rot_u.x, j_rot_u.y, j_rot_u.z, j_eye_u.x, j_eye_u.y, j_eye_u.z,
+    );
+    let jv = Vector6::new(
+        j_rot_v.x, j_rot_v.y, j_rot_v.z, j_eye_v.x, j_eye_v.y, j_eye_v.z,
+    );
+    Some((ru, rv, ju, jv))
+}
 
-    fn synthetic_holdout_scene(scale_m: f64, outlier_every_five: usize) -> HoldoutScene {
-        let size = [960, 720];
-        let k = Matrix3::new(780.0, 0.0, 479.5, 0.0, 780.0, 359.5, 0.0, 0.0, 1.0);
-        let true_eye = [0.21 * scale_m, -0.14 * scale_m, 0.92 * scale_m];
-        let look_down = Matrix3::new(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0);
-        let tilt = Rotation3::from_euler_angles(0.16, -0.11, 0.35).into_inner();
-        let true_rot = tilt * look_down;
-
-        let mut world = Vec::with_capacity(80);
-        let mut pixels = Vec::with_capacity(80);
-        for gy in 0..8 {
-            for gx in 0..10 {
-                let u = 48.0 + f64::from(gx) * 96.0;
-                let v = 45.0 + f64::from(gy) * 90.0;
-                let depth =
-                    scale_m * (0.82 + 0.14 * (f64::from(gx) * 0.7 + f64::from(gy) * 0.9).sin());
-                let ray_cam = Vector3::new(
-                    (u - k[(0, 2)]) * depth / k[(0, 0)],
-                    (v - k[(1, 2)]) * depth / k[(1, 1)],
-                    depth,
-                );
-                let pt = Vector3::from(true_eye) + true_rot.transpose() * ray_cam;
-                world.push([pt.x, pt.y, pt.z]);
-                pixels.push([u, v]);
-            }
-        }
-
-        let mut outliers = 0usize;
-        for (idx, px) in pixels.iter_mut().enumerate() {
-            if (idx * 3 + 1) % 5 < outlier_every_five {
-                let mag = 120.0 + (outliers as f64) * 6.0;
-                let ang = 0.4 + (outliers as f64) * 0.23;
-                px[0] += mag * ang.cos();
-                px[1] += mag * ang.sin();
-                outliers += 1;
-            }
-        }
-        HoldoutScene {
-            world,
-            pixels,
-            k,
-            size,
-            true_eye,
-            true_rot,
-        }
+/// Compute Euclidean pixel reprojection error for a point in front of the camera.
+#[must_use]
+pub fn reproj_error(
+    world: [f64; 3],
+    pixel: [f64; 2],
+    eye: [f64; 3],
+    rot: &Matrix3<f64>,
+    k: &Matrix3<f64>,
+) -> Option<f64> {
+    let pc = rot * (Vector3::from(world) - Vector3::from(eye));
+    if pc.z <= 0.1 {
+        return None;
     }
-
-    #[test]
-    fn l1_gnc_and_hybrid_accept_accurate_pose_under_40_percent_outliers() {
-        let s = synthetic_holdout_scene(1_000.0, 2);
-        let init_eye = [
-            s.true_eye[0] + 65.0,
-            s.true_eye[1] - 45.0,
-            s.true_eye[2] + 30.0,
-        ];
-        let init_rot = Rotation3::from_euler_angles(0.06, -0.05, 0.07).into_inner() * s.true_rot;
-
-        let cand = fit_pose_l1_gnc(&s.world, &s.pixels, &s.k, s.size, (init_eye, init_rot))
-            .expect("L1-GNC must produce a pose candidate");
-        let repeat = fit_pose_l1_gnc(&s.world, &s.pixels, &s.k, s.size, (init_eye, init_rot))
-            .expect("repeated L1-GNC call must match");
-        assert_eq!(cand, repeat);
-        assert!(cand.score.geometry_accepted, "score: {:?}", cand.score);
-
-        let eye_err = (Vector3::from(cand.eye) - Vector3::from(s.true_eye)).norm();
-        let rel_rot = cand.rotation * s.true_rot.transpose();
-        let trace_cos = ((rel_rot.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
-        let rot_err_deg = trace_cos.acos().to_degrees();
-        assert!(eye_err < 0.05, "eye error {eye_err} m >= 0.05 m");
-        assert!(
-            rot_err_deg < 0.01,
-            "rotation error {rot_err_deg} deg >= 0.01 deg"
-        );
-        assert_eq!(cand.score.inliers, 48);
-
-        let hybrid = fit_pose_hybrid(
-            &s.world,
-            &s.pixels,
-            &s.k,
-            s.size,
-            Some((init_eye, init_rot)),
-        )
-        .expect("hybrid solver must accept deterministic L1-GNC candidate");
-        assert_eq!(hybrid, cand);
-
-        let near = synthetic_holdout_scene(10.0, 1);
-        let fallback = fit_pose_hybrid(&near.world, &near.pixels, &near.k, near.size, None)
-            .expect("hybrid solver without prior must fall back to RANSAC");
-        assert!(fallback.score.geometry_accepted);
-    }
-
-    #[test]
-    fn enforces_displacement_guard_and_minimum_pair_count() {
-        let s = synthetic_holdout_scene(1_000.0, 2);
-        assert!(
-            fit_pose_l1_gnc(
-                &s.world[..15],
-                &s.pixels[..15],
-                &s.k,
-                s.size,
-                (s.true_eye, s.true_rot)
-            )
-            .is_none()
-        );
-
-        let far_eye = [s.true_eye[0] + 5_500.0, s.true_eye[1], s.true_eye[2]];
-        assert!(
-            fit_pose_l1_gnc(&s.world, &s.pixels, &s.k, s.size, (far_eye, s.true_rot)).is_none()
-        );
-    }
+    let u = k[(0, 0)] * (pc.x / pc.z) + k[(0, 2)];
+    let v = k[(1, 1)] * (pc.y / pc.z) + k[(1, 2)];
+    Some((u - pixel[0]).hypot(v - pixel[1]))
 }

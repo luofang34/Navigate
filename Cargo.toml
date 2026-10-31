@@ -18,7 +18,6 @@ members = [
     "crates/navigate-match-kernels",
     "crates/navigate-locate",
     "crates/navigate-locate-web",
-    "crates/navigate-visual-workflow",
     "crates/navigate-visual-render",
     "crates/navigate-visual-fusion",
     "crates/navigate-visual-session",

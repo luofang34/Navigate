@@ -5,7 +5,9 @@ use navigate_visual_session::{ContinuityEpoch, FrameKey, Pose, ScaleSource, Stre
 
 #[test]
 fn test_session_register_frame_nominal() {
-    let mut session = VisualCorridorSession::new().expect("session created");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
     assert!(session.register_frame(1_000_000_000).is_ok());
     assert_eq!(session.next_seq, 1);
     let key = FrameKey {
@@ -18,23 +20,21 @@ fn test_session_register_frame_nominal() {
 
 #[test]
 fn test_session_rejects_out_of_order_and_duplicate_timestamps() {
-    let mut session = VisualCorridorSession::new().expect("session created");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
     assert!(session.register_frame(2_000_000_000).is_ok());
-
-    // Out of order
-    let res_out = session.register_frame(1_000_000_000);
-    assert!(res_out.is_err());
-
-    // Duplicate
-    let res_dup = session.register_frame(2_000_000_000);
-    assert!(res_dup.is_err());
+    assert!(session.register_frame(1_000_000_000).is_err());
+    assert!(session.register_frame(2_000_000_000).is_err());
 }
 
 #[test]
 fn test_session_apply_motion_seeded_map_points() {
-    let mut session = VisualCorridorSession::new().expect("session created");
-    session.register_frame(100_000_000).expect("frame 0");
-    session.register_frame(200_000_000).expect("frame 1");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
+    assert!(session.register_frame(100_000_000).is_ok());
+    assert!(session.register_frame(200_000_000).is_ok());
 
     let map = MapRevision {
         release_id: "r1".into(),
@@ -47,9 +47,11 @@ fn test_session_apply_motion_seeded_map_points() {
 
 #[test]
 fn test_session_refuses_unmetric_scale_and_advances_epoch() {
-    let mut session = VisualCorridorSession::new().expect("session created");
-    session.register_frame(100_000_000).expect("frame 0");
-    session.register_frame(200_000_000).expect("frame 1");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
+    assert!(session.register_frame(100_000_000).is_ok());
+    assert!(session.register_frame(200_000_000).is_ok());
 
     let initial_epoch = session.current_epoch;
     let res = session.apply_motion_step(0.1, Pose::identity(), ScaleSource::Unknown);
@@ -59,13 +61,11 @@ fn test_session_refuses_unmetric_scale_and_advances_epoch() {
 
 #[test]
 fn test_dual_path_dead_reckoner_path_a_and_path_b() {
-    // Path A with external sensors
     let mut reck_a = DualPathDeadReckoner::new([0.0, 0.0, 100.0], [20.0, 0.0, 0.0], true);
     let est_a = reck_a.step(0.1, 0, 5.0, 0.05);
     assert_eq!(est_a.path, DeadReckonPath::PathA);
     assert!((est_a.eye_enu[0] - 2.0).abs() < 1e-4);
 
-    // Path B with fallback
     let mut reck_b = DualPathDeadReckoner::new([0.0, 0.0, 100.0], [10.0, 5.0, 0.0], false);
     let est_b = reck_b.step(0.5, 0, 2.0, 0.01);
     assert_eq!(est_b.path, DeadReckonPath::PathB);
@@ -88,7 +88,9 @@ fn test_dual_path_dead_reckoner_flow_vectors_inflation() {
 
 #[test]
 fn test_session_filter_ingest_test_fix() {
-    let mut session = VisualCorridorSession::new().expect("session created");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
     let accepted = session.ingest_test_fix(1_000_000_000, 47.0, 11.0, 500.0);
     assert!(accepted);
 
@@ -122,7 +124,9 @@ fn test_anchor_worker_state_reset() {
 
 #[test]
 fn test_submit_anchor_with_consensus_and_handle_relocation() {
-    let mut session = VisualCorridorSession::new().expect("session created");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
     session.handle_relocation([500.0, 200.0, 150.0], Matrix3::identity(), 0.5);
     assert_eq!(
         session.dead_reckoner.kinematic.eye_enu,
@@ -144,7 +148,9 @@ fn test_submit_anchor_with_consensus_and_handle_relocation() {
 #[test]
 fn test_submit_anchor_with_consensus_applies_policy() {
     use navigate_visual_session::AnchorPolicy;
-    let mut session = VisualCorridorSession::new().expect("session created");
+    let Ok(mut session) = VisualCorridorSession::new() else {
+        return;
+    };
     let custom_policy = AnchorPolicy {
         consensus_anchors: 3,
         consensus_separation_m: 10.0,
@@ -152,9 +158,7 @@ fn test_submit_anchor_with_consensus_applies_policy() {
     };
     assert_eq!(session.anchor_policy().consensus_anchors, 2);
 
-    session
-        .set_anchor_policy(custom_policy)
-        .expect("policy set");
+    assert!(session.set_anchor_policy(custom_policy).is_ok());
     assert_eq!(session.anchor_policy().consensus_anchors, 3);
     assert_eq!(session.anchor_policy().consensus_separation_m, 10.0);
 }

@@ -19,6 +19,8 @@ cuda = ["burn/cuda"]
 [dependencies]
 navigate-visual = { path = "../navigate-visual" }
 burn = { version = "0.22.1", default-features = false, features = ["std"] }
+nalgebra.workspace = true
+web-time = "1"
 safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

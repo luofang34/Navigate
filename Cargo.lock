@@ -5027,11 +5027,15 @@ dependencies = [
  "image",
  "kamadak-exif",
  "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-fusion",
+ "navigate-geodesy",
  "navigate-match",
  "navigate-place",
  "navigate-visual",
+ "navigate-visual-fusion",
  "navigate-visual-render",
- "navigate-visual-workflow",
+ "navigate-visual-session",
  "pollster",
  "serde",
  "serde_json",
@@ -5076,7 +5080,6 @@ dependencies = [
  "nalgebra 0.34.2",
  "navigate-match-kernels",
  "navigate-visual",
- "navigate-visual-workflow",
  "ort",
  "pollster",
  "safetensors 0.8.0",
@@ -5145,6 +5148,7 @@ dependencies = [
  "burn",
  "getrandom 0.4.3",
  "image",
+ "nalgebra 0.34.2",
  "navigate-visual",
  "rand 0.10.3",
  "safetensors 0.8.0",
@@ -5154,6 +5158,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
  "zip 9.1.0",
 ]
 
@@ -5172,6 +5177,7 @@ dependencies = [
  "navigate-contract",
  "navigate-geodesy",
  "pollster",
+ "serde",
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tracing",
@@ -5202,6 +5208,7 @@ dependencies = [
  "navigate-contract",
  "navigate-fusion",
  "navigate-geodesy",
+ "navigate-locate",
  "navigate-match",
  "navigate-place",
  "navigate-recording",
@@ -5245,18 +5252,6 @@ dependencies = [
  "navigate-contract",
  "navigate-visual",
  "thiserror 2.0.19",
-]
-
-[[package]]
-name = "navigate-visual-workflow"
-version = "0.1.0"
-dependencies = [
- "image",
- "nalgebra 0.34.2",
- "navigate-visual",
- "pollster",
- "thiserror 2.0.19",
- "web-time",
 ]
 
 [[package]]

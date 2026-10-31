@@ -1,9 +1,9 @@
 //! Query extraction occurs once for each bounded candidate batch.
 
-use crate::{FeatureBackend, WorkflowError};
+use super::WorkflowError;
 use navigate_visual::{
-    CameraModel, Estimate, Frame, LocalizerConfig, PosePrior, PoseVerifier, ReferenceView,
-    VisualError,
+    CameraModel, Estimate, FeatureBackend, Frame, LocalizerConfig, PosePrior, PoseVerifier,
+    ReferenceView, VisualError,
 };
 use std::time::Duration;
 use web_time::Instant;

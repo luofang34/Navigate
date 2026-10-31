@@ -4,34 +4,19 @@ use crate::PipelineError;
 use burn::tensor::Device;
 use image::{GrayImage, RgbImage, imageops::colorops::grayscale};
 use nalgebra::Matrix3;
-use navigate_segment::{MaskPolicy, PropellerDetector, Segformer};
+pub use navigate_segment::amortized::MaskFrameTelemetry;
+use navigate_segment::{
+    MaskPolicy, PropellerDetector, Segformer,
+    amortized::{
+        SegEngine, compose_amortized_u8, compose_fallback_u8, compose_unmasked_u8,
+        horizon_from_keep_layers,
+    },
+};
 use std::{path::Path, time::Instant};
 
-mod compose;
 mod refresh;
 
-use compose::{compose_amortized_u8, compose_fallback_u8, compose_unmasked_u8};
-use refresh::{KeyLayers, Refresher, SegEngine};
-
-/// Per-frame masking telemetry from [`AmortizedMasker::mask_frame`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MaskFrameTelemetry {
-    /// Elapsed wall-clock time for mask generation in milliseconds.
-    pub mask_ms: f64,
-    /// `true` when new `Segformer` key layers took effect on this frame.
-    ///
-    /// With inline refresh the layers come from this frame. With background
-    /// refresh they come from the frame that `segformer_submitted` marked.
-    pub segformer_refreshed: bool,
-    /// `true` when this frame went to the background `Segformer` worker.
-    pub segformer_submitted: bool,
-    /// `Segformer` evaluation time of the layers that took effect on this frame.
-    pub segformer_ms: Option<f64>,
-    /// Fraction of pixels retained as valid matchable terrain (`[0.0, 1.0]`).
-    pub valid_fraction: f64,
-    /// Number of pixels excluded by [`PropellerDetector`] on this frame.
-    pub propeller_pixels: usize,
-}
+use refresh::{KeyLayers, Refresher};
 
 /// Amortized live frame masker combining `Segformer`, attitude sky warping, and [`PropellerDetector`].
 pub struct AmortizedMasker {
@@ -57,19 +42,14 @@ impl AmortizedMasker {
         let policy = MaskPolicy::parse(policy_str)?;
         let seg = if let Some(dir) = seg_model_dir {
             let (model, cfg, preproc) = Segformer::load_pretrained(dir, None, device)?;
-            let sky_label = cfg.class_index("sky").unwrap_or(2) as u8;
-            let airplane_indices = cfg.class_index("airplane").into_iter().collect();
-            let is_four_class = cfg.num_labels() == 4;
-            Some(Refresher::Inline(Box::new(SegEngine {
+            Some(Refresher::Inline(Box::new(SegEngine::from_loaded(
                 model,
+                &cfg,
                 preproc,
-                airplane_indices,
-                sky_label,
-                is_four_class,
-                device: device.clone(),
                 policy,
                 margin_px,
-            })))
+                device.clone(),
+            ))))
         } else {
             None
         };
@@ -82,12 +62,6 @@ impl AmortizedMasker {
     }
 
     /// Run `Segformer` refreshes on a named background thread.
-    ///
-    /// When no key layers exist yet, the first frame goes to the worker without
-    /// blocking and the masker uses `fallback_mask` and [`PropellerDetector`]
-    /// until the background layers arrive. While later refreshes run, frames
-    /// warp the previous key layers with their attitude.
-    /// A masker without a `Segformer` checkpoint does not change.
     ///
     /// # Errors
     ///
@@ -190,28 +164,29 @@ impl AmortizedMasker {
     }
 
     /// Record the solved world-to-camera rotation of the most recent frame.
-    ///
-    /// The rotation becomes the key rotation of `Segformer` layers made from
-    /// that frame, also when the layers arrive on a later frame.
     pub fn note_solved_rotation(&mut self, rot: Matrix3<f64>) {
         if let Some(seg) = &mut self.seg {
             seg.note_solved_rotation(&mut self.key, rot);
         }
     }
 
-    /// Check whether a Segformer model is configured.
+    /// Check whether a `Segformer` model is configured.
     #[must_use]
     pub fn has_segformer(&self) -> bool {
         self.seg.is_some()
     }
 
-    /// Check whether usable key layers exist for the given image dimensions.
+    /// Check whether usable key layers exist for `dims`.
     #[must_use]
     pub fn has_usable_key(&self, dims: [u32; 2]) -> bool {
         self.key.usable(dims)
     }
 
-    /// Run a fast initial Segformer pass on frame 1 to provide ground and sky masks before anchor jobs.
+    /// Run a fast initial `Segformer` pass on frame 1 before cold anchor jobs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] when background worker communication fails.
     pub fn fast_initial_pass(
         &mut self,
         rgb: &RgbImage,
@@ -226,33 +201,11 @@ impl AmortizedMasker {
     /// Estimate `(down_deg, roll_deg)` from the cached `Segformer` sky mask if sky is visible.
     #[must_use]
     pub fn horizon_attitude(&self, k: &Matrix3<f64>) -> Option<(f64, f64)> {
-        let [w, h] = self.key.dims;
-        let total = (w as usize) * (h as usize);
-        if self.key.sky_keep.len() != total
-            || self.key.airframe_keep.len() != total
-            || w < 8
-            || h < 8
-        {
-            return None;
-        }
-        if self.key.sky_keep.iter().all(|&keep| keep != 0) {
-            return None;
-        }
-        let map: Vec<u8> = self
-            .key
-            .sky_keep
-            .iter()
-            .zip(&self.key.airframe_keep)
-            .map(|(&sky, &air)| {
-                if air == 0 {
-                    navigate_segment::AIRFRAME
-                } else if sky == 0 {
-                    navigate_segment::SKY
-                } else {
-                    navigate_segment::GROUND
-                }
-            })
-            .collect();
-        crate::surface::horizon_attitude(&map, w, h, k)
+        horizon_from_keep_layers(
+            self.key.dims,
+            &self.key.sky_keep,
+            &self.key.airframe_keep,
+            k,
+        )
     }
 }

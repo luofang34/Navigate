@@ -11,8 +11,7 @@ fn gpu_depth_unprojection_matches_cpu_surface_raycast() {
     let rot = surface.camera_rotation(39.75, -75.55, 25.0, 55.0, 0.0);
     let (_, cpu_depth, _) = surface.render(eye, &rot, &k, size);
 
-    let frame =
-        LocalFrame::spherical_enu(surface.origin_lat, surface.origin_lon).expect("spherical frame");
+    let frame = LocalFrame::wgs84_enu(surface.origin_lat, surface.origin_lon).expect("wgs84 frame");
     let pose = surface_pose_to_gpu(&surface, frame, eye, &rot).expect("gpu pose");
     let camera = camera_model(&k, size).expect("camera");
     let gpu_view = GpuSurfaceView {

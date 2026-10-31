@@ -50,7 +50,7 @@ pub enum LocateError {
     Render(#[from] navigate_visual_render::RenderError),
     /// The geometry or the matcher failed.
     #[error("localization failed")]
-    Workflow(#[from] navigate_visual_workflow::WorkflowError),
+    Workflow(#[from] crate::WorkflowError),
     /// A geometry value was invalid.
     #[error("invalid geometry")]
     Visual(#[from] navigate_visual::VisualError),

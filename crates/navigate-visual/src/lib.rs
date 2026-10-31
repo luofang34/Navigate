@@ -18,22 +18,16 @@
 //! ```
 //! use image::GrayImage;
 //! use nalgebra::{UnitQuaternion, Vector3};
-//! use navigate_visual::{CameraModel, CameraPose, Frame, FrameStamp, LocalFrame,
-//!     Localizer, LocalizerConfig, MapRevision, PosePrior, PyramidalMatcher,
-//!     ReferenceView, VisualError};
-//!
+//! use navigate_visual::{CameraModel, CameraPose, Frame, FrameStamp, LocalFrame, Localizer,
+//!     LocalizerConfig, MapRevision, PosePrior, PyramidalMatcher, ReferenceView, VisualError};
 //! let camera = CameraModel { width: 64, height: 64, fx: 55.0, fy: 55.0, cx: 31.5, cy: 31.5 };
 //! let pose = CameraPose { position: Vector3::new(0.0, 0.0, 1000.0), orientation: UnitQuaternion::identity() };
 //! let prior = PosePrior { pose, position_radius_m: 100.0, attitude_radius_rad: 0.1 };
 //! let frame = Frame { stamp: FrameStamp { sequence: 0, capture_time_ns: 1 }, camera, image: GrayImage::new(64, 64) };
-//! let reference = ReferenceView {
-//!     map: MapRevision { release_id: "selected-release".into(), manifest_sha256: "a".repeat(64) },
-//!     frame: LocalFrame::anchor_mercator(47.0, 11.0)?,
-//!     pose, image: GrayImage::new(64, 64), depth_m: vec![1000.0; 64 * 64],
-//! };
+//! let map = MapRevision { release_id: "selected-release".into(), manifest_sha256: "a".repeat(64) };
+//! let reference = ReferenceView { map, frame: LocalFrame::anchor_mercator(47.0, 11.0)?, pose, image: GrayImage::new(64, 64), depth_m: vec![1000.0; 64 * 64] };
 //! let mut localizer = Localizer::new(PyramidalMatcher, LocalizerConfig::default())?;
-//! assert!(matches!(localizer.estimate_blocking(&frame, &reference, &prior),
-//!     Err(VisualError::InsufficientMatches { .. })));
+//! assert!(matches!(localizer.estimate_blocking(&frame, &reference, &prior), Err(VisualError::InsufficientMatches { .. })));
 //! # Ok::<(), VisualError>(())
 //! ```
 mod camera;
@@ -44,6 +38,7 @@ mod frame;
 mod geometry;
 #[cfg(feature = "gpu")]
 mod gpu;
+pub mod holdout_pnp;
 mod inference;
 mod local_frame;
 mod local_scene;
@@ -69,6 +64,10 @@ pub use geometry::{
 };
 #[cfg(feature = "gpu")]
 pub use gpu::GpuPyramidalMatcher;
+pub use holdout_pnp::{
+    MaskAwareSpatialHoldout, PoseCandidate, PoseScore, QueryRayDomain, candidate_priority,
+    fit_pose_hybrid, fit_pose_l1_gnc, fit_pose_ransac, refine_seed_eye_2pt, spatial_holdout,
+};
 pub use inference::{
     AsyncModelInference, EngineKind, GenericTensor, HostTensor, ModelInference, NamedTensor,
 };
@@ -80,7 +79,10 @@ pub use local_scene::{
     refine_regularized_local_scene,
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
-pub use matching::{AsyncImageMatcher, ImageMatcher, PixelMatch, PointTracker, PyramidalMatcher};
+pub use matching::{
+    AsyncImageMatcher, FeatureBackend, FeatureMetadata, ImageMatcher, PixelMatch, PointTracker,
+    PyramidalMatcher,
+};
 pub use orthographic::{
     OrthographicEstimate, OrthographicReference, RasterGeometry, RawPixelQuality,
 };

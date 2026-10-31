@@ -1,6 +1,6 @@
 [package]
 name = "navigate-locate"
-description = "Camera pose of one photo from map imagery and terrain, natively and in a browser"
+description = "Camera pose of one photo or flight corridor from map imagery and terrain"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,14 +10,19 @@ publish.workspace = true
 default = []
 # Native tile source over HTTP with a disk cache, for tools and tests.
 http = ["dep:ureq"]
-# JSON encoding of worker messages across the Web Worker boundary.
-serde = ["dep:serde"]
+# JSON encoding of worker messages and dynamics profiles across boundaries.
+serde = ["dep:serde", "navigate-visual/serde"]
 
 [dependencies]
+navigate-contract.workspace = true
+navigate-fusion.workspace = true
+navigate-geodesy.workspace = true
 navigate-visual = { path = "../navigate-visual" }
+navigate-visual-session = { path = "../navigate-visual-session" }
+navigate-visual-fusion = { path = "../navigate-visual-fusion" }
 navigate-place = { path = "../navigate-place" }
 navigate-visual-render = { path = "../navigate-visual-render" }
-navigate-visual-workflow = { path = "../navigate-visual-workflow" }
+navigate-match = { path = "../navigate-match", default-features = false }
 image = { workspace = true, features = ["jpeg", "png"] }
 nalgebra.workspace = true
 thiserror.workspace = true

@@ -1,4 +1,4 @@
-use super::compose_amortized_u8;
+use super::compose::compose_amortized_u8;
 use nalgebra::{Matrix3, Rotation3, Vector3};
 
 #[test]

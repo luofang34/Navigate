@@ -3,124 +3,20 @@
 mod debrief;
 
 pub use debrief::prepare_navigate_debrief;
+pub use navigate_locate::corridor::{kabsch_3d, relative_rotation_ransac};
 
 use crate::{
     PipelineError,
     clock::{PriorTrack, capture_anchor, movie_duration_s, quicktime_udta_tags},
     util::{file_sha256, read_json, run_tool, write_json},
 };
-use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Rotation3, UnitQuaternion};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
-
-/// Solve the orthogonal Procrustes rotation `R` (`b_i ≈ R * a_i`) via `3 x 3` SVD (`kabsch_3d`).
-pub fn kabsch_3d(rays_a: &[[f64; 3]], rays_b: &[[f64; 3]]) -> Option<Matrix3<f64>> {
-    if rays_a.len() != rays_b.len() || rays_a.len() < 2 {
-        return None;
-    }
-    let mut h = Matrix3::<f64>::zeros();
-    for (a, b) in rays_a.iter().zip(rays_b) {
-        let va = Vector3::from(*a);
-        let vb = Vector3::from(*b);
-        let na = va.norm();
-        let nb = vb.norm();
-        if na > 1e-9 && nb > 1e-9 {
-            h += (vb / nb) * (va / na).transpose();
-        }
-    }
-    let svd = h.svd(true, true);
-    let (u, vt) = (svd.u?, svd.v_t?);
-    let mut r = u * vt;
-    if r.determinant() < 0.0 {
-        let mut u_fix = u;
-        u_fix.set_column(2, &(-u.column(2)));
-        r = u_fix * vt;
-    }
-    Some(r)
-}
-
-/// Estimate relative camera rotation `R_ba` between calibrated pixel pairs via RANSAC.
-pub fn relative_rotation_ransac(
-    px_a: &[[f64; 2]],
-    px_b: &[[f64; 2]],
-    k: &Matrix3<f64>,
-    threshold_px: f64,
-) -> Option<(Matrix3<f64>, Vec<bool>)> {
-    if px_a.len() != px_b.len() || px_a.len() < 4 {
-        return None;
-    }
-    let fx = k[(0, 0)].max(1.0);
-    let fy = k[(1, 1)].max(1.0);
-    let cx = k[(0, 2)];
-    let cy = k[(1, 2)];
-    let rays_a: Vec<[f64; 3]> = px_a
-        .iter()
-        .map(|p| {
-            let v = Vector3::new((p[0] - cx) / fx, (p[1] - cy) / fy, 1.0).normalize();
-            [v.x, v.y, v.z]
-        })
-        .collect();
-    let rays_b: Vec<[f64; 3]> = px_b
-        .iter()
-        .map(|p| {
-            let v = Vector3::new((p[0] - cx) / fx, (p[1] - cy) / fy, 1.0).normalize();
-            [v.x, v.y, v.z]
-        })
-        .collect();
-
-    let max_angle = (threshold_px / fx.min(fy)).atan();
-    let cos_thresh = max_angle.cos();
-    let mut best_r = Matrix3::identity();
-    let mut best_count = 0usize;
-
-    let trials = 48usize.min(rays_a.len() * 2);
-    for t in 0..trials {
-        let i0 = (t * 7) % rays_a.len();
-        let i1 = (t * 13 + 1) % rays_a.len();
-        let i2 = (t * 29 + 2) % rays_a.len();
-        if i0 == i1 || i1 == i2 || i0 == i2 {
-            continue;
-        }
-        let sub_a = [rays_a[i0], rays_a[i1], rays_a[i2]];
-        let sub_b = [rays_b[i0], rays_b[i1], rays_b[i2]];
-        let Some(r) = kabsch_3d(&sub_a, &sub_b) else {
-            continue;
-        };
-        let count = rays_a
-            .iter()
-            .zip(&rays_b)
-            .filter(|(a, b)| (r * Vector3::from(**a)).dot(&Vector3::from(**b)) >= cos_thresh)
-            .count();
-        if count > best_count {
-            best_count = count;
-            best_r = r;
-        }
-    }
-    if best_count < 3 {
-        return None;
-    }
-    let inliers: Vec<bool> = rays_a
-        .iter()
-        .zip(&rays_b)
-        .map(|(a, b)| (best_r * Vector3::from(*a)).dot(&Vector3::from(*b)) >= cos_thresh)
-        .collect();
-    let in_a: Vec<[f64; 3]> = rays_a
-        .iter()
-        .zip(&inliers)
-        .filter_map(|(a, &ok)| ok.then_some(*a))
-        .collect();
-    let in_b: Vec<[f64; 3]> = rays_b
-        .iter()
-        .zip(&inliers)
-        .filter_map(|(b, &ok)| ok.then_some(*b))
-        .collect();
-    let refined = kabsch_3d(&in_a, &in_b).unwrap_or(best_r);
-    Some((refined, inliers))
-}
 
 /// Spherical linear interpolation between two `3 x 3` rotation matrices at `t` in `[0, 1]`.
 pub fn slerp_mat3(r0: &Matrix3<f64>, r1: &Matrix3<f64>, t: f64) -> Matrix3<f64> {
