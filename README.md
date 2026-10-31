@@ -62,9 +62,7 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-segment` | Rust SegFormer-B0 occlusion masks, propeller detection, and 4-class training |
 | `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
 | `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
-| `navigate-data` | Read interface for immutable navigation data on native and web hosts |
-| `navigate-data-fs` | File system implementation of the `navigate-data` read interface |
-| `navigate-imagery` | Coverage plans and content-addressed imagery packages |
+| `navigate-place` | Hilbert-sharded visual place index and bounded region search plans |
 | `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
 | `tools/visual-model` | Deterministic ONNX-to-SafeTensors weight converter for `LoFTR`, `XFeat`, and `LighterGlue` |
 | `tools/recording-worker` | JSON Lines worker for image matching and recording processing |
@@ -86,17 +84,10 @@ gravitational light deflection, gravitational delay, refraction, or clock drift.
 The WGS84/NED `NavigationSolution` belongs to Earth navigation. Do not encode
 states from other bodies as WGS84 positions to enter that filter.
 
-The [visual positioning tool](tools/visual-bench/README.md) runs image and video
-matching in the browser. Its Rust service provides optional imagery downloads.
-The tool is separate from the navigation core.
-
 Use the [visual recording pipeline](tools/visual-pipeline/README.md) to process
 photo datasets and export camera views for Sokoly.
 
 Build the visual API documentation with `cargo doc -p navigate-visual --open`.
-Run `cargo run --manifest-path tools/visual-bench/Cargo.toml -- --help` for
-image, video, and stream commands. The development tool uses the sibling
-MapLibre fork.
 
 ## Quality gates
 

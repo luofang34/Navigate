@@ -190,25 +190,6 @@ The report names each tensor file and gives its shape. Writes occur outside the
 timed model execution. Compare these values with a CPU reference. A provider
 name or a low inference time does not prove correct output.
 
-## Browser model probe
-
-The probe is outside the production web bundle. It runs inference in a browser
-worker. It compares real feature tensors with native CPU assignment results.
-It requires finite scores, identical selected matches, and GPU compute dispatches.
-The input manifest must contain at least 1024 features for each image.
-
-```sh
-python prepare_browser_probe.py /path/to/lighterglue.onnx \
-  /path/to/inputs.json /path/to/new-browser-inputs
-node browser/serve.mjs /path/to/new-browser-inputs \
-  ../visual-bench/webapp/runtime /path/to/lighterglue.onnx /path/to/new-report.json
-```
-
-Open the printed loopback URL in a WebGPU browser. The page writes its result to
-the given local report path. It does not send tensors to an external service.
-This probe checks the matcher model. Test the full search and pose pipeline
-separately before changing the production browser adapter.
-
 ## NVIDIA runtime selection
 
 The native adapter supports `Provider::Cuda` and `Provider::TensorRt`.

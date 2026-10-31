@@ -24,20 +24,13 @@ members = [
     "crates/navigate-visual-render",
     "crates/navigate-visual-fusion",
     "crates/navigate-visual-session",
-    "crates/navigate-data",
-    "crates/navigate-data-fs",
-    "crates/navigate-imagery",
     "crates/navigate-segment",
     "tools/visual-pipeline",
     "crates/navigate-place",
     "tests/e2e_corridor",
 ]
 exclude = [
-    "tools/imagery-provider",
-    "tools/visual-bench",
     "tools/visual-inference",
-    "tools/visual-correlation",
-    "tools/visual-service",
 ]
 
 [workspace.package]
