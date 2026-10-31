@@ -223,6 +223,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                     &prepared,
                     &qry_feat,
                     &cand,
+                    render_size,
                 );
             }
             (

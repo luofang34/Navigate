@@ -53,11 +53,14 @@ pub(super) fn acquire_corridor_anchor(
         only_cases: None,
     };
     let attitude = load_horizon_attitude(&opts.dataset_dir, case, k_full).or(live_attitude);
-    let seeds: Vec<_> = pred_pose
-        .into_iter()
-        .chain(generate_seeds(surface, case, &stage_opts, attitude))
-        .take(opts.anchor_attempts.max(1))
-        .collect();
+    let seeds = build_anchor_seeds(
+        surface,
+        case,
+        &stage_opts,
+        attitude,
+        pred_pose,
+        opts.anchor_attempts,
+    );
     let intrinsics = [
         k_render[(0, 0)],
         k_render[(1, 1)],
@@ -232,6 +235,24 @@ fn is_plausible_corridor_pose(c: &PoseCandidate, hyp_eye: [f64; 3]) -> bool {
     horiz.is_finite() && horiz <= 2_200.0 && dz <= 750.0 && c.score.image_support_fraction >= 0.025
 }
 
+fn build_anchor_seeds(
+    surface: &Surface,
+    case: &PhotoCase,
+    stage_opts: &MatchStageOptions,
+    attitude: Option<(f64, f64)>,
+    pred_pose: Option<([f64; 3], Matrix3<f64>)>,
+    anchor_attempts: usize,
+) -> Vec<([f64; 3], Matrix3<f64>)> {
+    pred_pose
+        .into_iter()
+        .chain(
+            generate_seeds(surface, case, stage_opts, attitude)
+                .into_iter()
+                .take(anchor_attempts.max(1)),
+        )
+        .collect()
+}
+
 fn eval_virtual_hypothesis(
     bank: &CorridorLandmarkBank,
     projector: &HadamardProjector,
@@ -241,6 +262,7 @@ fn eval_virtual_hypothesis(
     (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
     fast_exit: bool,
 ) -> Result<(Option<PoseCandidate>, VirtualCorridorView, usize), PipelineError> {
+    let min_cos_orientation = if -hyp_rot[(2, 2)] > 0.95 { -1.0 } else { 0.90 };
     let virt = bank.project_virtual_view(
         &VirtualViewCamera {
             eye_enu: hyp_eye,
@@ -249,7 +271,7 @@ fn eval_virtual_hypothesis(
             image_size: render_size,
             max_landmarks: max_lm,
             min_cos_incidence: 0.84,
-            min_cos_orientation: 0.90,
+            min_cos_orientation,
         },
         projector,
     );
@@ -395,3 +417,6 @@ fn collect_virtual_indexed(
     }
     (w, p)
 }
+
+#[cfg(test)]
+mod tests;

@@ -44,7 +44,7 @@ pub(crate) fn commands() -> [Command; 2] {
             .arg(path_arg("model", true))
             .arg(path_arg("output", true))
             .arg(float_arg("tile-size-m", Some("600.0")))
-            .arg(float_arg("radius-m", Some("1500.0")))
+            .arg(float_arg("radius-m", Some("3500.0")))
             .arg(float_arg("nominal-agl-m", Some("480.0")))
             .arg(
                 Arg::new("max-landmarks")

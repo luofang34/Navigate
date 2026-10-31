@@ -1,6 +1,12 @@
-use super::{KeyLayers, RefreshLayers, Refresher};
+use super::{KeyLayers, RefreshLayers, Refresher, SegEngine, four_class_keep_layers};
+use burn::tensor::Device;
 use image::RgbImage;
 use nalgebra::{Matrix3, Rotation3};
+use navigate_segment::{
+    AIRFRAME, CLASSES, GROUND, MaskPolicy, PROPELLER, PreprocessorConfig, SKY, Segformer,
+    SegformerConfig,
+};
+use std::error::Error;
 use std::sync::mpsc;
 
 const DIMS: [u32; 2] = [4, 3];
@@ -103,4 +109,47 @@ fn unsolved_submitted_frames_keep_their_estimated_rotation() {
     });
     assert!(arrived, "released refresh must arrive");
     assert_eq!(key.rot, Some(rotation(0.5)));
+}
+
+#[test]
+fn four_class_ground_pixels_remain_valid_while_airframe_and_propeller_occlude()
+-> Result<(), Box<dyn Error>> {
+    let labels = vec![
+        SKY, SKY, GROUND, GROUND, // row 0
+        GROUND, GROUND, AIRFRAME, PROPELLER, // row 1
+    ];
+    let (air_keep, sky_keep) = four_class_keep_layers(&labels, SKY, 4, 2, 0);
+    assert_eq!(sky_keep, vec![0, 0, 255, 255, 255, 255, 255, 255]);
+    assert_eq!(air_keep, vec![255, 255, 255, 255, 255, 255, 0, 0]);
+
+    // Verify SegEngine::eval on a 4-class Segformer biased to predict GROUND (label 1).
+    let device = Device::flex();
+    let cfg = SegformerConfig::mit_b0(&CLASSES);
+    let mut model = Segformer::new(&cfg, &device);
+    let bias = burn::tensor::Tensor::<1>::from_data(
+        burn::tensor::TensorData::new(vec![-5.0_f32, 10.0, -5.0, -5.0], [4]),
+        &device,
+    );
+    model.decode_head.classifier.bias = Some(burn::module::Param::from_tensor(bias));
+    let preproc = PreprocessorConfig {
+        size: [("height".to_owned(), 32), ("width".to_owned(), 32)]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let engine = SegEngine {
+        model,
+        preproc,
+        airplane_indices: Vec::new(),
+        sky_label: SKY,
+        is_four_class: true,
+        device,
+        policy: MaskPolicy::AirframeOcclusions,
+        margin_px: 1,
+    };
+    let rgb = RgbImage::new(16, 12);
+    let (air, sky) = engine.eval(&rgb)?;
+    assert!(air.iter().all(|&v| v == 255), "GROUND must stay unoccluded");
+    assert!(sky.iter().all(|&v| v == 255), "GROUND must not become sky");
+    Ok(())
 }

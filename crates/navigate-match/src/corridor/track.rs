@@ -132,6 +132,73 @@ impl ActiveTrackSet {
         }
     }
 
+    /// Retain only 3D landmarks that project in front of the camera inside `image_size` plus `margin_px`.
+    ///
+    /// Returns the number of retained landmarks.
+    pub fn retain_in_frustum(
+        &mut self,
+        eye_enu: [f64; 3],
+        world_to_cam: &[f64; 9],
+        intrinsics: [f64; 4],
+        image_size: [u32; 2],
+        margin_px: f64,
+    ) -> usize {
+        let count = self
+            .world_points_enu
+            .len()
+            .min(self.sign_bits.len())
+            .min(self.kashin_i8.len());
+        let [w, h] = image_size;
+        let [fx, fy, cx, cy] = intrinsics;
+        if w == 0
+            || h == 0
+            || fx <= 1e-6
+            || fy <= 1e-6
+            || !margin_px.is_finite()
+            || !eye_enu.iter().all(|v| v.is_finite())
+        {
+            self.world_points_enu.truncate(count);
+            self.sign_bits.truncate(count);
+            self.kashin_i8.truncate(count);
+            return count;
+        }
+        let wf = f64::from(w);
+        let hf = f64::from(h);
+        let mut write = 0_usize;
+        for i in 0..count {
+            let world = self.world_points_enu[i];
+            if !world.iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let pc = mat3_mul(
+                world_to_cam,
+                [
+                    world[0] - eye_enu[0],
+                    world[1] - eye_enu[1],
+                    world[2] - eye_enu[2],
+                ],
+            );
+            if pc[2] <= 1.0 {
+                continue;
+            }
+            let u = fx * (pc[0] / pc[2]) + cx;
+            let v = fy * (pc[1] / pc[2]) + cy;
+            if u < -margin_px || u >= wf + margin_px || v < -margin_px || v >= hf + margin_px {
+                continue;
+            }
+            if write != i {
+                self.world_points_enu[write] = world;
+                self.sign_bits[write] = self.sign_bits[i];
+                self.kashin_i8[write] = self.kashin_i8[i];
+            }
+            write += 1;
+        }
+        self.world_points_enu.truncate(write);
+        self.sign_bits.truncate(write);
+        self.kashin_i8.truncate(write);
+        write
+    }
+
     /// Match projected 3D tracks against `query` within a 2D pixel search radius.
     ///
     /// # Errors

@@ -245,3 +245,50 @@ fn active_track_radius_matcher_recovers_shifted_3d_tracks_and_rejects_far_clutte
         assert_eq!(m.track_index, m.query_index);
     }
 }
+
+#[test]
+fn retain_in_frustum_evicts_outside_and_behind_landmarks_and_nadir_accepts_any_heading()
+-> Result<(), MatchError> {
+    let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
+    let tile = build_tile_landmarks(0, 0, 600.0, 48, &projector);
+    let bank = CorridorLandmarkBank::new([1; 32], [2; 32], DEFAULT_KASHIN_SEED, 600.0, vec![tile])?;
+
+    // South-looking camera rotated 180 deg in yaw on a nadir tile at low 85 m AGL (205 m up vs 120 m ground):
+    let w2c_south = [0.0, -1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0];
+    let nadir_cam = VirtualViewCamera {
+        eye_enu: [300.0, 300.0, 225.0],
+        world_to_cam: w2c_south,
+        intrinsics: [600.0, 600.0, 400.0, 300.0],
+        image_size: [800, 600],
+        max_landmarks: 64,
+        min_cos_incidence: 0.80,
+        min_cos_orientation: -1.0,
+    };
+    let virt = bank.project_virtual_view(&nadir_cam, &projector);
+    assert!(
+        !virt.features.is_empty(),
+        "nadir camera with relaxed orientation must project landmarks at arbitrary heading"
+    );
+
+    let mut set = ActiveTrackSet {
+        world_points_enu: vec![
+            [300.0, 300.0, 120.0],   // dead center in front
+            [300.0, 300.0, 400.0],   // behind camera (pc[2] < 0)
+            [5_000.0, 300.0, 120.0], // far outside horizontal FOV
+        ],
+        sign_bits: vec![11, 22, 33],
+        kashin_i8: vec![[1; 64], [2; 64], [3; 64]],
+    };
+    let kept = set.retain_in_frustum(
+        [300.0, 300.0, 225.0],
+        &w2c_south,
+        [600.0, 600.0, 400.0, 300.0],
+        [800, 600],
+        16.0,
+    );
+    assert_eq!(kept, 1);
+    assert_eq!(set.len(), 1);
+    assert_eq!(set.sign_bits, vec![11]);
+    assert_eq!(set.kashin_i8, vec![[1; 64]]);
+    Ok(())
+}

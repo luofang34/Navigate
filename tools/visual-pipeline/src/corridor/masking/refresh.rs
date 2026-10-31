@@ -59,23 +59,12 @@ impl SegEngine {
             &self.device,
         )?;
         if self.is_four_class {
-            let raw_sky: Vec<bool> = pred.labels.iter().map(|&l| l == self.sky_label).collect();
-            let raw_air: Vec<bool> = pred
-                .labels
-                .iter()
-                .map(|&l| l != 0 && l != self.sky_label)
-                .collect();
-            let sky_occ = dilate_rect(&raw_sky, w, h, self.margin_px);
-            let air_occ = dilate_rect(&raw_air, w, h, self.margin_px);
-            Ok((
-                air_occ
-                    .into_iter()
-                    .map(|b| if b { 0 } else { 255 })
-                    .collect(),
-                sky_occ
-                    .into_iter()
-                    .map(|b| if b { 0 } else { 255 })
-                    .collect(),
+            Ok(four_class_keep_layers(
+                &pred.labels,
+                self.sky_label,
+                w,
+                h,
+                self.margin_px,
             ))
         } else {
             let air_probs = pred.selected_probs.first().map(Vec::as_slice);
@@ -270,6 +259,32 @@ impl Refresher {
             _ => {}
         }
     }
+}
+
+fn four_class_keep_layers(
+    labels: &[u8],
+    sky_label: u8,
+    w: usize,
+    h: usize,
+    margin_px: usize,
+) -> (Vec<u8>, Vec<u8>) {
+    let raw_sky: Vec<bool> = labels.iter().map(|&l| l == sky_label).collect();
+    let raw_air: Vec<bool> = labels
+        .iter()
+        .map(|&l| matches!(l, navigate_segment::AIRFRAME | navigate_segment::PROPELLER))
+        .collect();
+    let sky_occ = dilate_rect(&raw_sky, w, h, margin_px);
+    let air_occ = dilate_rect(&raw_air, w, h, margin_px);
+    (
+        air_occ
+            .into_iter()
+            .map(|b| if b { 0 } else { 255 })
+            .collect(),
+        sky_occ
+            .into_iter()
+            .map(|b| if b { 0 } else { 255 })
+            .collect(),
+    )
 }
 
 fn installed(
