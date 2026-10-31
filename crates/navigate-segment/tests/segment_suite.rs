@@ -1,13 +1,21 @@
 //! Integration and parity tests for `navigate-segment`.
 
+#[cfg(feature = "optim")]
 use burn::tensor::Device;
-use image::{GrayImage, Luma, Rgb, RgbImage};
+#[cfg(feature = "optim")]
+use image::{GrayImage, Luma};
+use image::{Rgb, RgbImage};
 use navigate_segment::{
-    AIRFRAME, CLASSES, ColorMode, DatasetSample, GROUND, MaskPolicy, NpyArray, PROPELLER,
-    PreprocessorConfig, PropellerDetector, SKY, Score, Segformer, SegformerConfig, TrainPolicy,
-    class_masks, compose_labels, drop_specks, finetune, frame_masks, parse_object, read_npy,
-    read_npz, split_name, surface_mask, write_npy, write_npz,
+    AIRFRAME, CLASSES, GROUND, MaskPolicy, NpyArray, PROPELLER, PropellerDetector, SKY,
+    SegformerConfig, class_masks, compose_labels, drop_specks, frame_masks, parse_object, read_npy,
+    split_name, surface_mask, write_npy,
 };
+#[cfg(feature = "optim")]
+use navigate_segment::{
+    ColorMode, DatasetSample, PreprocessorConfig, Score, Segformer, TrainPolicy, finetune,
+    read_npz, write_npz,
+};
+#[cfg(feature = "optim")]
 use std::{collections::BTreeMap, path::PathBuf};
 
 #[test]
@@ -52,6 +60,7 @@ fn object_labels_and_speck_filtering_match_airframe_labels_contract() {
     assert_eq!(s1, split_name("flight-alpha", 20));
 }
 
+#[cfg(feature = "optim")]
 #[test]
 fn score_metrics_compute_iou_and_exclusion_rates() {
     let mut score = Score::new();
@@ -171,22 +180,26 @@ fn npy_and_npz_round_trip_exact_shapes_and_values() {
     assert_eq!(back.shape, vec![2, 3]);
     assert_eq!(back.to_f32(), vec![1.5, -2.0, 3.25, 4.0, 0.0, 8.5]);
 
-    let npz_path = dir.path().join("bundle.npz");
-    let mut map = BTreeMap::new();
-    map.insert(
-        "eye".into(),
-        NpyArray::from_f64(vec![3], &[10.0, 20.0, 300.0]).expect("eye"),
-    );
-    map.insert(
-        "mask".into(),
-        NpyArray::from_bool(vec![2, 2], &[true, false, false, true]).expect("mask"),
-    );
-    write_npz(&npz_path, &map).expect("write npz");
-    let loaded = read_npz(&npz_path).expect("read npz");
-    assert_eq!(loaded["eye"].to_f64(), vec![10.0, 20.0, 300.0]);
-    assert_eq!(loaded["mask"].to_u8().expect("u8"), vec![1, 0, 0, 1]);
+    #[cfg(feature = "optim")]
+    {
+        let npz_path = dir.path().join("bundle.npz");
+        let mut map = BTreeMap::new();
+        map.insert(
+            "eye".into(),
+            NpyArray::from_f64(vec![3], &[10.0, 20.0, 300.0]).expect("eye"),
+        );
+        map.insert(
+            "mask".into(),
+            NpyArray::from_bool(vec![2, 2], &[true, false, false, true]).expect("mask"),
+        );
+        write_npz(&npz_path, &map).expect("write npz");
+        let loaded = read_npz(&npz_path).expect("read npz");
+        assert_eq!(loaded["eye"].to_f64(), vec![10.0, 20.0, 300.0]);
+        assert_eq!(loaded["mask"].to_u8().expect("u8"), vec![1, 0, 0, 1]);
+    }
 }
 
+#[cfg(feature = "optim")]
 #[test]
 fn pure_rust_segformer_finetuning_decreases_loss_and_round_trips_safetensors() {
     let dir = tempfile::tempdir().expect("tempdir");

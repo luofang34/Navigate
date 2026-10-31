@@ -1,4 +1,4 @@
-use webnn_onnx_utils::protos::onnx::{self as p, NodeProto, ValueInfoProto};
+use crate::onnx_proto::{self as p, NodeProto, ValueInfoProto};
 
 pub fn value(name: &str, element: i32, dimensions: &[i64]) -> ValueInfoProto {
     ValueInfoProto {

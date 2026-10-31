@@ -1,34 +1,18 @@
-//! Unified matcher client supporting in-process `burn` engines and ONNX worker processes.
+//! In-process matcher client wrapping `burn` neural matchers and pyramidal patch matching.
 
 use crate::{PipelineError, util::file_sha256};
 use burn::tensor::Device;
 use image::{DynamicImage, GrayImage, RgbImage};
 use navigate_match::{EngineKind, NativeMlEngine, Weights};
 use navigate_visual::{ImageMatcher, PixelMatch, PyramidalMatcher};
-use serde_json::{Value, json};
-use std::{
-    io::{BufRead, BufReader, Write},
-    path::Path,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-};
+use std::path::Path;
 
 /// Image correspondence matcher used by offline pipeline stages.
 pub enum PipelineMatcher {
     /// In-process pure-Rust `burn` matcher (`LoFTR-DS` or `XFeat + LighterGlue`).
     Native(Box<NativeMlEngine>),
-    /// Classical pyramidal optical-flow/patch matcher (`navigate_visual::PyramidalMatcher`).
+    /// Classical pyramidal optical-flow and patch matcher (`navigate_visual::PyramidalMatcher`).
     Pyramidal(PyramidalMatcher),
-    /// External `navigate-recording-worker match-worker` JSON-lines subprocess for `.onnx`.
-    Worker {
-        /// Matcher backend identity string reported by the worker.
-        identity: String,
-        /// Child process handle.
-        child: Child,
-        /// Standard input pipe.
-        stdin: ChildStdin,
-        /// Buffered standard output reader.
-        stdout: BufReader<ChildStdout>,
-    },
 }
 
 impl PipelineMatcher {
@@ -92,75 +76,12 @@ impl PipelineMatcher {
     }
 
     /// Construct a deterministic classical pyramidal matcher.
+    #[must_use]
     pub fn pyramidal() -> Self {
         Self::Pyramidal(PyramidalMatcher)
     }
 
-    /// Spawn `worker_bin match-worker` for an `.onnx` model with ONNX Runtime `runtime_lib`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PipelineError`] when spawning or handshaking with the worker fails.
-    pub fn spawn_onnx_worker(
-        worker_bin: &Path,
-        model_path: &Path,
-        runtime_lib: &Path,
-    ) -> Result<Self, PipelineError> {
-        let mut child = Command::new(worker_bin)
-            .arg("match-worker")
-            .arg("--model")
-            .arg(model_path)
-            .arg("--runtime")
-            .arg(runtime_lib)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| PipelineError::Tool {
-                tool: worker_bin.display().to_string(),
-                message: e.to_string(),
-            })?;
-        let stdin = child.stdin.take().ok_or_else(|| PipelineError::Tool {
-            tool: "match-worker".into(),
-            message: "missing stdin pipe".into(),
-        })?;
-        let out = child.stdout.take().ok_or_else(|| PipelineError::Tool {
-            tool: "match-worker".into(),
-            message: "missing stdout pipe".into(),
-        })?;
-        let mut stdout = BufReader::new(out);
-        let mut banner = String::new();
-        stdout
-            .read_line(&mut banner)
-            .map_err(|e| PipelineError::Tool {
-                tool: "match-worker".into(),
-                message: e.to_string(),
-            })?;
-        let doc: Value = serde_json::from_str(&banner).map_err(|source| PipelineError::Json {
-            context: "match-worker banner".into(),
-            source,
-        })?;
-        if doc.get("status").and_then(Value::as_str) != Some("ready") {
-            return Err(PipelineError::Tool {
-                tool: "match-worker".into(),
-                message: format!("expected a ready banner, got {}", banner.trim_end()),
-            });
-        }
-        let identity = doc
-            .get("backend")
-            .or_else(|| doc.get("matcher"))
-            .and_then(Value::as_str)
-            .unwrap_or("onnx-match-worker")
-            .to_owned();
-        Ok(Self::Worker {
-            identity,
-            child,
-            stdin,
-            stdout,
-        })
-    }
-
-    /// Open a matcher from CLI options (`backend` + `model_path` + optional `lighterglue` / `runtime`).
+    /// Open a matcher from CLI options (`backend` + `model_path` + optional `lighterglue_path`).
     ///
     /// # Errors
     ///
@@ -169,8 +90,6 @@ impl PipelineMatcher {
         backend: &str,
         model_path: Option<&Path>,
         lighterglue_path: Option<&Path>,
-        worker_bin: Option<&Path>,
-        runtime_lib: Option<&Path>,
     ) -> Result<Self, PipelineError> {
         if backend == "pyramidal" {
             return Ok(Self::pyramidal());
@@ -184,11 +103,9 @@ impl PipelineMatcher {
             .unwrap_or_default()
             .to_ascii_lowercase();
         if ext == "onnx" {
-            let worker = worker_bin.unwrap_or_else(|| Path::new("navigate-recording-worker"));
-            let rt = runtime_lib.ok_or_else(|| {
-                PipelineError::Invalid("ONNX model requires --onnx-runtime path".into())
-            })?;
-            return Self::spawn_onnx_worker(worker, path, rt);
+            return Err(PipelineError::Invalid(
+                "offline stages require .safetensors weights; use bank-match or corridor-track --xfeat-runtime for ONNX Runtime".into(),
+            ));
         }
         let (device, engine) = default_burn_device();
         match backend {
@@ -201,11 +118,11 @@ impl PipelineMatcher {
     }
 
     /// Return the stable matcher backend identity string.
+    #[must_use]
     pub fn identity(&self) -> &str {
         match self {
             Self::Native(m) => m.identity(),
             Self::Pyramidal(m) => m.identity(),
-            Self::Worker { identity, .. } => identity.as_str(),
         }
     }
 
@@ -213,7 +130,7 @@ impl PipelineMatcher {
     ///
     /// # Errors
     ///
-    /// Returns [`PipelineError`] when matching or IPC fails.
+    /// Returns [`PipelineError`] when matching fails.
     pub fn match_rgb(
         &mut self,
         reference: &RgbImage,
@@ -228,7 +145,7 @@ impl PipelineMatcher {
     ///
     /// # Errors
     ///
-    /// Returns [`PipelineError`] when matching or IPC fails.
+    /// Returns [`PipelineError`] when matching fails.
     pub fn match_gray(
         &mut self,
         reference: &GrayImage,
@@ -237,79 +154,6 @@ impl PipelineMatcher {
         match self {
             Self::Native(m) => Ok(m.match_images_blocking(reference, query)?),
             Self::Pyramidal(m) => Ok(m.match_images_blocking(reference, query)?),
-            Self::Worker { stdin, stdout, .. } => {
-                let tmp_dir = std::env::temp_dir();
-                let pid = std::process::id();
-                let ref_p = tmp_dir.join(format!("nav-ref-{pid}.png"));
-                let qry_p = tmp_dir.join(format!("nav-qry-{pid}.png"));
-                reference
-                    .save(&ref_p)
-                    .map_err(|source| PipelineError::Image {
-                        path: ref_p.clone(),
-                        source,
-                    })?;
-                query.save(&qry_p).map_err(|source| PipelineError::Image {
-                    path: qry_p.clone(),
-                    source,
-                })?;
-                let req = json!({
-                    "reference": ref_p.display().to_string(),
-                    "query": qry_p.display().to_string(),
-                });
-                let line = serde_json::to_string(&req).map_err(|source| PipelineError::Json {
-                    context: "match-worker request".into(),
-                    source,
-                })?;
-                writeln!(stdin, "{line}").map_err(|e| PipelineError::Tool {
-                    tool: "match-worker".into(),
-                    message: e.to_string(),
-                })?;
-                stdin.flush().map_err(|e| PipelineError::Tool {
-                    tool: "match-worker".into(),
-                    message: e.to_string(),
-                })?;
-                let mut resp = String::new();
-                stdout
-                    .read_line(&mut resp)
-                    .map_err(|e| PipelineError::Tool {
-                        tool: "match-worker".into(),
-                        message: e.to_string(),
-                    })?;
-                drop(std::fs::remove_file(&ref_p));
-                drop(std::fs::remove_file(&qry_p));
-                let parsed: Value =
-                    serde_json::from_str(&resp).map_err(|source| PipelineError::Json {
-                        context: "match-worker response".into(),
-                        source,
-                    })?;
-                let pairs: Vec<[[f64; 2]; 2]> = parsed
-                    .get("pairs")
-                    .or_else(|| parsed.get("matches"))
-                    .cloned()
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(|source| PipelineError::Json {
-                        context: "match-worker pairs".into(),
-                        source,
-                    })?
-                    .unwrap_or_default();
-                Ok(pairs
-                    .into_iter()
-                    .map(|p| PixelMatch {
-                        reference: nalgebra::Vector2::new(p[0][0], p[0][1]),
-                        query: nalgebra::Vector2::new(p[1][0], p[1][1]),
-                    })
-                    .collect())
-            }
-        }
-    }
-}
-
-impl Drop for PipelineMatcher {
-    fn drop(&mut self) {
-        if let Self::Worker { child, .. } = self {
-            drop(child.kill());
-            drop(child.wait());
         }
     }
 }

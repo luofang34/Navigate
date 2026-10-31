@@ -1,8 +1,13 @@
-use crate::{Error, graph};
+use crate::{
+    Error, graph,
+    onnx_proto::{
+        GraphProto, ModelProto, StringStringEntryProto, ValueInfoProto, tensor_shape_proto,
+        type_proto,
+    },
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto, StringStringEntryProto};
 const SOURCE: &str = "49901002e682c650dcc1cd596d4effa980f12ffcc383746b77651ac89ed88559";
 const PATCHES: [&str; 2] = [
     "/net/fine_preprocess/merge_feat/Add_output_0",
@@ -41,17 +46,15 @@ pub fn prepare(bytes: &[u8], batch: Option<usize>) -> Result<Vec<u8>, Error> {
     });
     Ok(model.encode_to_vec())
 }
-fn dynamic_value(name: &str, dimensions: &[i64]) -> webnn_onnx_utils::protos::onnx::ValueInfoProto {
+fn dynamic_value(name: &str, dimensions: &[i64]) -> ValueInfoProto {
     let mut value = graph::value(name, 1, dimensions);
-    if let Some(webnn_onnx_utils::protos::onnx::type_proto::Value::TensorType(t)) =
+    if let Some(type_proto::Value::TensorType(t)) =
         value.r#type.as_mut().and_then(|t| t.value.as_mut())
         && let Some(dim) = t.shape.as_mut().and_then(|s| s.dim.first_mut())
     {
-        dim.value = Some(
-            webnn_onnx_utils::protos::onnx::tensor_shape_proto::dimension::Value::DimParam(
-                "matches".into(),
-            ),
-        );
+        dim.value = Some(tensor_shape_proto::dimension::Value::DimParam(
+            "matches".into(),
+        ));
     }
     value
 }

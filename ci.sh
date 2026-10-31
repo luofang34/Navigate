@@ -58,12 +58,10 @@ echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
     cargo doc --no-deps --workspace
 
-echo "== visual pipeline and segmentation (Rust) =="
-cargo test -p navigate-segment -p navigate-visual-pipeline
+echo "== wasm32 (visual locator and segmentation) =="
 cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
-
-echo "== native tools =="
-./scripts/check-native-tools.sh
+cargo clippy -p navigate-segment --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-segment --no-default-features --features webgpu --target wasm32-unknown-unknown -- -D warnings
 
 echo "== cargo build --release =="
 cargo build --release --workspace

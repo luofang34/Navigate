@@ -1,7 +1,9 @@
-use crate::{Error, graph};
+use crate::{
+    Error, graph,
+    onnx_proto::{GraphProto, ModelProto, StringStringEntryProto},
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
-use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto, StringStringEntryProto};
 
 const INPUT_SHA256: &str = "41336466bbbb09b701b815e33932c7da69cff6ab75a068230418468430482912";
 const PATCH: &str = "/net/keypoint_head/keypoint_head.0/layer/layer.0/Conv";

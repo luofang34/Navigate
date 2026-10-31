@@ -1,5 +1,5 @@
 {
-  description = "Navigate native visual workflow";
+  description = "Navigate visual pipeline and model preparation";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/e72e4f299401a3689d4b3d5fc6496b11db7064eb";
 
@@ -18,46 +18,32 @@
                 [ ".git" "target" ".venv" "__pycache__" ])
               && pkgs.lib.cleanSourceFilter path type;
           };
-          workflow = pkgs.rustPlatform.buildRustPackage {
-            pname = "navigate-workflow";
+          pipeline = pkgs.rustPlatform.buildRustPackage {
+            pname = "navigate-visual-pipeline";
             version = "0.1.0";
             src = source;
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              outputHashes = {
-                "rustnn-0.5.11" = "sha256-boZ7PupZWix9mJwDjUONg+ou1cr0x7M90isKKMFU+/w=";
-                "webnn-graph-0.3.0" = "sha256-KvxoUJDA00r2qX3CLLHA+he8apmOJvs5tfLeN62mypI=";
-                "webnn-onnx-utils-0.1.1" = "sha256-3Z6+Jnk+64ATWd0m92oJ8eudIWwwJ+/oxW5Ky+2jmsI=";
-              };
-            };
-            cargoBuildFlags = [ "-p" "navigate-workflow" "--features" "navigate-workflow/gpu" ];
-            cargoTestFlags = [ "-p" "navigate-workflow" "-p" "navigate-visual-workflow" "-p" "navigate-visual-render" "-p" "navigate-visual-fusion" "--features" "navigate-workflow/gpu" ];
-            meta.mainProgram = "navigate-workflow";
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildFlags = [ "-p" "navigate-visual-pipeline" ];
+            cargoTestFlags = [ "-p" "navigate-visual-pipeline" "-p" "navigate-segment" ];
+            meta.mainProgram = "navigate-visual-pipeline";
           };
-          rustnn = workflow.overrideAttrs (old: {
-            pname = "navigate-workflow-rustnn";
-            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.protobuf ];
-            cargoBuildFlags = old.cargoBuildFlags ++ [ "--features" "navigate-workflow/rustnn-coreml" ];
-            cargoTestFlags = old.cargoTestFlags ++ [ "--features" "navigate-workflow/rustnn-coreml" ];
-          });
-          model = workflow.overrideAttrs (old: {
+          model = pipeline.overrideAttrs (_: {
             pname = "navigate-model";
-            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [ pkgs.protobuf ];
             cargoBuildFlags = [ "-p" "navigate-model" ];
             cargoTestFlags = [ "-p" "navigate-model" ];
             meta.mainProgram = "navigate-model";
           });
         in {
-          default = workflow;
-          inherit workflow model;
+          default = pipeline;
+          inherit pipeline model;
           runtime = pkgs.onnxruntime;
-        } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin { inherit rustnn; });
+        });
       checks = eachSystem (system:
         builtins.removeAttrs self.packages.${system} [ "default" "runtime" ]);
       apps = eachSystem (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.workflow}/bin/navigate-workflow";
+          program = "${self.packages.${system}.pipeline}/bin/navigate-visual-pipeline";
         };
       });
     };

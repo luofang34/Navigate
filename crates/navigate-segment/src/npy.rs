@@ -1,12 +1,14 @@
 //! Pure-Rust reader and writer for NumPy `.npy` and compressed `.npz` array archives.
 
 use crate::SegmentError;
+use std::path::Path;
+#[cfg(feature = "optim")]
 use std::{
     collections::BTreeMap,
     fs::File,
     io::{Cursor, Read, Write},
-    path::Path,
 };
+#[cfg(feature = "optim")]
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// Element data types supported by [`NpyArray`].
@@ -391,6 +393,7 @@ pub fn write_npy(path: &Path, array: &NpyArray) -> Result<(), SegmentError> {
 /// # Errors
 ///
 /// Returns [`SegmentError`] when opening or decoding any member fails.
+#[cfg(feature = "optim")]
 pub fn read_npz(path: &Path) -> Result<BTreeMap<String, NpyArray>, SegmentError> {
     let file = File::open(path).map_err(|source| SegmentError::Io {
         path: path.to_path_buf(),
@@ -425,6 +428,7 @@ pub fn read_npz(path: &Path) -> Result<BTreeMap<String, NpyArray>, SegmentError>
 /// # Errors
 ///
 /// Returns [`SegmentError`] when archive creation or disk write fails.
+#[cfg(feature = "optim")]
 pub fn write_npz(path: &Path, arrays: &BTreeMap<String, NpyArray>) -> Result<(), SegmentError> {
     let mut cursor = Cursor::new(Vec::new());
     {

@@ -64,10 +64,9 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
 | `navigate-place` | Hilbert-sharded visual place index and bounded region search plans |
 | `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
-| `tools/visual-model` | Deterministic ONNX-to-SafeTensors weight converter for `LoFTR`, `XFeat`, and `LighterGlue` |
-| `tools/recording-worker` | JSON Lines worker for image matching and recording processing |
-| `tools/visual-pipeline` | Rust photo and video preprocessing, pose search, segmentation training, and `sokoly-debrief` export |
-| `tools/navrun` | Deterministic scripted scenario runner exercising fusion → plan → guidance end to end |
+| `tools/visual-model` | Deterministic ONNX and checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` |
+| `tools/visual-pipeline` | Rust photo and video preparation, corridor tracking, pose search, segmentation training, and `sokoly-debrief` export |
+| `tools/navrun` | Deterministic scenario runner that tests fusion, flight plans, and guidance end to end |
 
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
 records.

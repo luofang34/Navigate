@@ -50,7 +50,6 @@ mod local_scene;
 mod localizer;
 mod matching;
 mod orthographic;
-pub mod place_retrieval;
 mod pose_solver;
 #[cfg(feature = "reconstruction")]
 pub mod reconstruction;

@@ -12,8 +12,6 @@ members = [
     "crates/navigate-egpws",
     "tools/navrun",
     "crates/navigate-recording",
-    "tools/recording-worker",
-    "tools/visual-workflow",
     "tools/visual-model",
     "crates/navigate-visual",
     "crates/navigate-match",
@@ -28,9 +26,6 @@ members = [
     "tools/visual-pipeline",
     "crates/navigate-place",
     "tests/e2e_corridor",
-]
-exclude = [
-    "tools/visual-inference",
 ]
 
 [workspace.package]

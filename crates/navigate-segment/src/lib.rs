@@ -26,5 +26,7 @@ pub use labels::{
 };
 pub use masks::{MaskPolicy, MaskSummary, OBSTRUCTION_LABELS, SURFACE_LABELS, surface_mask};
 pub use model::{Segformer, SegmentationPrediction};
-pub use npy::{NpyArray, NpyDType, read_npy, read_npz, write_npy, write_npz};
+pub use npy::{NpyArray, NpyDType, read_npy, write_npy};
+#[cfg(feature = "optim")]
+pub use npy::{read_npz, write_npz};
 pub use video::{FrameMaskResult, PropellerDetector, class_masks, frame_masks};
