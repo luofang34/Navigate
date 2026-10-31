@@ -1,18 +1,21 @@
 //! Pure-Rust XFeat dense backbone and sparse keypoint decoder on burn.
 //!
 //! [`XFeat`] executes the 27 folded convolution layers of `verlab/accelerated_features`
-//! on any compiled burn [`Device`] and decodes unit-length 64-D descriptors and source
-//! image keypoints on the host.
+//! on any compiled burn [`Device`], scores keypoint candidates on the device, and
+//! decodes unit-length 64-D descriptors and source image keypoints on the host.
 mod decode;
+mod score;
+mod upsample;
 
 use crate::{
     MatchError, Weights, input,
-    kernels::{Layout, product},
     loftr::layers::{Conv, upload},
 };
-use burn::tensor::{Device, Tensor, Transaction, activation::sigmoid};
+use burn::tensor::{Device, Tensor, TensorData, Transaction, activation::sigmoid};
 use image::GrayImage;
 use navigate_visual::PixelMatch;
+use score::ScoredMaps;
+use upsample::Upsample;
 
 /// Letterbox width before vertical resize to 576 pixels.
 const PREPARE_WIDTH: usize = 800;
@@ -187,7 +190,15 @@ pub struct XFeat {
     block_fusion: [Conv; 3],
     heatmap_head: [Conv; 3],
     keypoint_head: [Conv; 4],
+    upsample: Upsample,
     device: Device,
+}
+
+/// Device tensors of one dense forward pass before read-back.
+struct DenseTensors {
+    descriptors: Tensor<4>,
+    logits: Tensor<4>,
+    reliability: Tensor<4>,
 }
 
 impl XFeat {
@@ -245,6 +256,7 @@ impl XFeat {
                 c(&mut weights, "keypoint_head.2", [64, 64, 1], 1)?,
                 c(&mut weights, "keypoint_head.3", [65, 64, 1], 1)?,
             ],
+            upsample: Upsample::new(device),
             device: device.clone(),
         };
         weights.finish()?;
@@ -303,7 +315,7 @@ impl XFeat {
         }
         let prepared = input::prepare(image, [PREPARE_WIDTH, PREPARE_HEIGHT])?;
         let normalized = decode::normalize_resized(&prepared.values);
-        let maps = self.forward_dense(normalized).await?;
+        let maps = self.forward_scored(normalized).await?;
         decode::decode(&maps, &prepared, image, valid_mask, limit)
     }
 
@@ -314,6 +326,34 @@ impl XFeat {
     /// Returns [`MatchError`] when `normalized` does not have `576 * 800` values or
     /// when device execution fails.
     pub async fn forward_dense(&self, normalized: Vec<f32>) -> Result<DenseMaps, MatchError> {
+        let maps = self.dense_tensors(normalized)?;
+        let transaction = Transaction::default()
+            .register(maps.descriptors)
+            .register(maps.logits)
+            .register(maps.reliability);
+        let [descriptors, keypoint_logits, reliability] = read_back(transaction).await?;
+        Ok(DenseMaps {
+            descriptors,
+            keypoint_logits,
+            reliability,
+        })
+    }
+
+    /// Run the dense network and score keypoint candidates on the device.
+    async fn forward_scored(&self, normalized: Vec<f32>) -> Result<ScoredMaps, MatchError> {
+        let maps = self.dense_tensors(normalized)?;
+        let scores = score::score_map(maps.logits, maps.reliability, &self.upsample.reliability)?;
+        let transaction = Transaction::default()
+            .register(maps.descriptors)
+            .register(scores);
+        let [descriptors, scores] = read_back(transaction).await?;
+        Ok(ScoredMaps {
+            descriptors,
+            scores,
+        })
+    }
+
+    fn dense_tensors(&self, normalized: Vec<f32>) -> Result<DenseTensors, MatchError> {
         if normalized.len() != XFEAT_INPUT_HEIGHT * XFEAT_INPUT_WIDTH {
             return Err(MatchError::Output("dense XFeat input buffer size mismatch"));
         }
@@ -343,9 +383,7 @@ impl XFeat {
             .forward_relu(self.block5[2].forward_relu(
                 self.block5[1].forward_relu(self.block5[0].forward_relu(x4.clone())),
             ));
-        let fused = x3
-            + upsample_half_pixel(x4, [GRID_HEIGHT, GRID_WIDTH])
-            + upsample_half_pixel(x5, [GRID_HEIGHT, GRID_WIDTH]);
+        let fused = x3 + self.upsample.x4.apply(x4)? + self.upsample.x5.apply(x5)?;
         let descriptors = self.block_fusion[2]
             .forward(self.block_fusion[1].forward_relu(self.block_fusion[0].forward_relu(fused)));
         let reliability = sigmoid(
@@ -361,70 +399,29 @@ impl XFeat {
         let logits = self.keypoint_head[3].forward(self.keypoint_head[2].forward_relu(
             self.keypoint_head[1].forward_relu(self.keypoint_head[0].forward_relu(patches)),
         ));
-        let data = Transaction::default()
-            .register(descriptors)
-            .register(logits)
-            .register(reliability)
+        Ok(DenseTensors {
+            descriptors,
+            logits,
+            reliability,
+        })
+    }
+}
+
+/// Read back `N` registered tensors as finite host values.
+async fn read_back<const N: usize>(transaction: Transaction) -> Result<[Vec<f32>; N], MatchError> {
+    let data: Vec<TensorData> =
+        transaction
             .execute_async()
             .await
             .map_err(|error| MatchError::Device {
                 stage: "xfeat read-back",
                 message: format!("{error:?}"),
             })?;
-        let [desc_data, logit_data, rel_data] =
-            <[_; 3]>::try_from(data).map_err(|_| MatchError::Output("xfeat read-back count"))?;
-        let descriptors: Vec<f32> = desc_data.iter::<f32>().collect();
-        let keypoint_logits: Vec<f32> = logit_data.iter::<f32>().collect();
-        let reliability: Vec<f32> = rel_data.iter::<f32>().collect();
-        if descriptors.iter().any(|v| !v.is_finite())
-            || keypoint_logits.iter().any(|v| !v.is_finite())
-            || reliability.iter().any(|v| !v.is_finite())
-        {
-            return Err(MatchError::Output("non-finite dense XFeat output"));
-        }
-        Ok(DenseMaps {
-            descriptors,
-            keypoint_logits,
-            reliability,
-        })
+    let values: Vec<Vec<f32>> = data.iter().map(|d| d.iter::<f32>().collect()).collect();
+    if values.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(MatchError::Output("non-finite dense XFeat output"));
     }
-}
-
-fn upsample_half_pixel(x: Tensor<4>, [height, width]: [usize; 2]) -> Tensor<4> {
-    let [n, c, h, w] = x.dims();
-    let device = x.device();
-    let rows = upload(half_pixel_weights(h, height), [1, height, h], &device);
-    let cols = upload(half_pixel_weights(w, width), [1, width, w], &device);
-    let zeros = |len: usize| upload(vec![0.0; len], [len], &device);
-    let tall = product(rows, x.reshape([n * c, h, w]), zeros(w), Layout::default());
-    let layout = Layout {
-        trans_b: true,
-        ..Layout::default()
-    };
-    product(tall, cols, zeros(width), layout).reshape([n, c, height, width])
-}
-
-fn half_pixel_weights(input: usize, output: usize) -> Vec<f32> {
-    let mut matrix = vec![0.0; output * input];
-    if input == 0 || output == 0 {
-        return matrix;
-    }
-    let last = input.saturating_sub(1);
-    for row in 0..output {
-        let source = (row as f64 + 0.5) * (input as f64 / output as f64) - 0.5;
-        if source <= 0.0 {
-            matrix[row * input] = 1.0;
-        } else if source >= last as f64 {
-            matrix[row * input + last] = 1.0;
-        } else {
-            let low = source.floor() as usize;
-            let high = (low + 1).min(last);
-            let fraction = (source - low as f64) as f32;
-            matrix[row * input + low] += 1.0 - fraction;
-            matrix[row * input + high] += fraction;
-        }
-    }
-    matrix
+    <[_; N]>::try_from(values).map_err(|_| MatchError::Output("xfeat read-back count"))
 }
 
 #[cfg(test)]

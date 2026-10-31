@@ -184,3 +184,90 @@ fn truncate_top_keeps_highest_scoring_keypoints_deterministically() {
     assert_eq!(sorted.len(), 1);
     assert_eq!(sorted.pixels, vec![[20.0, 21.0]]);
 }
+
+#[test]
+fn device_score_map_matches_host_reference() {
+    let device = Device::flex();
+    let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load synthetic XFeat");
+    let image = textured_image(160, 120);
+    let prepared = input::prepare(&image, [PREPARE_WIDTH, PREPARE_HEIGHT]).expect("prepare");
+    let normalized = decode::normalize_resized(&prepared.values);
+
+    let dense = pollster::block_on(model.forward_dense(normalized.clone())).expect("dense");
+    let reference = decode::reference_scores(&dense.keypoint_logits, &dense.reliability);
+    let scored = pollster::block_on(model.forward_scored(normalized)).expect("scored");
+    assert_eq!(scored.descriptors, dense.descriptors);
+    assert_eq!(scored.scores.len(), reference.len());
+
+    let support = |scores: &[f32]| -> Vec<usize> {
+        let mut support: Vec<usize> = (1..scores.len()).filter(|&i| scores[i] > 0.0).collect();
+        support.sort_unstable();
+        support
+    };
+    let reference_support = support(&reference);
+    assert!(reference_support.len() > 10, "fixture must have peaks");
+    assert_eq!(support(&scored.scores), reference_support);
+    for &i in &reference_support {
+        let (device, host) = (scored.scores[i], reference[i]);
+        assert!(
+            (device - host).abs() <= 1e-5 * host.abs().max(1e-3),
+            "score {i}: device {device} host {host}"
+        );
+    }
+
+    let host_maps = score::ScoredMaps {
+        descriptors: dense.descriptors,
+        scores: reference,
+    };
+    // Scores agree only within rounding, so peaks near the cutoff score can enter
+    // or leave the top 256 on one backend.
+    let from_host = decode::decode(&host_maps, &prepared, &image, None, 256).expect("host decode");
+    let from_device = pollster::block_on(model.extract(&image, 256)).expect("device decode");
+    assert_eq!(from_device.len(), from_host.len());
+    assert_same_keypoints(&from_device, &from_host);
+    assert_same_keypoints(&from_host, &from_device);
+}
+
+/// Assert that each keypoint of `a` is in `b` with the same descriptor, or that it
+/// scores within rounding of the lowest score of `b`.
+fn assert_same_keypoints(a: &SparseFeatures, b: &SparseFeatures) {
+    let close = |x: f32, y: f32| (x - y).abs() <= 1e-5 * y.abs().max(1e-3);
+    let cutoff = b.scores.iter().copied().fold(f32::INFINITY, f32::min);
+    for (i, pixel) in a.pixels.iter().enumerate() {
+        match b.pixels.iter().position(|p| p == pixel) {
+            Some(j) => {
+                assert_eq!(
+                    a.descriptors[i * 64..(i + 1) * 64],
+                    b.descriptors[j * 64..(j + 1) * 64],
+                    "descriptor at {pixel:?}"
+                );
+                assert!(close(a.scores[i], b.scores[j]), "score at {pixel:?}");
+            }
+            None => assert!(
+                close(a.scores[i], cutoff),
+                "keypoint {pixel:?} score {} is not at the cutoff {cutoff}",
+                a.scores[i]
+            ),
+        }
+    }
+}
+
+#[test]
+fn grid_point_weights_zero_pad_outside_the_grid() {
+    let weights = upsample::grid_point_weights(4, 32);
+    let rows: Vec<&[f32]> = weights.chunks(4).collect();
+    assert_eq!(rows[0], [0.5, 0.0, 0.0, 0.0]);
+    assert_eq!(rows[31], [0.0, 0.0, 0.0, 0.5]);
+    for (index, row) in rows.iter().enumerate() {
+        let sum: f32 = row.iter().sum();
+        assert!(sum <= 1.0 + 1e-6);
+        if (4..=27).contains(&index) {
+            assert!(
+                (sum - 1.0).abs() < 1e-6,
+                "interior row {index} sums to {sum}"
+            );
+        } else {
+            assert!(sum < 1.0, "edge row {index} must lose weight to padding");
+        }
+    }
+}
