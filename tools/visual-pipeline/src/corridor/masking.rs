@@ -199,11 +199,40 @@ impl AmortizedMasker {
         }
     }
 
+    /// Check whether a Segformer model is configured.
+    #[must_use]
+    pub fn has_segformer(&self) -> bool {
+        self.seg.is_some()
+    }
+
+    /// Check whether usable key layers exist for the given image dimensions.
+    #[must_use]
+    pub fn has_usable_key(&self, dims: [u32; 2]) -> bool {
+        self.key.usable(dims)
+    }
+
+    /// Run a fast initial Segformer pass on frame 1 to provide ground and sky masks before anchor jobs.
+    pub fn fast_initial_pass(
+        &mut self,
+        rgb: &RgbImage,
+        cur_rot: Option<&Matrix3<f64>>,
+    ) -> Result<bool, PipelineError> {
+        let Some(seg) = &mut self.seg else {
+            return Ok(false);
+        };
+        seg.initial_fast_pass(&mut self.key, rgb, cur_rot)
+    }
+
     /// Estimate `(down_deg, roll_deg)` from the cached `Segformer` sky mask if sky is visible.
     #[must_use]
     pub fn horizon_attitude(&self, k: &Matrix3<f64>) -> Option<(f64, f64)> {
         let [w, h] = self.key.dims;
-        if self.key.sky_keep.len() != (w as usize) * (h as usize) || w < 8 || h < 8 {
+        let total = (w as usize) * (h as usize);
+        if self.key.sky_keep.len() != total
+            || self.key.airframe_keep.len() != total
+            || w < 8
+            || h < 8
+        {
             return None;
         }
         if self.key.sky_keep.iter().all(|&keep| keep != 0) {
@@ -213,7 +242,16 @@ impl AmortizedMasker {
             .key
             .sky_keep
             .iter()
-            .map(|&keep| u8::from(keep != 0))
+            .zip(&self.key.airframe_keep)
+            .map(|(&sky, &air)| {
+                if air == 0 {
+                    navigate_segment::AIRFRAME
+                } else if sky == 0 {
+                    navigate_segment::SKY
+                } else {
+                    navigate_segment::GROUND
+                }
+            })
             .collect();
         crate::surface::horizon_attitude(&map, w, h, k)
     }

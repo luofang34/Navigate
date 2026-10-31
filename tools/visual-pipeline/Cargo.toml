@@ -23,9 +23,12 @@ navigate-geodesy.workspace = true
 navigate-visual = { path = "../../crates/navigate-visual" }
 navigate-visual-render = { path = "../../crates/navigate-visual-render" }
 navigate-visual-session = { path = "../../crates/navigate-visual-session" }
+navigate-fusion.workspace = true
+navigate-visual-fusion = { path = "../../crates/navigate-visual-fusion" }
 navigate-recording = { path = "../../crates/navigate-recording" }
 navigate-match = { path = "../../crates/navigate-match", default-features = false }
 navigate-segment = { path = "../../crates/navigate-segment", default-features = false, features = ["optim"] }
+navigate-place = { path = "../../crates/navigate-place" }
 burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
 clap = "4"
 kamadak-exif = "0.6.1"

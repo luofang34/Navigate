@@ -1,5 +1,6 @@
 //! Terrain pose search stage (`photo_match`) and shared stage helpers.
 
+pub mod focal;
 mod followup;
 mod seeds;
 

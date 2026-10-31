@@ -2,15 +2,29 @@
 //! `25-30 Hz` two-tier temporal corridor tracking (`corridor-track`).
 
 mod admission;
-mod anchor;
-mod anchor_worker;
+pub mod anchor;
+pub mod anchor_worker;
 mod background;
+pub(crate) mod canonical;
+pub mod kinematics;
 mod latency;
 pub mod masking;
 mod motion;
+pub mod nadir;
+pub mod session;
 mod tile_builder;
 mod tracker;
 
+pub(crate) use canonical::{canonical_tile_poses, select_corridor_tiles};
+
+pub use anchor_worker::AnchorWorkerState;
+pub use kinematics::{
+    KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile, can_update_vertical_velocity,
+    compute_dt_s,
+};
+pub use session::{
+    DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner, VisualCorridorSession,
+};
 pub use tracker::run_corridor_track;
 
 use crate::{
@@ -18,7 +32,6 @@ use crate::{
     realtime::helpers::{hex, raw_file_sha256},
     stages::{load_profile_cases, scale_k},
     surface::{Surface, SurfaceGpuRenderer},
-    testset::PhotoCase,
     xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };
 use image::DynamicImage;
@@ -80,14 +93,24 @@ pub struct CorridorTrackOptions {
     pub lighterglue_weights_path: Option<PathBuf>,
     /// Optional directory containing a `Segformer` checkpoint for amortized live masking.
     pub seg_model_dir: Option<PathBuf>,
+    /// Vehicle dynamics constraints and platform parameter gates.
+    pub dynamics_profile: VehicleDynamicsProfile,
     /// Semantic mask policy name (`"airframe-occlusions"` by default).
     pub mask_policy: String,
     /// Frame interval between full `Segformer` refreshes (`10` = `3 Hz` at `30 fps`).
     pub mask_interval: usize,
+    /// Optional time interval in seconds between full `Segformer` refreshes.
+    pub mask_interval_s: Option<f64>,
     /// Stage output directory (`run.json`, `{id}.json`, `{id}/candidate.npz`).
     pub output_dir: PathBuf,
     /// Frame interval between map-anchor refresh checks (`0` keeps warm track until loss).
     pub anchor_interval: usize,
+    /// Optional time interval in seconds between map-anchor refresh checks.
+    pub anchor_interval_s: Option<f64>,
+    /// Optional horizontal uncertainty threshold in meters to trigger an anchor.
+    pub anchor_uncertainty_m: Option<f64>,
+    /// Trigger an anchor check when entering a new EKF independence map cell.
+    pub anchor_on_cell_boundary: bool,
     /// Minimum PnP inliers required to accept a warm-tracked frame.
     pub min_track_inliers: usize,
     /// Horizontal edge length of each EKF independence [`navigate_visual_session::MapCell`] in metres.
@@ -159,7 +182,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let mut total_pixels = 0_usize;
     let mut total_rays = 0_usize;
     let voxel_m = 1.5_f64;
-    let max_oblique_dist_m = (agl_m * 8.0).clamp(2_400.0, 6_000.0);
+    let max_oblique_dist_m = (agl_m * 14.0).max(4_000.0);
 
     for &(tx, ty) in &tile_keys {
         let ce = (f64::from(tx) + 0.5) * tile_m;
@@ -189,11 +212,11 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
                         .ok();
                 }
             }
-            let (raw, world_hits) = if let Some(gv) = gpu_view_opt {
+            let (gray_img, raw, world_hits) = if let Some(ref gv) = gpu_view_opt {
                 total_pixels += (render_size[0] as usize) * (render_size[1] as usize);
                 let feat = xfeat.extract(&gv.image, 2048)?;
                 let unproj = gv.unproject_pixels(&surface, &feat.pixels);
-                (feat, unproj)
+                (gv.image.clone(), feat, unproj)
             } else {
                 let ((rgb, _, _), stats) =
                     surface.render_adaptive(eye, &rot, &k_render, render_size, stride, 8, 0.025);
@@ -203,49 +226,83 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
                 let feat = xfeat.extract(&gray, 2048)?;
                 let hits = surface.raycast_pixels(eye, &rot, &k_render, &feat.pixels);
                 (
+                    gray,
                     feat,
                     hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect(),
                 )
             };
 
-            let chunks = raw.descriptors.as_chunks::<64>().0;
-            let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
-            let n_raw = (world_hits.len().max(1)) as f32;
+            let mut insert_band =
+                |band_idx: u8,
+                 cam_x: [f32; 3],
+                 features: &SparseFeatures,
+                 world_hits: &[Option<[f64; 3]>]| {
+                    let chunks = features.descriptors.as_chunks::<64>().0;
+                    let n_raw = (world_hits.len().max(1)) as f32;
 
-            for (idx, w_opt) in world_hits.iter().enumerate() {
-                let Some(w) = *w_opt else {
-                    continue;
-                };
-                let dist_m =
-                    ((eye[0] - w[0]).powi(2) + (eye[1] - w[1]).powi(2) + (eye[2] - w[2]).powi(2))
+                    for (idx, w_opt) in world_hits.iter().enumerate() {
+                        let Some(w) = *w_opt else {
+                            continue;
+                        };
+                        let dist_m = ((eye[0] - w[0]).powi(2)
+                            + (eye[1] - w[1]).powi(2)
+                            + (eye[2] - w[2]).powi(2))
                         .sqrt();
-                if opts.include_obliques && !(20.0..=max_oblique_dist_m).contains(&dist_m) {
-                    continue;
-                }
-                let dst_tx = (w[0] / tile_m).floor() as i32;
-                let dst_ty = (w[1] / tile_m).floor() as i32;
-                let vx = (w[0] / voxel_m).floor() as i32;
-                let vy = (w[1] / voxel_m).floor() as i32;
-                let score = (1.0 - (idx as f32) / n_raw).clamp(0.01, 1.0);
-                let band_map = tile_buckets
-                    .entry((dst_tx, dst_ty))
-                    .or_default()
-                    .entry(band)
-                    .or_default();
-                if band_map
-                    .get(&(vx, vy))
-                    .is_none_or(|prev| score > prev.score)
-                {
-                    band_map.insert(
-                        (vx, vy),
-                        RawLandmark {
-                            world_enu: w,
-                            obs_dir_enu: unit_obs_dir(eye, w),
-                            cam_x_enu: cam_x,
-                            ref_dist_m: dist_m.round().clamp(1.0, 65_535.0) as u16,
-                            score,
-                            descriptor: chunks[idx],
-                        },
+                        if opts.include_obliques && !(20.0..=max_oblique_dist_m).contains(&dist_m) {
+                            continue;
+                        }
+                        let dst_tx = (w[0] / tile_m).floor() as i32;
+                        let dst_ty = (w[1] / tile_m).floor() as i32;
+                        let vx = (w[0] / voxel_m).floor() as i32;
+                        let vy = (w[1] / voxel_m).floor() as i32;
+                        let score = (1.0 - (idx as f32) / n_raw).clamp(0.01, 1.0);
+                        let band_map = tile_buckets
+                            .entry((dst_tx, dst_ty))
+                            .or_default()
+                            .entry(band_idx)
+                            .or_default();
+                        if band_map
+                            .get(&(vx, vy))
+                            .is_none_or(|prev| score > prev.score)
+                        {
+                            band_map.insert(
+                                (vx, vy),
+                                RawLandmark {
+                                    world_enu: w,
+                                    obs_dir_enu: unit_obs_dir(eye, w),
+                                    cam_x_enu: cam_x,
+                                    ref_dist_m: dist_m.round().clamp(1.0, 65_535.0) as u16,
+                                    score,
+                                    descriptor: chunks[idx],
+                                },
+                            );
+                        }
+                    }
+                };
+
+            let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
+            insert_band(band, cam_x, &raw, &world_hits);
+
+            if nadir::is_nadir_pose(&rot)
+                && let Ok(rot_bands) =
+                    nadir::synthesize_rotated_bands(&gray_img, &surface, clat, clon, &xfeat, 2048)
+            {
+                for (b_idx, r_band) in rot_bands.into_iter().enumerate() {
+                    let r_band_idx = band.saturating_add((b_idx as u8) + 1);
+                    let r_world_hits: Vec<Option<[f64; 3]>> = if let Some(ref gv) = gpu_view_opt {
+                        gv.unproject_pixels(&surface, &r_band.unrotated_pixels)
+                    } else {
+                        surface
+                            .raycast_pixels(eye, &rot, &k_render, &r_band.unrotated_pixels)
+                            .into_iter()
+                            .map(|h| h.map(|x| x.world_enu))
+                            .collect()
+                    };
+                    insert_band(
+                        r_band_idx,
+                        r_band.cam_x_enu,
+                        &r_band.features,
+                        &r_world_hits,
                     );
                 }
             }
@@ -378,82 +435,6 @@ fn assemble_tiles(
         )?);
     }
     Ok(tiles)
-}
-
-fn select_corridor_tiles(
-    surface: &Surface,
-    cases: &[PhotoCase],
-    tile_m: f64,
-    radius_m: f64,
-) -> Vec<(i32, i32)> {
-    let sw = surface.local(surface.bbox[1], surface.bbox[0], 0.0);
-    let ne = surface.local(surface.bbox[3], surface.bbox[2], 0.0);
-    let cat_min_x = (sw[0].min(ne[0]) / tile_m).floor() as i32;
-    let cat_max_x = (sw[0].max(ne[0]) / tile_m).floor() as i32;
-    let cat_min_y = (sw[1].min(ne[1]) / tile_m).floor() as i32;
-    let cat_max_y = (sw[1].max(ne[1]) / tile_m).floor() as i32;
-
-    let mut selected = BTreeSet::new();
-    let r = radius_m.max(0.0);
-    for case in cases {
-        if let Some(pos) = case.prior.as_ref().and_then(|p| p.position.as_ref()) {
-            let p = surface.local(pos.latitude, pos.longitude, 0.0);
-            let x0 = (((p[0] - r) / tile_m).floor() as i32).max(cat_min_x);
-            let x1 = (((p[0] + r) / tile_m).floor() as i32).min(cat_max_x);
-            let y0 = (((p[1] - r) / tile_m).floor() as i32).max(cat_min_y);
-            let y1 = (((p[1] + r) / tile_m).floor() as i32).min(cat_max_y);
-            for ty in y0..=y1 {
-                for tx in x0..=x1 {
-                    selected.insert((tx, ty));
-                }
-            }
-        }
-    }
-    if selected.is_empty() {
-        for ty in cat_min_y..=cat_max_y {
-            for tx in cat_min_x..=cat_max_x {
-                selected.insert((tx, ty));
-            }
-        }
-    }
-    selected.into_iter().collect()
-}
-
-pub(crate) fn canonical_tile_poses(
-    surface: &Surface,
-    (ce, cn, ground_msl): (f64, f64, f64),
-    tile_m: f64,
-    agl_m: f64,
-    include_obliques: bool,
-) -> Vec<(u8, [f64; 3], Matrix3<f64>)> {
-    let [clat, clon, _] = surface.geodetic([ce, cn, 0.0]);
-    let nadir_eye = surface.local(clat, clon, ground_msl + (tile_m * 0.9).max(agl_m));
-    let nadir_rot = surface.camera_rotation(clat, clon, 0.0, 89.0, 0.0);
-    if !include_obliques {
-        return vec![(0, nadir_eye, nadir_rot)];
-    }
-
-    let mut out = Vec::with_capacity(25);
-    let mut band = 0_u8;
-    let min_clear_m = agl_m.clamp(25.0, 140.0);
-    for down_deg in [26.0_f64, 50.0_f64] {
-        let horiz_back = agl_m / down_deg.to_radians().tan();
-        for step in 0..12_u32 {
-            let heading_deg = f64::from(step) * 30.0;
-            let h = heading_deg.to_radians();
-            let eye_e = ce - h.sin() * horiz_back;
-            let eye_n = cn - h.cos() * horiz_back;
-            let [elat, elon, _] = surface.geodetic([eye_e, eye_n, 0.0]);
-            let base_dem = surface.sample_dem(elat, elon).unwrap_or(ground_msl);
-            let eye_alt = (ground_msl + agl_m).max(base_dem + min_clear_m);
-            let eye = surface.local(elat, elon, eye_alt);
-            let rot = surface.camera_rotation(elat, elon, heading_deg, down_deg, 0.0);
-            out.push((band, eye, rot));
-            band += 1;
-        }
-    }
-    out.push((band, nadir_eye, nadir_rot));
-    out
 }
 
 pub(crate) fn unit_obs_dir(eye_enu: [f64; 3], world_enu: [f64; 3]) -> [f32; 3] {

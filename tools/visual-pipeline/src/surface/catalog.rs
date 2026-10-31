@@ -52,58 +52,8 @@ impl ContextSurface {
     }
 }
 
-/// Estimate `(down_deg, roll_deg)` from the sky boundary in a semantic label map.
-///
-/// Accepts both ADE20K (`sky == 2`) and 4-class Navigate (`sky == 0`, `max_label <= 3`) maps.
-pub fn horizon_attitude(
-    labels: &[u8],
-    width: u32,
-    height: u32,
-    k: &Matrix3<f64>,
-) -> Option<(f64, f64)> {
-    if labels.len() != (width * height) as usize || width < 8 || height < 8 {
-        return None;
-    }
-    let max_lbl = labels.iter().copied().max().unwrap_or(0);
-    let sky_id = if max_lbl <= 3 { 0u8 } else { 2u8 };
-    let mut pts = Vec::new();
-    for x in (0..width).step_by(4) {
-        let mut last_sky = None;
-        for y in 0..(height - 1) {
-            let a = labels[(y * width + x) as usize];
-            let b = labels[((y + 1) * width + x) as usize];
-            if a == sky_id && b != sky_id {
-                last_sky = Some(f64::from(y) + 0.5);
-                break;
-            }
-        }
-        if let Some(hy) = last_sky {
-            pts.push((f64::from(x), hy));
-        }
-    }
-    if pts.len() < 6 {
-        return None;
-    }
-    let n = pts.len() as f64;
-    let mx = pts.iter().map(|p| p.0).sum::<f64>() / n;
-    let my = pts.iter().map(|p| p.1).sum::<f64>() / n;
-    let mut sxx = 0.0;
-    let mut sxy = 0.0;
-    for &(x, y) in &pts {
-        sxx += (x - mx) * (x - mx);
-        sxy += (x - mx) * (y - my);
-    }
-    if sxx <= 1e-6 {
-        return None;
-    }
-    let slope = sxy / sxx;
-    let roll_deg = (-slope).atan().to_degrees();
-    let cy = k[(1, 2)];
-    let fy = k[(1, 1)].max(1.0);
-    let y_at_cx = my + slope * (k[(0, 2)] - mx);
-    let down_deg = ((cy - y_at_cx) / fy).atan().to_degrees();
-    Some((down_deg, roll_deg))
-}
+#[allow(unused_imports)]
+pub use super::horizon::horizon_attitude;
 
 /// Build a bounded `photo-reference-catalog` (`catalog.json`) at zoom `14` / `12`.
 ///

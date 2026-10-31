@@ -40,9 +40,10 @@ pub fn load_xfeat_extractor_blocking(
         .map_err(|e| InferenceError::Invalid(format!("load XFeat safetensors contract: {e}")))?;
     let contract = XFeat::encoder_contract_of(&weights);
     let session = OrtModelSession::load_blocking(onnx_path, config)?;
+    let input_name = session.primary_input_name()?.to_owned();
     let extractor = ModelSessionExtractor::new(
         session,
-        "image",
+        input_name,
         contract,
         provider_runtime_name(config.provider),
     );

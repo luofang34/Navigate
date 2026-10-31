@@ -133,9 +133,10 @@ impl LoadedXFeat {
                     .unwrap_or_else(|| safetensors_path.with_extension("onnx"));
                 init_ort_once(cfg.onnx_runtime_path.as_deref())?;
                 let session = OrtDenseSession::load(&onnx_path, cfg.runtime)?;
+                let input_name = session.primary_input_name()?.to_owned();
                 Arc::new(ModelSessionExtractor::new(
                     session,
-                    "image",
+                    input_name,
                     contract,
                     cfg.runtime.as_str(),
                 ))
@@ -302,6 +303,14 @@ impl OrtDenseSession {
             session,
             output_names,
         })
+    }
+
+    fn primary_input_name(&self) -> Result<&str, PipelineError> {
+        self.session
+            .inputs()
+            .first()
+            .map(|i| i.name())
+            .ok_or_else(|| PipelineError::Invalid("ORT XFeat model has no input tensors".into()))
     }
 }
 

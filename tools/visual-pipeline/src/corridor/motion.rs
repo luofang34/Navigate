@@ -1,5 +1,9 @@
 //! Inter-frame motion prediction, relative odometry history, and warm 3D track solving.
 
+use super::kinematics::{
+    KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile, can_update_vertical_velocity,
+    match_tracks_kashin, orthonormalize_so3,
+};
 use crate::{
     PipelineError,
     pose::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc},
@@ -33,6 +37,11 @@ pub(super) struct TrackState {
     pub(super) pose_steps: VecDeque<OdometryStep>,
     pub(super) frames_since_anchor: usize,
     pub(super) visited_cells: BTreeMap<MapCell, String>,
+    pub(super) prev_time_s: Option<f64>,
+    pub(super) time_since_anchor_s: f64,
+    pub(super) kinematic: Option<KinematicState>,
+    #[allow(dead_code)]
+    pub(super) focal_estimator: crate::stages::focal::FocalLengthEstimator,
 }
 
 impl TrackState {
@@ -49,6 +58,10 @@ impl TrackState {
             pose_steps: VecDeque::with_capacity(MAX_ODOMETRY_STEPS),
             frames_since_anchor: 0,
             visited_cells: BTreeMap::new(),
+            prev_time_s: None,
+            time_since_anchor_s: 0.0,
+            kinematic: None,
+            focal_estimator: crate::stages::focal::FocalLengthEstimator::default(),
         }
     }
 }
@@ -59,6 +72,8 @@ pub(super) fn record_odometry_step(
     k_render: &Matrix3<f64>,
     prior_rot_hint: Option<Matrix3<f64>>,
     nominal_agl_m: f64,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
 ) {
     state.frame_seq += 1;
     let base_rot = state.prev_rot.or(state.vo_rot).or(prior_rot_hint);
@@ -66,21 +81,33 @@ pub(super) fn record_odometry_step(
     let mut matched_pairs = (Vec::new(), Vec::new());
 
     if let Some(prev_q) = &state.prev_prepared {
-        matched_pairs = match_interframe_top(prev_q, cur_q, 192);
+        let fx = k_render[(0, 0)];
+        let fy = k_render[(1, 1)];
+        let max_px = profile
+            .max_pixel_displacement(dt_s, fx, fy, nominal_agl_m)
+            .clamp(96.0, 400.0);
+        matched_pairs = match_interframe_top(prev_q, cur_q, 192, max_px);
         if matched_pairs.0.len() >= 12
             && let Some((r_delta, inliers)) =
                 relative_rotation_ransac(&matched_pairs.0, &matched_pairs.1, k_render, 4.0)
         {
             let inl_n = inliers.iter().filter(|&&b| b).count();
             let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
-            if inl_n >= 8 && trace_cos >= 18.0_f64.to_radians().cos() {
+            let min_cos = profile
+                .min_trace_cosine(dt_s)
+                .min(18.0_f64.to_radians().cos());
+            if inl_n >= 8 && trace_cos >= min_cos {
                 rot_step = orthonormalize_so3(&r_delta);
             }
         }
     }
 
     let eye_delta = if state.prev_eye.is_some() {
-        state.prev_vel
+        [
+            state.prev_vel[0] * dt_s,
+            state.prev_vel[1] * dt_s,
+            state.prev_vel[2] * dt_s,
+        ]
     } else if let Some(r_world_to_cam) = base_rot {
         estimate_ground_vo_delta(
             &matched_pairs.0,
@@ -89,6 +116,8 @@ pub(super) fn record_odometry_step(
             &r_world_to_cam,
             k_render,
             nominal_agl_m,
+            dt_s,
+            profile,
         )
     } else {
         [0.0; 3]
@@ -106,6 +135,7 @@ pub(super) fn record_odometry_step(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn estimate_ground_vo_delta(
     px_a: &[[f64; 2]],
     px_b: &[[f64; 2]],
@@ -113,6 +143,8 @@ fn estimate_ground_vo_delta(
     world_to_cam: &Matrix3<f64>,
     k: &Matrix3<f64>,
     agl_m: f64,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
 ) -> [f64; 3] {
     if px_a.len() < 8 || !agl_m.is_finite() || agl_m < 15.0 {
         return [0.0; 3];
@@ -124,6 +156,7 @@ fn estimate_ground_vo_delta(
     let cam_to_world = world_to_cam.transpose();
     let mut east_samples = Vec::with_capacity(px_a.len());
     let mut north_samples = Vec::with_capacity(px_a.len());
+    let (filter_gate, clamp_gate) = profile.ground_vo_bounds(dt_s);
 
     for (&[ax, ay], &[bx, by]) in px_a.iter().zip(px_b.iter()) {
         let ray_a = Vector3::new((ax - cx) / fx, (ay - cy) / fy, 1.0);
@@ -145,7 +178,7 @@ fn estimate_ground_vo_delta(
             0.0,
         );
         let d_enu = cam_to_world * d_cam;
-        if d_enu.x.hypot(d_enu.y) <= 60.0 {
+        if d_enu.x.hypot(d_enu.y) <= filter_gate {
             east_samples.push(d_enu.x);
             north_samples.push(d_enu.y);
         }
@@ -157,8 +190,8 @@ fn estimate_ground_vo_delta(
     north_samples.sort_by(f64::total_cmp);
     let mid = east_samples.len() / 2;
     [
-        east_samples[mid].clamp(-25.0, 25.0),
-        north_samples[mid].clamp(-25.0, 25.0),
+        east_samples[mid].clamp(-clamp_gate, clamp_gate),
+        north_samples[mid].clamp(-clamp_gate, clamp_gate),
         0.0,
     ]
 }
@@ -186,13 +219,27 @@ pub(super) fn update_motion_state(
     state: &mut TrackState,
     cand: &PoseCandidate,
     prepared: PreparedKashinQuery,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
 ) {
-    let mut exact_delta = state.prev_vel;
+    let mut exact_delta = [
+        state.prev_vel[0] * dt_s,
+        state.prev_vel[1] * dt_s,
+        state.prev_vel[2] * dt_s,
+    ];
+    let allow_vert = can_update_vertical_velocity(cand.score.holdout_count, cand.score.inliers);
     if let Some(pe) = state.prev_eye {
         let dv = Vector3::from(cand.eye) - Vector3::from(pe);
-        if dv.norm() <= 500.0 {
+        let max_disp = profile.max_displacement(dt_s);
+        if dv.norm() <= (max_disp * 1.5).max(10.0) {
             exact_delta = [dv.x, dv.y, dv.z];
-            state.prev_vel = exact_delta;
+            let v_mps = dv / dt_s;
+            let vz = if allow_vert {
+                v_mps.z
+            } else {
+                state.prev_vel[2]
+            };
+            state.prev_vel = [v_mps.x, v_mps.y, vz];
         }
     }
     let mut exact_rot = state.prev_rot_step;
@@ -207,19 +254,36 @@ pub(super) fn update_motion_state(
         last.eye_delta = exact_delta;
         last.rot_step = exact_rot;
     }
+    if let Some(kin) = state.kinematic.as_mut() {
+        kin.update_from_pose_gated(cand.eye, cand.rotation, dt_s, profile, allow_vert);
+    } else {
+        state.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
+    }
     state.prev_eye = Some(cand.eye);
     state.prev_rot = Some(cand.rotation);
     state.vo_rot = Some(cand.rotation);
     state.prev_prepared = Some(prepared);
 }
 
-pub(super) fn advance_unsolved_prepared(state: &mut TrackState, prepared: PreparedKashinQuery) {
+pub(super) fn advance_unsolved_prepared(
+    state: &mut TrackState,
+    prepared: PreparedKashinQuery,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
+) {
     if let Some(pe) = state.prev_eye {
         let step_delta = state
             .pose_steps
             .back()
             .filter(|s| s.frame_seq == state.frame_seq)
-            .map_or(state.prev_vel, |s| s.eye_delta);
+            .map_or(
+                [
+                    state.prev_vel[0] * dt_s,
+                    state.prev_vel[1] * dt_s,
+                    state.prev_vel[2] * dt_s,
+                ],
+                |s| s.eye_delta,
+            );
         state.prev_eye = Some([
             pe[0] + step_delta[0],
             pe[1] + step_delta[1],
@@ -229,6 +293,13 @@ pub(super) fn advance_unsolved_prepared(state: &mut TrackState, prepared: Prepar
     if let Some(pr) = state.prev_rot {
         state.prev_rot = Some(orthonormalize_so3(&(state.prev_rot_step * pr)));
     }
+    if let Some(kin) = state.kinematic.as_mut() {
+        kin.propagate_covariance(
+            dt_s,
+            profile.rms_accel_mps2,
+            profile.max_angular_rate_rad_s * 0.1,
+        );
+    }
     state.prev_prepared = Some(prepared);
 }
 
@@ -236,22 +307,36 @@ pub(super) fn predict_interframe_pose(
     state: &TrackState,
     cur_q: &PreparedKashinQuery,
     k: &Matrix3<f64>,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
 ) -> Option<([f64; 3], Matrix3<f64>)> {
     let (prev_eye, prev_rot) = (state.prev_eye?, state.prev_rot?);
-    let pred_eye = [
-        prev_eye[0] + 0.85 * state.prev_vel[0],
-        prev_eye[1] + 0.85 * state.prev_vel[1],
-        prev_eye[2] + 0.85 * state.prev_vel[2],
-    ];
+    let pred_eye = if let Some(kin) = &state.kinematic {
+        kin.predict_position(dt_s)
+    } else {
+        [
+            prev_eye[0] + state.prev_vel[0] * dt_s,
+            prev_eye[1] + state.prev_vel[1] * dt_s,
+            prev_eye[2] + state.prev_vel[2] * dt_s,
+        ]
+    };
     let mut pred_rot = state.prev_rot_step * prev_rot;
     if let Some(prev_q) = &state.prev_prepared {
-        let (px_a, px_b) = match_interframe_top(prev_q, cur_q, 192);
+        let fx = k[(0, 0)];
+        let fy = k[(1, 1)];
+        let max_px = profile
+            .max_pixel_displacement(dt_s, fx, fy, 480.0)
+            .clamp(96.0, 400.0);
+        let (px_a, px_b) = match_interframe_top(prev_q, cur_q, 192, max_px);
         if px_a.len() >= 12
             && let Some((r_delta, inliers)) = relative_rotation_ransac(&px_a, &px_b, k, 4.0)
         {
             let inl_n = inliers.iter().filter(|&&b| b).count();
             let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
-            if inl_n >= 10 && trace_cos >= 15.0_f64.to_radians().cos() {
+            let min_cos = profile
+                .min_trace_cosine(dt_s)
+                .min(15.0_f64.to_radians().cos());
+            if inl_n >= 10 && trace_cos >= min_cos {
                 pred_rot = r_delta * prev_rot;
             }
         }
@@ -259,25 +344,11 @@ pub(super) fn predict_interframe_pose(
     Some((pred_eye, orthonormalize_so3(&pred_rot)))
 }
 
-fn orthonormalize_so3(m: &Matrix3<f64>) -> Matrix3<f64> {
-    let svd = m.svd(true, true);
-    if let (Some(u), Some(v_t)) = (svd.u, svd.v_t) {
-        let mut r = u * v_t;
-        if r.determinant() < 0.0 {
-            let mut u_fix = u;
-            u_fix.set_column(2, &(-u.column(2)));
-            r = u_fix * v_t;
-        }
-        r
-    } else {
-        Matrix3::identity()
-    }
-}
-
 fn match_interframe_top(
     prev_q: &PreparedKashinQuery,
     cur_q: &PreparedKashinQuery,
     cap: usize,
+    max_pixel_disp: f64,
 ) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
     let na = prev_q.valid_indices().len().min(cap);
     let nb = cur_q.valid_indices().len().min(cap);
@@ -291,7 +362,7 @@ fn match_interframe_top(
         let mut best = (usize::MAX, 65_u32, 65_u32);
         for b in 0..nb {
             let [bx, by] = pb[ib[b]];
-            if (ax - bx).abs() > 96.0 || (ay - by).abs() > 96.0 {
+            if (ax - bx).abs() > max_pixel_disp || (ay - by).abs() > max_pixel_disp {
                 continue;
             }
             let hd = (sa[a] ^ sb[b]).count_ones();
@@ -309,6 +380,7 @@ fn match_interframe_top(
     (out_a, out_b)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn try_warm_track(
     tracks: &ActiveTrackSet,
     prepared: &PreparedKashinQuery,
@@ -317,44 +389,47 @@ pub(super) fn try_warm_track(
     render_size: [u32; 2],
     min_inliers: usize,
     attempts_log: &mut Vec<Value>,
+    strategy: TrackingSearchStrategy,
 ) -> Result<Option<PoseCandidate>, PipelineError> {
-    let cfg = TrackMatchConfig {
-        search_radius_px: 36.0,
-        hamming_gate: 22,
-        min_dot: 0.64,
-        ratio_limit: 0.90,
+    let (world, px) = match strategy {
+        TrackingSearchStrategy::RadiusSearch { radius_px } => {
+            let cfg = TrackMatchConfig {
+                search_radius_px: radius_px as f32,
+                hamming_gate: 22,
+                min_dot: 0.64,
+                ratio_limit: 0.90,
+            };
+            let intrinsics = [
+                k_render[(0, 0)],
+                k_render[(1, 1)],
+                k_render[(0, 2)],
+                k_render[(1, 2)],
+            ];
+            let matches = tracks.match_radius(
+                prepared,
+                pred.0,
+                &rot_to_row_major(&pred.1),
+                intrinsics,
+                render_size,
+                &cfg,
+            )?;
+            let mut w = Vec::with_capacity(matches.len());
+            let mut p = Vec::with_capacity(matches.len());
+            for m in &matches {
+                w.push(m.world_point_enu);
+                p.push(m.query_pixel);
+            }
+            (w, p)
+        }
+        TrackingSearchStrategy::GlobalFrustumMatch => match_tracks_kashin(tracks, prepared, 384),
     };
-    let intrinsics = [
-        k_render[(0, 0)],
-        k_render[(1, 1)],
-        k_render[(0, 2)],
-        k_render[(1, 2)],
-    ];
-    let matches = tracks.match_radius(
-        prepared,
-        pred.0,
-        &rot_to_row_major(&pred.1),
-        intrinsics,
-        render_size,
-        &cfg,
-    )?;
-    let mut world = Vec::with_capacity(matches.len());
-    let mut px = Vec::with_capacity(matches.len());
-    for m in &matches {
-        world.push(m.world_point_enu);
-        px.push(m.query_pixel);
-    }
     let cand = fit_pose_l1_gnc(&world, &px, k_render, render_size, pred)
         .or_else(|| fit_pose_hybrid(&world, &px, k_render, render_size, Some(pred)));
-    log_attempt(
-        attempts_log,
-        "kashin-3d-radius-track+l1-gnc",
-        0,
-        0,
-        1.0,
-        world.len(),
-        cand.as_ref(),
-    );
+    let label = match strategy {
+        TrackingSearchStrategy::RadiusSearch { .. } => "kashin-3d-radius-track+l1-gnc",
+        TrackingSearchStrategy::GlobalFrustumMatch => "kashin-3d-global-frustum+l1-gnc",
+    };
+    log_attempt(attempts_log, label, 0, 0, 1.0, world.len(), cand.as_ref());
     Ok(cand.filter(|c| c.score.geometry_accepted && c.score.inliers >= min_inliers))
 }
 

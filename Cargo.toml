@@ -30,6 +30,7 @@ members = [
     "crates/navigate-segment",
     "tools/visual-pipeline",
     "crates/navigate-place",
+    "tests/e2e_corridor",
 ]
 exclude = [
     "tools/imagery-provider",

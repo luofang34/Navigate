@@ -33,6 +33,19 @@ impl OrtModelSession {
     pub fn session(&self) -> &Session {
         &self.session
     }
+
+    /// Return the primary input tensor name of the ONNX model graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InferenceError`] if the session has no input tensors.
+    pub fn primary_input_name(&self) -> Result<&str, InferenceError> {
+        self.session
+            .inputs()
+            .first()
+            .map(|i| i.name())
+            .ok_or_else(|| InferenceError::Invalid("ORT model has no input tensors".into()))
+    }
 }
 
 impl ModelInference for OrtModelSession {

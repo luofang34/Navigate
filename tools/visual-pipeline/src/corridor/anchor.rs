@@ -1,6 +1,9 @@
 //! Virtual-view map-anchor acquisition against [`CorridorTileStore`].
 
-use super::CorridorTrackOptions;
+pub mod multitier;
+pub mod plausibility;
+
+use super::{CorridorTrackOptions, kinematics::match_virtual_kashin};
 use crate::{
     PipelineError,
     pose::{PoseCandidate, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
@@ -12,9 +15,10 @@ use crate::{
 };
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::{
-    ActiveTrackSet, CorridorTileStore, FastMatchConfig, HadamardProjector, IndexedMatch,
-    LighterGlue, PreparedKashinQuery, SparseFeatures, VirtualCorridorView, VirtualViewCamera,
+    CorridorTileStore, FastMatchConfig, HadamardProjector, IndexedMatch, LighterGlue,
+    PreparedKashinQuery, SparseFeatures, VirtualCorridorView, VirtualViewCamera,
 };
+use plausibility::{PhysicalPlausibilityConfig, is_plausible_candidate};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Mutex};
 
@@ -97,9 +101,9 @@ pub(super) fn acquire_corridor_anchor(
     for chunk in chunks {
         let fast_exit = pred_pose.is_some() && base_idx == 0 && chunk.len() == 1;
         let evals = eval_seed_batch(
-            store,
-            projector,
-            lighterglue,
+            (surface, store, projector),
+            gpu_renderer,
+            (xfeat, lighterglue),
             (qry_feat, prepared),
             chunk,
             (intrinsics, k_render, render_size, max_lm),
@@ -124,7 +128,7 @@ pub(super) fn acquire_corridor_anchor(
             }
 
             let hyp_eye = chunk[local_i].0;
-            let mut cur_cand = cand_opt.filter(|c| is_plausible_corridor_pose(c, hyp_eye));
+            let mut cur_cand = cand_opt.filter(|c| is_plausible_anchor_candidate(c, surface));
             let mut cur_virt = virt;
             let mut prev_eye = hyp_eye;
             for re_step in 1..=2_usize {
@@ -138,9 +142,9 @@ pub(super) fn acquire_corridor_anchor(
                 }
                 prev_eye = c_prev.eye;
                 let mut single = eval_seed_batch(
-                    store,
-                    projector,
-                    lighterglue,
+                    (surface, store, projector),
+                    gpu_renderer,
+                    (xfeat, lighterglue),
                     (qry_feat, prepared),
                     &[(c_prev.eye, c_prev.rotation)],
                     (intrinsics, k_render, render_size, max_lm),
@@ -149,7 +153,7 @@ pub(super) fn acquire_corridor_anchor(
                 let (re_cand, re_virt, re_layers) =
                     single.pop().unwrap_or((None, cur_virt.clone(), 0));
                 lg_layers += re_layers;
-                let re_cand = re_cand.filter(|c| is_plausible_corridor_pose(c, hyp_eye));
+                let re_cand = re_cand.filter(|c| is_plausible_anchor_candidate(c, surface));
                 log_attempt(
                     attempts_log,
                     "corridor-virtual-reproject+l1-gnc",
@@ -188,6 +192,54 @@ pub(super) fn acquire_corridor_anchor(
         base_idx += chunk.len();
         if accepted_early {
             break;
+        }
+    }
+
+    if best
+        .as_ref()
+        .is_none_or(|(_, _, c)| !c.score.geometry_accepted)
+        && let Ok(rgb_img) = crate::stages::load_case_rgb(&opts.dataset_dir, &case.image)
+    {
+        let dyn_img = image::DynamicImage::ImageRgb8(rgb_img);
+        let search_prior =
+            multitier::build_search_prior_from_hint(pred_pose, opts.anchor_uncertainty_m);
+        let matcher =
+            multitier::SearchTierMatcher::new(multitier::MultiTierSearchConfig::default());
+        if let Ok(fb_seeds) = multitier::resolve_global_fallback_seeds(
+            &matcher,
+            &search_prior,
+            &dyn_img,
+            surface,
+            store,
+            480.0,
+        ) && !fb_seeds.is_empty()
+        {
+            let fb_evals = eval_seed_batch(
+                (surface, store, projector),
+                gpu_renderer,
+                (xfeat, lighterglue),
+                (qry_feat, prepared),
+                &fb_seeds,
+                (intrinsics, k_render, render_size, max_lm),
+                false,
+            )?;
+            for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
+                lg_layers += layers;
+                if let Some(c) = cand_opt.filter(|c| is_plausible_anchor_candidate(c, surface)) {
+                    let seed_idx = base_idx + local_i;
+                    let take = best.as_ref().is_none_or(|(_, _, prev)| {
+                        candidate_priority(&c.score) > candidate_priority(&prev.score)
+                    });
+                    seed_pool.push((seed_idx, c.clone()));
+                    if take {
+                        best = Some((seed_idx, 0, c.clone()));
+                        best_view = Some(virt);
+                    }
+                    if c.score.geometry_accepted {
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -276,9 +328,9 @@ pub(super) fn acquire_corridor_anchor(
 type SeedEvalTuple = (Option<PoseCandidate>, VirtualCorridorView, usize);
 
 fn eval_seed_batch(
-    store: &CorridorTileStore,
-    projector: &HadamardProjector,
-    lighterglue: Option<&LighterGlue>,
+    (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
+    gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
+    (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
     (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
     poses: &[([f64; 3], Matrix3<f64>)],
     (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
@@ -289,7 +341,7 @@ fn eval_seed_batch(
     let mut need_lg: Vec<usize> = Vec::new();
 
     for (i, &(hyp_eye, hyp_rot)) in poses.iter().enumerate() {
-        let min_cos_orientation = if -hyp_rot[(2, 2)] > 0.95 { -1.0 } else { 0.90 };
+        let min_cos_orientation = if -hyp_rot[(2, 2)] > 0.95 { 0.80 } else { 0.90 };
         let virt = store.project_virtual_view(
             &VirtualViewCamera {
                 eye_enu: hyp_eye,
@@ -302,7 +354,22 @@ fn eval_seed_batch(
             },
             projector,
         )?;
-        if virt.world_points_enu.len() < 16 {
+        if virt.world_points_enu.len() < 12 {
+            if let Some(gpu_lock) = gpu_renderer
+                && let Some((polished, layers, _)) = polish_pose_sparse(
+                    surface,
+                    Some(gpu_lock),
+                    xfeat,
+                    lighterglue,
+                    qry_feat,
+                    (hyp_eye, hyp_rot),
+                    k_render,
+                    render_size,
+                )?
+            {
+                results.push((Some(polished), virt, layers));
+                continue;
+            }
             results.push((None, virt, 0));
             continue;
         }
@@ -314,7 +381,7 @@ fn eval_seed_batch(
             render_size,
             Some((hyp_eye, hyp_rot)),
         )
-        .filter(|c| is_plausible_corridor_pose(c, hyp_eye));
+        .filter(|c| is_plausible_anchor_candidate(c, surface));
         let accepted = cand.as_ref().is_some_and(|c| c.score.geometry_accepted);
         results.push((cand, virt, 0));
         if accepted {
@@ -352,13 +419,13 @@ fn eval_seed_batch(
             let (w_pts, px) = collect_virtual_indexed(virt, &idx_matches);
             let mut lg_best =
                 fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some((hyp_eye, hyp_rot)))
-                    .filter(|c| is_plausible_corridor_pose(c, hyp_eye));
+                    .filter(|c| is_plausible_anchor_candidate(c, surface));
             if !lg_best.as_ref().is_some_and(|c| c.score.geometry_accepted)
                 && let Some(tri_init) =
                     refine_seed_eye_2pt(&w_pts, &px, (hyp_eye, hyp_rot), k_render)
                 && let Some(tri_cand) =
                     fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some(tri_init))
-                        .filter(|c| is_plausible_corridor_pose(c, hyp_eye))
+                        .filter(|c| is_plausible_anchor_candidate(c, surface))
                 && lg_best.as_ref().is_none_or(|prev| {
                     candidate_priority(&tri_cand.score) > candidate_priority(&prev.score)
                 })
@@ -377,10 +444,9 @@ fn eval_seed_batch(
     Ok(results)
 }
 
-fn is_plausible_corridor_pose(c: &PoseCandidate, hyp_eye: [f64; 3]) -> bool {
-    let horiz = (c.eye[0] - hyp_eye[0]).hypot(c.eye[1] - hyp_eye[1]);
-    let dz = (c.eye[2] - hyp_eye[2]).abs();
-    horiz.is_finite() && horiz <= 2_200.0 && dz <= 750.0 && c.score.image_support_fraction >= 0.025
+fn is_plausible_anchor_candidate(cand: &PoseCandidate, surface: &Surface) -> bool {
+    let config = PhysicalPlausibilityConfig::default();
+    is_plausible_candidate(cand, surface, None, false, &config)
 }
 
 fn build_anchor_seeds(
@@ -399,76 +465,6 @@ fn build_anchor_seeds(
                 .take(anchor_attempts.max(1)),
         )
         .collect()
-}
-
-fn match_virtual_kashin(
-    virt: &VirtualCorridorView,
-    query: &PreparedKashinQuery,
-    cap: usize,
-) -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
-    let probe = ActiveTrackSet {
-        world_points_enu: virt.world_points_enu.iter().take(cap).copied().collect(),
-        sign_bits: virt.sign_bits.iter().take(cap).copied().collect(),
-        kashin_i8: virt.kashin_i8.iter().take(cap).copied().collect(),
-    };
-    let n_r = probe.len();
-    let q_valid = query.valid_indices();
-    let n_q = q_valid.len().min(cap);
-    if n_r == 0 || n_q == 0 {
-        return (Vec::new(), Vec::new());
-    }
-    let q_signs = query.sign_bits();
-    let q_rots = query.rotated();
-    let q_px = query.pixels();
-    let mut fwd = vec![(usize::MAX, -2.0_f32, -2.0_f32); n_r];
-    let mut rev = vec![(usize::MAX, -2.0_f32); n_q];
-
-    for (r, fwd_slot) in fwd.iter_mut().enumerate() {
-        let rs = probe.sign_bits[r];
-        let rc = &probe.kashin_i8[r];
-        for q in 0..n_q {
-            if (rs ^ q_signs[q]).count_ones() > 24 {
-                continue;
-            }
-            let dot = approx_dot(rc, &q_rots[q]);
-            if dot > fwd_slot.1 {
-                *fwd_slot = (q, dot, fwd_slot.1);
-            } else if dot > fwd_slot.2 {
-                fwd_slot.2 = dot;
-            }
-            if dot > rev[q].1 {
-                rev[q] = (r, dot);
-            }
-        }
-    }
-    let mut world = Vec::new();
-    let mut px = Vec::new();
-    for (r, &(q, b1, b2)) in fwd.iter().enumerate() {
-        if q < n_q
-            && rev[q].0 == r
-            && b1 >= 0.62
-            && (b2 <= -1.5 || (1.0 - b1).max(0.0) <= 0.85 * (1.0 - b2).max(0.0))
-        {
-            world.push(probe.world_points_enu[r]);
-            px.push(q_px[q_valid[q]]);
-        }
-    }
-    (world, px)
-}
-
-fn approx_dot(code: &[u8; 64], rot: &[f32; 64]) -> f32 {
-    let mut dot = 0.0_f32;
-    let mut norm_sq = 0_i32;
-    for (&raw, &q) in code.iter().zip(rot) {
-        let v = raw as i8;
-        let vi = i32::from(v);
-        norm_sq += vi * vi;
-        dot += f32::from(v) * q;
-    }
-    if norm_sq <= 0 {
-        return 0.0;
-    }
-    (dot / (norm_sq as f32).sqrt()).clamp(-1.0, 1.0)
 }
 
 fn collect_virtual_indexed(

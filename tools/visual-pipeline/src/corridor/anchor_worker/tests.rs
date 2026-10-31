@@ -156,3 +156,33 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
     assert_eq!(state.active_tracks.world_points_enu[0], [10.0, 0.0, 200.0]);
     assert_eq!(state.prev_eye, Some([10.0, 0.0, 0.0]));
 }
+
+#[test]
+fn test_anchor_worker_state_transitions() {
+    use super::AnchorWorkerState;
+
+    let mut state = AnchorWorkerState::default();
+    assert!(state.prev_eye.is_none());
+    assert!(state.prev_rot.is_none());
+    assert_eq!(state.vel_enu_mps, [0.0, 0.0, 0.0]);
+
+    // Cold start
+    state.on_anchor_accepted([10.0, 20.0, 100.0], Matrix3::identity(), 0.1);
+    assert_eq!(state.prev_eye, Some([10.0, 20.0, 100.0]));
+    assert_eq!(state.vel_enu_mps, [0.0, 0.0, 0.0]);
+
+    // Follow-up anchor
+    state.on_anchor_accepted([13.0, 20.0, 100.0], Matrix3::identity(), 0.1);
+    assert!((state.vel_enu_mps[0] - 30.0).abs() < 1e-4);
+
+    // Relocation
+    state.on_relocation([500.0, 20.0, 100.0], 1.0);
+    assert_eq!(state.prev_eye, Some([500.0, 20.0, 100.0]));
+    assert!((state.vel_enu_mps[0] - 487.0).abs() < 1e-4);
+
+    // Track loss
+    state.on_track_loss();
+    assert!(state.prev_eye.is_none());
+    assert!(state.prev_rot.is_none());
+    assert_eq!(state.vel_enu_mps, [0.0, 0.0, 0.0]);
+}

@@ -8,3 +8,4 @@ pub use atlas::{AtlasLayout, ImageAtlas, TerrainAtlas};
 pub use error::RenderError;
 pub use renderer::{GpuRenderer, RenderLimits, RenderScene};
 pub use sparse::{AdaptiveRenderStats, SparseRayHit, SparseSceneSampler};
+pub use wgpu;

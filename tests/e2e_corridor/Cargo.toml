@@ -1,0 +1,24 @@
+[package]
+name = "e2e-corridor-tests"
+description = "Opaque-box end-to-end test suite for visual corridor navigation upgrades"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+navigate-contract = { path = "../../crates/navigate-contract" }
+navigate-fusion = { path = "../../crates/navigate-fusion" }
+navigate-visual = { path = "../../crates/navigate-visual" }
+navigate-visual-fusion = { path = "../../crates/navigate-visual-fusion" }
+navigate-visual-session = { path = "../../crates/navigate-visual-session" }
+navigate-match = { path = "../../crates/navigate-match" }
+navigate-place = { path = "../../crates/navigate-place" }
+nalgebra = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

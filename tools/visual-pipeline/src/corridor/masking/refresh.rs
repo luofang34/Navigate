@@ -271,6 +271,59 @@ impl Refresher {
             _ => {}
         }
     }
+
+    /// Run a fast initial Segformer pass on frame 1 to provide ground and sky masks before anchor jobs.
+    pub(super) fn initial_fast_pass(
+        &mut self,
+        key: &mut KeyLayers,
+        rgb: &RgbImage,
+        cur_rot: Option<&Matrix3<f64>>,
+    ) -> Result<bool, PipelineError> {
+        let dims = [rgb.width(), rgb.height()];
+        if key.usable(dims) {
+            return Ok(false);
+        }
+        match self {
+            Self::Inline(engine) => {
+                let layers = match engine.refresh(rgb) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::warn!("inline Segformer refresh failed: {e}");
+                        return Ok(false);
+                    }
+                };
+                *key = KeyLayers::default();
+                let _ = installed(key, layers, cur_rot.copied(), 1);
+                key.role = KeyRole::Current;
+                Ok(true)
+            }
+            Self::Background(background) => {
+                let BackgroundRefresh { worker, pending } = &mut **background;
+                if pending.is_none() {
+                    worker.submit(rgb.clone())?;
+                    *pending = Some(Pending {
+                        submit_rot: cur_rot.copied(),
+                        solved_rot: None,
+                        frames_since_submit: 1,
+                    });
+                }
+                let layers = match worker.recv_blocking()? {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::warn!("background Segformer refresh failed: {e}");
+                        *pending = None;
+                        return Ok(false);
+                    }
+                };
+                let rot = pending.as_ref().and_then(|p| p.solved_rot.or(p.submit_rot));
+                *pending = None;
+                *key = KeyLayers::default();
+                let _ = installed(key, layers, rot, 1);
+                key.role = KeyRole::Current;
+                Ok(true)
+            }
+        }
+    }
 }
 
 fn four_class_keep_layers(
