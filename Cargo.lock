@@ -5231,6 +5231,7 @@ dependencies = [
  "kamadak-exif",
  "nalgebra 0.34.2",
  "navigate-match",
+ "navigate-place",
  "navigate-visual",
  "navigate-visual-render",
  "navigate-visual-workflow",
@@ -5254,6 +5255,7 @@ dependencies = [
  "js-sys",
  "navigate-locate",
  "navigate-match",
+ "navigate-place",
  "navigate-visual",
  "serde_json",
  "thiserror 2.0.19",
@@ -5312,6 +5314,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webnn-onnx-utils",
+]
+
+[[package]]
+name = "navigate-place"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

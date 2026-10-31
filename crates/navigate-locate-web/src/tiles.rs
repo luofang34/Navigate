@@ -37,31 +37,36 @@ impl TileSource for FetchSource {
             .replace("{z}", &z.to_string())
             .replace("{x}", &x.to_string())
             .replace("{y}", &y.to_string());
-        let scope: WorkerGlobalScope = js_sys::global()
-            .dyn_into()
-            .map_err(|_| "the module must run in a Worker".to_owned())?;
-        let response: Response = JsFuture::from(scope.fetch_with_str(&url))
-            .await
-            .map_err(|e| format!("{url}: {e:?}"))?
-            .dyn_into()
-            .map_err(|_| format!("{url}: not a response"))?;
-        if response.status() == 404 {
-            return Ok(None);
-        }
-        if !response.ok() {
-            return Err(format!("{url}: HTTP {}", response.status()));
-        }
-        let buffer = JsFuture::from(
-            response
-                .array_buffer()
-                .map_err(|e| format!("{url}: {e:?}"))?,
-        )
-        .await
-        .map_err(|e| format!("{url}: {e:?}"))?;
-        Ok(Some(js_sys::Uint8Array::new(&buffer).to_vec()))
+        fetch_bytes(&url).await
     }
 
     fn identity(&self) -> String {
         format!("{} + {}", self.imagery, self.terrain)
     }
+}
+
+/// The body of `url` through the Worker's `fetch`, or `None` for HTTP 404.
+pub(crate) async fn fetch_bytes(url: &str) -> Result<Option<Vec<u8>>, String> {
+    let scope: WorkerGlobalScope = js_sys::global()
+        .dyn_into()
+        .map_err(|_| "the module must run in a Worker".to_owned())?;
+    let response: Response = JsFuture::from(scope.fetch_with_str(url))
+        .await
+        .map_err(|e| format!("{url}: {e:?}"))?
+        .dyn_into()
+        .map_err(|_| format!("{url}: not a response"))?;
+    if response.status() == 404 {
+        return Ok(None);
+    }
+    if !response.ok() {
+        return Err(format!("{url}: HTTP {}", response.status()));
+    }
+    let buffer = JsFuture::from(
+        response
+            .array_buffer()
+            .map_err(|e| format!("{url}: {e:?}"))?,
+    )
+    .await
+    .map_err(|e| format!("{url}: {e:?}"))?;
+    Ok(Some(js_sys::Uint8Array::new(&buffer).to_vec()))
 }

@@ -158,7 +158,7 @@ fn cell_position(cell: usize, width: usize) -> [f32; 2] {
     ]
 }
 
-async fn read_floats<const D: usize>(
+pub(crate) async fn read_floats<const D: usize>(
     tensor: Tensor<D>,
     stage: &'static str,
 ) -> Result<Vec<f32>, MatchError> {

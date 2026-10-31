@@ -137,11 +137,12 @@ impl Linear {
     }
 }
 
-/// Layer normalization over the last dimension, with PyTorch's default epsilon.
+/// Layer normalization over the last dimension.
 #[derive(Clone, Debug)]
 pub(crate) struct LayerNorm {
     weight: Tensor<1>,
     bias: Tensor<1>,
+    epsilon: f64,
 }
 
 const LAYER_NORM_EPSILON: f64 = 1e-5;
@@ -153,7 +154,19 @@ impl LayerNorm {
         width: usize,
         device: &Device,
     ) -> Result<Self, MatchError> {
+        Self::load_with_epsilon(weights, name, width, LAYER_NORM_EPSILON, device)
+    }
+
+    /// As [`Self::load`], with the epsilon of the reference model.
+    pub(crate) fn load_with_epsilon(
+        weights: &mut Weights,
+        name: &str,
+        width: usize,
+        epsilon: f64,
+        device: &Device,
+    ) -> Result<Self, MatchError> {
         Ok(Self {
+            epsilon,
             weight: upload(
                 weights.take(&format!("{name}.weight"), &[width])?,
                 [width],
@@ -171,7 +184,7 @@ impl LayerNorm {
         let mean = x.clone().mean_dim(D - 1);
         let centred = x - mean;
         let variance = centred.clone().powi_scalar(2).mean_dim(D - 1);
-        let normalized = centred / (variance + LAYER_NORM_EPSILON).sqrt();
+        let normalized = centred / (variance + self.epsilon).sqrt();
         normalized * self.weight.clone().unsqueeze::<D>() + self.bias.clone().unsqueeze::<D>()
     }
 }

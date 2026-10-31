@@ -29,6 +29,7 @@ members = [
     "crates/navigate-imagery",
     "crates/navigate-segment",
     "tools/visual-pipeline",
+    "crates/navigate-place",
 ]
 exclude = [
     "tools/imagery-provider",

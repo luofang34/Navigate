@@ -15,6 +15,7 @@ serde = ["dep:serde"]
 
 [dependencies]
 navigate-visual = { path = "../navigate-visual" }
+navigate-place = { path = "../navigate-place" }
 navigate-visual-render = { path = "../navigate-visual-render" }
 navigate-visual-workflow = { path = "../navigate-visual-workflow" }
 image = { workspace = true, features = ["jpeg", "png"] }
@@ -41,6 +42,10 @@ workspace = true
 
 [[example]]
 name = "photo"
+required-features = ["http"]
+
+[[example]]
+name = "search"
 required-features = ["http"]
 
 [[test]]
