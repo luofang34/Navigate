@@ -2,23 +2,28 @@
 
 use crate::{
     PipelineError,
-    matcher_client::default_burn_device,
-    pose::{PoseCandidate, fit_pose_hybrid},
-    surface::{Surface, SurfaceRayHit},
+    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid},
+    surface::{Surface, SurfaceGpuRenderer, SurfaceRayHit},
+    xfeat_runtime::LoadedXFeat,
 };
 use image::DynamicImage;
 use nalgebra::Matrix3;
 use navigate_match::{
-    FastMatchConfig, IndexedMatch, LighterGlue, PrecomputedMatch, PrecomputedViewEntry,
-    SparseFeatures, Weights, XFeat,
+    FastMatchConfig, HadamardProjector, IndexedMatch, LighterGlue, PrecomputedMatch,
+    PrecomputedReferenceBank, PrecomputedViewEntry, PreparedKashinQuery, SparseFeatures, Weights,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{fs, path::Path, sync::Mutex};
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "sparse pose polish accepts surface, optional GPU renderer, feature models, query keypoints, and camera geometry"
+)]
 pub(crate) fn polish_pose_sparse(
     surface: &Surface,
-    xfeat: &XFeat,
+    gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
+    xfeat: &LoadedXFeat,
     lighterglue: Option<&LighterGlue>,
     qry_feat: &SparseFeatures,
     pose: ([f64; 3], Matrix3<f64>),
@@ -26,10 +31,32 @@ pub(crate) fn polish_pose_sparse(
     render_size: [u32; 2],
 ) -> Result<Option<(PoseCandidate, usize, usize)>, PipelineError> {
     let kp_cap = qry_feat.len().clamp(1536, 4096);
-    let ((ref_rgb, _, _), render_stats) =
-        surface.render_adaptive(pose.0, &pose.1, k_render, render_size, 4, 8, 0.025);
-    let ref_gray = DynamicImage::ImageRgb8(ref_rgb).into_luma8();
-    let ref_feat = pollster::block_on(xfeat.extract(&ref_gray, kp_cap))?;
+    let mut gpu_view_opt = None;
+    if let Some(lock) = gpu_renderer
+        && let Ok(mut guard) = lock.lock()
+    {
+        if guard.is_none() {
+            *guard = SurfaceGpuRenderer::try_new(surface, k_render, render_size);
+        }
+        if let Some(gpu) = guard.as_mut() {
+            gpu_view_opt = gpu
+                .render_view(surface, pose.0, &pose.1, k_render, render_size)
+                .ok();
+        }
+    }
+
+    let (ref_gray, pre_rays) = if let Some(ref gv) = gpu_view_opt {
+        (gv.image.clone(), 0_usize)
+    } else {
+        let ((ref_rgb, _, _), render_stats) =
+            surface.render_adaptive(pose.0, &pose.1, k_render, render_size, 4, 8, 0.025);
+        (
+            DynamicImage::ImageRgb8(ref_rgb).into_luma8(),
+            render_stats.rays_cast,
+        )
+    };
+
+    let ref_feat = xfeat.extract(&ref_gray, kp_cap)?;
     let (matches, layers) = if let Some(lg) = lighterglue {
         let cfg = FastMatchConfig {
             max_keypoints: kp_cap,
@@ -44,33 +71,60 @@ pub(crate) fn polish_pose_sparse(
         .iter()
         .map(|m| [m.reference.x, m.reference.y])
         .collect();
-    let hits = surface.raycast_pixels(pose.0, &pose.1, k_render, &ref_pixels);
+
     let mut world_pts = Vec::with_capacity(matches.len());
     let mut img_px = Vec::with_capacity(matches.len());
-    for (m, hit) in matches.iter().zip(hits) {
-        if let Some(h) = hit {
-            world_pts.push(h.world_enu);
-            img_px.push([m.query.x, m.query.y]);
+    let rays_used = if let Some(gv) = gpu_view_opt {
+        let unproj = gv.unproject_pixels(surface, &ref_pixels);
+        for (m, w_opt) in matches.iter().zip(unproj) {
+            if let Some(w) = w_opt {
+                world_pts.push(w);
+                img_px.push([m.query.x, m.query.y]);
+            }
         }
-    }
+        0_usize
+    } else {
+        let hits = surface.raycast_pixels(pose.0, &pose.1, k_render, &ref_pixels);
+        for (m, hit) in matches.iter().zip(hits) {
+            if let Some(h) = hit {
+                world_pts.push(h.world_enu);
+                img_px.push([m.query.x, m.query.y]);
+            }
+        }
+        pre_rays + ref_pixels.len()
+    };
+
     let cand = fit_pose_hybrid(&world_pts, &img_px, k_render, render_size, Some(pose));
-    Ok(cand.map(|c| (c, render_stats.rays_cast + ref_pixels.len(), layers)))
+    Ok(cand.map(|c| (c, rays_used, layers)))
 }
 
 pub(crate) fn filter_terrain_features(
     raw: &SparseFeatures,
     hits: &[Option<SurfaceRayHit>],
 ) -> (SparseFeatures, Vec<[f64; 3]>) {
+    filter_terrain_world_points(
+        raw,
+        &hits
+            .iter()
+            .map(|h| h.map(|x| x.world_enu))
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub(crate) fn filter_terrain_world_points(
+    raw: &SparseFeatures,
+    world_opts: &[Option<[f64; 3]>],
+) -> (SparseFeatures, Vec<[f64; 3]>) {
     let mut out = SparseFeatures::empty();
     let mut world = Vec::new();
-    for (i, hit) in hits.iter().enumerate() {
-        if let Some(h) = hit {
+    for (i, w_opt) in world_opts.iter().enumerate() {
+        if let Some(w) = *w_opt {
             out.pixels.push(raw.pixels[i]);
             out.model_pixels.push(raw.model_pixels[i]);
             out.scores.push(raw.scores[i]);
             out.descriptors
                 .extend_from_slice(&raw.descriptors[i * 64..(i + 1) * 64]);
-            world.push(h.world_enu);
+            world.push(w);
         }
     }
     (out, world)
@@ -150,32 +204,20 @@ pub(crate) fn raw_file_sha256(path: &Path) -> Result<[u8; 32], PipelineError> {
     Ok(Sha256::digest(&bytes).into())
 }
 
-pub(crate) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), PipelineError> {
-    let bytes = fs::read(path).map_err(|source| PipelineError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let digest: [u8; 32] = Sha256::digest(&bytes).into();
-    let weights = Weights::from_safetensors(&bytes)?;
-    let (device, _) = default_burn_device();
-    Ok((XFeat::load(weights, &device)?, digest))
-}
-
-/// Check a bank `encoder_contract` stamp against the loaded XFeat model.
+/// Check a bank `encoder_contract` stamp against the loaded `XFeat` extractor.
 pub(crate) fn check_encoder_contract(
     bank_kind: &str,
     stamp: &[u8; 32],
-    xfeat: &XFeat,
-    weights_file_sha256: &[u8; 32],
+    xfeat: &LoadedXFeat,
 ) -> Result<(), PipelineError> {
-    if xfeat.accepts_encoder_contract(stamp, weights_file_sha256) {
+    if xfeat.accepts_encoder_contract(stamp) {
         return Ok(());
     }
     Err(PipelineError::Invalid(format!(
         "{bank_kind} encoder_contract {} is neither the XFeat encoder contract {} nor the --model file digest {}",
         hex(stamp),
         hex(&xfeat.encoder_contract()),
-        hex(weights_file_sha256),
+        hex(xfeat.weights_sha256()),
     )))
 }
 
@@ -196,33 +238,6 @@ pub(crate) fn load_lighterglue_model(
     Ok(LighterGlue::load(weights, device)?)
 }
 
-pub(crate) fn warmup_gpu_pipelines(
-    xfeat: &XFeat,
-    lighterglue: Option<&LighterGlue>,
-) -> Result<f64, PipelineError> {
-    #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
-    {
-        let t0 = std::time::Instant::now();
-        let mut patch = image::GrayImage::new(32, 32);
-        for (x, y, p) in patch.enumerate_pixels_mut() {
-            p.0[0] = ((x * 17 + y * 31) & 0xff) as u8;
-        }
-        let feat = pollster::block_on(xfeat.extract(&patch, 32))?;
-        if let Some(lg) = lighterglue
-            && !feat.is_empty()
-        {
-            let cfg = FastMatchConfig::realtime_tracking();
-            let _ = pollster::block_on(lg.match_features_fast(&feat, &feat, &cfg))?;
-        }
-        Ok(t0.elapsed().as_secs_f64() * 1000.0)
-    }
-    #[cfg(not(any(feature = "wgpu", feature = "metal", feature = "cuda")))]
-    {
-        let _ = (xfeat, lighterglue);
-        Ok(0.0)
-    }
-}
-
 pub(crate) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
     [
         r[(0, 0)],
@@ -239,4 +254,139 @@ pub(crate) fn rot_to_row_major(r: &Matrix3<f64>) -> [f64; 9] {
 
 pub(crate) fn rot_from_row_major(m: [f64; 9]) -> Matrix3<f64> {
     Matrix3::new(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
+}
+
+pub(super) type ShortlistMatchResult = (Option<(usize, usize, PoseCandidate)>, Vec<Value>, usize);
+
+pub(super) fn match_shortlisted_views(
+    bank: &PrecomputedReferenceBank,
+    projector: &HadamardProjector,
+    lighterglue: Option<&LighterGlue>,
+    qry_feat: &SparseFeatures,
+    prepared: &PreparedKashinQuery,
+    ranked: &[(usize, f32)],
+    (k_render, render_size, kp_limit): (&Matrix3<f64>, [u32; 2], usize),
+) -> Result<ShortlistMatchResult, PipelineError> {
+    let kashin_limit = if lighterglue.is_some() {
+        640
+    } else {
+        usize::MAX
+    };
+    let mut attempts_log = Vec::new();
+    let mut best: Option<(usize, usize, PoseCandidate)> = None;
+    let mut kashin_cands = Vec::with_capacity(ranked.len());
+
+    for &(entry_idx, sketch_score) in ranked {
+        let entry = &bank.entries[entry_idx];
+        let init_eye = entry.eye_enu;
+        let init_rot = rot_from_row_major(entry.world_to_cam);
+        let kashin_matches =
+            bank.match_prepared_limit(entry_idx, prepared, kashin_limit, 24, 0.60, 0.92)?;
+        let (world_pts, img_px) = collect_bank_correspondences(&kashin_matches);
+        let cand = fit_pose_hybrid(
+            &world_pts,
+            &img_px,
+            k_render,
+            render_size,
+            Some((init_eye, init_rot)),
+        );
+        if let Some(ref c) = cand
+            && c.score.geometry_accepted
+        {
+            log_attempt(
+                &mut attempts_log,
+                "kashin-i8",
+                entry_idx,
+                0,
+                sketch_score,
+                world_pts.len(),
+                cand.as_ref(),
+            );
+            return Ok((Some((entry_idx, 0, c.clone())), attempts_log, 0));
+        }
+        kashin_cands.push((entry_idx, sketch_score, world_pts.len(), cand));
+    }
+
+    let mut lg_layers_total = 0usize;
+    if let Some(lg) = lighterglue
+        && !kashin_cands.is_empty()
+    {
+        let ref_owned: Vec<SparseFeatures> = kashin_cands
+            .iter()
+            .map(|&(idx, _, _, _)| bank.entries[idx].to_sparse_features(projector))
+            .collect();
+        let ref_refs: Vec<&SparseFeatures> = ref_owned.iter().collect();
+        let fast_cfg = FastMatchConfig {
+            max_keypoints: kp_limit,
+            ..FastMatchConfig::balanced_search()
+        };
+        let batched = pollster::block_on(
+            lg.match_features_batch_indexed_fast(&ref_refs, qry_feat, &fast_cfg),
+        )?;
+        if let Some((_, first_stats)) = batched.first() {
+            lg_layers_total += first_stats.layers_executed;
+        }
+        for ((entry_idx, sketch_score, mut pairs_n, mut cand), (lg_matches, _)) in
+            kashin_cands.into_iter().zip(batched)
+        {
+            let entry = &bank.entries[entry_idx];
+            let init_eye = entry.eye_enu;
+            let init_rot = rot_from_row_major(entry.world_to_cam);
+            let mut label = "kashin-i8";
+            let (lg_world, lg_px) = lookup_indexed_3d_matches(entry, &lg_matches);
+            if let Some(lg_cand) = fit_pose_hybrid(
+                &lg_world,
+                &lg_px,
+                k_render,
+                render_size,
+                Some((init_eye, init_rot)),
+            ) && cand.as_ref().is_none_or(|prev| {
+                candidate_priority(&lg_cand.score) > candidate_priority(&prev.score)
+            }) {
+                pairs_n = lg_world.len();
+                label = "kashin-bank+lighterglue-batch";
+                cand = Some(lg_cand);
+            }
+            log_attempt(
+                &mut attempts_log,
+                label,
+                entry_idx,
+                0,
+                sketch_score,
+                pairs_n,
+                cand.as_ref(),
+            );
+            if let Some(c) = cand {
+                let is_acc = c.score.geometry_accepted;
+                if best.as_ref().is_none_or(|(_, _, prev)| {
+                    candidate_priority(&c.score) > candidate_priority(&prev.score)
+                }) {
+                    best = Some((entry_idx, 0, c));
+                }
+                if is_acc {
+                    break;
+                }
+            }
+        }
+    } else {
+        for (entry_idx, sketch_score, pairs_n, cand) in kashin_cands {
+            log_attempt(
+                &mut attempts_log,
+                "kashin-i8",
+                entry_idx,
+                0,
+                sketch_score,
+                pairs_n,
+                cand.as_ref(),
+            );
+            if let Some(c) = cand
+                && best.as_ref().is_none_or(|(_, _, prev)| {
+                    candidate_priority(&c.score) > candidate_priority(&prev.score)
+                })
+            {
+                best = Some((entry_idx, 0, c));
+            }
+        }
+    }
+    Ok((best, attempts_log, lg_layers_total))
 }

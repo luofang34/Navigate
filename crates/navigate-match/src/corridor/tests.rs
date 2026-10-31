@@ -292,3 +292,46 @@ fn retain_in_frustum_evicts_outside_and_behind_landmarks_and_nadir_accepts_any_h
     assert_eq!(set.kashin_i8, vec![[1; 64]]);
     Ok(())
 }
+
+#[test]
+fn corridor_tile_store_bounds_lru_window_and_supports_live_tile_insertion() -> Result<(), MatchError>
+{
+    let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
+    let mut tiles = Vec::new();
+    for ty in -3..=3 {
+        for tx in -3..=3 {
+            tiles.push(build_tile_landmarks(tx, ty, 600.0, 64, &projector));
+        }
+    }
+    let bank = CorridorLandmarkBank::new([7; 32], [8; 32], DEFAULT_KASHIN_SEED, 600.0, tiles)?;
+    let store = super::CorridorTileStore::from_bank(bank.clone(), 9);
+    assert_eq!(store.indexed_tile_count(), 49);
+    assert_eq!(store.cached_tile_count(), 0);
+
+    let w2c = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0];
+    let cam = VirtualViewCamera {
+        eye_enu: [300.0, 300.0, 1_120.0],
+        world_to_cam: w2c,
+        intrinsics: [600.0, 600.0, 400.0, 300.0],
+        image_size: [800, 600],
+        max_landmarks: 512,
+        min_cos_incidence: 0.70,
+        min_cos_orientation: 0.50,
+    };
+    let from_store = store.project_virtual_view(&cam, &projector)?;
+    let from_bank = bank.project_virtual_view(&cam, &projector);
+    assert_eq!(from_store.features.pixels, from_bank.features.pixels);
+    assert!(store.cached_tile_count() <= 9);
+    assert!(store.resident_window_bytes() < 10 * 1024 * 1024);
+
+    let extra = build_tile_landmarks(12, 12, 600.0, 32, &projector);
+    let extra_key = super::CorridorTileKey {
+        tile_x: 12,
+        tile_y: 12,
+    };
+    assert!(!store.has_tile(extra_key));
+    store.insert_tile(extra, false)?;
+    assert!(store.has_tile(extra_key));
+    assert!(store.cached_tile_count() <= 9);
+    Ok(())
+}

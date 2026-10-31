@@ -45,24 +45,49 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
     let rgb = RgbImage::new(DIMS[0], DIMS[1]);
     let interval = 2;
 
-    // The first frame has no layers to warp, so it waits for its own refresh.
-    permit.send(10).unwrap();
+    // Frame 1 submits to the background worker without blocking the frame loop.
     let first = refresher
         .step(&mut key, &rgb, Some(&rotation(0.0)), interval)
         .unwrap();
     started.recv().unwrap();
-    assert!(first.refreshed && !first.submitted);
-    assert_eq!(key.sky_keep, vec![10; 12]);
+    assert!(first.submitted && !first.refreshed);
+    assert!(!key.usable(DIMS));
+    refresher.note_solved_rotation(&mut key, rotation(0.05));
 
-    // The second frame reaches the interval and goes to the worker.
-    let submit = refresher
-        .step(&mut key, &rgb, Some(&rotation(0.1)), interval)
-        .unwrap();
-    assert!(submit.submitted && !submit.refreshed);
+    // While Frame 1's Segformer job runs, early frames return immediately without usable key layers.
+    for frame in 0..4 {
+        let step = refresher
+            .step(&mut key, &rgb, Some(&rotation(0.08)), interval)
+            .unwrap();
+        assert!(
+            !step.refreshed && !step.submitted,
+            "cold frame {frame} stalled"
+        );
+        assert!(!key.usable(DIMS));
+    }
+
+    // Release Frame 1's Segformer layers; they install with Frame 1's solved rotation.
+    permit.send(10).unwrap();
+    let first_arrived = (0..POLL_LIMIT)
+        .find_map(|_| {
+            let step = refresher
+                .step(&mut key, &rgb, Some(&rotation(0.1)), interval)
+                .unwrap();
+            std::thread::yield_now();
+            step.refreshed.then_some(step)
+        })
+        .expect("first refresh must arrive");
+    assert_eq!(first_arrived.segformer_ms, Some(10.0));
+    assert!(key.usable(DIMS));
+    assert_eq!(key.sky_keep, vec![10; 12]);
+    assert_eq!(key.rot, Some(rotation(0.05)));
+
+    // Because >= interval frames elapsed since Frame 1 was submitted, that same step also submits a new refresh.
+    assert!(first_arrived.submitted);
     refresher.note_solved_rotation(&mut key, rotation(0.2));
     started.recv().unwrap();
 
-    // The worker is blocked; later frames still use the first layers.
+    // The worker is blocked; later frames still warp the first layers without stalling.
     for frame in 0..20 {
         let step = refresher
             .step(&mut key, &rgb, Some(&rotation(0.3)), interval)
@@ -94,13 +119,10 @@ fn unsolved_submitted_frames_keep_their_estimated_rotation() {
     let (mut refresher, permit, started) = gated();
     let mut key = KeyLayers::default();
     let rgb = RgbImage::new(DIMS[0], DIMS[1]);
-    permit.send(1).unwrap();
-    refresher.step(&mut key, &rgb, None, 1).unwrap();
-    started.recv().unwrap();
     let submit = refresher
         .step(&mut key, &rgb, Some(&rotation(0.5)), 1)
         .unwrap();
-    assert!(submit.submitted);
+    assert!(submit.submitted && !submit.refreshed);
     started.recv().unwrap();
     permit.send(2).unwrap();
     let arrived = (0..POLL_LIMIT).any(|_| {

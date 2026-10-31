@@ -3,7 +3,7 @@ use crate::{
     MatchError, Weights,
     kernels::{self, Layout},
 };
-use burn::tensor::{Device, Tensor, TensorData};
+use burn::tensor::{Device, FloatDType, Tensor, TensorData};
 
 /// Upload host values as a tensor of the given shape.
 pub(crate) fn upload<const D: usize>(
@@ -14,12 +14,28 @@ pub(crate) fn upload<const D: usize>(
     Tensor::from_data(TensorData::new(values, shape), device)
 }
 
+/// Upload host values and cast to `dtype`.
+pub(crate) fn upload_dtype<const D: usize>(
+    values: Vec<f32>,
+    shape: [usize; D],
+    dtype: FloatDType,
+    device: &Device,
+) -> Tensor<D> {
+    let tensor = upload(values, shape, device);
+    if dtype == FloatDType::F32 {
+        tensor
+    } else {
+        tensor.cast(dtype)
+    }
+}
+
 /// Load `{name}.bias` of `width` values, or zeros when the layer has no bias.
 fn bias(
     weights: &mut Weights,
     name: &str,
     width: usize,
     present: bool,
+    dtype: FloatDType,
     device: &Device,
 ) -> Result<Tensor<1>, MatchError> {
     let values = if present {
@@ -27,7 +43,7 @@ fn bias(
     } else {
         vec![0.0; width]
     };
-    Ok(upload(values, [width], device))
+    Ok(upload_dtype(values, [width], dtype, device))
 }
 
 /// A square-kernel 2D convolution with half-kernel zero padding.
@@ -43,20 +59,42 @@ impl Conv {
     pub(crate) fn load(
         weights: &mut Weights,
         name: &str,
-        [out, input, kernel]: [usize; 3],
+        shape: [usize; 3],
         stride: usize,
         has_bias: bool,
         device: &Device,
     ) -> Result<Self, MatchError> {
+        Self::load_with_dtype(
+            weights,
+            name,
+            shape,
+            stride,
+            has_bias,
+            FloatDType::F32,
+            device,
+        )
+    }
+
+    /// As [`Self::load`], casting the convolution weights and bias to `dtype`.
+    pub(crate) fn load_with_dtype(
+        weights: &mut Weights,
+        name: &str,
+        [out, input, kernel]: [usize; 3],
+        stride: usize,
+        has_bias: bool,
+        dtype: FloatDType,
+        device: &Device,
+    ) -> Result<Self, MatchError> {
         let shape = [out, input, kernel, kernel];
-        let weight = upload(
+        let weight = upload_dtype(
             weights.take(&format!("{name}.weight"), &shape)?,
             shape,
+            dtype,
             device,
         );
         Ok(Self {
             weight,
-            bias: bias(weights, name, out, has_bias, device)?,
+            bias: bias(weights, name, out, has_bias, dtype, device)?,
             stride,
         })
     }
@@ -104,7 +142,7 @@ impl Linear {
         }
         Ok(Self {
             weight: upload(transposed, [input, out], device),
-            bias: bias(weights, name, out, has_bias, device)?,
+            bias: bias(weights, name, out, has_bias, FloatDType::F32, device)?,
             output: out,
         })
     }

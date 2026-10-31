@@ -1,10 +1,4 @@
-//! Background map-anchor acquisition for `corridor-track --background-refresh`.
-//!
-//! A periodic re-anchor runs on a named worker thread while the warm tracker
-//! keeps solving frames against the current [`ActiveTrackSet`]. The anchor
-//! result belongs to the frame that was sent. On arrival it replaces the active
-//! tracks and counts as an EKF fix for that frame, but it does not change the
-//! motion state, because the pose is older than the current frame.
+//! Background map-anchor acquisition and odometry-propagated arrival for `corridor-track`.
 
 use super::{
     CorridorTrackOptions,
@@ -12,35 +6,43 @@ use super::{
     anchor::acquire_corridor_anchor,
     background::BackgroundWorker,
     latency::StageLatencies,
-    motion::TrackState,
+    motion::{TrackState, propagate_pose_from},
 };
-use crate::{PipelineError, pose::PoseCandidate, surface::Surface, testset::PhotoCase};
+use crate::{
+    PipelineError,
+    pose::PoseCandidate,
+    realtime::helpers::rot_to_row_major,
+    surface::{Surface, SurfaceGpuRenderer},
+    testset::PhotoCase,
+    xfeat_runtime::LoadedXFeat,
+};
 use nalgebra::Matrix3;
 use navigate_match::{
-    ActiveTrackSet, CorridorLandmarkBank, HadamardProjector, LighterGlue, PreparedKashinQuery,
-    SparseFeatures, XFeat,
+    ActiveTrackSet, CorridorTileStore, HadamardProjector, LighterGlue, PreparedKashinQuery,
+    SparseFeatures,
 };
 use serde_json::{Value, json};
 use std::{
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-/// Time that a finished run waits for an in-flight anchor job to stop.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const ARRIVAL_FRUSTUM_MARGIN_PX: f64 = 64.0;
 
 /// Read-only models and maps that the anchor worker thread owns.
 pub(super) struct AnchorContext {
     pub(super) surface: Arc<Surface>,
-    pub(super) bank: Arc<CorridorLandmarkBank>,
+    pub(super) store: Arc<CorridorTileStore>,
     pub(super) projector: HadamardProjector,
-    pub(super) xfeat: XFeat,
+    pub(super) xfeat: LoadedXFeat,
     pub(super) lighterglue: Option<LighterGlue>,
     pub(super) opts: CorridorTrackOptions,
 }
 
-/// One query frame for map-anchor acquisition.
+/// One query frame captured for background map-anchor acquisition.
 pub(super) struct AnchorJob {
+    pub(super) sent_frame_seq: usize,
     pub(super) case: PhotoCase,
     pub(super) qry_feat: SparseFeatures,
     pub(super) prepared: PreparedKashinQuery,
@@ -53,19 +55,27 @@ pub(super) struct AnchorJob {
 
 /// Result of one [`AnchorJob`].
 pub(super) struct AnchorOutcome {
-    case_id: String,
-    best: Option<PoseCandidate>,
-    seeded: Option<ActiveTrackSet>,
-    attempts: usize,
-    elapsed_ms: f64,
+    pub(super) sent_frame_seq: usize,
+    pub(super) case_id: String,
+    pub(super) k_render: Matrix3<f64>,
+    pub(super) render_size: [u32; 2],
+    pub(super) best: Option<PoseCandidate>,
+    pub(super) seeded: Option<ActiveTrackSet>,
+    pub(super) attempts: usize,
+    pub(super) elapsed_ms: f64,
 }
 
 impl AnchorContext {
-    fn run(&self, job: &AnchorJob) -> Result<AnchorOutcome, PipelineError> {
+    fn run(
+        &self,
+        gpu_renderer: &Mutex<Option<SurfaceGpuRenderer>>,
+        job: &AnchorJob,
+    ) -> Result<AnchorOutcome, PipelineError> {
         let t0 = Instant::now();
         let mut attempts = Vec::new();
         let acq = acquire_corridor_anchor(
-            (&*self.surface, &*self.bank, &self.projector),
+            (&*self.surface, &*self.store, &self.projector),
+            Some(gpu_renderer),
             (&self.xfeat, self.lighterglue.as_ref()),
             (&job.case, &self.opts),
             (&job.qry_feat, &job.prepared),
@@ -87,7 +97,10 @@ impl AnchorContext {
                 )
             });
         Ok(AnchorOutcome {
+            sent_frame_seq: job.sent_frame_seq,
             case_id: job.case.id.clone(),
+            k_render: job.k_render,
+            render_size: job.render_size,
             best,
             seeded,
             attempts: attempts.len(),
@@ -104,9 +117,18 @@ pub(super) struct BackgroundAnchor {
 
 impl BackgroundAnchor {
     pub(super) fn spawn(context: AnchorContext) -> Result<Self, PipelineError> {
+        let init_gpu = context
+            .opts
+            .polish_anchors
+            .then(|| {
+                let k = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
+                SurfaceGpuRenderer::try_new(&context.surface, &k, [800, 600])
+            })
+            .flatten();
+        let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(init_gpu);
         let worker =
             BackgroundWorker::spawn("corridor-map-anchor", SHUTDOWN_TIMEOUT, move |job| {
-                context.run(&job)
+                context.run(&gpu_renderer, &job)
             })?;
         Ok(Self {
             worker,
@@ -118,12 +140,13 @@ impl BackgroundAnchor {
     pub(super) fn submit_if_idle(
         &mut self,
         job: impl FnOnce() -> AnchorJob,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<bool, PipelineError> {
         if !self.in_flight {
             self.worker.submit(job())?;
             self.in_flight = true;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Return the finished job without waiting.
@@ -136,8 +159,8 @@ impl BackgroundAnchor {
         Ok(outcome)
     }
 
-    /// Wait for the job that runs, if any.
-    pub(super) fn wait(&mut self) -> Result<Option<AnchorOutcome>, PipelineError> {
+    /// Drain an in-flight job after the frame loop completes.
+    pub(super) fn wait_for_shutdown(&mut self) -> Result<Option<AnchorOutcome>, PipelineError> {
         if !self.in_flight {
             return Ok(None);
         }
@@ -157,19 +180,56 @@ pub(super) struct AnchorArrival<'a> {
 }
 
 impl AnchorArrival<'_> {
-    /// Apply `outcome` on frame `arrived_at` (`None` after the last frame).
-    pub(super) fn apply(&mut self, outcome: AnchorOutcome, arrived_at: Option<&str>) {
+    /// Apply `outcome` on frame `arrived_at` (`None` after the last frame) and return the propagated pose.
+    pub(super) fn apply(
+        &mut self,
+        outcome: AnchorOutcome,
+        arrived_at: Option<&str>,
+    ) -> Option<([f64; 3], Matrix3<f64>)> {
         self.latencies.anchor_ms.push(outcome.elapsed_ms);
+        let propagated_frames = if arrived_at.is_some() {
+            self.state.frame_seq.saturating_sub(outcome.sent_frame_seq)
+        } else {
+            0
+        };
         let mut record = json!({
             "anchor_result_for": outcome.case_id,
             "arrived_at": arrived_at,
+            "propagated_frames": propagated_frames,
             "accepted": outcome.seeded.is_some(),
             "attempts": outcome.attempts,
             "anchor_ms": outcome.elapsed_ms,
         });
-        if let (Some(tracks), Some(cand)) = (outcome.seeded, outcome.best.as_ref()) {
+        let mut propagated_pose = None;
+        if let (Some(mut tracks), Some(cand)) = (outcome.seeded, outcome.best.as_ref()) {
+            let (prop_eye, prop_rot) = if arrived_at.is_some() {
+                propagate_pose_from(self.state, outcome.sent_frame_seq, cand.eye, cand.rotation)
+            } else {
+                (cand.eye, cand.rotation)
+            };
+            if arrived_at.is_some() && !tracks.is_empty() {
+                let intrinsics = [
+                    outcome.k_render[(0, 0)],
+                    outcome.k_render[(1, 1)],
+                    outcome.k_render[(0, 2)],
+                    outcome.k_render[(1, 2)],
+                ];
+                tracks.retain_in_frustum(
+                    prop_eye,
+                    &rot_to_row_major(&prop_rot),
+                    intrinsics,
+                    outcome.render_size,
+                    ARRIVAL_FRUSTUM_MARGIN_PX,
+                );
+            }
             self.state.active_tracks = tracks;
             self.state.frames_since_anchor = 0;
+            if arrived_at.is_some() && self.state.prev_eye.is_none() {
+                self.state.prev_eye = Some(prop_eye);
+                self.state.prev_rot = Some(prop_rot);
+                self.state.vo_rot = Some(prop_rot);
+            }
+            propagated_pose = Some((prop_eye, prop_rot));
             let adm = classify_anchor_cell(
                 &mut self.state.visited_cells,
                 self.independent_fixes,
@@ -189,6 +249,7 @@ impl AnchorArrival<'_> {
             }
         }
         self.results.push(record);
+        propagated_pose
     }
 }
 

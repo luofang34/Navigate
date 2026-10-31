@@ -7,9 +7,9 @@ use super::{GRID_HEIGHT, GRID_WIDTH};
 use crate::{
     MatchError,
     kernels::{Layout, product},
-    loftr::layers::upload,
+    loftr::layers::upload_dtype,
 };
-use burn::tensor::{Device, Tensor};
+use burn::tensor::{Device, FloatDType, Tensor};
 
 /// Separable resampling `[rows] x input x [cols]^T` between two fixed shapes.
 #[derive(Clone, Debug)]
@@ -28,6 +28,7 @@ impl Resample {
         target: [usize; 2],
         rows: Vec<f32>,
         cols: Vec<f32>,
+        dtype: FloatDType,
         device: &Device,
     ) -> Self {
         let [h, w] = source;
@@ -35,18 +36,23 @@ impl Resample {
         Self {
             source,
             target,
-            rows: upload(rows, [1, height, h], device),
-            cols: upload(cols, [1, width, w], device),
-            row_bias: upload(vec![0.0; w], [w], device),
-            col_bias: upload(vec![0.0; width], [width], device),
+            rows: upload_dtype(rows, [1, height, h], dtype, device),
+            cols: upload_dtype(cols, [1, width, w], dtype, device),
+            row_bias: upload_dtype(vec![0.0; w], [w], dtype, device),
+            col_bias: upload_dtype(vec![0.0; width], [width], dtype, device),
         }
     }
 
     /// Half-pixel bilinear resize with edge clamping (`align_corners = false`).
-    fn half_pixel(source: [usize; 2], target: [usize; 2], device: &Device) -> Self {
+    fn half_pixel(
+        source: [usize; 2],
+        target: [usize; 2],
+        dtype: FloatDType,
+        device: &Device,
+    ) -> Self {
         let rows = half_pixel_weights(source[0], target[0]);
         let cols = half_pixel_weights(source[1], target[1]);
-        Self::new(source, target, rows, cols, device)
+        Self::new(source, target, rows, cols, dtype, device)
     }
 
     /// Resample `x` of shape `[n, c, source]` to `[n, c, target]`.
@@ -85,17 +91,28 @@ pub(super) struct Upsample {
 }
 
 impl Upsample {
-    pub(super) fn new(device: &Device) -> Self {
+    pub(super) fn new_with_dtype(device: &Device, backbone_dtype: FloatDType) -> Self {
         let grid = [GRID_HEIGHT, GRID_WIDTH];
         let pixels = [GRID_HEIGHT * 8, GRID_WIDTH * 8];
         Self {
-            x4: Resample::half_pixel([GRID_HEIGHT / 2, GRID_WIDTH / 2], grid, device),
-            x5: Resample::half_pixel([GRID_HEIGHT / 4, GRID_WIDTH / 4], grid, device),
+            x4: Resample::half_pixel(
+                [GRID_HEIGHT / 2, GRID_WIDTH / 2],
+                grid,
+                backbone_dtype,
+                device,
+            ),
+            x5: Resample::half_pixel(
+                [GRID_HEIGHT / 4, GRID_WIDTH / 4],
+                grid,
+                backbone_dtype,
+                device,
+            ),
             reliability: Resample::new(
                 grid,
                 pixels,
                 grid_point_weights(GRID_HEIGHT, pixels[0]),
                 grid_point_weights(GRID_WIDTH, pixels[1]),
+                FloatDType::F32,
                 device,
             ),
         }

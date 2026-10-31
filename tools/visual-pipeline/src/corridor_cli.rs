@@ -2,8 +2,8 @@
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use navigate_visual_pipeline::{
-    CorridorBuildOptions, CorridorTrackOptions, PipelineError, build_corridor_bank,
-    run_corridor_track,
+    CorridorBuildOptions, CorridorTrackOptions, PipelineError, XFeatRuntime, XFeatRuntimeConfig,
+    build_corridor_bank, run_corridor_track,
 };
 use serde_json::Value;
 use std::{collections::BTreeSet, path::PathBuf};
@@ -26,6 +26,27 @@ fn float_arg(name: &'static str, default: Option<&'static str>) -> Arg {
     a
 }
 
+fn xfeat_runtime_args(cmd: Command) -> Command {
+    cmd.arg(
+        Arg::new("xfeat-runtime")
+            .long("xfeat-runtime")
+            .default_value("burn-f32"),
+    )
+    .arg(path_arg("xfeat-onnx", false))
+    .arg(path_arg("onnx-runtime", false))
+}
+
+pub(crate) fn parse_xfeat_runtime(args: &ArgMatches) -> Result<XFeatRuntimeConfig, PipelineError> {
+    let raw = args
+        .get_one::<String>("xfeat-runtime")
+        .map_or("burn-f32", String::as_str);
+    Ok(XFeatRuntimeConfig {
+        runtime: XFeatRuntime::parse(raw)?,
+        onnx_model_path: args.get_one::<PathBuf>("xfeat-onnx").cloned(),
+        onnx_runtime_path: args.get_one::<PathBuf>("onnx-runtime").cloned(),
+    })
+}
+
 fn req<T: Clone + Send + Sync + 'static>(
     args: &ArgMatches,
     name: &str,
@@ -37,101 +58,112 @@ fn req<T: Clone + Send + Sync + 'static>(
 
 pub(crate) fn commands() -> [Command; 2] {
     [
-        Command::new("corridor-build")
-            .about("Build and save an NVKTILE1 3D corridor landmark bank")
-            .arg(path_arg("catalog", true))
-            .arg(path_arg("profile", false))
-            .arg(path_arg("model", true))
-            .arg(path_arg("output", true))
-            .arg(float_arg("tile-size-m", Some("600.0")))
-            .arg(float_arg("radius-m", Some("3500.0")))
-            .arg(float_arg("nominal-agl-m", Some("480.0")))
-            .arg(
-                Arg::new("max-landmarks")
-                    .long("max-landmarks")
-                    .default_value("16384")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(
-                Arg::new("adaptive-stride")
-                    .long("adaptive-stride")
-                    .default_value("4")
-                    .value_parser(value_parser!(u32)),
-            )
-            .arg(
-                Arg::new("no-obliques")
-                    .long("no-obliques")
-                    .action(ArgAction::SetTrue),
-            ),
-        Command::new("corridor-track")
-            .about("Localize and track sequential frames against an NVKTILE1 corridor bank")
-            .arg(path_arg("dataset", true))
-            .arg(path_arg("profile", true))
-            .arg(path_arg("catalog", true))
-            .arg(path_arg("corridor-bank", true))
-            .arg(path_arg("model", true))
-            .arg(path_arg("lighterglue", false))
-            .arg(path_arg("seg-model", false))
-            .arg(
-                Arg::new("mask-policy")
-                    .long("mask-policy")
-                    .default_value("airframe-occlusions"),
-            )
-            .arg(
-                Arg::new("mask-interval")
-                    .long("mask-interval")
-                    .default_value("10")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(path_arg("output", true))
-            .arg(
-                Arg::new("anchor-interval")
-                    .long("anchor-interval")
-                    .default_value("30")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(
-                Arg::new("min-track-inliers")
-                    .long("min-track-inliers")
-                    .default_value("32")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(float_arg("map-cell-m", Some("500.0")))
-            .arg(
-                Arg::new("attempts")
-                    .long("attempts")
-                    .default_value("12")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(float_arg("heading-step", Some("0.0")))
-            .arg(
-                Arg::new("height-factors")
-                    .long("height-factors")
-                    .default_value("1.0"),
-            )
-            .arg(
-                Arg::new("query-keypoints")
-                    .long("query-keypoints")
-                    .default_value("2048")
-                    .value_parser(value_parser!(usize)),
-            )
-            .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue))
-            .arg(
-                Arg::new("background-refresh")
-                    .long("background-refresh")
-                    .help("Run Segformer refreshes and periodic re-anchors on background threads")
-                    .action(ArgAction::SetTrue),
-            )
-            .arg(float_arg("prior-lat", None))
-            .arg(float_arg("prior-lon", None))
-            .arg(float_arg("prior-alt", None))
-            .arg(float_arg("prior-heading", None))
-            .arg(float_arg("focal-35mm", None))
-            .arg(Arg::new("only").long("only").action(ArgAction::Append)),
+        xfeat_runtime_args(
+            Command::new("corridor-build")
+                .about("Build and save an NVKTILE1 file or sharded NVKTIDX1 3D corridor tile store")
+                .arg(path_arg("catalog", true))
+                .arg(path_arg("profile", false))
+                .arg(path_arg("model", true))
+                .arg(path_arg("output", true))
+                .arg(float_arg("tile-size-m", Some("600.0")))
+                .arg(float_arg("radius-m", Some("3500.0")))
+                .arg(float_arg("nominal-agl-m", Some("480.0")))
+                .arg(
+                    Arg::new("max-landmarks")
+                        .long("max-landmarks")
+                        .default_value("16384")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(
+                    Arg::new("adaptive-stride")
+                        .long("adaptive-stride")
+                        .default_value("4")
+                        .value_parser(value_parser!(u32)),
+                )
+                .arg(
+                    Arg::new("no-obliques")
+                        .long("no-obliques")
+                        .action(ArgAction::SetTrue),
+                ),
+        ),
+        xfeat_runtime_args(
+            Command::new("corridor-track")
+                .about("Localize and track sequential frames against a corridor bank or sharded tile store")
+                .arg(path_arg("dataset", true))
+                .arg(path_arg("profile", true))
+                .arg(path_arg("catalog", true))
+                .arg(path_arg("corridor-bank", true))
+                .arg(path_arg("model", true))
+                .arg(path_arg("lighterglue", false))
+                .arg(path_arg("seg-model", false))
+                .arg(
+                    Arg::new("mask-policy")
+                        .long("mask-policy")
+                        .default_value("airframe-occlusions"),
+                )
+                .arg(
+                    Arg::new("mask-interval")
+                        .long("mask-interval")
+                        .default_value("10")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(path_arg("output", true))
+                .arg(
+                    Arg::new("anchor-interval")
+                        .long("anchor-interval")
+                        .default_value("30")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(
+                    Arg::new("min-track-inliers")
+                        .long("min-track-inliers")
+                        .default_value("32")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(float_arg("map-cell-m", Some("500.0")))
+                .arg(
+                    Arg::new("attempts")
+                        .long("attempts")
+                        .default_value("12")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(float_arg("heading-step", Some("0.0")))
+                .arg(
+                    Arg::new("height-factors")
+                        .long("height-factors")
+                        .default_value("1.0"),
+                )
+                .arg(
+                    Arg::new("query-keypoints")
+                        .long("query-keypoints")
+                        .default_value("2048")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("background-refresh")
+                        .long("background-refresh")
+                        .help("Keep background refresh enabled (default behavior)")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("sync-refresh")
+                        .long("sync-refresh")
+                        .help("Run Segformer refreshes and map anchors synchronously inside the frame loop")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(float_arg("prior-lat", None))
+                .arg(float_arg("prior-lon", None))
+                .arg(float_arg("prior-alt", None))
+                .arg(float_arg("prior-heading", None))
+                .arg(float_arg("focal-35mm", None))
+                .arg(Arg::new("only").long("only").action(ArgAction::Append)),
+        ),
     ]
 }
 
 pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineError> {
+    let xfeat_runtime = parse_xfeat_runtime(args)?;
     match sub {
         "corridor-build" => build_corridor_bank(&CorridorBuildOptions {
             catalog_path: req(args, "catalog")?,
@@ -144,6 +176,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
             max_landmarks_per_tile: req(args, "max-landmarks")?,
             adaptive_stride: req(args, "adaptive-stride")?,
             include_obliques: !args.get_flag("no-obliques"),
+            xfeat_runtime,
         }),
         "corridor-track" => {
             let only_cases = args
@@ -168,6 +201,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 }
                 _ => None,
             };
+            let background_refresh = !args.get_flag("sync-refresh");
             run_corridor_track(&CorridorTrackOptions {
                 dataset_dir: req(args, "dataset")?,
                 profile_path: req(args, "profile")?,
@@ -190,7 +224,8 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 prior_override,
                 focal_35mm_override: args.get_one::<f64>("focal-35mm").copied(),
                 only_cases,
-                background_refresh: args.get_flag("background-refresh"),
+                background_refresh,
+                xfeat_runtime,
             })
         }
         other => Err(PipelineError::Invalid(format!(

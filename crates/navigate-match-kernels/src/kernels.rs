@@ -44,7 +44,7 @@ pub fn matmul<F: Float>(
     let col0 = CUBE_POS_X as usize * TILE;
     let mut sa = Shared::<[F]>::new_slice(SLICE * TILE);
     let mut sb = Shared::<[F]>::new_slice(SLICE * TILE);
-    let mut acc = Array::<F>::new(PER_UNIT * PER_UNIT);
+    let mut acc = Array::<f32>::new(PER_UNIT * PER_UNIT);
     let mut k0 = 0usize;
     while k0 < k {
         #[unroll]
@@ -101,11 +101,11 @@ pub fn matmul<F: Float>(
         for j in 0..PER_UNIT {
             let col = col0 + tx * PER_UNIT + j;
             if row < m && col < n {
-                let mut v = acc[i * PER_UNIT + j] + bias[col];
+                let mut v = acc[i * PER_UNIT + j] + f32::cast_from(bias[col]);
                 if comptime![relu] {
-                    v = F::max(v, F::new(0.0_f32));
+                    v = f32::max(v, 0.0_f32);
                 }
-                out[o_off + row * n + col] = v;
+                out[o_off + row * n + col] = F::cast_from(v);
             }
         }
     }
@@ -149,7 +149,7 @@ pub fn convolution<F: Float>(
     let x0 = (pixel % wout) * stride;
     let mut sa = Shared::<[F]>::new_slice(SLICE * TILE);
     let mut sb = Shared::<[F]>::new_slice(SLICE * TILE);
-    let mut acc = Array::<F>::new(PER_UNIT * PER_UNIT);
+    let mut acc = Array::<f32>::new(PER_UNIT * PER_UNIT);
     let mut k0 = 0usize;
     while k0 < k {
         #[unroll]
@@ -193,11 +193,11 @@ pub fn convolution<F: Float>(
         for j in 0..PER_UNIT {
             let col = col0 + tx * PER_UNIT + j;
             if co < cout && col < n {
-                let mut v = acc[i * PER_UNIT + j] + bias[co];
+                let mut v = acc[i * PER_UNIT + j] + f32::cast_from(bias[co]);
                 if comptime![relu] {
-                    v = F::max(v, F::new(0.0_f32));
+                    v = f32::max(v, 0.0_f32);
                 }
-                out[((col / plane) * cout + co) * plane + col % plane] = v;
+                out[((col / plane) * cout + co) * plane + col % plane] = F::cast_from(v);
             }
         }
     }
@@ -205,17 +205,17 @@ pub fn convolution<F: Float>(
 
 /// Multiply the staged slices into the unit's 8 × 8 accumulator block.
 #[cube]
-fn accumulate<F: Float>(sa: &Shared<[F]>, sb: &Shared<[F]>, acc: &mut Array<F>, unit: usize) {
+fn accumulate<F: Float>(sa: &Shared<[F]>, sb: &Shared<[F]>, acc: &mut Array<f32>, unit: usize) {
     let tx = unit % (TILE / PER_UNIT);
     let ty = unit / (TILE / PER_UNIT);
-    let mut fa = Array::<F>::new(PER_UNIT);
-    let mut fb = Array::<F>::new(PER_UNIT);
+    let mut fa = Array::<f32>::new(PER_UNIT);
+    let mut fb = Array::<f32>::new(PER_UNIT);
     #[unroll]
     for kk in 0..SLICE {
         #[unroll]
         for i in 0..PER_UNIT {
-            fa[i] = sa[kk * TILE + ty * PER_UNIT + i];
-            fb[i] = sb[kk * TILE + tx * PER_UNIT + i];
+            fa[i] = f32::cast_from(sa[kk * TILE + ty * PER_UNIT + i]);
+            fb[i] = f32::cast_from(sb[kk * TILE + tx * PER_UNIT + i]);
         }
         #[unroll]
         for i in 0..PER_UNIT {

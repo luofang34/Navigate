@@ -81,10 +81,12 @@ impl AmortizedMasker {
         })
     }
 
-    /// Run later `Segformer` refreshes on a named background thread.
+    /// Run `Segformer` refreshes on a named background thread.
     ///
-    /// While a refresh runs, frames warp the previous key layers with their
-    /// attitude. Only a frame without usable key layers waits for the worker.
+    /// When no key layers exist yet, the first frame goes to the worker without
+    /// blocking and the masker uses `fallback_mask` and [`PropellerDetector`]
+    /// until the background layers arrive. While later refreshes run, frames
+    /// warp the previous key layers with their attitude.
     /// A masker without a `Segformer` checkpoint does not change.
     ///
     /// # Errors
@@ -149,8 +151,10 @@ impl AmortizedMasker {
         let prop_pixels = prop_occluded.iter().filter(|&&b| b).count();
         let mut step = refresh::RefreshStep::default();
 
-        let (raw_mask, valid_count) = if let Some(seg) = &mut self.seg {
+        if let Some(seg) = &mut self.seg {
             step = seg.step(&mut self.key, rgb, cur_rot, self.refresh_interval)?;
+        }
+        let (raw_mask, valid_count) = if self.key.usable([w, h]) {
             compose_amortized_u8(
                 [w, h],
                 &self.key.airframe_keep,

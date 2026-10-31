@@ -28,8 +28,9 @@ mod xfeat;
 
 pub use convert::loftr_from_checkpoint;
 pub use corridor::{
-    ActiveTrackSet, CORRIDOR_MAGIC, CORRIDOR_VERSION, CorridorLandmarkBank, CorridorTileEntry,
-    CorridorTileKey, TrackMatchConfig, Tracked3dMatch, VirtualCorridorView, VirtualViewCamera,
+    ActiveTrackSet, CORRIDOR_MAGIC, CORRIDOR_SHARD_MAGIC, CORRIDOR_STORE_INDEX_MAGIC,
+    CORRIDOR_VERSION, CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, CorridorTileStore,
+    DEFAULT_WINDOW_TILES, TrackMatchConfig, Tracked3dMatch, VirtualCorridorView, VirtualViewCamera,
 };
 pub use dinov2::{DINOV2_WIDTH, Dinov2};
 pub use error::MatchError;
@@ -50,4 +51,7 @@ pub use vendor_npu::{VendorNpuBackend, VendorNpuSession};
 #[cfg(target_arch = "wasm32")]
 pub use web_engine::{WebMlEngine, WebNnAvailability, open_burn_device, probe_webnn};
 pub use weights::{WeightTensor, Weights};
-pub use xfeat::{DenseMaps, SparseFeatures, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat};
+pub use xfeat::{
+    DenseMaps, ModelSessionExtractor, PreparedXFeatImage, SparseFeatureExtractor, SparseFeatures,
+    XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat, XFeatPrecision,
+};

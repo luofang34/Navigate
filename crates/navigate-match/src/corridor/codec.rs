@@ -31,42 +31,75 @@ pub(super) fn encode_corridor_bank(bank: &CorridorLandmarkBank) -> Vec<u8> {
     out.extend_from_slice(&(tile_count as u32).to_le_bytes());
 
     for tile in bank.tiles.iter().take(tile_count) {
-        let n = tile.len().min(MAX_TILE_LANDMARKS);
-        out.extend_from_slice(&tile.tile_x.to_le_bytes());
-        out.extend_from_slice(&tile.tile_y.to_le_bytes());
-        for &c in &tile.anchor_enu {
-            out.extend_from_slice(&c.to_le_bytes());
-        }
-        for &c in tile.bounds_min_rel.iter().chain(&tile.bounds_max_rel) {
-            out.extend_from_slice(&c.to_le_bytes());
-        }
-        out.extend_from_slice(&tile.sketch.to_bytes());
-        out.extend_from_slice(&(n as u32).to_le_bytes());
-
-        for &c in tile.rel_enu.iter().take(n).flatten() {
-            out.extend_from_slice(&c.to_le_bytes());
-        }
-        for &d_xyz in tile.obs_dirs_i8.iter().take(n) {
-            out.extend_from_slice(&d_xyz.map(|v| v as u8));
-        }
-        for &x_xyz in tile.cam_x_i8.iter().take(n) {
-            out.extend_from_slice(&x_xyz.map(|v| v as u8));
-        }
-        for &dm in tile.ref_dist_m.iter().take(n) {
-            out.extend_from_slice(&dm.to_le_bytes());
-        }
-        out.extend_from_slice(&tile.scores_u8[..n]);
-        for &s in tile.sign_bits.iter().take(n) {
-            out.extend_from_slice(&s.to_le_bytes());
-        }
-        for code in tile.kashin_i8.iter().take(n) {
-            out.extend_from_slice(code);
-        }
+        write_tile(&mut out, tile);
     }
 
     let digest: [u8; 32] = Sha256::digest(&out).into();
     out.extend_from_slice(&digest);
     out
+}
+
+pub(super) fn write_tile(out: &mut Vec<u8>, tile: &CorridorTileEntry) {
+    let n = tile.len().min(MAX_TILE_LANDMARKS);
+    out.extend_from_slice(&tile.tile_x.to_le_bytes());
+    out.extend_from_slice(&tile.tile_y.to_le_bytes());
+    for &c in &tile.anchor_enu {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    for &c in tile.bounds_min_rel.iter().chain(&tile.bounds_max_rel) {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    out.extend_from_slice(&tile.sketch.to_bytes());
+    out.extend_from_slice(&(n as u32).to_le_bytes());
+
+    for &c in tile.rel_enu.iter().take(n).flatten() {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    for &d_xyz in tile.obs_dirs_i8.iter().take(n) {
+        out.extend_from_slice(&d_xyz.map(|v| v as u8));
+    }
+    for &x_xyz in tile.cam_x_i8.iter().take(n) {
+        out.extend_from_slice(&x_xyz.map(|v| v as u8));
+    }
+    for &dm in tile.ref_dist_m.iter().take(n) {
+        out.extend_from_slice(&dm.to_le_bytes());
+    }
+    out.extend_from_slice(&tile.scores_u8[..n]);
+    for &s in tile.sign_bits.iter().take(n) {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    for code in tile.kashin_i8.iter().take(n) {
+        out.extend_from_slice(code);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn encode_tile_shard(magic: &[u8; 8], tile: &CorridorTileEntry) -> Vec<u8> {
+    let n = tile.len().min(MAX_TILE_LANDMARKS);
+    let mut out = Vec::with_capacity(12 + TILE_HEADER_BYTES + n * LANDMARK_BYTES + CHECKSUM_BYTES);
+    out.extend_from_slice(magic);
+    out.extend_from_slice(&CORRIDOR_VERSION.to_le_bytes());
+    write_tile(&mut out, tile);
+    let digest: [u8; 32] = Sha256::digest(&out).into();
+    out.extend_from_slice(&digest);
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn decode_tile_shard(
+    magic: &[u8; 8],
+    bytes: &[u8],
+) -> Result<CorridorTileEntry, MatchError> {
+    ensure(bytes.len() >= 12 + CHECKSUM_BYTES, "truncated tile shard")?;
+    let (payload, trailer) = bytes.split_at(bytes.len() - CHECKSUM_BYTES);
+    let mut cur = payload;
+    ensure(&take::<8>(&mut cur)? == magic, "tile shard magic mismatch")?;
+    ensure(u32_le(&mut cur)? == CORRIDOR_VERSION, "bad shard version")?;
+    let digest: [u8; 32] = Sha256::digest(payload).into();
+    ensure(digest.as_slice() == trailer, "tile shard checksum mismatch")?;
+    let tile = read_tile(&mut cur)?;
+    ensure(cur.is_empty(), "tile shard has trailing bytes")?;
+    Ok(tile)
 }
 
 pub(super) fn decode_corridor_bank(bytes: &[u8]) -> Result<CorridorLandmarkBank, MatchError> {

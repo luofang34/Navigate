@@ -16,6 +16,7 @@ pub mod surface;
 pub mod testset;
 pub mod util;
 pub mod video_ops;
+pub mod xfeat_runtime;
 
 pub use clock::{
     PriorTrack, capture_anchor, movie_duration_s, rotation_from_heading, seed_live_prior,
@@ -36,7 +37,8 @@ pub use realtime::{
     BankBuildOptions, BankMatchOptions, build_reference_bank, run_realtime_bank_match,
 };
 pub use surface::{
-    ContextSurface, Surface, SurfaceAdaptiveStats, SurfaceRayHit, build_reference_catalog,
-    build_reference_catalog_zoom, horizon_attitude,
+    ContextSurface, GpuSurfaceView, Surface, SurfaceAdaptiveStats, SurfaceGpuRenderer,
+    SurfaceRayHit, build_reference_catalog, build_reference_catalog_zoom, horizon_attitude,
 };
 pub use testset::{build_cases, group_flights, interpolate_flight_priors, prepare_photo_testset};
+pub use xfeat_runtime::{XFeatRuntime, XFeatRuntimeConfig};

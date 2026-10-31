@@ -24,6 +24,7 @@ mod staged;
 mod superpoint;
 mod xfeat;
 mod xfeat_dense;
+mod xfeat_extractor;
 mod xfeat_image;
 
 pub use adapter::{MatcherFiles, OnnxMatcher};
@@ -35,5 +36,8 @@ pub use model_session::OrtModelSession;
 pub use native_runtime::{ExecutionConfig, InferenceError, Provider, initialize_blocking};
 
 pub use staged::{ScoredPixelMatch, XFeatFeatures, XFeatGraph, XFeatStages};
+pub use xfeat_extractor::{
+    OrtXFeatExtractor, load_xfeat_extractor_blocking, provider_runtime_name,
+};
 
 pub use selection::{CandidateFailure, MatcherCandidate, MatcherSelection, SelectionError};

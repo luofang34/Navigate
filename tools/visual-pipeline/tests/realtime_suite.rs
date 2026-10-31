@@ -3,7 +3,7 @@
 use image::{GrayImage, Luma, Rgb, RgbImage};
 use navigate_match::{PrecomputedReferenceBank, WeightTensor, Weights, kashin::BANK_MAGIC};
 use navigate_visual_pipeline::{
-    BankBuildOptions, BankMatchOptions, build_reference_bank,
+    BankBuildOptions, BankMatchOptions, XFeatRuntimeConfig, build_reference_bank,
     metadata::{PhotoClaims, PositionClaim},
     run_realtime_bank_match,
     util::write_json,
@@ -227,6 +227,7 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
         max_keypoints: 128,
         adaptive_stride: 4,
         only_cases: None,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
     })?;
 
     assert_eq!(build_summary["views"].as_u64(), Some(1));
@@ -262,6 +263,7 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
         query_keypoints: 128,
         polish: false,
         only_cases: None,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
     })?;
     assert_eq!(match_summary["evaluated"].as_u64(), Some(1));
     assert_eq!(match_summary["bank_views"].as_u64(), Some(1));
@@ -283,6 +285,7 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
             query_keypoints: 128,
             polish: false,
             only_cases: None,
+            xfeat_runtime: XFeatRuntimeConfig::burn_f16(),
         },
     )?;
 
@@ -299,6 +302,7 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
         query_keypoints: 128,
         polish: false,
         only_cases: None,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
     });
     assert!(err.is_err(), "mismatched catalog SHA-256 must fail");
     Ok(())

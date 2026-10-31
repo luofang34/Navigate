@@ -4,27 +4,26 @@ pub(crate) mod helpers;
 
 use crate::{
     PipelineError,
-    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid},
+    pose::candidate_priority,
     stages::{
         MatchStageOptions, estimate_intrinsics, generate_seeds, load_case_mask, load_case_rgb,
         load_horizon_attitude, load_profile_cases, scale_k, scaled_size, write_case_report,
     },
-    surface::Surface,
+    surface::{Surface, SurfaceGpuRenderer},
     util::write_json,
+    xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };
 use helpers::{
-    check_encoder_contract, collect_bank_correspondences, filter_terrain_features, hex,
-    load_lighterglue_model, load_xfeat_model, log_attempt, lookup_indexed_3d_matches,
-    polish_pose_sparse, raw_file_sha256, rot_from_row_major, rot_to_row_major,
-    warmup_gpu_pipelines,
+    check_encoder_contract, filter_terrain_features, hex, load_lighterglue_model, log_attempt,
+    match_shortlisted_views, polish_pose_sparse, raw_file_sha256, rot_to_row_major,
 };
 use image::{DynamicImage, imageops::FilterType};
 use navigate_match::{
-    DEFAULT_KASHIN_SEED, FastMatchConfig, HadamardProjector, PrecomputedReferenceBank,
-    PrecomputedViewEntry, PreparedKashinQuery,
+    DEFAULT_KASHIN_SEED, HadamardProjector, PrecomputedReferenceBank, PrecomputedViewEntry,
+    PreparedKashinQuery,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, fs, path::PathBuf, time::Instant};
+use std::{collections::BTreeSet, fs, path::PathBuf, sync::Mutex, time::Instant};
 
 /// Options that control offline [`PrecomputedReferenceBank`] construction (`bank-build`).
 #[derive(Clone, Debug)]
@@ -51,6 +50,8 @@ pub struct BankBuildOptions {
     pub adaptive_stride: u32,
     /// Optional case ID allow-list.
     pub only_cases: Option<BTreeSet<String>>,
+    /// Sparse `XFeat` runtime configuration (`burn-f32`, `burn-f16`, `coreml`, `tensorrt`).
+    pub xfeat_runtime: XFeatRuntimeConfig,
 }
 
 /// Options that control real-time pose matching against a [`PrecomputedReferenceBank`] (`bank-match`).
@@ -74,10 +75,12 @@ pub struct BankMatchOptions {
     pub shortlist_k: usize,
     /// Maximum `XFeat` keypoints extracted from each masked query image (`1..=4096`).
     pub query_keypoints: usize,
-    /// Run one adaptive render and sparse-ray pose polish step on the winning candidate.
+    /// Run one GPU (`wgpu-terrain-v1`) or adaptive CPU render and depth-unproject pose polish pass.
     pub polish: bool,
     /// Optional case ID allow-list.
     pub only_cases: Option<BTreeSet<String>>,
+    /// Sparse `XFeat` runtime configuration (`burn-f32`, `burn-f16`, `coreml`, `tensorrt`).
+    pub xfeat_runtime: XFeatRuntimeConfig,
 }
 
 /// Build and save a [`PrecomputedReferenceBank`] (`NVKBANK1`) from terrain seed views.
@@ -89,7 +92,7 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
     let t0 = Instant::now();
     let surface = Surface::from_catalog(&opts.catalog_path)?;
     let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
-    let (xfeat, encoder_digest) = load_xfeat_model(&opts.xfeat_weights_path)?;
+    let xfeat = LoadedXFeat::load(&opts.xfeat_weights_path, &opts.xfeat_runtime)?;
     let cases = load_profile_cases(&opts.profile_path)?;
     let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
 
@@ -137,7 +140,7 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
             total_pixels += stats.total_pixels;
             total_rays += stats.rays_cast;
             let ref_gray = DynamicImage::ImageRgb8(ref_rgb).into_luma8();
-            let raw_feat = pollster::block_on(xfeat.extract(&ref_gray, kp_limit))?;
+            let raw_feat = xfeat.extract(&ref_gray, kp_limit)?;
             let hits = surface.raycast_pixels(eye, &rot, &k_render, &raw_feat.pixels);
             let (feat_3d, world_pts) = filter_terrain_features(&raw_feat, &hits);
             total_keypoints_3d += world_pts.len();
@@ -182,7 +185,8 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
     Ok(json!({
         "bank_path": opts.output_bank_path.display().to_string(),
         "bank_bytes": encoded.len(),
-        "xfeat_weights_sha256": hex(&encoder_digest),
+        "xfeat_runtime": xfeat.runtime_name(),
+        "xfeat_weights_sha256": hex(xfeat.weights_sha256()),
         "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
         "views": bank.entries.len(),
         "keypoints_3d": total_keypoints_3d,
@@ -201,7 +205,7 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
 pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, PipelineError> {
     let surface = Surface::from_catalog(&opts.catalog_path)?;
     let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
-    let (xfeat, encoder_digest) = load_xfeat_model(&opts.xfeat_weights_path)?;
+    let xfeat = LoadedXFeat::load(&opts.xfeat_weights_path, &opts.xfeat_runtime)?;
     let lighterglue = opts
         .lighterglue_weights_path
         .as_deref()
@@ -213,12 +217,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             "precomputed bank catalog_sha256 does not match --catalog".into(),
         ));
     }
-    check_encoder_contract(
-        "precomputed bank",
-        &bank.encoder_contract,
-        &xfeat,
-        &encoder_digest,
-    )?;
+    check_encoder_contract("precomputed bank", &bank.encoder_contract, &xfeat)?;
 
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
@@ -230,7 +229,18 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
     )?;
 
     let projector = HadamardProjector::new(bank.seed);
-    let shader_warmup_ms = warmup_gpu_pipelines(&xfeat, lighterglue.as_ref())?;
+    let t_warmup = Instant::now();
+    let _ = xfeat.warmup(lighterglue.as_ref())?;
+    let init_gpu = opts
+        .polish
+        .then(|| {
+            let k_init =
+                nalgebra::Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
+            SurfaceGpuRenderer::try_new(&surface, &k_init, [800, 600])
+        })
+        .flatten();
+    let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(init_gpu);
+    let shader_warmup_ms = t_warmup.elapsed().as_secs_f64() * 1000.0;
     let cases = load_profile_cases(&opts.profile_path)?;
     let kp_limit = opts.query_keypoints.clamp(16, 4096);
     let top_k = opts.shortlist_k.max(1);
@@ -278,8 +288,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             .clamp(qry_kp_floor, kp_limit);
 
         let t_xfeat = Instant::now();
-        let qry_feat =
-            pollster::block_on(xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap))?;
+        let qry_feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
         let query_xfeat_ms = t_xfeat.elapsed().as_secs_f64() * 1000.0;
 
         let t_short = Instant::now();
@@ -288,91 +297,15 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         let shortlist_us = t_short.elapsed().as_secs_f64() * 1_000_000.0;
 
         let t_match = Instant::now();
-        let kashin_limit = if lighterglue.is_some() {
-            640
-        } else {
-            usize::MAX
-        };
-        let mut attempts_log = Vec::new();
-        let mut best: Option<(usize, usize, PoseCandidate)> = None;
-        let mut lg_layers_total = 0usize;
-
-        for &(entry_idx, sketch_score) in &ranked {
-            let entry = &bank.entries[entry_idx];
-            let init_eye = entry.eye_enu;
-            let init_rot = rot_from_row_major(entry.world_to_cam);
-
-            let kashin_matches =
-                bank.match_prepared_limit(entry_idx, &prepared, kashin_limit, 24, 0.60, 0.92)?;
-            let (mut world_pts, img_px) = collect_bank_correspondences(&kashin_matches);
-            let mut backend_label = "kashin-i8";
-            let mut cand = fit_pose_hybrid(
-                &world_pts,
-                &img_px,
-                &k_render,
-                render_size,
-                Some((init_eye, init_rot)),
-            );
-
-            if !cand.as_ref().is_some_and(|c| c.score.geometry_accepted)
-                && let Some(lg) = &lighterglue
-            {
-                let ref_feat = entry.to_sparse_features(&projector);
-                let fast_cfg = FastMatchConfig {
-                    max_keypoints: kp_limit,
-                    ..FastMatchConfig::balanced_search()
-                };
-                let (lg_matches, stats) = pollster::block_on(
-                    lg.match_features_indexed_fast(&ref_feat, &qry_feat, &fast_cfg),
-                )?;
-                lg_layers_total += stats.layers_executed;
-                let (lg_world, lg_px) = lookup_indexed_3d_matches(entry, &lg_matches);
-                if let Some(lg_cand) = fit_pose_hybrid(
-                    &lg_world,
-                    &lg_px,
-                    &k_render,
-                    render_size,
-                    Some((init_eye, init_rot)),
-                ) {
-                    let take_lg = match &cand {
-                        Some(prev) => {
-                            candidate_priority(&lg_cand.score) > candidate_priority(&prev.score)
-                        }
-                        None => true,
-                    };
-                    if take_lg {
-                        world_pts = lg_world;
-                        backend_label = "kashin-bank+lighterglue-fast";
-                        cand = Some(lg_cand);
-                    }
-                }
-            }
-
-            log_attempt(
-                &mut attempts_log,
-                backend_label,
-                entry_idx,
-                0,
-                sketch_score,
-                world_pts.len(),
-                cand.as_ref(),
-            );
-            if let Some(c) = cand {
-                let is_accepted = c.score.geometry_accepted;
-                let replace = match &best {
-                    Some((_, _, prev)) => {
-                        candidate_priority(&c.score) > candidate_priority(&prev.score)
-                    }
-                    None => true,
-                };
-                if replace {
-                    best = Some((entry_idx, 0, c));
-                }
-                if is_accepted {
-                    break;
-                }
-            }
-        }
+        let (mut best, mut attempts_log, mut lg_layers_total) = match_shortlisted_views(
+            &bank,
+            &projector,
+            lighterglue.as_ref(),
+            &qry_feat,
+            &prepared,
+            &ranked,
+            (&k_render, render_size, kp_limit),
+        )?;
         let bank_match_ms = t_match.elapsed().as_secs_f64() * 1000.0;
 
         let t_polish = Instant::now();
@@ -388,6 +321,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             for p_step in 1..=max_polish {
                 let Some((polished, rays, layers)) = polish_pose_sparse(
                     &surface,
+                    Some(&gpu_renderer),
                     &xfeat,
                     lighterglue.as_ref(),
                     &qry_feat,
@@ -402,7 +336,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
                 lg_layers_total += layers;
                 log_attempt(
                     &mut attempts_log,
-                    "adaptive-render+sparse-raycast+l1-gnc",
+                    "gpu-or-adaptive-polish+l1-gnc",
                     seed_idx,
                     p_step,
                     1.0,
@@ -428,6 +362,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         case_telemetry.push(json!({
             "id": case.id,
             "accepted": solved,
+            "xfeat_runtime": xfeat.runtime_name(),
             "query_keypoints": qry_feat.len(),
             "shortlisted_views": ranked.len(),
             "lighterglue_layers": lg_layers_total,
@@ -454,6 +389,7 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         "evaluated": evaluated,
         "accepted": accepted,
         "bank_views": bank.entries.len(),
+        "xfeat_runtime": xfeat.runtime_name(),
         "shader_warmup_ms": shader_warmup_ms,
         "output": opts.output_dir.display().to_string(),
         "telemetry": case_telemetry,

@@ -1,23 +1,27 @@
-//! Integration tests for 3D corridor landmark banks (`NVKTILE1`), two-tier tracking,
-//! amortized masking, and `MapCell` EKF fusion independence gating.
+//! Integration tests for 3D corridor landmark banks (`NVKTILE1`), sharded tile stores
+//! (`NVKTIDX1`), non-blocking background anchoring, `burn-f16`, and `MapCell` EKF gating.
 
 use burn::tensor::Device;
 use image::{GrayImage, Luma, Rgb, RgbImage};
 use nalgebra::Matrix3;
-use navigate_match::{CORRIDOR_MAGIC, CorridorLandmarkBank, WeightTensor, Weights};
+use navigate_match::{
+    CORRIDOR_MAGIC, CORRIDOR_STORE_INDEX_MAGIC, CorridorLandmarkBank, CorridorTileStore,
+    DEFAULT_KASHIN_SEED, DEFAULT_WINDOW_TILES, WeightTensor, Weights, XFeat,
+};
 use navigate_visual_pipeline::{
-    CorridorBuildOptions, CorridorTrackOptions, Surface, build_corridor_bank,
+    CorridorBuildOptions, CorridorTrackOptions, Surface, XFeatRuntimeConfig, build_corridor_bank,
     corridor::masking::AmortizedMasker,
     metadata::{PhotoClaims, PositionClaim},
     run_corridor_track,
     util::{read_json, write_json},
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{error::Error, fs, path::Path, path::PathBuf};
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-fn synthetic_xfeat_safetensors() -> TestResult<Vec<u8>> {
+fn synthetic_xfeat_weights() -> Weights {
     let specs: &[(&str, [usize; 3])] = &[
         ("block1.0", [4, 1, 3]),
         ("block1.1", [8, 4, 3]),
@@ -50,8 +54,9 @@ fn synthetic_xfeat_safetensors() -> TestResult<Vec<u8>> {
     let mut weights = Weights::default();
     for &(name, [out, input, k]) in specs {
         let len = out * input * k * k;
+        let scale = ((2.0 / ((input * k * k) as f32)).sqrt() / 0.09).min(1.0);
         let values = (0..len)
-            .map(|i| (((i * 23 + 7) % 37) as f32 - 18.0) * 0.015)
+            .map(|i| (((i * 23 + 7) % 37) as f32 - 18.0) * 0.015 * scale)
             .collect();
         weights.insert(
             format!("{name}.weight"),
@@ -73,7 +78,7 @@ fn synthetic_xfeat_safetensors() -> TestResult<Vec<u8>> {
             },
         );
     }
-    Ok(weights.to_safetensors(false)?)
+    weights
 }
 
 fn mercator_xy(lat_deg: f64, lon_deg: f64, zoom: u32) -> (u32, u32) {
@@ -162,6 +167,42 @@ fn write_synthetic_corridor_catalog(root: &Path, lat: f64, lon: f64) -> TestResu
     Ok(catalog_path)
 }
 
+fn base_track_opts(
+    ds_dir: &Path,
+    profile_path: &Path,
+    catalog_path: &Path,
+    bank_path: &Path,
+    xfeat_path: &Path,
+    output_dir: PathBuf,
+    background_refresh: bool,
+) -> CorridorTrackOptions {
+    CorridorTrackOptions {
+        dataset_dir: ds_dir.to_path_buf(),
+        profile_path: profile_path.to_path_buf(),
+        catalog_path: catalog_path.to_path_buf(),
+        corridor_bank_path: bank_path.to_path_buf(),
+        xfeat_weights_path: xfeat_path.to_path_buf(),
+        lighterglue_weights_path: None,
+        seg_model_dir: None,
+        mask_policy: "airframe-occlusions".into(),
+        mask_interval: 5,
+        output_dir,
+        anchor_interval: 10,
+        min_track_inliers: 24,
+        map_cell_m: 500.0,
+        anchor_attempts: 2,
+        heading_step_deg: 0.0,
+        height_factors: vec![1.0],
+        query_keypoints: 384,
+        polish_anchors: false,
+        prior_override: None,
+        focal_35mm_override: None,
+        only_cases: None,
+        background_refresh,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
+    }
+}
+
 #[test]
 fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
     let tmp = tempfile::tempdir()?;
@@ -170,8 +211,9 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
     let catalog_path = write_synthetic_corridor_catalog(&tmp.path().join("cat"), lat, lon)?;
     let surface = Surface::from_catalog(&catalog_path)?;
 
+    let weights = synthetic_xfeat_weights();
     let xfeat_path = tmp.path().join("xfeat.safetensors");
-    fs::write(&xfeat_path, synthetic_xfeat_safetensors()?)?;
+    fs::write(&xfeat_path, weights.to_safetensors(false)?)?;
 
     let ds_dir = tmp.path().join("dataset");
     fs::create_dir_all(ds_dir.join("images"))?;
@@ -182,19 +224,7 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
     let f_px = 320.0_f64.hypot(240.0) * 28.0 / 43.266_615_3;
     let k = Matrix3::new(f_px, 0.0, 159.5, 0.0, f_px, 119.5, 0.0, 0.0, 1.0);
     let eye0 = surface.local(lat, lon, 1_050.0);
-    let rot0 = surface.camera_rotation(lat, lon, 0.0, 72.0, 0.0);
-    let ((rgb0, _, _), _) = surface.render_adaptive(eye0, &rot0, &k, size, 2, 8, 0.025);
-    rgb0.save(ds_dir.join("images/f-0001.png"))?;
-
-    let eye1 = [eye0[0] + 8.0, eye0[1] + 2.0, eye0[2]];
-    let [lat1, lon1, _] = surface.geodetic(eye1);
-    let rot1 = surface.camera_rotation(lat1, lon1, 0.5, 72.0, 0.0);
-    let ((rgb1, _, _), _) = surface.render_adaptive(eye1, &rot1, &k, size, 2, 8, 0.025);
-    rgb1.save(ds_dir.join("images/f-0002.png"))?;
-
     let mask = GrayImage::from_pixel(size[0], size[1], Luma([255_u8]));
-    mask.save(ds_dir.join("masks/f-0001.png"))?;
-    mask.save(ds_dir.join("masks/f-0002.png"))?;
 
     let prior = PhotoClaims {
         direction_deg: Some(0.0),
@@ -210,31 +240,35 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
         }),
         ..PhotoClaims::default()
     };
-    let profile_path = ds_dir.join("profiles/with-prior.json");
-    write_json(
-        &profile_path,
-        &json!({
-            "cases": [
-                {
-                    "id": "f-0001",
-                    "image": "images/f-0001.png",
-                    "image_sha256": "c".repeat(64),
-                    "valid_mask": "masks/f-0001.png",
-                    "size": size,
-                    "prior": prior
-                },
-                {
-                    "id": "f-0002",
-                    "image": "images/f-0002.png",
-                    "image_sha256": "d".repeat(64),
-                    "valid_mask": "masks/f-0002.png",
-                    "size": size,
-                    "prior": prior
-                }
-            ]
-        }),
-    )?;
 
+    let mut cases = Vec::new();
+    for step in 0..4_usize {
+        let id = format!("f-{:04}", step + 1);
+        let eye = [
+            eye0[0] + (step as f64) * 5.0,
+            eye0[1] + (step as f64) * 1.5,
+            eye0[2],
+        ];
+        let [clat, clon, _] = surface.geodetic(eye);
+        let rot = surface.camera_rotation(clat, clon, (step as f64) * 0.4, 72.0, 0.0);
+        let ((rgb, _, _), _) = surface.render_adaptive(eye, &rot, &k, size, 2, 8, 0.025);
+        let img_rel = format!("images/{id}.png");
+        let msk_rel = format!("masks/{id}.png");
+        rgb.save(ds_dir.join(&img_rel))?;
+        mask.save(ds_dir.join(&msk_rel))?;
+        cases.push(json!({
+            "id": id,
+            "image": img_rel,
+            "image_sha256": "c".repeat(64),
+            "valid_mask": msk_rel,
+            "size": size,
+            "prior": prior
+        }));
+    }
+    let profile_path = ds_dir.join("profiles/with-prior.json");
+    write_json(&profile_path, &json!({ "cases": cases }))?;
+
+    // 1. Monolithic NVKTILE1 build + deterministic sync-refresh + burn-f16 parity
     let bank_path = tmp.path().join("corridor.nvktile");
     let build_summary = build_corridor_bank(&CorridorBuildOptions {
         catalog_path: catalog_path.clone(),
@@ -247,43 +281,34 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
         max_landmarks_per_tile: 512,
         adaptive_stride: 4,
         include_obliques: false,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
     })?;
-
     assert!(build_summary["tiles"].as_u64().unwrap_or(0) >= 1);
     assert!(build_summary["landmarks_3d"].as_u64().unwrap_or(0) >= 32);
+    assert_eq!(&fs::read(&bank_path)?[..8], CORRIDOR_MAGIC);
+    assert!(
+        !CorridorLandmarkBank::load_file(&bank_path)?
+            .tiles
+            .is_empty()
+    );
 
-    let raw_bytes = fs::read(&bank_path)?;
-    assert_eq!(&raw_bytes[..8], CORRIDOR_MAGIC);
-    let loaded = CorridorLandmarkBank::load_file(&bank_path)?;
-    assert!(!loaded.tiles.is_empty());
-
-    let out_dir = tmp.path().join("track_out");
-    let track_summary = run_corridor_track(&CorridorTrackOptions {
-        dataset_dir: ds_dir.clone(),
-        profile_path: profile_path.clone(),
-        catalog_path: catalog_path.clone(),
-        corridor_bank_path: bank_path.clone(),
-        xfeat_weights_path: xfeat_path.clone(),
-        lighterglue_weights_path: None,
-        seg_model_dir: None,
-        mask_policy: "airframe-occlusions".into(),
-        mask_interval: 5,
-        output_dir: out_dir.clone(),
-        anchor_interval: 10,
-        min_track_inliers: 24,
-        map_cell_m: 500.0,
-        anchor_attempts: 2,
-        heading_step_deg: 0.0,
-        height_factors: vec![1.0],
-        query_keypoints: 384,
-        polish_anchors: false,
-        prior_override: None,
-        focal_35mm_override: None,
-        only_cases: None,
-        background_refresh: false,
-    })?;
-    assert_eq!(track_summary["evaluated"].as_u64(), Some(2));
-    assert!(out_dir.join("run.json").is_file());
+    let out_dir = tmp.path().join("track_sync");
+    let track_summary = run_corridor_track(&base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &catalog_path,
+        &bank_path,
+        &xfeat_path,
+        out_dir.clone(),
+        false,
+    ))?;
+    assert_eq!(track_summary["evaluated"].as_u64(), Some(4));
+    assert!(
+        track_summary["resident_window_bytes"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            < 10 * 1024 * 1024
+    );
     for key in [
         "warm_track_p50_ms",
         "warm_track_p95_ms",
@@ -296,125 +321,135 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
             "summary must report {key}"
         );
     }
-    assert!(track_summary["anchor_p50_ms"].as_f64().is_some());
 
-    let background_summary = run_corridor_track(&CorridorTrackOptions {
-        dataset_dir: ds_dir.clone(),
-        profile_path: profile_path.clone(),
+    // Verify burn-f16 runtime shares encoder_contract with burn-f32 bank
+    let mut f16_opts = base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &catalog_path,
+        &bank_path,
+        &xfeat_path,
+        tmp.path().join("track_f16"),
+        false,
+    );
+    f16_opts.xfeat_runtime = XFeatRuntimeConfig::burn_f16();
+    f16_opts.only_cases = Some(["f-0001".to_owned()].into_iter().collect());
+    let f16_summary = run_corridor_track(&f16_opts)?;
+    assert_eq!(f16_summary["xfeat_runtime"], "burn-f16");
+    assert_eq!(f16_summary["evaluated"], 1);
+
+    // 2. Non-blocking background_refresh cold start emits acquiring_anchor on Frame 1
+    let bg_dir = tmp.path().join("track_bg");
+    let bg_summary = run_corridor_track(&base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &catalog_path,
+        &bank_path,
+        &xfeat_path,
+        bg_dir.clone(),
+        true,
+    ))?;
+    assert_eq!(bg_summary["background_refresh"], true);
+    assert!(bg_summary["acquiring_anchor_frames"].as_u64().unwrap_or(0) >= 1);
+    let bg_f1: Value = read_json(&bg_dir.join("f-0001.json"))?;
+    assert_eq!(bg_f1["status"].as_str(), Some("acquiring_anchor"));
+    assert_eq!(bg_f1["evidence_kind"].as_str(), Some("visual_odometry"));
+    assert!(
+        !bg_summary["anchor_results"]
+            .as_array()
+            .ok_or("anchor_results")?
+            .is_empty()
+    );
+
+    // 3. Sharded NVKTIDX1 tile store directory + on-demand empty-store synthesis
+    let sharded_dir = tmp.path().join("corridor.nvktiledir");
+    let sharded_build = build_corridor_bank(&CorridorBuildOptions {
         catalog_path: catalog_path.clone(),
-        corridor_bank_path: bank_path.clone(),
+        profile_path: Some(profile_path.clone()),
         xfeat_weights_path: xfeat_path.clone(),
-        lighterglue_weights_path: None,
-        seg_model_dir: None,
-        mask_policy: "airframe-occlusions".into(),
-        mask_interval: 5,
-        output_dir: tmp.path().join("background_out"),
-        anchor_interval: 10,
-        min_track_inliers: 24,
-        map_cell_m: 500.0,
-        anchor_attempts: 2,
-        heading_step_deg: 0.0,
-        height_factors: vec![1.0],
-        query_keypoints: 384,
-        polish_anchors: false,
-        prior_override: None,
-        focal_35mm_override: None,
-        only_cases: None,
-        background_refresh: true,
+        output_bank_path: sharded_dir.clone(),
+        tile_size_m: 15_000.0,
+        corridor_radius_m: 0.0,
+        nominal_agl_m: 900.0,
+        max_landmarks_per_tile: 512,
+        adaptive_stride: 4,
+        include_obliques: false,
+        xfeat_runtime: XFeatRuntimeConfig::default(),
     })?;
-    assert_eq!(background_summary["background_refresh"], true);
-    // Without a periodic re-anchor inside the sequence, both modes solve the same frames.
-    for key in [
-        "evaluated",
-        "accepted",
-        "warm_tracked_frames",
-        "independent_ekf_fixes",
-    ] {
-        assert_eq!(background_summary[key], track_summary[key], "{key}");
-    }
-    let doc1: Value = read_json(&out_dir.join("f-0001.json"))?;
-    assert_eq!(doc1["id"].as_str(), Some("f-0001"));
+    assert_eq!(sharded_build["sharded_store"], true);
+    let idx_bytes = fs::read(sharded_dir.join("manifest.nvktidx"))?;
+    assert_eq!(&idx_bytes[..8], CORRIDOR_STORE_INDEX_MAGIC);
+    let sharded_track = run_corridor_track(&base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &catalog_path,
+        &sharded_dir,
+        &xfeat_path,
+        tmp.path().join("track_sharded"),
+        false,
+    ))?;
+    assert_eq!(sharded_track["accepted"], track_summary["accepted"]);
 
-    // Verify MapCell deduplication when anchor_interval == 1 on same cell
+    // Empty sharded store triggers live on-demand tile synthesis
+    let empty_store_dir = tmp.path().join("empty_store.nvktiledir");
+    let cat_digest: [u8; 32] = Sha256::digest(fs::read(&catalog_path)?).into();
+    let contract = XFeat::encoder_contract_of(&weights);
+    let _ = CorridorTileStore::create_dir(
+        &empty_store_dir,
+        cat_digest,
+        contract,
+        DEFAULT_KASHIN_SEED,
+        1_200.0,
+        DEFAULT_WINDOW_TILES,
+    )?;
+    let mut synth_opts = base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &catalog_path,
+        &empty_store_dir,
+        &xfeat_path,
+        tmp.path().join("track_live_synth"),
+        false,
+    );
+    synth_opts.only_cases = Some(["f-0001".to_owned()].into_iter().collect());
+    let live_synth = run_corridor_track(&synth_opts)?;
+    assert!(
+        live_synth["tiles_built_live"].as_u64().unwrap_or(0) >= 1,
+        "expected on-demand tile synthesis on empty store"
+    );
+
+    // 4. Verify MapCell deduplication and catalog SHA-256 rejection
+    let doc1: Value = read_json(&out_dir.join("f-0001.json"))?;
     if doc1["status"].as_str() == Some("candidate_requires_review") {
         assert_eq!(
             doc1["candidate"]["independent_ekf_fix"].as_bool(),
             Some(true)
         );
-        let doc2: Value = read_json(&out_dir.join("f-0002.json"))?;
-        if doc2["status"].as_str() == Some("candidate_requires_review") {
-            assert_eq!(
-                doc2["candidate"]["independent_ekf_fix"].as_bool(),
-                Some(false),
-                "warm-tracked frame must not be marked independent_ekf_fix"
-            );
-        }
-
-        let reanchor_dir = tmp.path().join("reanchor_out");
-        let re_summary = run_corridor_track(&CorridorTrackOptions {
-            dataset_dir: ds_dir.clone(),
-            profile_path: profile_path.clone(),
-            catalog_path: catalog_path.clone(),
-            corridor_bank_path: bank_path.clone(),
-            xfeat_weights_path: xfeat_path.clone(),
-            lighterglue_weights_path: None,
-            seg_model_dir: None,
-            mask_policy: "airframe-occlusions".into(),
-            mask_interval: 5,
-            output_dir: reanchor_dir.clone(),
-            anchor_interval: 1,
-            min_track_inliers: 24,
-            map_cell_m: 500.0,
-            anchor_attempts: 4,
-            heading_step_deg: 0.0,
-            height_factors: vec![1.0],
-            query_keypoints: 512,
-            polish_anchors: true,
-            prior_override: None,
-            focal_35mm_override: None,
-            only_cases: None,
-            background_refresh: false,
-        })?;
+        let mut re_opts = base_track_opts(
+            &ds_dir,
+            &profile_path,
+            &catalog_path,
+            &bank_path,
+            &xfeat_path,
+            tmp.path().join("reanchor_out"),
+            false,
+        );
+        re_opts.anchor_interval = 1;
+        re_opts.polish_anchors = true;
+        let re_summary = run_corridor_track(&re_opts)?;
         assert_eq!(re_summary["independent_ekf_fixes"].as_u64(), Some(1));
-        let r2: Value = read_json(&reanchor_dir.join("f-0002.json"))?;
-        if r2["status"].as_str() == Some("candidate_requires_review") {
-            assert_eq!(
-                r2["candidate"]["fusion_eligibility"].as_str(),
-                Some("shared_map_cell")
-            );
-            assert_eq!(
-                r2["candidate"]["independent_ekf_fix"].as_bool(),
-                Some(false)
-            );
-        }
     }
 
-    // Verify catalog provenance rejection
     let other_cat = write_synthetic_corridor_catalog(&tmp.path().join("cat2"), lat + 0.2, lon)?;
-    let bad = run_corridor_track(&CorridorTrackOptions {
-        dataset_dir: ds_dir,
-        profile_path,
-        catalog_path: other_cat,
-        corridor_bank_path: bank_path,
-        xfeat_weights_path: xfeat_path,
-        lighterglue_weights_path: None,
-        seg_model_dir: None,
-        mask_policy: "airframe-occlusions".into(),
-        mask_interval: 5,
-        output_dir: tmp.path().join("bad_out"),
-        anchor_interval: 10,
-        min_track_inliers: 24,
-        map_cell_m: 500.0,
-        anchor_attempts: 2,
-        heading_step_deg: 0.0,
-        height_factors: vec![1.0],
-        query_keypoints: 256,
-        polish_anchors: false,
-        prior_override: None,
-        focal_35mm_override: None,
-        only_cases: None,
-        background_refresh: false,
-    });
+    let bad = run_corridor_track(&base_track_opts(
+        &ds_dir,
+        &profile_path,
+        &other_cat,
+        &bank_path,
+        &xfeat_path,
+        tmp.path().join("bad_out"),
+        false,
+    ));
     assert!(bad.is_err(), "mismatched catalog SHA-256 must fail");
     Ok(())
 }

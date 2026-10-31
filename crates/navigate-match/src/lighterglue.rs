@@ -3,6 +3,7 @@
 //! [`LighterGlue`] runs the six-layer rotary self-attention and bidirectional
 //! cross-attention transformer of `verlab/accelerated_features` and `cvg/LightGlue`
 //! (`input_dim = 64`, `descriptor_dim = 96`, `num_heads = 1`).
+mod batch;
 mod fast;
 
 pub use fast::{FastMatchConfig, FastMatchStats, IndexedMatch};
@@ -86,10 +87,19 @@ impl SelfBlock {
         })
     }
 
-    fn forward(&self, x: Tensor<3>, cos: &Tensor<3>, sin: &Tensor<3>) -> Tensor<3> {
-        let [_, n, _] = x.dims();
+    pub(super) fn forward(
+        &self,
+        x: Tensor<3>,
+        cos: &Tensor<3>,
+        sin: &Tensor<3>,
+        key_mask: Option<&Tensor<3>>,
+    ) -> Tensor<3> {
+        let [batch, n, _] = x.dims();
         let device = x.device();
-        let qkv = self.wqkv.forward(x.clone()).reshape([1, n, MODEL_DIM, 3]);
+        let qkv = self
+            .wqkv
+            .forward(x.clone())
+            .reshape([batch, n, MODEL_DIM, 3]);
         let q = rotary(qkv.clone().narrow(3, 0, 1).squeeze_dim::<3>(3), cos, sin);
         let k = rotary(qkv.clone().narrow(3, 1, 1).squeeze_dim::<3>(3), cos, sin);
         let v = qkv.narrow(3, 2, 1).squeeze_dim::<3>(3);
@@ -97,8 +107,11 @@ impl SelfBlock {
             trans_b: true,
             ..Layout::default()
         };
-        let scores =
+        let mut scores =
             product(q, k, Tensor::<1>::zeros([n], &device), trans_b) / (MODEL_DIM as f64).sqrt();
+        if let Some(mask) = key_mask {
+            scores = scores + mask.clone();
+        }
         let context = product(
             softmax(scores, 2),
             v,
@@ -146,7 +159,12 @@ impl CrossBlock {
         })
     }
 
-    fn forward(&self, a: Tensor<3>, b: Tensor<3>) -> (Tensor<3>, Tensor<3>) {
+    pub(super) fn forward(
+        &self,
+        a: Tensor<3>,
+        b: Tensor<3>,
+        a_key_mask: Option<&Tensor<3>>,
+    ) -> (Tensor<3>, Tensor<3>) {
         let [_, m, _] = b.dims();
         let device = a.device();
         let scale = (MODEL_DIM as f64).powf(0.25);
@@ -166,12 +184,13 @@ impl CrossBlock {
             zeros.clone(),
             Layout::default(),
         ));
-        let m1 = self.to_out.forward(product(
-            softmax(sim.swap_dims(1, 2), 2),
-            va,
-            zeros,
-            Layout::default(),
-        ));
+        let mut sim_ba = sim.swap_dims(1, 2);
+        if let Some(mask) = a_key_mask {
+            sim_ba = sim_ba + mask.clone();
+        }
+        let m1 = self
+            .to_out
+            .forward(product(softmax(sim_ba, 2), va, zeros, Layout::default()));
         (
             a.clone() + self.ffn.forward(Tensor::cat(vec![a, m0], 2)),
             b.clone() + self.ffn.forward(Tensor::cat(vec![b, m1], 2)),
@@ -366,11 +385,11 @@ impl LighterGlue {
         let (cos0, sin0) = self.encoding(k0, n);
         let (cos1, sin1) = self.encoding(k1, m);
         for layer in &self.layers {
-            a = layer.self_attn.forward(a, &cos0, &sin0);
-            b = layer.self_attn.forward(b, &cos1, &sin1);
-            (a, b) = layer.cross_attn.forward(a, b);
+            a = layer.self_attn.forward(a, &cos0, &sin0, None);
+            b = layer.self_attn.forward(b, &cos1, &sin1, None);
+            (a, b) = layer.cross_attn.forward(a, b, None);
         }
-        let (scores, _, _) = self.assignment_with_logits(a, b);
+        let (scores, _, _) = self.assignment_with_logits(a, b, None);
         Ok(scores)
     }
 
@@ -378,6 +397,7 @@ impl LighterGlue {
         &self,
         a: Tensor<3>,
         b: Tensor<3>,
+        a_key_mask: Option<&Tensor<3>>,
     ) -> (Tensor<3>, Tensor<3>, Tensor<3>) {
         let [_, m, _] = b.dims();
         let scale = (MODEL_DIM as f64).powf(0.25);
@@ -388,38 +408,46 @@ impl LighterGlue {
             ..Layout::default()
         };
         let sim = product(d0, d1, Tensor::<1>::zeros([m], &self.device), trans_b);
+        let sim_col = match a_key_mask {
+            Some(mask) => sim.clone() + mask.clone().swap_dims(1, 2),
+            None => sim.clone(),
+        };
         let ma = self.matchability.forward(a);
         let mb = self.matchability.forward(b);
-        let scores = log_softmax(sim.clone(), 2)
-            + log_softmax(sim, 1)
+        let mut scores = log_softmax(sim, 2)
+            + log_softmax(sim_col, 1)
             + log_sigmoid(ma.clone())
             + log_sigmoid(mb.clone()).swap_dims(1, 2);
+        if let Some(mask) = a_key_mask {
+            scores = scores + mask.clone().swap_dims(1, 2);
+        }
         (scores, ma, mb)
     }
 
-    fn encoding(&self, keypoints: Tensor<3>, count: usize) -> (Tensor<3>, Tensor<3>) {
+    pub(super) fn encoding(&self, keypoints: Tensor<3>, count: usize) -> (Tensor<3>, Tensor<3>) {
+        let [batch, _, _] = keypoints.dims();
         let projected = self.posenc_wr.forward(keypoints);
         let cos = projected
             .clone()
             .cos()
             .unsqueeze_dim::<4>(3)
             .repeat_dim(3, 2)
-            .reshape([1, count, MODEL_DIM]);
+            .reshape([batch, count, MODEL_DIM]);
         let sin = projected
             .sin()
             .unsqueeze_dim::<4>(3)
             .repeat_dim(3, 2)
-            .reshape([1, count, MODEL_DIM]);
+            .reshape([batch, count, MODEL_DIM]);
         (cos, sin)
     }
 }
 
 fn rotary(t: Tensor<3>, cos: &Tensor<3>, sin: &Tensor<3>) -> Tensor<3> {
-    let [_, n, _] = t.dims();
-    let pairs = t.clone().reshape([1, n, HALF_DIM, 2]);
+    let [batch, n, _] = t.dims();
+    let pairs = t.clone().reshape([batch, n, HALF_DIM, 2]);
     let p0 = pairs.clone().narrow(3, 0, 1);
     let p1 = pairs.narrow(3, 1, 1);
-    let rotated = Tensor::cat(vec![p1.neg(), p0], 3).reshape([1, n, MODEL_DIM]);
+    let rotated = Tensor::cat(vec![p1.neg(), p0], 3).reshape([batch, n, MODEL_DIM]);
     t * cos.clone() + rotated * sin.clone()
 }
 

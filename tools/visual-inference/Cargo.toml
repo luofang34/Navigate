@@ -13,6 +13,7 @@ rustnn-coreml = ["dep:rustnn", "rustnn/coreml-runtime"]
 [dependencies]
 navigate-visual-workflow = { path = "../../crates/navigate-visual-workflow" }
 navigate-visual = { path = "../../crates/navigate-visual" }
+navigate-match = { path = "../../crates/navigate-match", default-features = false, features = ["flex"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 nalgebra = "0.34.1"
 sha2 = { version = "0.11", default-features = false }
