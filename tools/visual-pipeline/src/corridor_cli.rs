@@ -3,7 +3,7 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use navigate_visual_pipeline::{
     CorridorBuildOptions, CorridorTrackOptions, PipelineError, XFeatRuntime, XFeatRuntimeConfig,
-    build_corridor_bank, run_corridor_track,
+    build_corridor_bank, corridor::VehicleDynamicsProfile, run_corridor_track,
 };
 use serde_json::Value;
 use std::{collections::BTreeSet, path::PathBuf};
@@ -107,6 +107,7 @@ pub(crate) fn commands() -> [Command; 2] {
                         .default_value("10")
                         .value_parser(value_parser!(usize)),
                 )
+                .arg(float_arg("mask-interval-s", None))
                 .arg(path_arg("output", true))
                 .arg(
                     Arg::new("anchor-interval")
@@ -114,6 +115,22 @@ pub(crate) fn commands() -> [Command; 2] {
                         .default_value("30")
                         .value_parser(value_parser!(usize)),
                 )
+                .arg(float_arg("anchor-interval-s", None))
+                .arg(float_arg("anchor-uncertainty-m", None))
+                .arg(
+                    Arg::new("anchor-on-cell-boundary")
+                        .long("anchor-on-cell-boundary")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("dynamics-profile")
+                        .long("dynamics-profile")
+                        .default_value("rotary-survey"),
+                )
+                .arg(float_arg("max-speed-mps", None))
+                .arg(float_arg("max-vertical-speed-mps", None))
+                .arg(float_arg("rms-accel-mps2", None))
+                .arg(float_arg("max-angular-rate-rad-s", None))
                 .arg(
                     Arg::new("min-track-inliers")
                         .long("min-track-inliers")
@@ -202,6 +219,23 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 _ => None,
             };
             let background_refresh = !args.get_flag("sync-refresh");
+            let profile_name = args
+                .get_one::<String>("dynamics-profile")
+                .map_or("rotary-survey", String::as_str);
+            let mut dynamics_profile = VehicleDynamicsProfile::from_name(profile_name)
+                .unwrap_or_else(VehicleDynamicsProfile::rotary_survey);
+            if let Some(v) = args.get_one::<f64>("max-speed-mps").copied() {
+                dynamics_profile.max_speed_mps = v;
+            }
+            if let Some(v) = args.get_one::<f64>("max-vertical-speed-mps").copied() {
+                dynamics_profile.max_vertical_speed_mps = v;
+            }
+            if let Some(v) = args.get_one::<f64>("rms-accel-mps2").copied() {
+                dynamics_profile.rms_accel_mps2 = v;
+            }
+            if let Some(v) = args.get_one::<f64>("max-angular-rate-rad-s").copied() {
+                dynamics_profile.max_angular_rate_rad_s = v;
+            }
             run_corridor_track(&CorridorTrackOptions {
                 dataset_dir: req(args, "dataset")?,
                 profile_path: req(args, "profile")?,
@@ -210,10 +244,15 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 xfeat_weights_path: req(args, "model")?,
                 lighterglue_weights_path: args.get_one::<PathBuf>("lighterglue").cloned(),
                 seg_model_dir: args.get_one::<PathBuf>("seg-model").cloned(),
+                dynamics_profile,
                 mask_policy: req(args, "mask-policy")?,
                 mask_interval: req(args, "mask-interval")?,
+                mask_interval_s: args.get_one::<f64>("mask-interval-s").copied(),
                 output_dir: req(args, "output")?,
                 anchor_interval: req(args, "anchor-interval")?,
+                anchor_interval_s: args.get_one::<f64>("anchor-interval-s").copied(),
+                anchor_uncertainty_m: args.get_one::<f64>("anchor-uncertainty-m").copied(),
+                anchor_on_cell_boundary: args.get_flag("anchor-on-cell-boundary"),
                 min_track_inliers: req(args, "min-track-inliers")?,
                 map_cell_m: req(args, "map-cell-m")?,
                 anchor_attempts: req(args, "attempts")?,

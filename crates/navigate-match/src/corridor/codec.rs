@@ -234,7 +234,7 @@ pub(super) fn scale_similarity(
     ref_dist_m: u16,
     eye_to_pt: [f64; 3],
     fx: f64,
-    is_nadir: bool,
+    _is_nadir: bool,
 ) -> Option<f32> {
     if ref_dist_m == 0 {
         return Some(1.0);
@@ -244,7 +244,7 @@ pub(super) fn scale_similarity(
             .sqrt();
     let d_ref = (f64::from(ref_dist_m) * (fx / 600.0).max(0.1)).max(1.0);
     let ratio = d_live / d_ref;
-    let bounds = if is_nadir { 0.15..=3.50 } else { 0.35..=2.85 };
+    let bounds = 0.22..=5.50;
     if !bounds.contains(&ratio) {
         return None;
     }

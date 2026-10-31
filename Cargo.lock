@@ -2721,6 +2721,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
+name = "e2e-corridor-tests"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-fusion",
+ "navigate-match",
+ "navigate-place",
+ "navigate-visual",
+ "navigate-visual-fusion",
+ "navigate-visual-session",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "eclipse-canon"
 version = "0.1.0"
 dependencies = [
@@ -5415,11 +5433,14 @@ dependencies = [
  "kamadak-exif",
  "nalgebra 0.34.2",
  "navigate-contract",
+ "navigate-fusion",
  "navigate-geodesy",
  "navigate-match",
+ "navigate-place",
  "navigate-recording",
  "navigate-segment",
  "navigate-visual",
+ "navigate-visual-fusion",
  "navigate-visual-render",
  "navigate-visual-session",
  "ort",

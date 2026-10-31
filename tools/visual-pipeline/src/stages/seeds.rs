@@ -4,7 +4,13 @@ use super::MatchStageOptions;
 use crate::{surface::Surface, testset::PhotoCase};
 use nalgebra::Matrix3;
 
-pub(crate) fn generate_seeds(
+/// Shallow grazing pitch angle seeds in degrees.
+pub const GRAZING_PITCH_SEEDS_DEG: [f64; 6] = [-10.0, 8.0, 22.0, 38.0, 58.0, 88.0];
+
+/// Banked roll angle seeds in degrees.
+pub const BANKED_ROLL_SEEDS_DEG: [f64; 3] = [0.0, 25.0, -25.0];
+
+pub fn generate_seeds(
     surface: &Surface,
     case: &PhotoCase,
     opts: &MatchStageOptions,
@@ -31,13 +37,19 @@ pub(crate) fn generate_seeds(
         ));
     let pitches: Vec<(f64, f64)> = match attitude {
         Some(att) => vec![att],
-        None => vec![
-            (35.0, 0.0),
-            (55.0, 0.0),
-            (75.0, 0.0),
-            (20.0, 0.0),
-            (88.0, 0.0),
-        ],
+        None => {
+            let mut list =
+                Vec::with_capacity(GRAZING_PITCH_SEEDS_DEG.len() * BANKED_ROLL_SEEDS_DEG.len());
+            for &p in &GRAZING_PITCH_SEEDS_DEG {
+                list.push((p, 0.0));
+            }
+            for &r in &[25.0, -25.0] {
+                for &p in &GRAZING_PITCH_SEEDS_DEG {
+                    list.push((p, r));
+                }
+            }
+            list
+        }
     };
     let headings: Vec<f64> = if let Some(dir) = case.prior.as_ref().and_then(|p| p.direction_deg)
         && opts.heading_step_deg <= 0.0
@@ -55,19 +67,45 @@ pub(crate) fn generate_seeds(
     };
 
     let dem_h = surface.sample_dem(lat, lon).unwrap_or(surface.min_elev_m);
-    let agl = (base_alt - dem_h).max(25.0);
+    let agl = (base_alt - dem_h).max(0.0);
+    let prioritize_nadir = attitude.is_none() && agl <= 250.0;
     let mut out = Vec::new();
     for &hf in &opts.height_factors {
-        let eye = surface.local(lat, lon, dem_h + agl * hf.max(0.25));
-        for &(down_deg, roll_deg) in &pitches {
+        let eye = surface.local(lat, lon, dem_h + agl.max(25.0) * hf.max(0.25));
+        if prioritize_nadir {
             for &hdg in &headings {
-                if out.len() >= opts.attempts.max(1) {
-                    return out;
+                for &down_deg in &[88.0, 75.0] {
+                    if out.len() >= opts.attempts.max(1) {
+                        return out;
+                    }
+                    out.push((eye, surface.camera_rotation(lat, lon, hdg, down_deg, 0.0)));
                 }
-                out.push((
-                    eye,
-                    surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
-                ));
+            }
+            for &(down_deg, roll_deg) in &pitches {
+                if (down_deg - 88.0).abs() < 1e-3 && roll_deg.abs() < 1e-3 {
+                    continue;
+                }
+                for &hdg in &headings {
+                    if out.len() >= opts.attempts.max(1) {
+                        return out;
+                    }
+                    out.push((
+                        eye,
+                        surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
+                    ));
+                }
+            }
+        } else {
+            for &(down_deg, roll_deg) in &pitches {
+                for &hdg in &headings {
+                    if out.len() >= opts.attempts.max(1) {
+                        return out;
+                    }
+                    out.push((
+                        eye,
+                        surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
+                    ));
+                }
             }
         }
     }
@@ -122,21 +160,29 @@ mod tests {
                 }),
                 ..PhotoClaims::default()
             }),
+            sequence: None,
+            time_s: None,
         };
 
-        let seeds = generate_seeds(&surface, &case, &dummy_opts(60), None);
-        assert_eq!(seeds.len(), 60);
+        let seeds = generate_seeds(&surface, &case, &dummy_opts(72), None);
+        assert_eq!(seeds.len(), 72);
         let [_, _, alt_m] = surface.geodetic(seeds[0].0);
         assert!(
             (alt_m - 135.0).abs() < 1.0,
             "expected low-AGL altitude near 135 m, got {alt_m}"
         );
-        // Pitch #5 (index 48..60) is 88.0 deg down -> -rot[(2, 2)] == sin(88 deg) > 0.999
-        let nadir_rot = seeds[48].1;
+        // Nadir pitch 88.0 deg is prioritized first at index 0 -> -rot[(2, 2)] == sin(88 deg) > 0.999
+        let nadir_rot = seeds[0].1;
         assert!(
             -nadir_rot[(2, 2)] > 0.998,
             "expected 88 deg nadir fallback pitch, got -r22={}",
             -nadir_rot[(2, 2)]
+        );
+        let nadir75_rot = seeds[1].1;
+        assert!(
+            -nadir75_rot[(2, 2)] > 0.96,
+            "expected 75 deg nadir pitch, got -r22={}",
+            -nadir75_rot[(2, 2)]
         );
     }
 }

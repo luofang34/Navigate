@@ -60,6 +60,12 @@ pub struct PhotoCase {
     /// Optional EXIF or interpolated search prior.
     #[serde(default)]
     pub prior: Option<PhotoClaims>,
+    /// Optional 0-indexed frame sequence number for sequential video frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    /// Optional capture time in seconds from video start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_s: Option<f64>,
 }
 
 /// Prepare a photo test set in `output_dir` from photos in `source_dir`.
@@ -207,6 +213,8 @@ pub fn prepare_photo_testset(
             semantic_labels: None,
             semantic_sha256: None,
             prior: Some(claims),
+            sequence: None,
+            time_s: None,
         });
     }
 
@@ -339,4 +347,41 @@ fn collect_photo_files(dir: &Path) -> Result<Vec<PathBuf>, PipelineError> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn photo_case_preserves_sequence_and_time_s() {
+        let json_str = r#"{
+            "id": "case-01",
+            "image": "img.png",
+            "image_sha256": "abc",
+            "size": [800, 600],
+            "sequence": 42,
+            "time_s": 1.4
+        }"#;
+        let case: PhotoCase = serde_json::from_str(json_str).expect("deserialize");
+        assert_eq!(case.sequence, Some(42));
+        assert_eq!(case.time_s, Some(1.4));
+
+        let reserialized = serde_json::to_string(&case).expect("serialize");
+        assert!(reserialized.contains("\"sequence\":42"));
+        assert!(reserialized.contains("\"time_s\":1.4"));
+    }
+
+    #[test]
+    fn photo_case_deserializes_without_timestamps() {
+        let json_str = r#"{
+            "id": "case-02",
+            "image": "img.png",
+            "image_sha256": "abc",
+            "size": [800, 600]
+        }"#;
+        let case: PhotoCase = serde_json::from_str(json_str).expect("deserialize");
+        assert_eq!(case.sequence, None);
+        assert_eq!(case.time_s, None);
+    }
 }

@@ -3,21 +3,19 @@
 use super::{
     CorridorTrackOptions,
     admission::{
-        FusionAdmission, apply_case_overrides, classify_anchor_cell, estimate_lookahead_enu,
-        prior_odometry_hint, seed_tracks, top_up_tracks, write_corridor_report,
+        apply_case_overrides, estimate_lookahead_enu, prior_odometry_hint, write_corridor_report,
     },
-    anchor::acquire_corridor_anchor,
-    anchor_worker::{AnchorArrival, AnchorContext, AnchorJob, BackgroundAnchor},
-    latency::{StageLatencies, percentile},
+    anchor_worker::{AnchorArrival, AnchorContext, BackgroundAnchor},
+    kinematics::compute_dt_s,
+    latency::StageLatencies,
     masking::{AmortizedMasker, MaskFrameTelemetry},
-    motion::{
-        TrackState, advance_unsolved_prepared, predict_interframe_pose, record_odometry_step,
-        try_warm_track, update_motion_state,
-    },
-    tile_builder::{
-        BackgroundTileBuilder, TileBuilderContext, TileSynthParams, synthesize_corridor_tiles,
-    },
+    motion::{TrackState, advance_unsolved_prepared, record_odometry_step, update_motion_state},
+    tile_builder::{BackgroundTileBuilder, TileBuilderContext, TileSynthParams},
 };
+
+mod lookahead;
+mod reporting;
+mod solve;
 use crate::{
     PipelineError,
     realtime::helpers::{check_encoder_contract, load_lighterglue_model, raw_file_sha256},
@@ -25,15 +23,19 @@ use crate::{
         estimate_intrinsics, load_case_mask, load_case_rgb, load_profile_cases, scale_k,
         scaled_size,
     },
+    surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     util::write_json,
     xfeat_runtime::LoadedXFeat,
 };
 use image::imageops::{FilterType, colorops::grayscale};
+use lookahead::ensure_lookahead_tiles;
 use navigate_match::{
-    ActiveTrackSet, CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery,
+    CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery, SparseFeatures,
 };
+use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
 use serde_json::{Value, json};
+use solve::{FrameSolveParams, solve_frame_pose};
 use std::{
     fs,
     sync::{Arc, Mutex},
@@ -70,11 +72,14 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     } else {
         xfeat.device().clone()
     };
+    let mask_interval = opts
+        .mask_interval_s
+        .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
     let mut masker = AmortizedMasker::new(
         opts.seg_model_dir.as_deref(),
         &opts.mask_policy,
         6,
-        opts.mask_interval.max(1),
+        mask_interval.max(1),
         &seg_device,
     )?;
     if opts.background_refresh {
@@ -95,7 +100,14 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     let t_warmup = Instant::now();
     let _ = xfeat.warmup(lighterglue.as_ref())?;
     let sync_gpu = (!opts.background_refresh && opts.polish_anchors)
-        .then(|| SurfaceGpuRenderer::try_new(&surface, &init_k, [800, 600]))
+        .then(|| {
+            SurfaceGpuRenderer::try_new_with_role(
+                &surface,
+                &init_k,
+                [800, 600],
+                GpuQueueRole::ForegroundTracking,
+            )
+        })
         .flatten();
     let sync_gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(sync_gpu);
     let tile_params = TileSynthParams {
@@ -141,18 +153,16 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
     let mut latencies = StageLatencies::default();
     let mut tile_build_ms = Vec::new();
-    let mut sync_tiles_built = 0_usize;
-    let mut anchor_results = Vec::new();
-    let kp_limit = opts.query_keypoints.clamp(16, 4096);
-    let cell_m = opts.map_cell_m.clamp(50.0, 20_000.0);
+    let (mut sync_tiles_built, mut anchor_results) = (0_usize, Vec::new());
+    let (kp_limit, cell_m) = (
+        opts.query_keypoints.clamp(16, 4096),
+        opts.map_cell_m.clamp(50.0, 20_000.0),
+    );
     let min_trk_inliers = opts.min_track_inliers.max(24);
     let mut state = TrackState::new();
-    let mut evaluated = 0_usize;
-    let mut accepted = 0_usize;
-    let mut acquiring_frames = 0_usize;
-    let mut warm_tracked_frames = 0_usize;
-    let mut independent_fixes = 0_usize;
-    let mut seg_refreshes = 0_usize;
+    let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
+    let (mut warm_tracked_frames, mut independent_fixes, mut seg_refreshes) =
+        (0_usize, 0_usize, 0_usize);
     let mut telemetry = Vec::new();
 
     for raw_case in &cases {
@@ -166,30 +176,18 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let case = apply_case_overrides(raw_case, opts);
 
         if let Some(lookahead) = estimate_lookahead_enu(&surface, &state, &case) {
-            if let Some(tb) = tile_builder.as_mut() {
-                tb.poll(&mut tile_build_ms)?;
-                tb.request_neighborhood(&surface, &store, lookahead)?;
-            } else {
-                let ck = store.tile_key_at(lookahead[0], lookahead[1]);
-                if !store.has_tile(ck) {
-                    let t_tb = Instant::now();
-                    let entries = synthesize_corridor_tiles(
-                        &surface,
-                        Some(&sync_gpu_renderer),
-                        &xfeat,
-                        &projector,
-                        ck,
-                        tile_params,
-                    )?;
-                    if !entries.is_empty() {
-                        for entry in entries {
-                            store.insert_tile(entry, true)?;
-                            sync_tiles_built += 1;
-                        }
-                        tile_build_ms.push(t_tb.elapsed().as_secs_f64() * 1000.0);
-                    }
-                }
-            }
+            ensure_lookahead_tiles(
+                &surface,
+                &store,
+                &mut tile_builder,
+                &sync_gpu_renderer,
+                &xfeat,
+                &projector,
+                tile_params,
+                lookahead,
+                &mut tile_build_ms,
+                &mut sync_tiles_built,
+            )?;
         }
 
         let query_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
@@ -216,6 +214,13 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             .prev_rot
             .or(state.vo_rot)
             .map(|r| state.prev_rot_step * r);
+        if evaluated == 1
+            && state.active_tracks.is_empty()
+            && masker.has_segformer()
+            && let Err(e) = masker.fast_initial_pass(&qry_small, est_rot_for_mask.as_ref())
+        {
+            tracing::warn!("frame 1 fast Segformer pass failed: {e}");
+        }
         let qry_gray = grayscale(&qry_small);
         let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker.mask_frame_with_luma(
             &qry_small,
@@ -226,15 +231,23 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         )?;
         seg_refreshes += usize::from(mask_tel.segformer_refreshed);
         latencies.seg_refresh_ms.extend(mask_tel.segformer_ms);
-        let qry_kp_floor = 256_usize.min(kp_limit);
-        let qry_kp_cap = (((kp_limit as f64) * mask_tel.valid_fraction.clamp(0.25, 1.0)).round()
-            as usize)
-            .clamp(qry_kp_floor, kp_limit);
-
-        let t_xfeat = Instant::now();
-        let qry_feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
-        let query_xfeat_ms = t_xfeat.elapsed().as_secs_f64() * 1000.0;
+        let qry_kp_cap = if mask_tel.valid_fraction > 0.0 {
+            kp_limit
+        } else {
+            0
+        };
+        let (qry_feat, query_xfeat_ms) = if qry_kp_cap > 0 {
+            let t_xfeat = Instant::now();
+            let feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
+            (feat, t_xfeat.elapsed().as_secs_f64() * 1000.0)
+        } else {
+            (SparseFeatures::empty(), 0.0)
+        };
         let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;
+
+        let dt_s = compute_dt_s(case.time_s, state.prev_time_s, 30.0);
+        state.prev_time_s = case.time_s;
+        state.time_since_anchor_s += dt_s;
 
         let (prior_rot_hint, nominal_agl_m) =
             prior_odometry_hint(&surface, &case, &masker, &k_render);
@@ -244,141 +257,73 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &k_render,
             prior_rot_hint,
             nominal_agl_m,
+            dt_s,
+            &opts.dynamics_profile,
         );
 
         let mut arrived_pose = None;
         if let Some(worker) = background_anchor.as_mut()
             && let Some(outcome) = worker.poll()?
         {
-            arrived_pose = AnchorArrival {
-                state: &mut state,
-                independent_fixes: &mut independent_fixes,
-                latencies: &mut latencies,
-                results: &mut anchor_results,
-                catalog_sha256: &surface.catalog_sha256,
+            arrived_pose = AnchorArrival::apply_outcome(
+                &mut state,
+                &mut independent_fixes,
+                &mut latencies,
+                &mut anchor_results,
+                &surface.catalog_sha256,
                 cell_m,
+                outcome,
+                Some(&case.id),
+            );
+            if arrived_pose.is_some() {
+                state.time_since_anchor_s = 0.0;
             }
-            .apply(outcome, Some(&case.id));
         }
 
-        let t_solve = Instant::now();
-        let mut attempts_log = Vec::new();
-        let mut lg_layers = 0_usize;
-        let mut polish_rays = 0_usize;
-        let pred_pose =
-            arrived_pose.or_else(|| predict_interframe_pose(&state, &prepared, &k_render));
-        let mut force_anchor =
-            opts.anchor_interval > 0 && state.frames_since_anchor >= opts.anchor_interval;
-        if force_anchor
-            && !state.active_tracks.is_empty()
-            && let Some(worker) = background_anchor.as_mut()
-        {
-            let seq = state.frame_seq;
-            let _ = worker.submit_if_idle(|| AnchorJob {
-                sent_frame_seq: seq,
-                case: case.clone(),
-                qry_feat: qry_feat.clone(),
-                prepared: prepared.clone(),
-                k,
-                k_render,
-                render_size,
-                pred_pose,
-                live_attitude: masker.horizon_attitude(&k_render),
-            })?;
-            force_anchor = false;
-        }
-
-        let mut solved_warm = None;
-        if !state.active_tracks.is_empty()
-            && !force_anchor
-            && let Some(pred) = pred_pose
-        {
-            solved_warm = try_warm_track(
-                &state.active_tracks,
-                &prepared,
-                pred,
-                &k_render,
-                render_size,
-                min_trk_inliers,
-                &mut attempts_log,
-            )?;
-        }
-
-        let (best, admission) = if let Some(cand) = solved_warm {
-            warm_tracked_frames += 1;
-            state.frames_since_anchor += 1;
-            if cand.score.inliers < 260 {
-                top_up_tracks(
-                    &mut state.active_tracks,
-                    &surface,
-                    &prepared,
-                    &qry_feat,
-                    &cand,
-                    render_size,
-                );
-            }
-            (Some((0, 0, cand)), FusionAdmission::warm_track())
-        } else if let Some(worker) = background_anchor.as_mut() {
-            let seq = state.frame_seq;
-            let _ = worker.submit_if_idle(|| AnchorJob {
-                sent_frame_seq: seq,
-                case: case.clone(),
-                qry_feat: qry_feat.clone(),
-                prepared: prepared.clone(),
-                k,
-                k_render,
-                render_size,
-                pred_pose,
-                live_attitude: masker.horizon_attitude(&k_render),
-            })?;
-            acquiring_frames += 1;
-            (None, FusionAdmission::acquiring_anchor())
-        } else {
-            let t_anchor = Instant::now();
-            let acq = acquire_corridor_anchor(
-                (&surface, &store, &projector),
-                Some(&sync_gpu_renderer),
-                (&xfeat, lighterglue.as_ref()),
-                (&case, opts),
-                (&qry_feat, &prepared),
-                (&k, &k_render, render_size),
-                (pred_pose, masker.horizon_attitude(&k_render)),
-                &mut attempts_log,
-            )?;
-            latencies
-                .anchor_ms
-                .push(t_anchor.elapsed().as_secs_f64() * 1000.0);
-            lg_layers += acq.lg_layers;
-            polish_rays += acq.polish_rays;
-            if let Some((_, _, ref cand)) = acq.best
-                && cand.score.geometry_accepted
-            {
-                state.frames_since_anchor = 0;
-                state.active_tracks =
-                    seed_tracks(&surface, &prepared, &qry_feat, cand, &acq.best_view);
-                let adm = classify_anchor_cell(
-                    &mut state.visited_cells,
-                    &mut independent_fixes,
-                    &surface.catalog_sha256,
-                    cand.eye,
-                    cell_m,
-                    &case.id,
-                );
-                (acq.best, adm)
-            } else {
-                state.active_tracks = ActiveTrackSet::empty();
-                (acq.best, FusionAdmission::unresolved())
-            }
+        let solve_params = FrameSolveParams {
+            surface: &surface,
+            store: &store,
+            projector: &projector,
+            sync_gpu_renderer: &sync_gpu_renderer,
+            xfeat: &xfeat,
+            lighterglue: lighterglue.as_ref(),
+            opts,
+            case: &case,
+            qry_feat: &qry_feat,
+            prepared: &prepared,
+            k,
+            k_render,
+            render_size,
+            masker: &masker,
+            nominal_agl_m,
+            dt_s,
+            cell_m,
+            min_trk_inliers,
+            arrived_pose,
         };
-        let solve_ms = t_solve.elapsed().as_secs_f64() * 1000.0;
+        let outcome = solve_frame_pose(
+            solve_params,
+            &mut state,
+            &mut background_anchor,
+            &mut independent_fixes,
+            &mut latencies,
+            &mut warm_tracked_frames,
+            &mut acquiring_frames,
+        )?;
+        let best = outcome.best;
+        let admission = outcome.admission;
+        let lg_layers = outcome.lg_layers;
+        let polish_rays = outcome.polish_rays;
+        let solve_ms = outcome.solve_ms;
+        let attempts_log = outcome.attempts_log;
 
         if let Some((_, _, ref cand)) = best
             && cand.score.geometry_accepted
         {
             masker.note_solved_rotation(cand.rotation);
-            update_motion_state(&mut state, cand, prepared);
+            update_motion_state(&mut state, cand, prepared, dt_s, &opts.dynamics_profile);
         } else {
-            advance_unsolved_prepared(&mut state, prepared);
+            advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
         }
 
         let total_case_ms = case_t0.elapsed().as_secs_f64() * 1000.0;
@@ -388,31 +333,23 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let is_accepted = best
             .as_ref()
             .is_some_and(|(_, _, c)| c.score.geometry_accepted);
-        telemetry.push(json!({
-            "id": case.id,
-            "accepted": is_accepted,
-            "xfeat_runtime": xfeat.runtime_name(),
-            "tracking_mode": admission.tracking_mode,
-            "evidence_kind": admission.evidence_kind,
-            "independent_ekf_fix": admission.independent_ekf_fix,
-            "fusion_eligibility": admission.fusion_eligibility,
-            "map_cell": admission.map_cell,
-            "active_tracks": state.active_tracks.len(),
-            "cached_tiles": store.cached_tile_count(),
-            "resident_window_bytes": store.resident_window_bytes(),
-            "query_keypoints": qry_feat.len(),
-            "lighterglue_layers": lg_layers,
-            "polish_rays_cast": polish_rays,
-            "segformer_refreshed": mask_tel.segformer_refreshed,
-            "segformer_submitted": mask_tel.segformer_submitted,
-            "segformer_ms": mask_tel.segformer_ms,
-            "valid_mask_fraction": mask_tel.valid_fraction,
-            "propeller_pixels": mask_tel.propeller_pixels,
-            "mask_ms": mask_tel.mask_ms,
-            "query_xfeat_ms": query_xfeat_ms,
-            "solve_ms": solve_ms,
-            "total_case_ms": total_case_ms,
-        }));
+        record_frame_telemetry(
+            &mut telemetry,
+            &case.id,
+            is_accepted,
+            xfeat.runtime_name(),
+            &admission,
+            state.active_tracks.len(),
+            store.cached_tile_count(),
+            store.resident_window_bytes(),
+            qry_feat.len(),
+            lg_layers,
+            polish_rays,
+            &mask_tel,
+            query_xfeat_ms,
+            solve_ms,
+            total_case_ms,
+        );
 
         write_corridor_report(
             &opts.output_dir,
@@ -427,15 +364,16 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
     if let Some(mut worker) = background_anchor.take() {
         if let Some(outcome) = worker.wait_for_shutdown()? {
-            let _ = AnchorArrival {
-                state: &mut state,
-                independent_fixes: &mut independent_fixes,
-                latencies: &mut latencies,
-                results: &mut anchor_results,
-                catalog_sha256: &surface.catalog_sha256,
+            let _ = AnchorArrival::apply_outcome(
+                &mut state,
+                &mut independent_fixes,
+                &mut latencies,
+                &mut anchor_results,
+                &surface.catalog_sha256,
                 cell_m,
-            }
-            .apply(outcome, None);
+                outcome,
+                None,
+            );
         }
         drop(worker);
     }
@@ -447,27 +385,25 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     }
     drop(masker);
 
-    let mut summary = json!({
-        "evaluated": evaluated,
-        "accepted": accepted,
-        "acquiring_anchor_frames": acquiring_frames,
-        "warm_tracked_frames": warm_tracked_frames,
-        "independent_ekf_fixes": independent_fixes,
-        "segformer_refreshes": seg_refreshes,
-        "xfeat_runtime": xfeat.runtime_name(),
-        "corridor_tiles": store.indexed_tile_count(),
-        "cached_tiles": store.cached_tile_count(),
-        "resident_window_bytes": store.resident_window_bytes(),
-        "tiles_built_live": tiles_built_live,
-        "tile_build_p50_ms": percentile(&tile_build_ms, 50.0),
-        "shader_warmup_ms": shader_warmup_ms,
-        "output": opts.output_dir.display().to_string(),
-        "telemetry": telemetry,
-        "background_refresh": opts.background_refresh,
-        "anchor_results": anchor_results,
+    let summary = build_run_summary(RunSummaryParams {
+        evaluated,
+        accepted,
+        acquiring_frames,
+        warm_tracked_frames,
+        independent_fixes,
+        seg_refreshes,
+        runtime_name: xfeat.runtime_name(),
+        indexed_tile_count: store.indexed_tile_count(),
+        cached_tile_count: store.cached_tile_count(),
+        resident_window_bytes: store.resident_window_bytes(),
+        tiles_built_live,
+        tile_build_ms: &tile_build_ms,
+        shader_warmup_ms,
+        output_dir: &opts.output_dir.display().to_string(),
+        telemetry,
+        background_refresh: opts.background_refresh,
+        anchor_results,
+        latencies: &latencies,
     });
-    if let Some(map) = summary.as_object_mut() {
-        latencies.write_summary(map);
-    }
     Ok(summary)
 }

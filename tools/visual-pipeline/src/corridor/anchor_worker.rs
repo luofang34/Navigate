@@ -12,6 +12,7 @@ use crate::{
     PipelineError,
     pose::PoseCandidate,
     realtime::helpers::rot_to_row_major,
+    surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
@@ -122,7 +123,12 @@ impl BackgroundAnchor {
             .polish_anchors
             .then(|| {
                 let k = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
-                SurfaceGpuRenderer::try_new(&context.surface, &k, [800, 600])
+                SurfaceGpuRenderer::try_new_with_role(
+                    &context.surface,
+                    &k,
+                    [800, 600],
+                    GpuQueueRole::BackgroundAnchor,
+                )
             })
             .flatten();
         let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(init_gpu);
@@ -179,7 +185,7 @@ pub(super) struct AnchorArrival<'a> {
     pub(super) cell_m: f64,
 }
 
-impl AnchorArrival<'_> {
+impl<'a> AnchorArrival<'a> {
     /// Apply `outcome` on frame `arrived_at` (`None` after the last frame) and return the propagated pose.
     pub(super) fn apply(
         &mut self,
@@ -224,10 +230,25 @@ impl AnchorArrival<'_> {
             }
             self.state.active_tracks = tracks;
             self.state.frames_since_anchor = 0;
-            if arrived_at.is_some() && self.state.prev_eye.is_none() {
+            if arrived_at.is_some() {
+                if let Some(prev) = self.state.prev_eye {
+                    let dt = self.state.time_since_anchor_s.clamp(1e-4, 60.0);
+                    self.state.prev_vel = [
+                        (prop_eye[0] - prev[0]) / dt,
+                        (prop_eye[1] - prev[1]) / dt,
+                        (prop_eye[2] - prev[2]) / dt,
+                    ];
+                } else {
+                    self.state.prev_vel = [0.0, 0.0, 0.0];
+                }
                 self.state.prev_eye = Some(prop_eye);
                 self.state.prev_rot = Some(prop_rot);
                 self.state.vo_rot = Some(prop_rot);
+                if let Some(kin) = self.state.kinematic.as_mut() {
+                    kin.eye_enu = prop_eye;
+                    kin.rot_world_to_cam = prop_rot;
+                    kin.vel_enu_mps = self.state.prev_vel;
+                }
             }
             propagated_pose = Some((prop_eye, prop_rot));
             let adm = classify_anchor_cell(
@@ -250,6 +271,80 @@ impl AnchorArrival<'_> {
         }
         self.results.push(record);
         propagated_pose
+    }
+
+    /// Apply an anchor outcome to the track state and record telemetry.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_outcome(
+        state: &'a mut TrackState,
+        independent_fixes: &'a mut usize,
+        latencies: &'a mut StageLatencies,
+        results: &'a mut Vec<Value>,
+        catalog_sha256: &'a str,
+        cell_m: f64,
+        outcome: AnchorOutcome,
+        arrived_at: Option<&str>,
+    ) -> Option<([f64; 3], Matrix3<f64>)> {
+        Self {
+            state,
+            independent_fixes,
+            latencies,
+            results,
+            catalog_sha256,
+            cell_m,
+        }
+        .apply(outcome, arrived_at)
+    }
+}
+
+/// Tracking state for an anchor worker.
+///
+/// This struct stores the previous pose and the recomputed velocity.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AnchorWorkerState {
+    /// Previous accepted camera position in ENU.
+    pub prev_eye: Option<[f64; 3]>,
+    /// Previous accepted camera rotation.
+    pub prev_rot: Option<Matrix3<f64>>,
+    /// Current translational velocity in meters per second.
+    pub vel_enu_mps: [f64; 3],
+}
+
+impl AnchorWorkerState {
+    /// Reset the state when tracking is lost.
+    pub fn on_track_loss(&mut self) {
+        self.prev_eye = None;
+        self.prev_rot = None;
+        self.vel_enu_mps = [0.0, 0.0, 0.0];
+    }
+
+    /// Reset the state and update velocity when an anchor is accepted.
+    pub fn on_anchor_accepted(&mut self, new_eye: [f64; 3], new_rot: Matrix3<f64>, dt_s: f64) {
+        if let Some(prev) = self.prev_eye {
+            let dt = dt_s.clamp(1e-4, 60.0);
+            self.vel_enu_mps = [
+                (new_eye[0] - prev[0]) / dt,
+                (new_eye[1] - prev[1]) / dt,
+                (new_eye[2] - prev[2]) / dt,
+            ];
+        } else {
+            self.vel_enu_mps = [0.0, 0.0, 0.0];
+        }
+        self.prev_eye = Some(new_eye);
+        self.prev_rot = Some(new_rot);
+    }
+
+    /// Reset the state and odometry when a relocation occurs.
+    pub fn on_relocation(&mut self, relocated_eye: [f64; 3], dt_s: f64) {
+        if let Some(prev) = self.prev_eye {
+            let dt = dt_s.clamp(1e-4, 60.0);
+            self.vel_enu_mps = [
+                (relocated_eye[0] - prev[0]) / dt,
+                (relocated_eye[1] - prev[1]) / dt,
+                (relocated_eye[2] - prev[2]) / dt,
+            ];
+        }
+        self.prev_eye = Some(relocated_eye);
     }
 }
 

@@ -2,12 +2,12 @@
 
 mod catalog;
 pub(crate) mod gpu;
+pub mod horizon;
 mod sparse;
 
-pub use catalog::{
-    ContextSurface, build_reference_catalog, build_reference_catalog_zoom, horizon_attitude,
-};
+pub use catalog::{ContextSurface, build_reference_catalog, build_reference_catalog_zoom};
 pub use gpu::{GpuSurfaceView, SurfaceGpuRenderer};
+pub use horizon::{RansacHorizonEstimator, horizon_attitude};
 pub use sparse::{SurfaceAdaptiveStats, SurfaceRayHit};
 
 use crate::{

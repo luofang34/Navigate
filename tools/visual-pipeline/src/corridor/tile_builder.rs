@@ -1,9 +1,15 @@
 //! On-demand 3D landmark tile synthesis and background `corridor-tile-builder` worker.
 
-use super::{background::BackgroundWorker, canonical_tile_poses, unit_obs_dir};
+use super::{
+    background::BackgroundWorker,
+    canonical_tile_poses,
+    nadir::{is_nadir_pose, synthesize_rotated_bands},
+    unit_obs_dir,
+};
 use crate::{
     PipelineError,
     stages::scale_k,
+    surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     xfeat_runtime::LoadedXFeat,
 };
@@ -71,7 +77,7 @@ pub(super) fn synthesize_corridor_tiles(
         params.include_obliques,
     );
     let voxel_m = 1.5_f64;
-    let max_oblique_dist_m = (params.agl_m * 8.0).clamp(2_400.0, 6_000.0);
+    let max_oblique_dist_m = (params.agl_m * 14.0).max(4_000.0);
     let mut tile_buckets: BTreeMap<CorridorTileKey, BandVoxelMap> = BTreeMap::new();
 
     for (band, eye, rot) in views {
@@ -80,7 +86,12 @@ pub(super) fn synthesize_corridor_tiles(
             && let Ok(mut guard) = lock.lock()
         {
             if guard.is_none() {
-                *guard = SurfaceGpuRenderer::try_new(surface, &k_render, LIVE_RENDER_SIZE);
+                *guard = SurfaceGpuRenderer::try_new_with_role(
+                    surface,
+                    &k_render,
+                    LIVE_RENDER_SIZE,
+                    GpuQueueRole::BackgroundTileBuilder,
+                );
             }
             if let Some(gpu) = guard.as_mut() {
                 gpu_view_opt = gpu
@@ -89,10 +100,10 @@ pub(super) fn synthesize_corridor_tiles(
             }
         }
 
-        let (gray, world_hits) = if let Some(gv) = gpu_view_opt {
+        let (gray_img, raw, world_hits) = if let Some(ref gv) = gpu_view_opt {
             let raw = xfeat.extract(&gv.image, 1536)?;
             let unproj = gv.unproject_pixels(surface, &raw.pixels);
-            (raw, unproj)
+            (gv.image.clone(), raw, unproj)
         } else {
             let ((rgb, _, _), _) = surface.render_adaptive(
                 eye,
@@ -107,48 +118,79 @@ pub(super) fn synthesize_corridor_tiles(
             let raw = xfeat.extract(&gray_img, 1536)?;
             let hits = surface.raycast_pixels(eye, &rot, &k_render, &raw.pixels);
             let unproj = hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect();
-            (raw, unproj)
+            (gray_img, raw, unproj)
         };
 
-        let chunks = gray.descriptors.as_chunks::<64>().0;
+        let mut insert_band = |band_idx: u8,
+                               cam_x: [f32; 3],
+                               features: &SparseFeatures,
+                               world_hits: &[Option<[f64; 3]>]| {
+            let chunks = features.descriptors.as_chunks::<64>().0;
+            let n_raw = (world_hits.len().max(1)) as f32;
+            for (idx, w_opt) in world_hits.iter().enumerate() {
+                let Some(w) = *w_opt else {
+                    continue;
+                };
+                let dist_m =
+                    ((eye[0] - w[0]).powi(2) + (eye[1] - w[1]).powi(2) + (eye[2] - w[2]).powi(2))
+                        .sqrt();
+                if params.include_obliques && !(20.0..=max_oblique_dist_m).contains(&dist_m) {
+                    continue;
+                }
+                let dst_key = CorridorTileKey {
+                    tile_x: (w[0] / tile_m).floor() as i32,
+                    tile_y: (w[1] / tile_m).floor() as i32,
+                };
+                if dst_key != key {
+                    continue;
+                }
+                let vx = (w[0] / voxel_m).floor() as i32;
+                let vy = (w[1] / voxel_m).floor() as i32;
+                let score = (1.0 - (idx as f32) / n_raw).clamp(0.01, 1.0);
+                let vox_map = tile_buckets
+                    .entry(dst_key)
+                    .or_default()
+                    .entry(band_idx)
+                    .or_default();
+                if vox_map.get(&(vx, vy)).is_none_or(|prev| score > prev.score) {
+                    vox_map.insert(
+                        (vx, vy),
+                        SynthLandmark {
+                            world_enu: w,
+                            obs_dir_enu: unit_obs_dir(eye, w),
+                            cam_x_enu: cam_x,
+                            ref_dist_m: dist_m.round().clamp(1.0, 65_535.0) as u16,
+                            score,
+                            descriptor: chunks[idx],
+                        },
+                    );
+                }
+            }
+        };
+
         let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
-        let n_raw = (world_hits.len().max(1)) as f32;
-        for (idx, w_opt) in world_hits.iter().enumerate() {
-            let Some(w) = *w_opt else {
-                continue;
-            };
-            let dist_m =
-                ((eye[0] - w[0]).powi(2) + (eye[1] - w[1]).powi(2) + (eye[2] - w[2]).powi(2))
-                    .sqrt();
-            if params.include_obliques && !(20.0..=max_oblique_dist_m).contains(&dist_m) {
-                continue;
-            }
-            let dst_key = CorridorTileKey {
-                tile_x: (w[0] / tile_m).floor() as i32,
-                tile_y: (w[1] / tile_m).floor() as i32,
-            };
-            if dst_key != key {
-                continue;
-            }
-            let vx = (w[0] / voxel_m).floor() as i32;
-            let vy = (w[1] / voxel_m).floor() as i32;
-            let score = (1.0 - (idx as f32) / n_raw).clamp(0.01, 1.0);
-            let vox_map = tile_buckets
-                .entry(dst_key)
-                .or_default()
-                .entry(band)
-                .or_default();
-            if vox_map.get(&(vx, vy)).is_none_or(|prev| score > prev.score) {
-                vox_map.insert(
-                    (vx, vy),
-                    SynthLandmark {
-                        world_enu: w,
-                        obs_dir_enu: unit_obs_dir(eye, w),
-                        cam_x_enu: cam_x,
-                        ref_dist_m: dist_m.round().clamp(1.0, 65_535.0) as u16,
-                        score,
-                        descriptor: chunks[idx],
-                    },
+        insert_band(band, cam_x, &raw, &world_hits);
+
+        if is_nadir_pose(&rot)
+            && let Ok(rot_bands) =
+                synthesize_rotated_bands(&gray_img, surface, clat, clon, xfeat, 1536)
+        {
+            for (b_idx, r_band) in rot_bands.into_iter().enumerate() {
+                let r_band_idx = band.saturating_add((b_idx as u8) + 1);
+                let r_world_hits: Vec<Option<[f64; 3]>> = if let Some(ref gv) = gpu_view_opt {
+                    gv.unproject_pixels(surface, &r_band.unrotated_pixels)
+                } else {
+                    surface
+                        .raycast_pixels(eye, &rot, &k_render, &r_band.unrotated_pixels)
+                        .into_iter()
+                        .map(|h| h.map(|x| x.world_enu))
+                        .collect()
+                };
+                insert_band(
+                    r_band_idx,
+                    r_band.cam_x_enu,
+                    &r_band.features,
+                    &r_world_hits,
                 );
             }
         }
@@ -253,7 +295,14 @@ pub(super) struct BackgroundTileBuilder {
 impl BackgroundTileBuilder {
     pub(super) fn spawn(ctx: TileBuilderContext, prewarm_gpu: bool) -> Result<Self, PipelineError> {
         let init_gpu = prewarm_gpu
-            .then(|| SurfaceGpuRenderer::try_new(&ctx.surface, &live_k_render(), LIVE_RENDER_SIZE))
+            .then(|| {
+                SurfaceGpuRenderer::try_new_with_role(
+                    &ctx.surface,
+                    &live_k_render(),
+                    LIVE_RENDER_SIZE,
+                    GpuQueueRole::BackgroundTileBuilder,
+                )
+            })
             .flatten();
         let gpu_renderer = Mutex::new(init_gpu);
         let worker = BackgroundWorker::spawn(

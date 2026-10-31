@@ -1,9 +1,11 @@
 //! Spatial holdout PnP verification, pose scoring, and `.npz` candidate archives (`photo_pose`).
 
 mod archive;
+pub mod holdout;
 mod l1_gnc;
 
 pub use archive::{LoadedPose, load_candidate_pose, save_candidate_npz};
+pub use holdout::{MaskAwareSpatialHoldout, QueryRayDomain};
 pub(crate) use l1_gnc::refine_seed_eye_2pt;
 pub use l1_gnc::{fit_pose_hybrid, fit_pose_l1_gnc};
 

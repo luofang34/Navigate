@@ -10,8 +10,8 @@ mod revisit;
 mod topology;
 
 use crate::{
-    Calibration, ContinuityEpoch, EventBatch, FrameKey, FrameRecord, RelativeMotion, SegmentId,
-    SegmentStart, SessionConfig, SessionError, SessionEvent, StreamId,
+    AnchorPolicy, Calibration, ContinuityEpoch, EventBatch, FrameKey, FrameRecord, RelativeMotion,
+    SegmentId, SegmentStart, SessionConfig, SessionError, SessionEvent, StreamId,
     anchor::{AnchorBudget, AnchorObservation},
     events::EventQueue,
     evidence::{Ledger, MapCell},
@@ -184,6 +184,24 @@ impl VisualSession {
     /// The local frame of all map poses, after the first anchor.
     pub fn local_frame(&self) -> Option<LocalFrame> {
         self.local_frame
+    }
+
+    /// Update the anchor admission policy for subsequent submissions.
+    ///
+    /// # Errors
+    /// Returns error if the policy parameters are invalid.
+    pub fn set_anchor_policy(&mut self, policy: AnchorPolicy) -> Result<(), SessionError> {
+        let mut cfg = self.config;
+        cfg.anchors = policy;
+        cfg.validate()?;
+        self.config = cfg;
+        Ok(())
+    }
+
+    /// The current anchor admission policy.
+    #[must_use]
+    pub fn anchor_policy(&self) -> &AnchorPolicy {
+        &self.config.anchors
     }
 
     /// Register a processed frame. The first frame of an epoch starts a segment.

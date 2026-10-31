@@ -20,7 +20,7 @@ use helpers::{
 use image::{DynamicImage, imageops::FilterType};
 use navigate_match::{
     DEFAULT_KASHIN_SEED, HadamardProjector, PrecomputedReferenceBank, PrecomputedViewEntry,
-    PreparedKashinQuery,
+    PreparedKashinQuery, SparseFeatures,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, path::PathBuf, sync::Mutex, time::Instant};
@@ -283,13 +283,14 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             .saturating_mul(render_size[1] as usize)
             .max(1);
         let valid_frac = (valid_px as f64) / (total_px as f64);
-        let qry_kp_floor = 256usize.min(kp_limit);
-        let qry_kp_cap = (((kp_limit as f64) * valid_frac.clamp(0.25, 1.0)).round() as usize)
-            .clamp(qry_kp_floor, kp_limit);
-
-        let t_xfeat = Instant::now();
-        let qry_feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
-        let query_xfeat_ms = t_xfeat.elapsed().as_secs_f64() * 1000.0;
+        let qry_kp_cap = if valid_frac > 0.0 { kp_limit } else { 0 };
+        let (qry_feat, query_xfeat_ms) = if qry_kp_cap > 0 {
+            let t_xfeat = Instant::now();
+            let feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
+            (feat, t_xfeat.elapsed().as_secs_f64() * 1000.0)
+        } else {
+            (SparseFeatures::empty(), 0.0)
+        };
 
         let t_short = Instant::now();
         let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;

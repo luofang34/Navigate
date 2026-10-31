@@ -5,7 +5,7 @@
 //! wait for it. The loop polls for results with [`BackgroundWorker::try_recv`].
 
 use std::{
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -13,10 +13,12 @@ use tracing::{debug, error};
 
 use crate::PipelineError;
 
+const WORKER_QUEUE_CAPACITY: usize = 4;
+
 /// One worker thread that runs `handler` for each job in submission order.
 pub(super) struct BackgroundWorker<J, R> {
     name: String,
-    jobs: Option<Sender<J>>,
+    jobs: Option<SyncSender<J>>,
     results: Receiver<R>,
     handle: Option<JoinHandle<()>>,
     shutdown_timeout: Duration,
@@ -32,8 +34,8 @@ impl<J: Send + 'static, R: Send + 'static> BackgroundWorker<J, R> {
     where
         F: FnMut(J) -> R + Send + 'static,
     {
-        let (job_tx, job_rx) = mpsc::channel::<J>();
-        let (result_tx, result_rx) = mpsc::channel::<R>();
+        let (job_tx, job_rx) = mpsc::sync_channel::<J>(WORKER_QUEUE_CAPACITY);
+        let (result_tx, result_rx) = mpsc::sync_channel::<R>(WORKER_QUEUE_CAPACITY);
         let handle = thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
@@ -58,10 +60,15 @@ impl<J: Send + 'static, R: Send + 'static> BackgroundWorker<J, R> {
 
     /// Queue `job` for the worker thread.
     pub(super) fn submit(&self, job: J) -> Result<(), PipelineError> {
-        self.jobs
-            .as_ref()
-            .and_then(|tx| tx.send(job).ok())
-            .ok_or_else(|| self.stopped())
+        let tx = self.jobs.as_ref().ok_or_else(|| self.stopped())?;
+        match tx.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(PipelineError::Tool {
+                tool: self.name.clone(),
+                message: "background queue full (capacity 4)".into(),
+            }),
+            Err(TrySendError::Disconnected(_)) => Err(self.stopped()),
+        }
     }
 
     /// Return a finished result without waiting, or `None` when no result is ready.
