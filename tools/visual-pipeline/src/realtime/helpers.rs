@@ -161,6 +161,29 @@ pub(crate) fn load_xfeat_model(path: &Path) -> Result<(XFeat, [u8; 32]), Pipelin
     Ok((XFeat::load(weights, &device)?, digest))
 }
 
+/// Check a bank `encoder_contract` stamp against the loaded XFeat model.
+pub(crate) fn check_encoder_contract(
+    bank_kind: &str,
+    stamp: &[u8; 32],
+    xfeat: &XFeat,
+    weights_file_sha256: &[u8; 32],
+) -> Result<(), PipelineError> {
+    if xfeat.accepts_encoder_contract(stamp, weights_file_sha256) {
+        return Ok(());
+    }
+    Err(PipelineError::Invalid(format!(
+        "{bank_kind} encoder_contract {} is neither the XFeat encoder contract {} nor the --model file digest {}",
+        hex(stamp),
+        hex(&xfeat.encoder_contract()),
+        hex(weights_file_sha256),
+    )))
+}
+
+/// Lowercase hex form of a SHA-256 digest for reports and error messages.
+pub(crate) fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub(crate) fn load_lighterglue_model(
     path: &Path,
     device: &burn::tensor::Device,

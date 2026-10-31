@@ -13,8 +13,8 @@ use crate::{
     metadata::PositionClaim,
     pose::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc},
     realtime::helpers::{
-        load_lighterglue_model, load_xfeat_model, log_attempt, raw_file_sha256, rot_to_row_major,
-        warmup_gpu_pipelines,
+        check_encoder_contract, load_lighterglue_model, load_xfeat_model, log_attempt,
+        raw_file_sha256, rot_to_row_major, warmup_gpu_pipelines,
     },
     stages::{
         estimate_intrinsics, load_case_mask, load_case_rgb, load_profile_cases, scale_k,
@@ -80,11 +80,12 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             "corridor bank catalog_sha256 does not match --catalog".into(),
         ));
     }
-    if bank.encoder_contract != encoder_digest {
-        return Err(PipelineError::Invalid(
-            "corridor bank encoder_contract does not match --model".into(),
-        ));
-    }
+    check_encoder_contract(
+        "corridor bank",
+        &bank.encoder_contract,
+        &xfeat,
+        &encoder_digest,
+    )?;
 
     let mut masker = AmortizedMasker::new(
         opts.seg_model_dir.as_deref(),

@@ -10,7 +10,7 @@ pub use tracker::run_corridor_track;
 
 use crate::{
     PipelineError,
-    realtime::helpers::{load_xfeat_model, raw_file_sha256},
+    realtime::helpers::{hex, load_xfeat_model, raw_file_sha256},
     stages::{load_profile_cases, scale_k},
     surface::Surface,
     testset::PhotoCase,
@@ -274,7 +274,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
 
     let bank = CorridorLandmarkBank::new(
         catalog_digest,
-        encoder_digest,
+        xfeat.encoder_contract(),
         DEFAULT_KASHIN_SEED,
         tile_m as f32,
         tiles,
@@ -300,6 +300,8 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     Ok(json!({
         "corridor_bank_path": opts.output_bank_path.display().to_string(),
         "bank_bytes": encoded.len(),
+        "xfeat_weights_sha256": hex(&encoder_digest),
+        "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
         "tile_size_m": tile_m,
         "tiles": bank.tiles.len(),
         "canonical_views": canonical_views,

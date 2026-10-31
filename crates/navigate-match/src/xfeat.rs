@@ -192,6 +192,7 @@ pub struct XFeat {
     keypoint_head: [Conv; 4],
     upsample: Upsample,
     device: Device,
+    encoder_contract: [u8; 32],
 }
 
 /// Device tensors of one dense forward pass before read-back.
@@ -202,6 +203,48 @@ struct DenseTensors {
 }
 
 impl XFeat {
+    /// Canonical description of the dense encoder output that banks depend on.
+    ///
+    /// [`Self::encoder_contract`] hashes this text together with the trained weights.
+    pub const ENCODER_CONTRACT_V1_DESCRIPTION: &str =
+        "navigate-xfeat-v1:input=800x576:grid=100x72:dim=64:norm=instance:coord=half-pixel";
+
+    /// Return the encoder contract digest of the loaded model.
+    ///
+    /// The digest is [`Weights::canonical_digest`] with
+    /// [`Self::ENCODER_CONTRACT_V1_DESCRIPTION`] as the prefix. It does not depend
+    /// on the file encoding or the runtime, so a bank that a burn session builds
+    /// is valid for an ONNX Runtime or NPU session with the same trained weights.
+    /// Retrained or changed weights give a different digest. Bank builders write
+    /// it into the `encoder_contract` field of
+    /// [`PrecomputedReferenceBank`](crate::PrecomputedReferenceBank) and
+    /// [`CorridorLandmarkBank`](crate::CorridorLandmarkBank).
+    pub fn encoder_contract(&self) -> [u8; 32] {
+        self.encoder_contract
+    }
+
+    /// Return the encoder contract digest of `weights` without a device.
+    ///
+    /// An ONNX Runtime or NPU host has no burn model. It calls this function with
+    /// the source safetensors file of its export to get the stamp that
+    /// [`Self::encoder_contract`] gives for that file.
+    pub fn encoder_contract_of(weights: &Weights) -> [u8; 32] {
+        weights.canonical_digest(Self::ENCODER_CONTRACT_V1_DESCRIPTION)
+    }
+
+    /// Return `true` when a bank `encoder_contract` stamp is valid for this model.
+    ///
+    /// The stamp is valid when it is [`Self::encoder_contract`] or the SHA-256
+    /// digest of the weight file that this model came from. Banks that record the
+    /// weight-file digest stay valid only for that exact file.
+    pub fn accepts_encoder_contract(
+        &self,
+        stamp: &[u8; 32],
+        weights_file_sha256: &[u8; 32],
+    ) -> bool {
+        *stamp == self.encoder_contract || stamp == weights_file_sha256
+    }
+
     /// Load named XFeat weights onto `device`.
     ///
     /// # Errors
@@ -209,6 +252,7 @@ impl XFeat {
     /// Returns [`MatchError`] when any tensor is missing, has an unexpected shape,
     /// or remains unused.
     pub fn load(mut weights: Weights, device: &Device) -> Result<Self, MatchError> {
+        let encoder_contract = Self::encoder_contract_of(&weights);
         let c = |w: &mut Weights, name: &str, shape: [usize; 3], stride: usize| {
             Conv::load(w, name, shape, stride, true, device)
         };
@@ -258,6 +302,7 @@ impl XFeat {
             ],
             upsample: Upsample::new(device),
             device: device.clone(),
+            encoder_contract,
         };
         weights.finish()?;
         Ok(model)

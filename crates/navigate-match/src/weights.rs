@@ -79,6 +79,36 @@ impl Weights {
     }
 
     /// Remove one tensor without a shape check.
+    /// SHA-256 of `prefix` and every tensor in name order, with values as IEEE-754
+    /// half-precision bits.
+    ///
+    /// The F16 rounding gives one digest for an F32 file and its F16 copy, and a
+    /// different digest when a trained value changes. Both zero signs write the
+    /// same bits.
+    pub fn canonical_digest(&self, prefix: &str) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(prefix.as_bytes());
+        let length = |n: usize| (n as u64).to_le_bytes();
+        for (name, tensor) in &self.tensors {
+            hasher.update(length(name.len()));
+            hasher.update(name.as_bytes());
+            hasher.update(length(tensor.shape.len()));
+            for &dim in &tensor.shape {
+                hasher.update(length(dim));
+            }
+            for &value in &tensor.values {
+                let bits = if value == 0.0 {
+                    0
+                } else {
+                    f16::from_f32(value).to_bits()
+                };
+                hasher.update(bits.to_le_bytes());
+            }
+        }
+        hasher.finalize().into()
+    }
+
     pub(crate) fn remove(&mut self, name: &str) -> Option<WeightTensor> {
         self.tensors.remove(name)
     }

@@ -13,9 +13,10 @@ use crate::{
     util::write_json,
 };
 use helpers::{
-    collect_bank_correspondences, filter_terrain_features, load_lighterglue_model,
-    load_xfeat_model, log_attempt, lookup_indexed_3d_matches, polish_pose_sparse, raw_file_sha256,
-    rot_from_row_major, rot_to_row_major, warmup_gpu_pipelines,
+    check_encoder_contract, collect_bank_correspondences, filter_terrain_features, hex,
+    load_lighterglue_model, load_xfeat_model, log_attempt, lookup_indexed_3d_matches,
+    polish_pose_sparse, raw_file_sha256, rot_from_row_major, rot_to_row_major,
+    warmup_gpu_pipelines,
 };
 use image::{DynamicImage, imageops::FilterType};
 use navigate_match::{
@@ -156,7 +157,7 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
 
     let bank = PrecomputedReferenceBank::new(
         catalog_digest,
-        encoder_digest,
+        xfeat.encoder_contract(),
         DEFAULT_KASHIN_SEED,
         entries,
     )?;
@@ -181,6 +182,8 @@ pub fn build_reference_bank(opts: &BankBuildOptions) -> Result<Value, PipelineEr
     Ok(json!({
         "bank_path": opts.output_bank_path.display().to_string(),
         "bank_bytes": encoded.len(),
+        "xfeat_weights_sha256": hex(&encoder_digest),
+        "xfeat_encoder_contract": hex(&xfeat.encoder_contract()),
         "views": bank.entries.len(),
         "keypoints_3d": total_keypoints_3d,
         "adaptive_total_pixels": total_pixels,
@@ -210,11 +213,12 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
             "precomputed bank catalog_sha256 does not match --catalog".into(),
         ));
     }
-    if bank.encoder_contract != encoder_digest {
-        return Err(PipelineError::Invalid(
-            "precomputed bank encoder_contract does not match --model".into(),
-        ));
-    }
+    check_encoder_contract(
+        "precomputed bank",
+        &bank.encoder_contract,
+        &xfeat,
+        &encoder_digest,
+    )?;
 
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),

@@ -13,7 +13,7 @@ use std::{error::Error, fs, path::Path, path::PathBuf};
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-fn synthetic_xfeat_safetensors() -> TestResult<Vec<u8>> {
+fn synthetic_xfeat_weights() -> Weights {
     let specs: &[(&str, [usize; 3])] = &[
         ("block1.0", [4, 1, 3]),
         ("block1.1", [8, 4, 3]),
@@ -69,7 +69,7 @@ fn synthetic_xfeat_safetensors() -> TestResult<Vec<u8>> {
             },
         );
     }
-    Ok(weights.to_safetensors(false)?)
+    weights
 }
 
 fn mercator_xy(lat_deg: f64, lon_deg: f64, zoom: u32) -> (u32, u32) {
@@ -159,7 +159,10 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
     let catalog_path = write_synthetic_catalog(&tmp.path().join("cat"), lat, lon)?;
 
     let xfeat_path = tmp.path().join("xfeat.safetensors");
-    fs::write(&xfeat_path, synthetic_xfeat_safetensors()?)?;
+    fs::write(
+        &xfeat_path,
+        synthetic_xfeat_weights().to_safetensors(false)?,
+    )?;
 
     let ds_dir = tmp.path().join("dataset");
     fs::create_dir_all(ds_dir.join("images"))?;
@@ -266,6 +269,23 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
     let case_doc: Value = navigate_visual_pipeline::util::read_json(&out_dir.join("q-test.json"))?;
     assert_eq!(case_doc["id"].as_str(), Some("q-test"));
 
+    check_encoder_contract_stamps(
+        tmp.path(),
+        &BankMatchOptions {
+            dataset_dir: ds_dir.clone(),
+            profile_path: profile_path.clone(),
+            catalog_path: catalog_path.clone(),
+            bank_path: bank_path.clone(),
+            xfeat_weights_path: xfeat_path.clone(),
+            lighterglue_weights_path: None,
+            output_dir: out_dir.clone(),
+            shortlist_k: 2,
+            query_keypoints: 128,
+            polish: false,
+            only_cases: None,
+        },
+    )?;
+
     let other_cat = write_synthetic_catalog(&tmp.path().join("cat2"), lat + 0.1, lon)?;
     let err = run_realtime_bank_match(&BankMatchOptions {
         dataset_dir: ds_dir,
@@ -281,5 +301,50 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
         only_cases: None,
     });
     assert!(err.is_err(), "mismatched catalog SHA-256 must fail");
+    Ok(())
+}
+
+/// Match `base` against copies of its weights and bank: the F16 copy of the build
+/// weights and a legacy file-digest stamp pass, and changed weights fail.
+fn check_encoder_contract_stamps(dir: &Path, base: &BankMatchOptions) -> TestResult {
+    use sha2::{Digest, Sha256};
+    let run = |bank: &Path, xfeat: &Path, out: &str| {
+        run_realtime_bank_match(&BankMatchOptions {
+            bank_path: bank.to_path_buf(),
+            xfeat_weights_path: xfeat.to_path_buf(),
+            output_dir: dir.join(out),
+            ..base.clone()
+        })
+    };
+    let f16_path = dir.join("xfeat-f16.safetensors");
+    fs::write(&f16_path, synthetic_xfeat_weights().to_safetensors(true)?)?;
+    let summary = run(&base.bank_path, &f16_path, "run_f16")?;
+    assert_eq!(summary["evaluated"].as_u64(), Some(1));
+
+    let mut changed = synthetic_xfeat_weights();
+    changed.insert(
+        "heatmap_head.2.bias",
+        WeightTensor {
+            shape: vec![1],
+            values: vec![0.5],
+        },
+    );
+    let changed_path = dir.join("xfeat-changed.safetensors");
+    fs::write(&changed_path, changed.to_safetensors(false)?)?;
+    let err = run(&base.bank_path, &changed_path, "run_changed")
+        .err()
+        .ok_or("changed XFeat weights must fail the encoder contract")?;
+    assert!(err.to_string().contains("encoder_contract"), "{err}");
+
+    let mut legacy = PrecomputedReferenceBank::load_file(&base.bank_path)?;
+    let file_sha: [u8; 32] = Sha256::digest(fs::read(&base.xfeat_weights_path)?).into();
+    legacy.encoder_contract = file_sha;
+    let legacy_path = dir.join("legacy.kashin");
+    fs::write(&legacy_path, legacy.to_bytes())?;
+    run(&legacy_path, &base.xfeat_weights_path, "run_legacy")?;
+    assert!(
+        run(&legacy_path, &f16_path, "run_legacy_f16").is_err(),
+        "a file-digest stamp is valid only for that exact file"
+    );
     Ok(())
 }

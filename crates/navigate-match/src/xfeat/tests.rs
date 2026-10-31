@@ -60,6 +60,61 @@ pub(crate) fn synthetic_xfeat_weights() -> Weights {
     weights
 }
 
+fn contract_of(weights: Weights) -> [u8; 32] {
+    XFeat::load(weights, &Device::flex())
+        .expect("load synthetic XFeat")
+        .encoder_contract()
+}
+
+#[test]
+fn f32_and_f16_files_of_one_model_share_the_encoder_contract() {
+    use sha2::{Digest, Sha256};
+    let weights = synthetic_xfeat_weights();
+    let f32_file = weights.to_safetensors(false).expect("F32 file");
+    let f16_file = weights.to_safetensors(true).expect("F16 file");
+    let f32_sha: [u8; 32] = Sha256::digest(&f32_file).into();
+    let f16_sha: [u8; 32] = Sha256::digest(&f16_file).into();
+    assert_ne!(f32_sha, f16_sha);
+
+    let from_f32 = contract_of(Weights::from_safetensors(&f32_file).expect("read F32"));
+    let from_f16 = contract_of(Weights::from_safetensors(&f16_file).expect("read F16"));
+    assert_eq!(from_f32, from_f16);
+    assert_eq!(from_f32, XFeat::encoder_contract_of(&weights));
+    assert_ne!(from_f32, f32_sha);
+    let architecture_only: [u8; 32] = Sha256::digest(XFeat::ENCODER_CONTRACT_V1_DESCRIPTION).into();
+    assert_ne!(from_f32, architecture_only);
+}
+
+#[test]
+fn a_changed_weight_changes_the_encoder_contract_and_is_rejected() {
+    let device = Device::flex();
+    let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load");
+    let mut perturbed = synthetic_xfeat_weights();
+    let mut tensor = perturbed.remove("block5.2.weight").expect("tensor");
+    tensor.values[0] += 0.25;
+    perturbed.insert("block5.2.weight", tensor);
+    let other = XFeat::load(perturbed, &device).expect("load perturbed");
+    assert_ne!(model.encoder_contract(), other.encoder_contract());
+
+    let file = [7_u8; 32];
+    assert!(model.accepts_encoder_contract(&model.encoder_contract(), &file));
+    assert!(!other.accepts_encoder_contract(&model.encoder_contract(), &file));
+    assert!(model.accepts_encoder_contract(&file, &file));
+    assert!(!model.accepts_encoder_contract(&file, &[8; 32]));
+}
+
+#[test]
+fn both_zero_signs_give_one_encoder_contract() {
+    let mut negative = synthetic_xfeat_weights();
+    let mut tensor = negative.remove("block1.0.bias").expect("tensor");
+    tensor.values.fill(0.0);
+    let mut positive = synthetic_xfeat_weights();
+    positive.insert("block1.0.bias", tensor.clone());
+    tensor.values.fill(-0.0);
+    negative.insert("block1.0.bias", tensor);
+    assert_eq!(contract_of(positive), contract_of(negative));
+}
+
 fn textured_image(width: u32, height: u32) -> GrayImage {
     let mut image = GrayImage::new(width, height);
     for (x, y, p) in image.enumerate_pixels_mut() {
