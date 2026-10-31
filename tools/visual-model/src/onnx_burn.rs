@@ -1,10 +1,12 @@
 //! Convert pinned XFeat and LighterGlue ONNX graphs to burn safetensors files.
-use crate::Error;
+use crate::{
+    Error,
+    onnx_proto::{GraphProto, ModelProto, TensorProto},
+};
 use navigate_match::{WeightTensor, Weights};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto, TensorProto};
 
 const XFEAT_SHA256: &str = "41336466bbbb09b701b815e33932c7da69cff6ab75a068230418468430482912";
 const LIGHTERGLUE_SHA256: &str = "170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca";

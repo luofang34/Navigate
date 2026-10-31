@@ -45,10 +45,7 @@ fn matcher_from(args: &ArgMatches) -> Result<PipelineMatcher, PipelineError> {
     let backend: String = req(args, "backend")?;
     let model = args.get_one::<PathBuf>("model").map(PathBuf::as_path);
     let lg = args.get_one::<PathBuf>("lighterglue").map(PathBuf::as_path);
-    let ort = args
-        .get_one::<PathBuf>("onnx-runtime")
-        .map(PathBuf::as_path);
-    PipelineMatcher::from_options(&backend, model, lg, None, ort)
+    PipelineMatcher::from_options(&backend, model, lg)
 }
 
 pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<serde_json::Value, PipelineError> {

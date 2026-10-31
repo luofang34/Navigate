@@ -1,7 +1,7 @@
 //! Letterboxed model input with the pixel-centre transform back to the source image.
 //!
-//! The transform is the same as the ONNX adapters in `tools/visual-inference` use:
-//! uniform scale to fit, centred, bilinear sampling of pixel centres, zero outside.
+//! The transform scales the image uniformly to fit, centres it, samples pixel centres
+//! bilinearly, and pads outside pixels with zero.
 use crate::MatchError;
 use image::GrayImage;
 

@@ -47,7 +47,6 @@ cargo run --release -p navigate-visual-pipeline -- --help
 5. Run `match`, `track`, `refine`, or `terrain-bundle` (or run `pipeline --recipe pipeline.json`) to fit and check pose candidates.
    Select `--backend xfeat`, `--backend loftr`, or `--backend pyramidal`.
    Supply `.safetensors` weights for in-process `burn` execution.
-   Supply `.onnx` weights with `--onnx-runtime` for worker execution.
 6. Run `preview` to write `debrief.json` (`sokoly-debrief` version 1) and `replay.json` (version 3).
 7. Run `freeze` to store accepted pose candidates.
 8. Run `publish` to write `publication.json`, and run `reproduce` to check SHA-256 digests.

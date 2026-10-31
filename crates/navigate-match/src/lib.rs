@@ -18,6 +18,8 @@ mod loftr;
 mod matcher;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_engine;
+#[cfg(all(not(target_arch = "wasm32"), feature = "ort"))]
+mod ort_session;
 mod staged;
 mod traits;
 mod vendor_npu;
@@ -43,6 +45,8 @@ pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_engine::{NativeMlEngine, XFeatDenseSession};
+#[cfg(all(not(target_arch = "wasm32"), feature = "ort"))]
+pub use ort_session::{OrtProvider, OrtSession, init_ort_runtime};
 pub use staged::{BurnXFeatFeatures, XFeatLighterGlueMatcher};
 pub use traits::{
     AsyncModelInference, EngineKind, GenericTensor, HostTensor, ModelInference, NamedTensor,

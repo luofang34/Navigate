@@ -1,7 +1,9 @@
-use crate::{Error, graph};
+use crate::{
+    Error, graph,
+    onnx_proto::{GraphProto, ModelProto, StringStringEntryProto, TensorProto},
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
-use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto, StringStringEntryProto, TensorProto};
 
 const INPUT_SHA256: &str = "170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca";
 

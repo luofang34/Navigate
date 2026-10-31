@@ -1,7 +1,6 @@
 //! Match `<name>-reference.png` and `<name>-query.png` pairs and write a JSON report.
 //!
-//! The report has the layout of `tools/visual-inference/examples/dense_pairs.rs`,
-//! so the two backends can be compared pair by pair.
+//! The JSON output matches the reference parity report schema in `tests/parity/`.
 //!
 //! ```sh
 //! cargo run --release -p navigate-match --features wgpu --example pairs -- \

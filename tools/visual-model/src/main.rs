@@ -5,6 +5,7 @@ mod graph;
 mod loftr;
 mod masked;
 mod onnx_burn;
+mod onnx_proto;
 mod recipe;
 mod xfeat;
 use clap::{Arg, Command, value_parser};

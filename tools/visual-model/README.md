@@ -1,128 +1,76 @@
-# Model preparation
+# Model preparation (`navigate-model`)
 
-This Rust program prepares supported XFeat, LighterGlue, and LoFTR ONNX exports.
-It retains the weights and source metadata. It records the source digest and recipe in the output model. Keep the upstream model license with the
-output. The input digest is checked before a named graph rewrite can run.
+`navigate-model` is a Rust command-line tool that prepares `XFeat`, `LighterGlue`, and `LoFTR` model files.
+It converts verified source files into `burn` `.safetensors` weights or fixed-shape ONNX graphs.
+It checks the input SHA-256 digest before it runs a graph recipe.
+Keep the upstream model license with each prepared output file.
 
-Build with `cargo build --locked --release -p navigate-model` or `nix build .#model`.
-The Cargo build needs `protoc`; the Nix package supplies it. No inference runtime
-or GPU is required for preparation.
+## Technical names
 
-## Matching
+- A **source export** is a pinned upstream `.onnx` or `.ckpt` file identified by its SHA-256 digest.
+- A **recipe** is a named deterministic weight conversion or ONNX graph rewrite.
+- A **feature capacity** is the fixed maximum keypoint count per image in a prepared `LighterGlue` ONNX graph.
 
-```sh
-target/release/navigate-model lighterglue.onnx matcher-2048.onnx --features 2048
-```
+## Build
 
-The output path must not exist. The supported input has SHA-256
-`170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca`.
-Feature counts must be 32 through 4096. The `lighterglue` recipe requires that
-exact count from each image. To accept fewer features with a fixed input shape:
+Build the binary from the repository root:
 
 ```sh
-target/release/navigate-model lighterglue.onnx matcher-masked.onnx \
-  --recipe lighterglue-masked --features 2048
+cargo build --locked --release -p navigate-model
 ```
 
-The masked recipe adds `key_bias0` and `key_bias1` float32 inputs with shape
-`[1, 1, capacity]`. `navigate-workflow` supplies zero for valid features and
-`-10000` for padding. It masks keys in each attention layer and both assignment
-normalizations. It removes padded indices from the output. Empty feature sets
-return no matches without inference. Set the workflow feature limit at or below
-the model capacity. Reference packets retain only valid features. Full-capacity
-feature arrays are borrowed; shorter arrays require temporary padded buffers.
+The build uses pure-Rust protobuf definitions and does not require `protoc`, a GPU, or an inference runtime.
 
-The recipe expresses assignment probabilities as the product of two softmax
-terms and two sigmoid terms. It removes logarithms from assignment and expresses
-negation with multiplication. This preserves the mathematical mutual-match rule
-and the strict probability threshold of 0.1. Floating-point output must still be
-checked on the target backend and the intended images.
+## Burn `.safetensors` weights
 
-The default output has `row_indices`, `column_indices`, and `row_scores`. It uses
-ArgMax with the first-index tie rule and returns 20 bytes per feature instead of
-the full quadratic matrix. `--output-kind probability` returns the full float32
-`assignment` matrix for backends without the required reductions or for numerical
-comparison. Both contracts are accepted by `navigate-workflow`.
+Convert verified exports into `.safetensors` files for `navigate-match`:
 
-Set `matcher` in the workflow configuration to the prepared model path. Set
-`matching.allow_cpu_fallback` to `false` when the chosen ORT provider must own
-the full graph. Use an execution profile to check graph placement; a Core ML
-partition does not identify each Core ML kernel's physical compute unit.
+```sh
+target/release/navigate-model xfeat.onnx xfeat-f16.safetensors --recipe xfeat-burn-f16
+target/release/navigate-model xfeat.onnx xfeat-f32.safetensors --recipe xfeat-burn-f32
+target/release/navigate-model lighterglue.onnx lighterglue-f16.safetensors --recipe lighterglue-burn-f16
+target/release/navigate-model lighterglue.onnx lighterglue-f32.safetensors --recipe lighterglue-burn-f32
+target/release/navigate-model loftr_outdoor.ckpt loftr-f16.safetensors --recipe loftr-burn-f16
+target/release/navigate-model loftr_outdoor.ckpt loftr-f32.safetensors --recipe loftr-burn-f32
+```
 
-## Feature extraction
+## Fixed-shape `XFeat` ONNX graphs
+
+Prepare a dense `XFeat` ONNX graph for `navigate-match` (`--features ort`) or RK3588 compilation (`tools/visual-model/rknn/`):
 
 ```sh
 target/release/navigate-model xfeat.onnx xfeat-dense.onnx --recipe xfeat-dense
+target/release/navigate-model xfeat.onnx xfeat-gray.onnx --recipe xfeat-gray
+target/release/navigate-model xfeat.onnx xfeat-gray-2x.onnx --recipe xfeat-gray-2x
 ```
 
-The supported input has SHA-256
-`41336466bbbb09b701b815e33932c7da69cff6ab75a068230418468430482912`.
-The graph accepts float32 NCHW `images` with shape 1 × 3 × 600 × 800 and emits
-`dense_descriptors`, `keypoint_logits`, and `reliability`, each at 72 × 100 pixels
-with 64, 65, and 1 channels respectively. It retains image normalization and
-resizing, removes sparse point selection, and folds the 8 × 8 patch expansion
-into a strided convolution without changing learned weight values.
+The source export must have SHA-256 `41336466bbbb09b701b815e33932c7da69cff6ab75a068230418468430482912`.
+`xfeat-dense` accepts `float32` NCHW `images` (`[1, 3, 600, 800]`) and emits `dense_descriptors` (`[1, 64, 72, 100]`), `keypoint_logits` (`[1, 65, 72, 100]`), and `reliability` (`[1, 1, 72, 100]`).
+`xfeat-gray` accepts `[1, 1, 600, 800]` grayscale input and repeats the channel inside the graph.
+`xfeat-gray-2x` accepts `[1, 1, 1200, 1600]` grayscale input and emits a `148 x 200` coarse grid.
 
-Use `--recipe xfeat-gray` for grayscale input with shape 1 × 1 × 600 × 800.
-This recipe repeats the channel inside the graph. It retains the channel mean
-operation and its floating-point order. The host transfers one channel.
-The model digest changes, so build new feature packets for this graph.
+## Fixed-shape `LighterGlue` and `LoFTR` ONNX graphs
 
-Use `--recipe xfeat-gray-2x` to test 1600 × 1200 input with the same weights.
-The internal image is 1600 × 1184 and the output grid is 200 × 148.
-The dense-image Rust adapters keep matcher coordinates in the 800 × 600 domain.
-Build separate feature packets and measure geometry and resource use before deployment.
-
-For ORT, set the workflow's `detector` to this file and `graph` to `dense_image`.
-Feature selection remains in the workflow, so this recipe does not accept a
-`--features` setting. For rustnn, build and validate the WebNN representation with
-the pinned Rust converter:
+Prepare fixed-capacity `LighterGlue` ONNX graphs (`32..=4096` features, source SHA-256 `170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca`):
 
 ```sh
-O2W_CACHE_DIR="$PWD/prepared" nix run .#converter -- convert \
-  --input "$PWD/xfeat-dense.onnx" --optimize --output --validate
+target/release/navigate-model lighterglue.onnx matcher-2048.onnx --features 2048
+target/release/navigate-model lighterglue.onnx matcher-masked.onnx --recipe lighterglue-masked --features 2048
 ```
 
-The converter package supplies its ONNX Runtime library. It compares the exported
-WebNN graph with ONNX execution on fixed test inputs. The flake and the converter
-lockfile fix the sources, dependencies, and compatibility patches. The converter
-is a separate offline tool. The flight program does not depend on it.
-
-Use the emitted `.webnn` file under `prepared/webnn` as the workflow's `detector`.
-Keep its adjacent `.safetensors` weights when copying it to another machine.
-The emitted filenames depend on the source path. Conversion validation checks
-CPU numerical equivalence; validate actual image features and geometry on the
-chosen deployment backend as well.
-
-The numerical regression test loads the original model and compares its dense
-intermediates with the prepared model through ORT. Set `NAVIGATE_TEST_ORT` to
-the runtime library, `NAVIGATE_XFEAT_MODEL` to the source model, and
-`NAVIGATE_XFEAT_INPUT` to little-endian float32 NCHW input bytes, then run:
-
-```sh
-cargo test --release -p navigate-model dense_recipe_matches_original_model_intermediates -- --ignored
-```
-
-## Split LoFTR execution
+Prepare split `LoFTR` ONNX stage graphs (`1..=1024` fine batch, source SHA-256 `49901002e682c650dcc1cd596d4effa980f12ffcc383746b77651ac89ed88559`):
 
 ```sh
 target/release/navigate-model loftr.onnx coarse.onnx --recipe loftr-coarse
 target/release/navigate-model loftr.onnx fine.onnx --recipe loftr-fine --batch 256
 ```
 
-These recipes require source SHA-256
-`49901002e682c650dcc1cd596d4effa980f12ffcc383746b77651ac89ed88559`.
-The coarse graph emits match coordinates, confidence, and two local feature arrays.
-Each feature array has shape `[matches, 25, 128]`. The fine graph accepts two
-`[batch, 25, 128]` float32 arrays and returns `[batch, 2]` query offsets in model pixels.
-The batch must be 1 through 1024. Weights and attention operations stay unchanged.
-Each fine attention calculation uses one patch pair. Padding does not add matches.
+## Numerical parity check
 
-Set the workflow `graph` to `loftr_split`, `detector` to the coarse graph, and
-`matcher` to the fine graph. `extraction` controls coarse execution; `matching`
-controls fine execution. The adapter checks the source digest and stage metadata.
-Use `matching.allow_cpu_fallback: false` to require full fine-graph placement on
-the selected provider. The coarse graph can still require CPU operators.
-Keep both sessions resident. Measure startup and steady execution separately.
-The split transfers patch arrays through host memory; it does not provide shared
-device tensors between sessions. Check runtime profiles before making placement claims.
+Compare the original and prepared `XFeat` graphs with ONNX Runtime:
+
+```sh
+cargo test --release -p navigate-model dense_recipe_matches_original_model_intermediates -- --ignored
+```
+
+Set `NAVIGATE_TEST_ORT` to the ONNX Runtime shared library, `NAVIGATE_XFEAT_MODEL` to `xfeat.onnx`, and `NAVIGATE_XFEAT_INPUT` to little-endian `float32` NCHW input bytes before you run the test.

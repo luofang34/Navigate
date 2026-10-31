@@ -19,8 +19,6 @@ pub enum EngineKind {
     BurnCpu,
     /// Native ONNX Runtime session (`ort`).
     Ort,
-    /// Native Core ML graph session (`rustnn`).
-    RustnnCoreMl,
     /// Embedded vendor neural processing unit runtime.
     VendorNpu,
 }
@@ -34,7 +32,6 @@ impl EngineKind {
             Self::BurnGpu => "burn-gpu",
             Self::BurnCpu => "burn-cpu",
             Self::Ort => "ort",
-            Self::RustnnCoreMl => "rustnn-coreml",
             Self::VendorNpu => "vendor-npu",
         }
     }

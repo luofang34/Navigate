@@ -4,23 +4,15 @@ use crate::{PipelineError, matcher_client::default_burn_device};
 use burn::tensor::Device;
 use image::GrayImage;
 use navigate_match::{
-    LighterGlue, ModelSessionExtractor, SparseFeatureExtractor, SparseFeatures, Weights, XFeat,
-    XFeatPrecision,
-};
-use navigate_visual::{EngineKind, HostTensor, ModelInference, NamedTensor};
-use ort::{
-    ep,
-    session::{Session, builder::AutoDevicePolicy},
-    value::TensorRef,
+    LighterGlue, ModelSessionExtractor, OrtProvider, OrtSession, SparseFeatureExtractor,
+    SparseFeatures, Weights, XFeat, XFeatPrecision, init_ort_runtime,
 };
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
-
-static ORT_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// Execution backend for dense `XFeat` feature extraction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,6 +58,15 @@ impl XFeatRuntime {
             Self::CoreMl => "coreml",
             Self::TensorRt => "tensorrt",
             Self::OnnxCpu => "onnx-cpu",
+        }
+    }
+
+    fn ort_provider(self) -> Option<OrtProvider> {
+        match self {
+            Self::BurnF32 | Self::BurnF16 => None,
+            Self::CoreMl => Some(OrtProvider::CoreMl),
+            Self::TensorRt => Some(OrtProvider::TensorRt),
+            Self::OnnxCpu => Some(OrtProvider::Cpu),
         }
     }
 }
@@ -125,20 +126,21 @@ impl LoadedXFeat {
                 &device,
                 XFeatPrecision::F16,
             )?),
-            XFeatRuntime::CoreMl | XFeatRuntime::TensorRt | XFeatRuntime::OnnxCpu => {
+            runtime => {
+                let provider = runtime.ort_provider().unwrap_or(OrtProvider::Cpu);
                 let contract = XFeat::encoder_contract_of(&weights);
                 let onnx_path = cfg
                     .onnx_model_path
                     .clone()
                     .unwrap_or_else(|| safetensors_path.with_extension("onnx"));
-                init_ort_once(cfg.onnx_runtime_path.as_deref())?;
-                let session = OrtDenseSession::load(&onnx_path, cfg.runtime)?;
-                let input_name = session.primary_input_name()?.to_owned();
+                init_ort_runtime(cfg.onnx_runtime_path.as_deref())?;
+                let session = OrtSession::load(&onnx_path, provider)?;
+                let input_name = session.primary_input_name().to_owned();
                 Arc::new(ModelSessionExtractor::new(
                     session,
                     input_name,
                     contract,
-                    cfg.runtime.as_str(),
+                    runtime.as_str(),
                 ))
             }
         };
@@ -228,134 +230,6 @@ impl LoadedXFeat {
             let _ = lighterglue;
             Ok(0.0)
         }
-    }
-}
-
-fn init_ort_once(explicit_lib: Option<&Path>) -> Result<(), PipelineError> {
-    let resolved = explicit_lib
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("ORT_DYLIB_PATH").map(PathBuf::from))
-        .ok_or_else(|| {
-            PipelineError::Invalid(
-                "ONNX XFeat runtime requires --onnx-runtime or ORT_DYLIB_PATH".into(),
-            )
-        })?;
-    let outcome = ORT_INIT.get_or_init(|| {
-        let builder = ort::init_from(&resolved)
-            .map_err(|e| format!("load ONNX Runtime {}: {e}", resolved.display()))?;
-        let _ = builder.with_telemetry(false).commit();
-        Ok(())
-    });
-    outcome.clone().map_err(PipelineError::Invalid)
-}
-
-struct OrtDenseSession {
-    session: Session,
-    output_names: Vec<String>,
-}
-
-impl OrtDenseSession {
-    fn load(onnx_path: &Path, runtime: XFeatRuntime) -> Result<Self, PipelineError> {
-        if !onnx_path.is_file() {
-            return Err(PipelineError::Invalid(format!(
-                "missing XFeat ONNX model {} (pass --xfeat-onnx)",
-                onnx_path.display()
-            )));
-        }
-        let providers = match runtime {
-            XFeatRuntime::CoreMl => vec![
-                ep::CoreML::default()
-                    .with_compute_units(ep::coreml::ComputeUnits::CPUAndNeuralEngine)
-                    .with_static_input_shapes(true)
-                    .with_model_format(ep::coreml::ModelFormat::MLProgram)
-                    .build()
-                    .error_on_failure(),
-            ],
-            XFeatRuntime::TensorRt => vec![
-                ep::TensorRT::default()
-                    .with_max_workspace_size(256 * 1024 * 1024)
-                    .build()
-                    .error_on_failure(),
-                ep::CUDA::default().build().error_on_failure(),
-            ],
-            _ => Vec::new(),
-        };
-        let session = Session::builder()
-            .map_err(|e| PipelineError::Invalid(format!("create ORT session: {e}")))?
-            .with_auto_device(AutoDevicePolicy::Default)
-            .map_err(|e| PipelineError::Invalid(format!("configure ORT auto device: {e}")))?
-            .with_intra_threads(4)
-            .map_err(|e| PipelineError::Invalid(format!("set ORT threads: {e}")))?
-            .with_intra_op_spinning(false)
-            .map_err(|e| PipelineError::Invalid(format!("set ORT spin policy: {e}")))?
-            .with_execution_providers(providers)
-            .map_err(|e| {
-                PipelineError::Invalid(format!("register {} provider: {e}", runtime.as_str()))
-            })?
-            .commit_from_file(onnx_path)
-            .map_err(|e| PipelineError::Invalid(format!("load {}: {e}", onnx_path.display())))?;
-        let output_names = session
-            .outputs()
-            .iter()
-            .map(|o| o.name().to_owned())
-            .collect();
-        Ok(Self {
-            session,
-            output_names,
-        })
-    }
-
-    fn primary_input_name(&self) -> Result<&str, PipelineError> {
-        self.session
-            .inputs()
-            .first()
-            .map(|i| i.name())
-            .ok_or_else(|| PipelineError::Invalid("ORT XFeat model has no input tensors".into()))
-    }
-}
-
-impl ModelInference for OrtDenseSession {
-    type Tensor = HostTensor;
-    type Error = String;
-
-    fn engine_kind(&self) -> EngineKind {
-        EngineKind::Ort
-    }
-
-    fn forward(
-        &mut self,
-        inputs: &[NamedTensor<HostTensor>],
-    ) -> Result<Vec<NamedTensor<HostTensor>>, String> {
-        let mut ort_inputs = Vec::with_capacity(inputs.len());
-        for named in inputs {
-            let view = TensorRef::from_array_view((
-                named.tensor.shape().to_vec(),
-                named.tensor.as_slice(),
-            ))
-            .map_err(|e| format!("borrow ORT input {}: {e}", named.name))?
-            .into_dyn();
-            ort_inputs.push((named.name.clone(), view));
-        }
-        let outputs = self
-            .session
-            .run(ort_inputs)
-            .map_err(|e| format!("run ORT XFeat session: {e}"))?;
-        let mut results = Vec::with_capacity(self.output_names.len());
-        for name in &self.output_names {
-            let (shape, slice) = outputs
-                .get(name.as_str())
-                .ok_or_else(|| format!("missing ORT output {name}"))?
-                .try_extract_tensor::<f32>()
-                .map_err(|e| format!("extract ORT output {name}: {e}"))?;
-            let dims: Vec<usize> = shape
-                .iter()
-                .map(|&d| usize::try_from(d).map_err(|_| format!("negative dimension on {name}")))
-                .collect::<Result<_, _>>()?;
-            let tensor = HostTensor::new(dims, slice.to_vec())
-                .map_err(|_| format!("non-finite ORT output {name}"))?;
-            results.push(NamedTensor::new(name.clone(), tensor));
-        }
-        Ok(results)
     }
 }
 

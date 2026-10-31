@@ -1,7 +1,10 @@
 //! Exclude padded features from every attention and assignment normalization.
-use crate::{Error, graph, recipe};
+use crate::{
+    Error, graph,
+    onnx_proto::{AttributeProto, GraphProto, ModelProto},
+    recipe,
+};
 use prost::Message;
-use webnn_onnx_utils::protos::onnx::{GraphProto, ModelProto};
 
 pub fn prepare(bytes: &[u8], count: usize, compact: bool) -> Result<Vec<u8>, Error> {
     let mut model = ModelProto::decode(recipe::prepare(bytes, count, false)?.as_slice())?;
@@ -25,14 +28,12 @@ fn insert_masks(model: &mut GraphProto, count: i64) -> Result<(), Error> {
         model.input.push(graph::value(name, 1, &[1, 1, count]));
     }
     let mut transpose = graph::node("Transpose", &["key_bias0"], "navigate.row_bias");
-    transpose
-        .attribute
-        .push(webnn_onnx_utils::protos::onnx::AttributeProto {
-            name: "perm".into(),
-            ints: vec![0, 2, 1],
-            r#type: 7,
-            ..Default::default()
-        });
+    transpose.attribute.push(AttributeProto {
+        name: "perm".into(),
+        ints: vec![0, 2, 1],
+        r#type: 7,
+        ..Default::default()
+    });
     let mut nodes = vec![transpose];
     let mut attention = 0_usize;
     let mut assignment = 0_usize;

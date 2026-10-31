@@ -9,7 +9,6 @@ publish.workspace = true
 [dependencies]
 navigate-match = { path = "../../crates/navigate-match" }
 pytorch-reader = "0.22.1"
-webnn-onnx-utils = { git = "https://github.com/rustnn/webnn-onnx-utils", branch = "main" }
 prost = "0.12"
 sha2 = "0.10"
 clap = "4"

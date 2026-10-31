@@ -1,5 +1,5 @@
 use super::*;
-use webnn_onnx_utils::protos::onnx::{AttributeProto, TensorProto, attribute_proto::AttributeType};
+use crate::onnx_proto::{AttributeProto, TensorProto, attribute_proto::AttributeType};
 
 #[test]
 fn dense_preparation_refuses_foreign_exports() {

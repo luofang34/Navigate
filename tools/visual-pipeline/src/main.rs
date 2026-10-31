@@ -68,7 +68,6 @@ fn matcher_args(cmd: Command) -> Command {
     cmd.arg(str_arg("backend", Some("xfeat")))
         .arg(path_arg("model", false))
         .arg(path_arg("lighterglue", false))
-        .arg(path_arg("onnx-runtime", false))
 }
 
 fn cli() -> Command {
