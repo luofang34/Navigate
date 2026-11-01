@@ -23,7 +23,8 @@ pub use kinematics::{
     compute_dt_s,
 };
 pub use session::{
-    DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner, VisualCorridorSession,
+    DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner, FilterIntegritySnapshot,
+    SessionAnchorReport, VisualCorridorSession,
 };
 pub use tracker::run_corridor_track;
 
@@ -93,6 +94,10 @@ pub struct CorridorTrackOptions {
     pub lighterglue_weights_path: Option<PathBuf>,
     /// Optional directory containing a `Segformer` checkpoint for amortized live masking.
     pub seg_model_dir: Option<PathBuf>,
+    /// Optional path to `DINOv2` `.safetensors` weights for global place retrieval.
+    pub dinov2_weights_path: Option<PathBuf>,
+    /// Optional path to a `navigate-place` manifest, directory, or `.npls` shard for global retrieval.
+    pub place_index_path: Option<PathBuf>,
     /// Vehicle dynamics constraints and platform parameter gates.
     pub dynamics_profile: VehicleDynamicsProfile,
     /// Semantic mask policy name (`"airframe-occlusions"` by default).
@@ -133,6 +138,8 @@ pub struct CorridorTrackOptions {
     pub only_cases: Option<BTreeSet<String>>,
     /// Run `Segformer` refreshes, map anchors, and on-demand tile synthesis on background threads.
     pub background_refresh: bool,
+    /// Pace offline frame replay to real-time capture timestamps (`case.time_s`).
+    pub pace_realtime: bool,
     /// Sparse `XFeat` runtime configuration (`burn-f32`, `burn-f16`, `coreml`, `tensorrt`).
     pub xfeat_runtime: XFeatRuntimeConfig,
 }
@@ -172,6 +179,15 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         .unwrap_or_default();
 
     let tile_keys = select_corridor_tiles(&surface, &cases, tile_m, opts.corridor_radius_m);
+    let prior_points_enu: Vec<[f64; 2]> = cases
+        .iter()
+        .filter_map(|c| c.prior.as_ref().and_then(|p| p.position.as_ref()))
+        .map(|pos| {
+            let p = surface.local(pos.latitude, pos.longitude, 0.0);
+            [p[0], p[1]]
+        })
+        .collect();
+    let nadir_rot_radius_sq = (tile_m * 1.5).max(agl_m * 2.0).powi(2);
     let render_size = [800_u32, 600_u32];
     let k_base = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
     let k_render = scale_k(&k_base, 1.0, 1.0);
@@ -191,6 +207,12 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         let Some(ground_msl) = surface.sample_dem(clat, clon) else {
             continue;
         };
+        let near_prior = prior_points_enu.is_empty()
+            || prior_points_enu
+                .iter()
+                .any(|p| (ce - p[0]).powi(2) + (cn - p[1]).powi(2) <= nadir_rot_radius_sq);
+        let want_rotated_nadir = !opts.include_obliques || near_prior;
+        let dense_nadir = !opts.include_obliques && near_prior;
 
         let views = canonical_tile_poses(
             &surface,
@@ -199,6 +221,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
             agl_m,
             opts.include_obliques,
         );
+        let mut rendered = Vec::with_capacity(views.len());
         for (band, eye, rot) in views {
             canonical_views += 1;
             let mut gpu_view_opt = None;
@@ -212,24 +235,35 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
                         .ok();
                 }
             }
-            let (gray_img, raw, world_hits) = if let Some(ref gv) = gpu_view_opt {
+            let gray_img = if let Some(ref gv) = gpu_view_opt {
                 total_pixels += (render_size[0] as usize) * (render_size[1] as usize);
-                let feat = xfeat.extract(&gv.image, 2048)?;
-                let unproj = gv.unproject_pixels(&surface, &feat.pixels);
-                (gv.image.clone(), feat, unproj)
+                gv.image.clone()
             } else {
                 let ((rgb, _, _), stats) =
                     surface.render_adaptive(eye, &rot, &k_render, render_size, stride, 8, 0.025);
                 total_pixels += stats.total_pixels;
                 total_rays += stats.rays_cast;
-                let gray = DynamicImage::ImageRgb8(rgb).into_luma8();
-                let feat = xfeat.extract(&gray, 2048)?;
-                let hits = surface.raycast_pixels(eye, &rot, &k_render, &feat.pixels);
-                (
-                    gray,
-                    feat,
-                    hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect(),
-                )
+                DynamicImage::ImageRgb8(rgb).into_luma8()
+            };
+            rendered.push((band, eye, rot, gray_img, gpu_view_opt));
+        }
+
+        let batch_pairs: Vec<(&image::GrayImage, Option<&image::GrayImage>)> = rendered
+            .iter()
+            .map(|(_, _, _, img, _)| (img, None))
+            .collect();
+        let batch_feats = xfeat.extract_batch_masked(&batch_pairs, 2048)?;
+
+        for ((band, eye, rot, gray_img, gpu_view_opt), raw) in rendered.into_iter().zip(batch_feats)
+        {
+            let world_hits: Vec<Option<[f64; 3]>> = if let Some(ref gv) = gpu_view_opt {
+                gv.unproject_pixels(&surface, &raw.pixels)
+            } else {
+                surface
+                    .raycast_pixels(eye, &rot, &k_render, &raw.pixels)
+                    .into_iter()
+                    .map(|h| h.map(|x| x.world_enu))
+                    .collect()
             };
 
             let mut insert_band =
@@ -283,9 +317,17 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
             let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
             insert_band(band, cam_x, &raw, &world_hits);
 
-            if nadir::is_nadir_pose(&rot)
-                && let Ok(rot_bands) =
-                    nadir::synthesize_rotated_bands(&gray_img, &surface, clat, clon, &xfeat, 2048)
+            if want_rotated_nadir
+                && nadir::is_nadir_pose(&rot)
+                && let Ok(rot_bands) = nadir::synthesize_rotated_bands(
+                    &gray_img,
+                    &surface,
+                    clat,
+                    clon,
+                    &xfeat,
+                    2048,
+                    dense_nadir,
+                )
             {
                 for (b_idx, r_band) in rot_bands.into_iter().enumerate() {
                     let r_band_idx = band.saturating_add((b_idx as u8) + 1);

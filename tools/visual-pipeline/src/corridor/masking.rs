@@ -191,9 +191,9 @@ impl AmortizedMasker {
         &mut self,
         rgb: &RgbImage,
         cur_rot: Option<&Matrix3<f64>>,
-    ) -> Result<bool, PipelineError> {
+    ) -> Result<Option<f64>, PipelineError> {
         let Some(seg) = &mut self.seg else {
-            return Ok(false);
+            return Ok(None);
         };
         seg.initial_fast_pass(&mut self.key, rgb, cur_rot)
     }

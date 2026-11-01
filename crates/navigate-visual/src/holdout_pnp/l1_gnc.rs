@@ -3,6 +3,7 @@
 use super::{
     PoseCandidate, fit_pose_ransac, refine_pose_lm, scaled_inlier_px, score_pose_candidate,
     spatial_holdout,
+    two_point::{solve_2pt_gravity_pose, solve_2pt_rot_at_eye, triad_rotation},
 };
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
 
@@ -294,10 +295,40 @@ pub fn refine_seed_eye_2pt(
             }
             let dx_px = pixels[i][0] - pixels[j][0];
             let dy_px = pixels[i][1] - pixels[j][1];
-            if dx_px * dx_px + dy_px * dy_px < 3_600.0
-                || cam_rays[i].dot(&cam_rays[j]).abs() > 0.995
+            if dx_px * dx_px + dy_px * dy_px < 1_600.0
+                || cam_rays[i].dot(&cam_rays[j]).abs() > 0.998
             {
                 continue;
+            }
+            if let Some(cand_g) = solve_2pt_gravity_pose(
+                world_pts[i],
+                world_pts[j],
+                pixels[i],
+                pixels[j],
+                (hyp_eye, hyp_rot),
+                k,
+            ) {
+                score_2pt_seed(
+                    &world_pts[..n],
+                    &pixels[..n],
+                    k,
+                    cand_g,
+                    &mut best_cnt,
+                    &mut best_pose,
+                );
+            }
+            if let Some(cand_r) =
+                solve_2pt_rot_at_eye(world_pts[i], world_pts[j], pixels[i], pixels[j], hyp_eye, k)
+                && (((cand_r.1 * rt).trace() - 1.0) * 0.5) >= 0.65
+            {
+                score_2pt_seed(
+                    &world_pts[..n],
+                    &pixels[..n],
+                    k,
+                    cand_r,
+                    &mut best_cnt,
+                    &mut best_pose,
+                );
             }
             let p_i = Matrix3::identity() - world_rays[i] * world_rays[i].transpose();
             let p_j = Matrix3::identity() - world_rays[j] * world_rays[j].transpose();
@@ -312,9 +343,9 @@ pub fn refine_seed_eye_2pt(
             let horiz_shift = (eye_v.x - hyp_v.x).hypot(eye_v.y - hyp_v.y);
             if horiz_shift > 1_800.0
                 || (eye_v.z - hyp_v.z).abs() > 650.0
-                || eye_v.z < max_pt_z + 80.0
-                || di_raw.dot(&world_rays[i]) <= 80.0
-                || dj_raw.dot(&world_rays[j]) <= 80.0
+                || eye_v.z < max_pt_z + 4.5
+                || di_raw.dot(&world_rays[i]) <= 4.5
+                || dj_raw.dot(&world_rays[j]) <= 4.5
             {
                 continue;
             }
@@ -325,49 +356,48 @@ pub fn refine_seed_eye_2pt(
             if att_cos < min_att_cos {
                 continue;
             }
-            let mut cells = 0_u64;
-            let mut cnt = 0_usize;
-            for m in 0..n {
-                let pc = rot_ij * (Vector3::from(world_pts[m]) - eye_v);
-                if pc.z > 80.0 {
-                    let du = fx * (pc.x / pc.z) + cx - pixels[m][0];
-                    let dv = fy * (pc.y / pc.z) + cy - pixels[m][1];
-                    if du * du + dv * dv <= 784.0 {
-                        cnt += 1;
-                        let bx =
-                            ((pixels[m][0] / (cx * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
-                        let by =
-                            ((pixels[m][1] / (cy * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
-                        cells |= 1_u64 << (by * 8 + bx);
-                    }
-                }
-            }
-            if cells.count_ones() >= 4 && cnt > best_cnt {
-                best_cnt = cnt;
-                best_pose = ([eye_v.x, eye_v.y, eye_v.z], rot_ij);
+            score_2pt_seed(
+                &world_pts[..n],
+                &pixels[..n],
+                k,
+                ([eye_v.x, eye_v.y, eye_v.z], rot_ij),
+                &mut best_cnt,
+                &mut best_pose,
+            );
+        }
+    }
+    (best_cnt >= 6).then_some(best_pose)
+}
+
+fn score_2pt_seed(
+    world_pts: &[[f64; 3]],
+    pixels: &[[f64; 2]],
+    k: &Matrix3<f64>,
+    (eye, rot): ([f64; 3], Matrix3<f64>),
+    best_cnt: &mut usize,
+    best_pose: &mut ([f64; 3], Matrix3<f64>),
+) {
+    let (fx, fy, cx, cy) = (k[(0, 0)], k[(1, 1)], k[(0, 2)], k[(1, 2)]);
+    let eye_v = Vector3::from(eye);
+    let mut cells = 0_u64;
+    let mut cnt = 0_usize;
+    for (w, px) in world_pts.iter().zip(pixels) {
+        let pc = rot * (Vector3::from(*w) - eye_v);
+        if pc.z > 4.5 {
+            let du = fx * (pc.x / pc.z) + cx - px[0];
+            let dv = fy * (pc.y / pc.z) + cy - px[1];
+            if du * du + dv * dv <= 784.0 {
+                cnt += 1;
+                let bx = ((px[0] / (cx * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
+                let by = ((px[1] / (cy * 2.0).max(1.0)) * 8.0).clamp(0.0, 7.0) as u32;
+                cells |= 1_u64 << (by * 8 + bx);
             }
         }
     }
-    (best_cnt >= 8).then_some(best_pose)
-}
-
-fn triad_rotation(
-    ci: Vector3<f64>,
-    cj: Vector3<f64>,
-    di_raw: Vector3<f64>,
-    dj_raw: Vector3<f64>,
-) -> Option<Matrix3<f64>> {
-    let di = di_raw.try_normalize(1e-6)?;
-    let dj = dj_raw.try_normalize(1e-6)?;
-    let bc1 = (ci + cj).try_normalize(1e-6)?;
-    let bc2 = ci.cross(&cj).try_normalize(1e-6)?;
-    let bc3 = bc1.cross(&bc2);
-    let bw1 = (di + dj).try_normalize(1e-6)?;
-    let bw2 = di.cross(&dj).try_normalize(1e-6)?;
-    let bw3 = bw1.cross(&bw2);
-    let c_mat = Matrix3::from_columns(&[bc1, bc2, bc3]);
-    let w_mat = Matrix3::from_columns(&[bw1, bw2, bw3]);
-    Some(c_mat * w_mat.transpose())
+    if cells.count_ones() >= 3 && cnt > *best_cnt {
+        *best_cnt = cnt;
+        *best_pose = (eye, rot);
+    }
 }
 
 /// Compute pixel reprojection residuals and `6`-DoF pose Jacobians for one 3D-2D pair.

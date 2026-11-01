@@ -3,7 +3,10 @@
 use super::{
     CorridorTrackOptions,
     admission::{classify_anchor_cell, seed_tracks},
-    anchor::acquire_corridor_anchor,
+    anchor::{
+        AnchorQueryAux, acquire_corridor_anchor, is_plausible_anchor_candidate,
+        multitier::SearchTierMatcher,
+    },
     background::BackgroundWorker,
     latency::StageLatencies,
     motion::{TrackState, propagate_pose_from},
@@ -12,16 +15,19 @@ use crate::{
     PipelineError,
     pose::PoseCandidate,
     realtime::helpers::rot_to_row_major,
+    stages::focal::FocalLengthEstimator,
     surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
+use image::GrayImage;
 use nalgebra::Matrix3;
 use navigate_match::{
     ActiveTrackSet, CorridorTileStore, HadamardProjector, LighterGlue, PreparedKashinQuery,
     SparseFeatures,
 };
+use navigate_visual::LocalFrame;
 use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
@@ -38,6 +44,7 @@ pub(super) struct AnchorContext {
     pub(super) projector: HadamardProjector,
     pub(super) xfeat: LoadedXFeat,
     pub(super) lighterglue: Option<LighterGlue>,
+    pub(super) search_tier_matcher: Option<Arc<SearchTierMatcher>>,
     pub(super) opts: CorridorTrackOptions,
 }
 
@@ -52,6 +59,8 @@ pub(super) struct AnchorJob {
     pub(super) render_size: [u32; 2],
     pub(super) pred_pose: Option<([f64; 3], Matrix3<f64>)>,
     pub(super) live_attitude: Option<(f64, f64)>,
+    pub(super) mask_small: Option<GrayImage>,
+    pub(super) focal_locked: bool,
 }
 
 /// Result of one [`AnchorJob`].
@@ -62,6 +71,7 @@ pub(super) struct AnchorOutcome {
     pub(super) render_size: [u32; 2],
     pub(super) best: Option<PoseCandidate>,
     pub(super) seeded: Option<ActiveTrackSet>,
+    pub(super) locked_focal_px: Option<f64>,
     pub(super) attempts: usize,
     pub(super) elapsed_ms: f64,
 }
@@ -81,13 +91,22 @@ impl AnchorContext {
             (&job.case, &self.opts),
             (&job.qry_feat, &job.prepared),
             (&job.k, &job.k_render, job.render_size),
-            (job.pred_pose, job.live_attitude),
+            AnchorQueryAux {
+                pred_pose: job.pred_pose,
+                live_attitude: job.live_attitude,
+                mask_small: job.mask_small.as_ref(),
+                search_tier_matcher: self.search_tier_matcher.as_deref(),
+                focal_locked: job.focal_locked,
+            },
             &mut attempts,
         )?;
         let best = acq.best.map(|(_, _, cand)| cand);
+        let k_render_eff = best.as_ref().map_or(job.k_render, |c| c.k);
         let seeded = best
             .as_ref()
-            .filter(|c| c.score.geometry_accepted)
+            .filter(|c| {
+                c.score.geometry_accepted && is_plausible_anchor_candidate(c, &self.surface)
+            })
             .map(|cand| {
                 seed_tracks(
                     &self.surface,
@@ -100,10 +119,11 @@ impl AnchorContext {
         Ok(AnchorOutcome {
             sent_frame_seq: job.sent_frame_seq,
             case_id: job.case.id.clone(),
-            k_render: job.k_render,
+            k_render: k_render_eff,
             render_size: job.render_size,
             best,
             seeded,
+            locked_focal_px: acq.locked_focal_px,
             attempts: attempts.len(),
             elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
         })
@@ -183,6 +203,8 @@ pub(super) struct AnchorArrival<'a> {
     pub(super) results: &'a mut Vec<Value>,
     pub(super) catalog_sha256: &'a str,
     pub(super) cell_m: f64,
+    pub(super) local_frame: Option<LocalFrame>,
+    pub(super) focal_estimator: Option<&'a mut FocalLengthEstimator>,
 }
 
 impl<'a> AnchorArrival<'a> {
@@ -193,6 +215,10 @@ impl<'a> AnchorArrival<'a> {
         arrived_at: Option<&str>,
     ) -> Option<([f64; 3], Matrix3<f64>)> {
         self.latencies.anchor_ms.push(outcome.elapsed_ms);
+        if let (Some(locked), Some(est)) = (outcome.locked_focal_px, self.focal_estimator.as_mut())
+        {
+            est.locked_focal_px = Some(locked);
+        }
         let propagated_frames = if arrived_at.is_some() {
             self.state.frame_seq.saturating_sub(outcome.sent_frame_seq)
         } else {
@@ -230,6 +256,7 @@ impl<'a> AnchorArrival<'a> {
             }
             self.state.active_tracks = tracks;
             self.state.frames_since_anchor = 0;
+            self.state.time_since_anchor_s = 0.0;
             if arrived_at.is_some() {
                 if let Some(prev) = self.state.prev_eye {
                     let dt = self.state.time_since_anchor_s.clamp(1e-4, 60.0);
@@ -249,16 +276,44 @@ impl<'a> AnchorArrival<'a> {
                     kin.rot_world_to_cam = prop_rot;
                     kin.vel_enu_mps = self.state.prev_vel;
                 }
+                if let (Some(session), Some(kin)) = (
+                    self.state.corridor_session.as_mut(),
+                    self.state.kinematic.clone(),
+                ) {
+                    session.dead_reckoner.kinematic = kin;
+                }
             }
             propagated_pose = Some((prop_eye, prop_rot));
-            let adm = classify_anchor_cell(
-                &mut self.state.visited_cells,
-                self.independent_fixes,
-                self.catalog_sha256,
-                cand.eye,
-                self.cell_m,
-                &outcome.case_id,
-            );
+
+            let mut prop_cand = cand.clone();
+            prop_cand.eye = prop_eye;
+            prop_cand.rotation = prop_rot;
+            let frame_opt = self
+                .local_frame
+                .or_else(|| LocalFrame::wgs84_enu(40.0, -75.0).ok());
+            let adm = if let Some(lf) = frame_opt
+                && let Ok(report) = self.state.admit_anchor(
+                    &prop_cand,
+                    lf,
+                    self.catalog_sha256,
+                    self.cell_m,
+                    &outcome.case_id,
+                    "corridor-background-anchor",
+                ) {
+                if report.independent_ekf_fix {
+                    *self.independent_fixes += 1;
+                }
+                super::admission::FusionAdmission::from_session_report(report)
+            } else {
+                classify_anchor_cell(
+                    &mut self.state.visited_cells,
+                    self.independent_fixes,
+                    self.catalog_sha256,
+                    cand.eye,
+                    self.cell_m,
+                    &outcome.case_id,
+                )
+            };
             if let Some(map) = record.as_object_mut() {
                 map.insert("independent_ekf_fix".into(), adm.independent_ekf_fix.into());
                 map.insert("fusion_eligibility".into(), adm.fusion_eligibility.into());
@@ -282,6 +337,8 @@ impl<'a> AnchorArrival<'a> {
         results: &'a mut Vec<Value>,
         catalog_sha256: &'a str,
         cell_m: f64,
+        local_frame: Option<LocalFrame>,
+        focal_estimator: &'a mut FocalLengthEstimator,
         outcome: AnchorOutcome,
         arrived_at: Option<&str>,
     ) -> Option<([f64; 3], Matrix3<f64>)> {
@@ -292,6 +349,8 @@ impl<'a> AnchorArrival<'a> {
             results,
             catalog_sha256,
             cell_m,
+            local_frame,
+            focal_estimator: Some(focal_estimator),
         }
         .apply(outcome, arrived_at)
     }

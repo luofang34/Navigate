@@ -1,29 +1,41 @@
-//! Frame pose solving, warm track gating, track top-up, and anchor submission.
+//! Frame pose solving, warm track gating, track top-up, and session anchor submission.
 
 use crate::{
     PipelineError,
     corridor::{
         CorridorTrackOptions,
-        admission::{FusionAdmission, classify_anchor_cell, seed_tracks, top_up_tracks},
-        anchor::acquire_corridor_anchor,
+        admission::{FusionAdmission, classify_anchor_cell, seed_tracks, top_up_tracks_with_bank},
+        anchor::{
+            AnchorQueryAux, acquire_corridor_anchor, is_plausible_anchor_candidate,
+            multitier::SearchTierMatcher, plausibility::compute_fisher_geometry_covariance,
+        },
         anchor_worker::{AnchorJob, BackgroundAnchor},
-        kinematics::{project_track_strategy, should_force_anchor},
+        kinematics::{CHI2_GATE_3DOF_99, project_track_strategy, should_force_anchor},
         latency::StageLatencies,
         masking::AmortizedMasker,
         motion::{TrackState, predict_interframe_pose, try_warm_track},
     },
     pose::PoseCandidate,
+    stages::{focal::FocalLengthEstimator, scaled_size},
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
+use image::GrayImage;
 use nalgebra::Matrix3;
 use navigate_match::{
     ActiveTrackSet, CorridorTileStore, HadamardProjector, LighterGlue, PreparedKashinQuery,
     SparseFeatures,
 };
+use navigate_visual::LocalFrame;
 use serde_json::Value;
 use std::{sync::Mutex, time::Instant};
+
+/// Compute the live tracking render size for `30 Hz` inference.
+#[must_use]
+pub(super) fn tracking_render_size(case_size: [u32; 2]) -> [u32; 2] {
+    scaled_size(case_size, 800)
+}
 
 /// Context parameters for solving a single frame pose.
 pub(super) struct FrameSolveParams<'a> {
@@ -33,14 +45,17 @@ pub(super) struct FrameSolveParams<'a> {
     pub sync_gpu_renderer: &'a Mutex<Option<SurfaceGpuRenderer>>,
     pub xfeat: &'a LoadedXFeat,
     pub lighterglue: Option<&'a LighterGlue>,
+    pub search_tier_matcher: Option<&'a SearchTierMatcher>,
     pub opts: &'a CorridorTrackOptions,
     pub case: &'a PhotoCase,
     pub qry_feat: &'a SparseFeatures,
     pub prepared: &'a PreparedKashinQuery,
+    pub mask_small: &'a GrayImage,
     pub k: Matrix3<f64>,
     pub k_render: Matrix3<f64>,
     pub render_size: [u32; 2],
     pub masker: &'a AmortizedMasker,
+    pub local_frame: Option<LocalFrame>,
     pub nominal_agl_m: f64,
     pub dt_s: f64,
     pub cell_m: f64,
@@ -58,10 +73,12 @@ pub(super) struct FrameSolveOutcome {
     pub attempts_log: Vec<Value>,
 }
 
-/// Solves camera pose for the current frame using warm tracking or anchor acquisition.
+/// Solve camera pose for the current frame using warm tracking or anchor acquisition.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn solve_frame_pose(
     params: FrameSolveParams<'_>,
     state: &mut TrackState,
+    focal_estimator: &mut FocalLengthEstimator,
     background_anchor: &mut Option<BackgroundAnchor>,
     independent_fixes: &mut usize,
     latencies: &mut StageLatencies,
@@ -72,6 +89,7 @@ pub(super) fn solve_frame_pose(
     let mut attempts_log = Vec::new();
     let mut lg_layers = 0_usize;
     let mut polish_rays = 0_usize;
+    let focal_locked = focal_estimator.locked_focal_px.is_some();
 
     let pred_pose = params.arrived_pose.or_else(|| {
         predict_interframe_pose(
@@ -96,27 +114,53 @@ pub(super) fn solve_frame_pose(
         params.cell_m,
     );
 
-    if force_anchor
-        && !state.active_tracks.is_empty()
-        && let Some(worker) = background_anchor.as_mut()
-    {
-        let seq = state.frame_seq;
-        let _ = worker.submit_if_idle(|| AnchorJob {
-            sent_frame_seq: seq,
-            case: params.case.clone(),
-            qry_feat: params.qry_feat.clone(),
-            prepared: params.prepared.clone(),
-            k: params.k,
-            k_render: params.k_render,
-            render_size: params.render_size,
-            pred_pose,
-            live_attitude: params.masker.horizon_attitude(&params.k_render),
-        })?;
+    if force_anchor && !state.active_tracks.is_empty() && background_anchor.is_some() {
+        if state.frames_since_anchor >= 3
+            && let Some(worker) = background_anchor.as_mut()
+        {
+            let seq = state.frame_seq;
+            let mask_clone = params.mask_small.clone();
+            let _ = worker.submit_if_idle(|| AnchorJob {
+                sent_frame_seq: seq,
+                case: params.case.clone(),
+                qry_feat: params.qry_feat.clone(),
+                prepared: params.prepared.clone(),
+                k: params.k,
+                k_render: params.k_render,
+                render_size: params.render_size,
+                pred_pose,
+                live_attitude: params.masker.horizon_attitude(&params.k_render),
+                mask_small: Some(mask_clone),
+                focal_locked,
+            })?;
+        }
         force_anchor = false;
     }
 
+    let predicted_kin = state.kinematic.as_ref().map(|kin| {
+        let mut kp = kin.clone();
+        if let Some((pe, pr)) = pred_pose {
+            kp.eye_enu = pe;
+            kp.rot_world_to_cam = pr;
+        }
+        let step_disp = params.opts.dynamics_profile.max_displacement(params.dt_s);
+        let vel_norm_sq = kp.vel_enu_mps[0] * kp.vel_enu_mps[0]
+            + kp.vel_enu_mps[1] * kp.vel_enu_mps[1]
+            + kp.vel_enu_mps[2] * kp.vel_enu_mps[2];
+        let step_var = if vel_norm_sq < 1e-6 {
+            (step_disp * 0.65).powi(2).max(4.0)
+        } else {
+            let accel_disp =
+                0.5 * params.opts.dynamics_profile.rms_accel_mps2 * params.dt_s * params.dt_s;
+            accel_disp.max(step_disp * 0.30).powi(2).max(2.25)
+        };
+        kp.pos_cov_enu_m2 += Matrix3::identity() * step_var;
+        kp.att_sigma_rad += params.opts.dynamics_profile.max_angular_rate_rad_s * 0.1 * params.dt_s;
+        kp
+    });
+
     let strategy = project_track_strategy(
-        state.kinematic.as_ref(),
+        predicted_kin.as_ref(),
         pred_pose,
         &state.active_tracks,
         &params.k_render,
@@ -139,14 +183,15 @@ pub(super) fn solve_frame_pose(
             strategy,
         )?;
         if let Some(cand) = solved_warm.as_ref() {
-            let passes_gate = if let Some(ref kin) = state.kinematic {
-                let geom_cov = nalgebra::Matrix3::identity()
-                    * (cand.score.train_rms_px.max(0.5).powi(2) * 2.0);
-                kin.mahalanobis_innovation_gate(cand.eye, geom_cov, 11.345)
+            let plausible = is_plausible_anchor_candidate(cand, params.surface);
+            let passes_gate = if let Some(ref kin) = predicted_kin {
+                let cov6 = compute_fisher_geometry_covariance(cand);
+                let geom_cov = cov6.fixed_view::<3, 3>(0, 0).into_owned();
+                kin.mahalanobis_innovation_gate(cand.eye, geom_cov, CHI2_GATE_3DOF_99)
             } else {
                 true
             };
-            if !passes_gate {
+            if !plausible || !passes_gate {
                 solved_warm = None;
             }
         }
@@ -155,10 +200,18 @@ pub(super) fn solve_frame_pose(
     let (best, admission) = if let Some(cand) = solved_warm {
         *warm_tracked_frames += 1;
         state.frames_since_anchor += 1;
-        if cand.score.inliers < 260 {
-            top_up_tracks(
+        state.record_warm_track(&cand, &params.surface.catalog_sha256);
+        let visible_cap = params.qry_feat.len();
+        let target_tracks = 640.min((visible_cap * 3) / 5).max(160);
+        let need_urgent_top_up = state.active_tracks.len() < 128 || cand.score.inliers < 40;
+        let need_periodic_top_up = state.frames_since_anchor.is_multiple_of(6)
+            && state.active_tracks.len() < target_tracks;
+        if need_urgent_top_up || need_periodic_top_up {
+            top_up_tracks_with_bank(
                 &mut state.active_tracks,
                 params.surface,
+                params.store,
+                params.projector,
                 params.prepared,
                 params.qry_feat,
                 &cand,
@@ -169,6 +222,7 @@ pub(super) fn solve_frame_pose(
     } else if let Some(worker) = background_anchor.as_mut() {
         if params.masker.has_usable_key(params.render_size) || !params.masker.has_segformer() {
             let seq = state.frame_seq;
+            let mask_clone = params.mask_small.clone();
             let _ = worker.submit_if_idle(|| AnchorJob {
                 sent_frame_seq: seq,
                 case: params.case.clone(),
@@ -179,6 +233,8 @@ pub(super) fn solve_frame_pose(
                 render_size: params.render_size,
                 pred_pose,
                 live_attitude: params.masker.horizon_attitude(&params.k_render),
+                mask_small: Some(mask_clone),
+                focal_locked,
             })?;
         }
         *acquiring_frames += 1;
@@ -192,7 +248,13 @@ pub(super) fn solve_frame_pose(
             (params.case, params.opts),
             (params.qry_feat, params.prepared),
             (&params.k, &params.k_render, params.render_size),
-            (pred_pose, params.masker.horizon_attitude(&params.k_render)),
+            AnchorQueryAux {
+                pred_pose,
+                live_attitude: params.masker.horizon_attitude(&params.k_render),
+                mask_small: Some(params.mask_small),
+                search_tier_matcher: params.search_tier_matcher,
+                focal_locked,
+            },
             &mut attempts_log,
         )?;
         latencies
@@ -200,8 +262,12 @@ pub(super) fn solve_frame_pose(
             .push(t_anchor.elapsed().as_secs_f64() * 1000.0);
         lg_layers += acq.lg_layers;
         polish_rays += acq.polish_rays;
+        if let Some(locked_px) = acq.locked_focal_px {
+            focal_estimator.locked_focal_px = Some(locked_px);
+        }
         if let Some((_, _, ref cand)) = acq.best
             && cand.score.geometry_accepted
+            && is_plausible_anchor_candidate(cand, params.surface)
         {
             state.frames_since_anchor = 0;
             state.time_since_anchor_s = 0.0;
@@ -212,14 +278,29 @@ pub(super) fn solve_frame_pose(
                 cand,
                 &acq.best_view,
             );
-            let adm = classify_anchor_cell(
-                &mut state.visited_cells,
-                independent_fixes,
-                &params.surface.catalog_sha256,
-                cand.eye,
-                params.cell_m,
-                &params.case.id,
-            );
+            let adm = if let Some(lf) = params.local_frame
+                && let Ok(report) = state.admit_anchor(
+                    cand,
+                    lf,
+                    &params.surface.catalog_sha256,
+                    params.cell_m,
+                    &params.case.id,
+                    "corridor-map-anchor",
+                ) {
+                if report.independent_ekf_fix {
+                    *independent_fixes += 1;
+                }
+                FusionAdmission::from_session_report(report)
+            } else {
+                classify_anchor_cell(
+                    &mut state.visited_cells,
+                    independent_fixes,
+                    &params.surface.catalog_sha256,
+                    cand.eye,
+                    params.cell_m,
+                    &params.case.id,
+                )
+            };
             (acq.best, adm)
         } else {
             state.active_tracks = ActiveTrackSet::empty();

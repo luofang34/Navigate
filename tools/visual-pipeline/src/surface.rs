@@ -328,6 +328,10 @@ impl Surface {
         eye: Vector3<f64>,
         dir: Vector3<f64>,
     ) -> Option<(Vector3<f64>, Rgb<u8>)> {
+        let [_, _, eye_alt] = self.geodetic([eye.x, eye.y, eye.z]);
+        if eye_alt > self.max_elev_m + 50.0 && dir.z >= 0.0 {
+            return None;
+        }
         let max_t = 65_000.0f64;
         let mut prev_t = 10.0f64;
         let mut t = 10.0f64;

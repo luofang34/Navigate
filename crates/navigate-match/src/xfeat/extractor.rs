@@ -143,6 +143,23 @@ pub trait SparseFeatureExtractor: Send + Sync {
     ) -> Result<SparseFeatures, MatchError> {
         self.extract_masked_blocking(image, None, limit)
     }
+
+    /// Extract up to `limit` sparse features across a batch of `(image, valid_mask)` pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when any input fails validation or device execution fails.
+    fn extract_batch_masked_blocking(
+        &self,
+        items: &[(&GrayImage, Option<&GrayImage>)],
+        limit: usize,
+    ) -> Result<Vec<SparseFeatures>, MatchError> {
+        let mut out = Vec::with_capacity(items.len());
+        for &(img, mask) in items {
+            out.push(self.extract_masked_blocking(img, mask, limit)?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -162,6 +179,14 @@ impl SparseFeatureExtractor for XFeat {
         limit: usize,
     ) -> Result<SparseFeatures, MatchError> {
         pollster::block_on(self.extract_masked(image, valid_mask, limit))
+    }
+
+    fn extract_batch_masked_blocking(
+        &self,
+        items: &[(&GrayImage, Option<&GrayImage>)],
+        limit: usize,
+    ) -> Result<Vec<SparseFeatures>, MatchError> {
+        pollster::block_on(self.extract_batch_masked(items, limit))
     }
 }
 
@@ -222,14 +247,47 @@ where
                 "valid mask dimensions do not match image",
             ));
         }
-        let Some(prepared) = XFeat::prepare_dense_input(image)? else {
+        let min = image.as_raw().iter().copied().min().unwrap_or(0);
+        let max = image.as_raw().iter().copied().max().unwrap_or(0);
+        if max.saturating_sub(min) < 2 {
             return Ok(SparseFeatures::empty());
+        }
+        let shape_hint: Vec<Option<usize>> = {
+            let guard = self.session.lock().map_err(|_| MatchError::Device {
+                stage: "xfeat session lock",
+                message: "mutex poisoned".into(),
+            })?;
+            guard
+                .input_shape_hint()
+                .map_or_else(Vec::new, <[Option<usize>]>::to_vec)
         };
-        let input_tensor = HostTensor::new(
-            vec![1, 1, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH],
-            prepared.normalized.clone(),
-        )
-        .map_err(|_| MatchError::Output("invalid XFeat dense input tensor"))?;
+        let channels = shape_hint.get(1).copied().flatten().unwrap_or(1);
+        if channels != 1 && channels != 3 {
+            return Err(MatchError::Output(
+                "unsupported XFeat session input channel count",
+            ));
+        }
+        let static_h = shape_hint.get(2).copied().flatten();
+        let static_w = shape_hint.get(3).copied().flatten();
+        let in_w = static_w.unwrap_or(XFEAT_INPUT_WIDTH);
+        let in_h = static_h.unwrap_or(XFEAT_INPUT_HEIGHT);
+        let prep_w = static_w.unwrap_or(PREPARE_WIDTH);
+        let prep_h = static_h.unwrap_or(PREPARE_HEIGHT);
+
+        let prepared = input::prepare(image, [prep_w, prep_h])?;
+        let plane =
+            decode::normalize_resized_dims(&prepared.values, [prep_w, prep_h], [in_w, in_h]);
+        let buffer = if channels == 3 {
+            let mut rgb = Vec::with_capacity(3 * plane.len());
+            for _ in 0..3 {
+                rgb.extend_from_slice(&plane);
+            }
+            rgb
+        } else {
+            plane
+        };
+        let input_tensor = HostTensor::new(vec![1, channels, in_h, in_w], buffer)
+            .map_err(|_| MatchError::Output("invalid XFeat dense input tensor"))?;
         let inputs = [NamedTensor::new(self.input_name.clone(), input_tensor)];
         let outputs = {
             let mut guard = self.session.lock().map_err(|_| MatchError::Device {
@@ -241,19 +299,171 @@ where
                 message: e.to_string(),
             })?
         };
-        let find = |primary: &str, fallback_idx: usize| -> Result<Vec<f32>, MatchError> {
+        decode_session_outputs(
+            &outputs,
+            &prepared,
+            [prep_w, prep_h],
+            [in_w, in_h],
+            image,
+            valid_mask,
+            limit,
+        )
+    }
+}
+
+fn decode_session_outputs(
+    outputs: &[NamedTensor<HostTensor>],
+    prepared: &input::InputImage,
+    prep_dims: [usize; 2],
+    in_dims: [usize; 2],
+    image: &GrayImage,
+    valid_mask: Option<&GrayImage>,
+    limit: usize,
+) -> Result<SparseFeatures, MatchError> {
+    if let Some(sparse_kp) = outputs
+        .iter()
+        .find(|t| t.name == "keypoints" && t.tensor.shape().last() == Some(&2))
+    {
+        return decode_sparse_session_outputs(
+            outputs, sparse_kp, prepared, prep_dims, in_dims, image, valid_mask, limit,
+        );
+    }
+
+    let desc_tensor = outputs
+        .iter()
+        .find(|t| t.name == "descriptors" || t.name == "feats")
+        .or_else(|| {
             outputs
                 .iter()
-                .find(|t| t.name == primary)
-                .or_else(|| outputs.get(fallback_idx))
-                .map(|t| t.tensor.as_slice().to_vec())
-                .ok_or(MatchError::Output("missing dense XFeat session output"))
-        };
-        let maps = DenseMaps {
-            descriptors: find("descriptors", 0)?,
-            keypoint_logits: find("keypoint_logits", 1)?,
-            reliability: find("reliability", 2)?,
-        };
-        XFeat::decode_dense_masked(&maps, &prepared, image, valid_mask, limit)
+                .find(|t| t.tensor.shape().len() == 4 && t.tensor.shape()[1] == 64)
+        })
+        .or_else(|| outputs.first())
+        .ok_or(MatchError::Output("missing dense XFeat descriptor output"))?;
+
+    let d_shape = desc_tensor.tensor.shape();
+    let (gh, gw) = if d_shape.len() == 4 && d_shape[1] == 64 {
+        (d_shape[2], d_shape[3])
+    } else {
+        (in_dims[1] / 8, in_dims[0] / 8)
+    };
+    let grid_in_dims = [gw * 8, gh * 8];
+    let cells = gh * gw;
+    let descriptors = desc_tensor.tensor.as_slice().to_vec();
+
+    let logits_opt = outputs
+        .iter()
+        .find(|t| {
+            t.name == "keypoint_logits"
+                || (t.tensor.shape().len() == 4 && t.tensor.shape()[1] == 65)
+        })
+        .or_else(|| {
+            outputs
+                .get(1)
+                .filter(|t| t.tensor.as_slice().len() == 65 * cells)
+        });
+
+    let scores = if let Some(logits_t) = logits_opt {
+        let rel = outputs
+            .iter()
+            .find(|t| {
+                t.name == "reliability"
+                    || t.name == "heatmap"
+                    || (t.tensor.shape().len() == 4
+                        && t.tensor.shape()[1] == 1
+                        && t.tensor.as_slice().len() == cells)
+            })
+            .map_or_else(|| vec![1.0_f32; cells], |t| t.tensor.as_slice().to_vec());
+        decode::reference_scores_grid(logits_t.tensor.as_slice(), &rel, grid_in_dims)
+    } else if let Some(heat_full) = outputs
+        .iter()
+        .find(|t| !std::ptr::eq(*t, desc_tensor) && t.tensor.as_slice().len() == cells * 64)
+    {
+        let rel = vec![1.0_f32; cells];
+        decode::scores_from_heatmap_grid(heat_full.tensor.as_slice(), &rel, grid_in_dims)
+    } else {
+        return Err(MatchError::Output("missing dense XFeat keypoint output"));
+    };
+
+    let scored = ScoredMaps {
+        descriptors,
+        scores,
+    };
+    decode::decode_grid(
+        &scored,
+        prepared,
+        prep_dims,
+        grid_in_dims,
+        image,
+        valid_mask,
+        limit,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_sparse_session_outputs(
+    outputs: &[NamedTensor<HostTensor>],
+    kp_tensor: &NamedTensor<HostTensor>,
+    prepared: &input::InputImage,
+    prep_dims: [usize; 2],
+    in_dims: [usize; 2],
+    image: &GrayImage,
+    valid_mask: Option<&GrayImage>,
+    limit: usize,
+) -> Result<SparseFeatures, MatchError> {
+    let desc_tensor = outputs
+        .iter()
+        .find(|t| t.name == "descriptors" || t.tensor.shape().last() == Some(&64))
+        .ok_or(MatchError::Output(
+            "missing sparse XFeat descriptors output",
+        ))?;
+    let kp_slice = kp_tensor.tensor.as_slice();
+    let desc_slice = desc_tensor.tensor.as_slice();
+    let count = (kp_slice.len() / 2).min(desc_slice.len() / 64);
+    let score_slice = outputs
+        .iter()
+        .find(|t| t.name == "scores" || t.tensor.as_slice().len() == count)
+        .map(|t| t.tensor.as_slice());
+
+    let sx = prep_dims[0] as f32 / in_dims[0].max(1) as f32;
+    let sy = prep_dims[1] as f32 / in_dims[1].max(1) as f32;
+    let mut ranked: Vec<(usize, f32, [f64; 2], [f32; 2])> = Vec::with_capacity(count);
+    for i in 0..count {
+        let kx = kp_slice[2 * i];
+        let ky = kp_slice[2 * i + 1];
+        if !kx.is_finite() || !ky.is_finite() {
+            continue;
+        }
+        let model = [kx * sx, ky * sy];
+        let pixel = prepared.source([f64::from(model[0]), f64::from(model[1])]);
+        if !input::inside(pixel, image) {
+            continue;
+        }
+        if let Some(mask) = valid_mask
+            && !decode::mask_allows(pixel, mask)
+        {
+            continue;
+        }
+        let score = score_slice
+            .and_then(|s| s.get(i).copied())
+            .unwrap_or(1.0 - (i as f32) / (count.max(1) as f32));
+        if score.is_finite() && score > 0.0 {
+            ranked.push((i, score, pixel, model));
+        }
     }
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    let mut out = SparseFeatures::empty();
+    for (idx, score, pixel, model) in ranked.into_iter().take(limit) {
+        let raw_d = &desc_slice[idx * 64..(idx + 1) * 64];
+        let norm = raw_d.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if !norm.is_finite() || norm <= 1e-6 {
+            continue;
+        }
+        let desc: [f32; 64] = std::array::from_fn(|c| raw_d[c] / norm);
+        out.pixels.push(pixel);
+        out.model_pixels.push(model);
+        out.scores.push(score);
+        out.descriptors.extend_from_slice(&desc);
+    }
+    Ok(out)
 }

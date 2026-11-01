@@ -184,6 +184,8 @@ fn base_track_opts(
         xfeat_weights_path: xfeat_path.to_path_buf(),
         lighterglue_weights_path: None,
         seg_model_dir: None,
+        dinov2_weights_path: None,
+        place_index_path: None,
         dynamics_profile: navigate_visual_pipeline::corridor::VehicleDynamicsProfile::default(),
         mask_policy: "airframe-occlusions".into(),
         mask_interval: 5,
@@ -204,6 +206,7 @@ fn base_track_opts(
         focal_35mm_override: None,
         only_cases: None,
         background_refresh,
+        pace_realtime: false,
         xfeat_runtime: XFeatRuntimeConfig::default(),
     }
 }
@@ -320,6 +323,9 @@ fn corridor_build_and_track_roundtrip_and_contracts() -> TestResult {
         "warm_track_p99_ms",
         "anchor_p50_ms",
         "seg_refresh_p50_ms",
+        "filter_integrity",
+        "trajectory_revisions",
+        "session_revision",
     ] {
         assert!(
             track_summary.get(key).is_some(),

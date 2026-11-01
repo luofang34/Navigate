@@ -429,3 +429,62 @@ fn f16_backbone_preserves_encoder_contract_and_descriptor_cosine_above_0999() {
         assert_eq!(via_session.len(), via_burn.len());
     }
 }
+
+#[test]
+fn batched_extraction_and_static_3ch_session_match_expectations() {
+    let device = Device::flex();
+    let model = XFeat::load(synthetic_xfeat_weights(), &device).expect("load synthetic XFeat");
+    let img_a = textured_image(160, 120);
+    let img_b = textured_image(200, 150);
+    let flat = GrayImage::from_pixel(64, 64, image::Luma([90]));
+    let mask_a = GrayImage::from_fn(160, 120, |_, y| image::Luma([if y < 60 { 0 } else { 255 }]));
+
+    let seq_a = pollster::block_on(model.extract_masked(&img_a, Some(&mask_a), 128)).expect("a");
+    let seq_b = pollster::block_on(model.extract_masked(&img_b, None, 128)).expect("b");
+    let batched = pollster::block_on(model.extract_batch_masked(
+        &[(&img_a, Some(&mask_a)), (&flat, None), (&img_b, None)],
+        128,
+    ))
+    .expect("batch");
+    assert_eq!(batched.len(), 3);
+    assert_same_keypoints(&batched[0], &seq_a);
+    assert!(batched[1].is_empty());
+    assert_same_keypoints(&batched[2], &seq_b);
+
+    struct Static3ChTwoOut([Option<usize>; 4]);
+    impl crate::traits::ModelInference for Static3ChTwoOut {
+        type Tensor = crate::traits::HostTensor;
+        type Error = MatchError;
+        fn engine_kind(&self) -> crate::traits::EngineKind {
+            crate::traits::EngineKind::Ort
+        }
+        fn input_shape_hint(&self) -> Option<&[Option<usize>]> {
+            Some(&self.0)
+        }
+        fn forward(
+            &mut self,
+            inputs: &[crate::traits::NamedTensor<Self::Tensor>],
+        ) -> Result<Vec<crate::traits::NamedTensor<Self::Tensor>>, Self::Error> {
+            assert_eq!(inputs[0].tensor.shape(), &[1, 3, 600, 800]);
+            let cells = 75 * 100;
+            let (mut desc, mut logits) = (vec![0.1_f32; 64 * cells], vec![0.0_f32; 65 * cells]);
+            desc[3750] = 1.0;
+            logits[27 * cells + 3750] = 8.0;
+            let t = |n: &str, s: Vec<usize>, v| {
+                crate::traits::NamedTensor::new(n, crate::traits::HostTensor::new(s, v).expect("t"))
+            };
+            Ok(vec![
+                t("feats", vec![1, 64, 75, 100], desc),
+                t("keypoints", vec![1, 65, 75, 100], logits),
+            ])
+        }
+    }
+
+    let hint = [Some(1), Some(3), Some(600), Some(800)];
+    let adapter = ModelSessionExtractor::new(Static3ChTwoOut(hint), "images", [9; 32], "coreml");
+    let out = adapter
+        .extract_masked_blocking(&textured_image(400, 300), None, 16)
+        .expect("static 3ch 2-output extract");
+    assert_eq!(out.len(), 1);
+    assert!((out.pixels[0][0] - 201.5).abs() < 2.0 && (out.pixels[0][1] - 149.5).abs() < 2.0);
+}

@@ -47,6 +47,7 @@ fn outcome(seq: usize, case_id: &str, eye: [f64; 3], accepted: bool) -> AnchorOu
         render_size: [800, 600],
         best: Some(candidate(eye)),
         seeded: accepted.then(ActiveTrackSet::empty),
+        locked_focal_px: None,
         attempts: 3,
         elapsed_ms: 12.5,
     }
@@ -67,6 +68,8 @@ fn arrivals_count_fixes_for_the_sent_frame_and_keep_tracks_on_rejection() {
         results: &mut results,
         catalog_sha256: "catalog",
         cell_m: 500.0,
+        local_frame: None,
+        focal_estimator: None,
     };
 
     arrival.state.frames_since_anchor = 7;
@@ -133,6 +136,7 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         render_size: [800, 600],
         best: Some(candidate([0.0, 0.0, 0.0])),
         seeded: Some(tracks),
+        locked_focal_px: None,
         attempts: 1,
         elapsed_ms: 8.0,
     };
@@ -147,6 +151,8 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         results: &mut results,
         catalog_sha256: "catalog",
         cell_m: 500.0,
+        local_frame: None,
+        focal_estimator: None,
     }
     .apply(delayed, Some("f-0003"))
     .expect("propagated pose");

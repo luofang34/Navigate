@@ -58,13 +58,13 @@ fn challenge_f16_frame1_segformer_gating() -> TestResult {
         "Cold anchor job must be allowed immediately when Segformer is disabled"
     );
 
-    // Initial fast pass with no segformer returns Ok(false)
+    // Initial fast pass with no Segformer returns Ok(None).
     let dummy_rgb = RgbImage::new(dims[0], dims[1]);
     let mut masker_mut = masker_no_seg;
     let fast_pass_result = masker_mut.fast_initial_pass(&dummy_rgb, None)?;
     assert!(
-        !fast_pass_result,
-        "Fast pass without model should return false without error"
+        fast_pass_result.is_none(),
+        "Fast pass without model must return None without error"
     );
 
     Ok(())

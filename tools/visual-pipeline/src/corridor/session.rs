@@ -2,5 +2,6 @@
 
 pub use navigate_locate::corridor::session::{
     AnchorWorkerState, DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner,
-    VisualCorridorSession, can_update_vertical_velocity,
+    FilterIntegritySnapshot, SessionAnchorReport, VisualCorridorSession,
+    can_update_vertical_velocity,
 };

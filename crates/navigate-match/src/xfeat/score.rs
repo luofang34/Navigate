@@ -22,21 +22,22 @@ pub(super) struct ScoredMaps {
     pub(super) scores: Vec<f32>,
 }
 
-/// Convert `[1, 65, 72, 100]` logits and `[1, 1, 72, 100]` reliability to a
-/// `[1, 1, 576, 800]` score map.
+/// Convert `[B, 65, 72, 100]` logits and `[B, 1, 72, 100]` reliability to a
+/// `[B, 1, 576, 800]` score map.
 pub(super) fn score_map(
     logits: Tensor<4>,
     reliability: Tensor<4>,
     upsample: &Resample,
 ) -> Result<Tensor<4>, MatchError> {
+    let [batch, _, _, _] = logits.dims();
     let (height, width) = (GRID_HEIGHT * 8, GRID_WIDTH * 8);
     // Channel `c = dy * 8 + dx` of cell `(cy, cx)` is model pixel
     // `(cy * 8 + dy, cx * 8 + dx)`; channel 64 is the "no keypoint" dustbin.
     let heatmap = softmax(logits, 1)
-        .slice([0..1, 0..64, 0..GRID_HEIGHT, 0..GRID_WIDTH])
-        .reshape([1, 8, 8, GRID_HEIGHT, GRID_WIDTH])
+        .slice([0..batch, 0..64, 0..GRID_HEIGHT, 0..GRID_WIDTH])
+        .reshape([batch, 8, 8, GRID_HEIGHT, GRID_WIDTH])
         .permute([0, 3, 1, 4, 2])
-        .reshape([1, 1, height, width]);
+        .reshape([batch, 1, height, width]);
     let pooled = max_pool2d(
         heatmap.clone(),
         MaxPoolOptions::new([NMS_WINDOW; 2])

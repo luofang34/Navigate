@@ -1,10 +1,11 @@
-//! Two-tier `25-30 Hz` temporal corridor tracker, windowed tile streaming, and [`MapCell`] EKF gate.
+//! Two-tier `25-30 Hz` temporal corridor tracker, session fusion, and windowed tile streaming.
 
 use super::{
     CorridorTrackOptions,
     admission::{
         apply_case_overrides, estimate_lookahead_enu, prior_odometry_hint, write_corridor_report,
     },
+    anchor::multitier::load_search_tier_matcher,
     anchor_worker::{AnchorArrival, AnchorContext, BackgroundAnchor},
     kinematics::compute_dt_s,
     latency::StageLatencies,
@@ -20,8 +21,8 @@ use crate::{
     PipelineError,
     realtime::helpers::{check_encoder_contract, load_lighterglue_model, raw_file_sha256},
     stages::{
-        estimate_intrinsics, load_case_mask, load_case_rgb, load_profile_cases, scale_k,
-        scaled_size,
+        estimate_intrinsics_with_estimator, focal::FocalLengthEstimator, load_case_mask,
+        load_case_rgb, load_profile_cases, scale_k,
     },
     surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
@@ -33,9 +34,10 @@ use lookahead::ensure_lookahead_tiles;
 use navigate_match::{
     CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery, SparseFeatures,
 };
+use navigate_visual::{CameraModel, LocalFrame};
 use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
 use serde_json::{Value, json};
-use solve::{FrameSolveParams, solve_frame_pose};
+use solve::{FrameSolveParams, solve_frame_pose, tracking_render_size};
 use std::{
     fs,
     sync::{Arc, Mutex},
@@ -49,6 +51,7 @@ use std::{
 /// Returns [`PipelineError`] when bank verification, masking, matching, or report writing fails.
 pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, PipelineError> {
     let surface = Arc::new(Surface::from_catalog(&opts.catalog_path)?);
+    let local_frame = LocalFrame::wgs84_enu(surface.origin_lat, surface.origin_lon).ok();
     let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
     let xfeat = LoadedXFeat::load(&opts.xfeat_weights_path, &opts.xfeat_runtime)?;
     let lighterglue = opts
@@ -66,6 +69,13 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         ));
     }
     check_encoder_contract("corridor bank", &store.encoder_contract, &xfeat)?;
+
+    let search_tier_matcher = load_search_tier_matcher(
+        opts.dinov2_weights_path.as_deref(),
+        opts.place_index_path.as_deref(),
+        Arc::clone(&store),
+        xfeat.device(),
+    )?;
 
     let seg_device = if opts.background_refresh {
         burn::tensor::Device::flex()
@@ -130,6 +140,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 projector,
                 xfeat: xfeat.clone(),
                 lighterglue: lighterglue.clone(),
+                search_tier_matcher: search_tier_matcher.clone(),
                 opts: opts.clone(),
             })
         })
@@ -160,10 +171,32 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     );
     let min_trk_inliers = opts.min_track_inliers.max(24);
     let mut state = TrackState::new();
+    let mut focal_estimator = FocalLengthEstimator::default();
+    if let Some(first_raw) = cases.first() {
+        let first_case = apply_case_overrides(first_raw, opts);
+        let rs = tracking_render_size(first_case.size);
+        let kf = estimate_intrinsics_with_estimator(&first_case, &focal_estimator);
+        let sx = f64::from(rs[0]) / f64::from(first_case.size[0].max(1));
+        let sy = f64::from(rs[1]) / f64::from(first_case.size[1].max(1));
+        let kr = scale_k(&kf, sx, sy);
+        let cam_model = CameraModel {
+            width: rs[0].max(32),
+            height: rs[1].max(32),
+            fx: kr[(0, 0)].max(10.0),
+            fy: kr[(1, 1)].max(10.0),
+            cx: kr[(0, 2)],
+            cy: kr[(1, 2)],
+        };
+        state
+            .configure_session(cam_model, cell_m)
+            .map_err(PipelineError::Invalid)?;
+    }
+
     let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
     let (mut warm_tracked_frames, mut independent_fixes, mut seg_refreshes) =
         (0_usize, 0_usize, 0_usize);
     let mut telemetry = Vec::new();
+    let mut pace_origin: Option<(f64, Instant)> = None;
 
     for raw_case in &cases {
         if let Some(allow) = &opts.only_cases
@@ -172,6 +205,29 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             continue;
         }
         evaluated += 1;
+        if opts.pace_realtime
+            && let Some(t_s) = raw_case.time_s.filter(|t| t.is_finite())
+        {
+            if let Some((t0_s, wall0)) = pace_origin {
+                let target_s = (t_s - t0_s).max(0.0);
+                let elapsed_s = wall0.elapsed().as_secs_f64();
+                if target_s > elapsed_s {
+                    std::thread::sleep(std::time::Duration::from_secs_f64(target_s - elapsed_s));
+                }
+            } else {
+                pace_origin = Some((t_s, Instant::now()));
+            }
+        }
+        let cold_blocked_outcome = if !opts.pace_realtime
+            && evaluated > 1
+            && state.active_tracks.is_empty()
+            && state.prev_eye.is_none()
+            && let Some(worker) = background_anchor.as_mut()
+        {
+            worker.wait_for_shutdown()?
+        } else {
+            None
+        };
         let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
 
@@ -195,8 +251,8 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             .then(|| load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size))
             .transpose()?;
 
-        let k = estimate_intrinsics(&case);
-        let render_size = scaled_size(case.size, 800);
+        let k = estimate_intrinsics_with_estimator(&case, &focal_estimator);
+        let render_size = tracking_render_size(case.size);
         let sx = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
         let sy = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
         let k_render = scale_k(&k, sx, sy);
@@ -214,12 +270,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             .prev_rot
             .or(state.vo_rot)
             .map(|r| state.prev_rot_step * r);
-        if evaluated == 1
-            && state.active_tracks.is_empty()
-            && masker.has_segformer()
-            && let Err(e) = masker.fast_initial_pass(&qry_small, est_rot_for_mask.as_ref())
-        {
-            tracing::warn!("frame 1 fast Segformer pass failed: {e}");
+        if evaluated == 1 && state.active_tracks.is_empty() && masker.has_segformer() {
+            match masker.fast_initial_pass(&qry_small, est_rot_for_mask.as_ref()) {
+                Ok(Some(ms)) => {
+                    seg_refreshes += 1;
+                    latencies.seg_refresh_ms.push(ms);
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("frame 1 fast Segformer pass failed: {e}"),
+            }
         }
         let qry_gray = grayscale(&qry_small);
         let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker.mask_frame_with_luma(
@@ -248,6 +307,9 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let dt_s = compute_dt_s(case.time_s, state.prev_time_s, 30.0);
         state.prev_time_s = case.time_s;
         state.time_since_anchor_s += dt_s;
+        state
+            .observe_frame(case.time_s, dt_s, &case.image_sha256, &case.id)
+            .map_err(PipelineError::Invalid)?;
 
         let (prior_rot_hint, nominal_agl_m) =
             prior_odometry_hint(&surface, &case, &masker, &k_render);
@@ -262,9 +324,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         );
 
         let mut arrived_pose = None;
-        if let Some(worker) = background_anchor.as_mut()
-            && let Some(outcome) = worker.poll()?
-        {
+        let polled_outcome = match cold_blocked_outcome {
+            Some(done) => Some(done),
+            None => background_anchor
+                .as_mut()
+                .map(BackgroundAnchor::poll)
+                .transpose()?
+                .flatten(),
+        };
+        if let Some(outcome) = polled_outcome {
             arrived_pose = AnchorArrival::apply_outcome(
                 &mut state,
                 &mut independent_fixes,
@@ -272,6 +340,8 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 &mut anchor_results,
                 &surface.catalog_sha256,
                 cell_m,
+                local_frame,
+                &mut focal_estimator,
                 outcome,
                 Some(&case.id),
             );
@@ -280,6 +350,9 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             }
         }
 
+        let k_after_arrival = estimate_intrinsics_with_estimator(&case, &focal_estimator);
+        let k_render_after_arrival = scale_k(&k_after_arrival, sx, sy);
+
         let solve_params = FrameSolveParams {
             surface: &surface,
             store: &store,
@@ -287,14 +360,17 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             sync_gpu_renderer: &sync_gpu_renderer,
             xfeat: &xfeat,
             lighterglue: lighterglue.as_ref(),
+            search_tier_matcher: search_tier_matcher.as_deref(),
             opts,
             case: &case,
             qry_feat: &qry_feat,
             prepared: &prepared,
-            k,
-            k_render,
+            mask_small: &mask_small,
+            k: k_after_arrival,
+            k_render: k_render_after_arrival,
             render_size,
             masker: &masker,
+            local_frame,
             nominal_agl_m,
             dt_s,
             cell_m,
@@ -304,6 +380,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let outcome = solve_frame_pose(
             solve_params,
             &mut state,
+            &mut focal_estimator,
             &mut background_anchor,
             &mut independent_fixes,
             &mut latencies,
@@ -325,10 +402,13 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         } else {
             advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
         }
+        let filter_snap = state.filter_snapshot(local_frame);
 
         let total_case_ms = case_t0.elapsed().as_secs_f64() * 1000.0;
         if admission.tracking_mode == "warm_track" {
-            latencies.warm_track_ms.push(total_case_ms);
+            latencies
+                .warm_track_ms
+                .push(mask_tel.mask_ms + query_xfeat_ms + solve_ms);
         }
         let is_accepted = best
             .as_ref()
@@ -339,6 +419,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             is_accepted,
             xfeat.runtime_name(),
             &admission,
+            &filter_snap,
             state.active_tracks.len(),
             store.cached_tile_count(),
             store.resident_window_bytes(),
@@ -356,6 +437,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &surface,
             &case.id,
             &admission,
+            &filter_snap,
             attempts_log,
             best,
             &mut accepted,
@@ -371,12 +453,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 &mut anchor_results,
                 &surface.catalog_sha256,
                 cell_m,
+                local_frame,
+                &mut focal_estimator,
                 outcome,
                 None,
             );
         }
         drop(worker);
     }
+    let final_filter_snap = state.filter_snapshot(local_frame);
     let mut tiles_built_live = sync_tiles_built;
     if let Some(mut tb) = tile_builder.take() {
         tb.poll(&mut tile_build_ms)?;
@@ -404,6 +489,8 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         background_refresh: opts.background_refresh,
         anchor_results,
         latencies: &latencies,
+        filter_snap: &final_filter_snap,
+        locked_focal_px: focal_estimator.locked_focal_px,
     });
     Ok(summary)
 }

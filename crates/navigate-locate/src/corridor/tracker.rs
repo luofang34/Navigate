@@ -1,12 +1,16 @@
 //! Sans-IO inter-frame visual odometry and warm 3D landmark tracking.
 
 mod odometry;
+mod session_ops;
 
 pub use odometry::{kabsch_3d, relative_rotation_ransac};
 
-use super::kinematics::{
-    KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile, can_update_vertical_velocity,
-    match_tracks_kashin, orthonormalize_so3,
+use super::{
+    kinematics::{
+        KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile,
+        can_update_vertical_velocity, match_tracks_kashin, orthonormalize_so3,
+    },
+    session::VisualCorridorSession,
 };
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::{ActiveTrackSet, MatchError, PreparedKashinQuery, TrackMatchConfig};
@@ -39,7 +43,7 @@ pub struct WarmTrackAttempt {
     pub candidate: Option<PoseCandidate>,
 }
 
-/// Sans-IO 3D landmark and visual odometry tracker state machine.
+/// Sans-IO 3D landmark, visual odometry, session, and dead-reckoning tracker state machine.
 pub struct CorridorTracker {
     /// Active 3D map landmarks tracked across frames.
     pub active_tracks: ActiveTrackSet,
@@ -61,7 +65,7 @@ pub struct CorridorTracker {
     pub pose_steps: VecDeque<OdometryStep>,
     /// Frames elapsed since the last accepted map anchor.
     pub frames_since_anchor: usize,
-    /// Visited map cells keyed by cell index.
+    /// Visited map cells synchronized with [`VisualSession`](navigate_visual_session::VisualSession).
     pub visited_cells: BTreeMap<MapCell, String>,
     /// Previous frame timestamp in seconds.
     pub prev_time_s: Option<f64>,
@@ -69,6 +73,12 @@ pub struct CorridorTracker {
     pub time_since_anchor_s: f64,
     /// Continuous-time kinematic state and covariance.
     pub kinematic: Option<KinematicState>,
+    /// Count of inter-frame ground optical-flow matches on the current step.
+    pub last_flow_vectors: usize,
+    /// Monotonic capture timestamp in nanoseconds for session and filter admission.
+    pub monotonic_time_ns: u64,
+    /// Embedded visual session, fix source, navigation filter, and dual-path dead reckoner.
+    pub corridor_session: Option<VisualCorridorSession>,
 }
 
 impl Default for CorridorTracker {
@@ -78,7 +88,7 @@ impl Default for CorridorTracker {
 }
 
 impl CorridorTracker {
-    /// Create an empty corridor tracker.
+    /// Create an empty corridor tracker with an initialized visual session and dead reckoner.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -96,6 +106,9 @@ impl CorridorTracker {
             prev_time_s: None,
             time_since_anchor_s: 0.0,
             kinematic: None,
+            last_flow_vectors: 0,
+            monotonic_time_ns: 1_000_000_000,
+            corridor_session: VisualCorridorSession::new().ok(),
         }
     }
 
@@ -135,12 +148,23 @@ impl CorridorTracker {
                 }
             }
         }
+        self.last_flow_vectors = matched_pairs.0.len();
 
-        let eye_delta = if self.prev_eye.is_some() {
+        let eye_delta = if let Some(pe) = self.prev_eye {
+            let pred_eye = self.kinematic.as_ref().map_or_else(
+                || {
+                    [
+                        pe[0] + self.prev_vel[0] * dt_s,
+                        pe[1] + self.prev_vel[1] * dt_s,
+                        pe[2] + self.prev_vel[2] * dt_s,
+                    ]
+                },
+                |k| k.predict_position(dt_s),
+            );
             [
-                self.prev_vel[0] * dt_s,
-                self.prev_vel[1] * dt_s,
-                self.prev_vel[2] * dt_s,
+                pred_eye[0] - pe[0],
+                pred_eye[1] - pe[1],
+                pred_eye[2] - pe[2],
             ]
         } else if let Some(r_world_to_cam) = base_rot {
             estimate_ground_vo_delta(
@@ -190,7 +214,7 @@ impl CorridorTracker {
         (eye, rot)
     }
 
-    /// Update tracker motion and kinematic state from an accepted pose candidate.
+    /// Update tracker motion, kinematic state, and dead reckoner from an accepted pose candidate.
     pub fn update_motion_state(
         &mut self,
         cand: &PoseCandidate,
@@ -235,52 +259,76 @@ impl CorridorTracker {
         } else {
             self.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
         }
+        if let (Some(session), Some(kin)) = (self.corridor_session.as_mut(), self.kinematic.clone())
+        {
+            session.dead_reckoner.kinematic = kin;
+        }
         self.prev_eye = Some(cand.eye);
         self.prev_rot = Some(cand.rotation);
         self.vo_rot = Some(cand.rotation);
         self.prev_prepared = Some(prepared);
     }
 
-    /// Coast tracker state and inflate covariance across an unsolved frame.
+    /// Coast tracker state across an unsolved frame via [`DualPathDeadReckoner`](super::session::DualPathDeadReckoner).
     pub fn advance_unsolved_prepared(
         &mut self,
         prepared: PreparedKashinQuery,
         dt_s: f64,
         profile: &VehicleDynamicsProfile,
     ) {
+        let a_rms = profile.rms_accel_mps2;
+        let omega_rms = profile.max_angular_rate_rad_s * 0.1;
+
         if let Some(pe) = self.prev_eye {
-            let step_delta = self
-                .pose_steps
-                .back()
-                .filter(|s| s.frame_seq == self.frame_seq)
-                .map_or(
-                    [
-                        self.prev_vel[0] * dt_s,
-                        self.prev_vel[1] * dt_s,
-                        self.prev_vel[2] * dt_s,
-                    ],
-                    |s| s.eye_delta,
-                );
-            self.prev_eye = Some([
-                pe[0] + step_delta[0],
-                pe[1] + step_delta[1],
-                pe[2] + step_delta[2],
-            ]);
+            if let Some(session) = self.corridor_session.as_mut() {
+                if let Some(kin) = self.kinematic.clone() {
+                    session.dead_reckoner.kinematic = kin;
+                } else {
+                    let mut kin =
+                        KinematicState::new(pe, self.prev_rot.unwrap_or_else(Matrix3::identity));
+                    kin.vel_enu_mps = self.prev_vel;
+                    session.dead_reckoner.kinematic = kin;
+                }
+                let est = session.dead_reckon(dt_s, self.last_flow_vectors, a_rms, omega_rms);
+                self.prev_eye = Some(est.eye_enu);
+                self.kinematic = Some(session.dead_reckoner.kinematic.clone());
+                if !session.dead_reckoner.external_sensors_available && self.last_flow_vectors < 6 {
+                    session.advance_epoch();
+                }
+                if let Some(last) = self.pose_steps.back_mut()
+                    && last.frame_seq == self.frame_seq
+                {
+                    last.eye_delta = [
+                        est.eye_enu[0] - pe[0],
+                        est.eye_enu[1] - pe[1],
+                        est.eye_enu[2] - pe[2],
+                    ];
+                }
+            } else if let Some(kin) = self.kinematic.as_mut() {
+                kin.propagate_covariance(dt_s, a_rms, omega_rms);
+                let pred = kin.predict_position(dt_s);
+                kin.eye_enu = pred;
+                self.prev_eye = Some(pred);
+            }
+        } else if let Some(session) = self.corridor_session.as_mut()
+            && !session.dead_reckoner.external_sensors_available
+            && self.last_flow_vectors < 6
+        {
+            session.advance_epoch();
         }
+
         if let Some(pr) = self.prev_rot {
             self.prev_rot = Some(orthonormalize_so3(&(self.prev_rot_step * pr)));
-        }
-        if let Some(kin) = self.kinematic.as_mut() {
-            kin.propagate_covariance(
-                dt_s,
-                profile.rms_accel_mps2,
-                profile.max_angular_rate_rad_s * 0.1,
-            );
+            if let Some(kin) = self.kinematic.as_mut()
+                && let Some(r_now) = self.prev_rot
+            {
+                kin.rot_world_to_cam = r_now;
+            }
         }
         self.prev_prepared = Some(prepared);
     }
 
-    /// Predict the next frame camera pose from velocity and inter-frame rotation.
+    /// Predict the next frame camera pose from dead-reckoned kinematics and inter-frame rotation.
     #[must_use]
     pub fn predict_interframe_pose(
         &self,
@@ -292,6 +340,8 @@ impl CorridorTracker {
         let (prev_eye, prev_rot) = (self.prev_eye?, self.prev_rot?);
         let pred_eye = if let Some(kin) = &self.kinematic {
             kin.predict_position(dt_s)
+        } else if let Some(session) = &self.corridor_session {
+            session.dead_reckoner.kinematic.predict_position(dt_s)
         } else {
             [
                 prev_eye[0] + self.prev_vel[0] * dt_s,

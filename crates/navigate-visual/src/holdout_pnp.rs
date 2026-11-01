@@ -4,10 +4,14 @@ pub mod holdout;
 mod l1_gnc;
 #[cfg(test)]
 mod tests;
+mod two_point;
 
 pub use holdout::{MaskAwareSpatialHoldout, QueryRayDomain};
 pub use l1_gnc::{
     fit_pose_hybrid, fit_pose_l1_gnc, point_jacobian, refine_seed_eye_2pt, reproj_error,
+};
+use two_point::{
+    dlt_pnp, select_refined_ransac_candidate, solve_2pt_gravity_pose, solve_2pt_rot_at_eye,
 };
 
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
@@ -139,6 +143,53 @@ pub fn fit_pose_ransac(
             }
         }
         if let Some((eye0, rot0)) = initial_pose {
+            for (ia, ib) in [(0, 1), (2, 3), (4, 5)] {
+                if let Some((eye_g, rot_g)) = solve_2pt_gravity_pose(
+                    world_points[subset[ia]],
+                    world_points[subset[ib]],
+                    image_pixels[subset[ia]],
+                    image_pixels[subset[ib]],
+                    (eye0, rot0),
+                    k,
+                ) {
+                    let count = count_inliers(
+                        world_points,
+                        image_pixels,
+                        &train_idx,
+                        eye_g,
+                        &rot_g,
+                        k,
+                        ransac_px,
+                    );
+                    if count > best_inliers {
+                        best_inliers = count;
+                        best_pose = Some((eye_g, rot_g));
+                    }
+                }
+                if let Some((eye_r, rot_r)) = solve_2pt_rot_at_eye(
+                    world_points[subset[ia]],
+                    world_points[subset[ib]],
+                    image_pixels[subset[ia]],
+                    image_pixels[subset[ib]],
+                    eye0,
+                    k,
+                ) && (((rot_r * rot0.transpose()).trace() - 1.0) * 0.5) >= 0.65
+                {
+                    let count = count_inliers(
+                        world_points,
+                        image_pixels,
+                        &train_idx,
+                        eye_r,
+                        &rot_r,
+                        k,
+                        ransac_px,
+                    );
+                    if count > best_inliers {
+                        best_inliers = count;
+                        best_pose = Some((eye_r, rot_r));
+                    }
+                }
+            }
             let (eye_lm, rot_lm) =
                 refine_pose_lm(&subset[..4], world_points, image_pixels, eye0, rot0, k);
             if (Vector3::from(eye_lm) - Vector3::from(eye0)).norm() <= 5_000.0 {
@@ -159,7 +210,8 @@ pub fn fit_pose_ransac(
         }
     }
 
-    let (mut eye, mut rot) = best_pose?;
+    let (init_best_eye, init_best_rot) = best_pose?;
+    let (mut eye, mut rot) = (init_best_eye, init_best_rot);
     for thresh in [inlier_px * 3.0, inlier_px * 1.5, inlier_px] {
         let inlier_train: Vec<usize> = train_idx
             .iter()
@@ -176,11 +228,23 @@ pub fn fit_pose_ransac(
         }
     }
 
-    Some(score_pose_candidate(
+    let cand_6dof = score_pose_candidate(
         world_points,
         image_pixels,
         &held,
         (eye, rot),
+        k,
+        size,
+        inlier_px,
+    );
+    Some(select_refined_ransac_candidate(
+        world_points,
+        image_pixels,
+        &train_idx,
+        &held,
+        (init_best_eye, init_best_rot),
+        cand_6dof,
+        initial_pose,
         k,
         size,
         inlier_px,
@@ -251,7 +315,7 @@ pub(crate) fn score_pose_candidate(
         && hold_frac >= 0.40
         && hold_median <= 1.5 * inlier_px
         && pos_frac >= 0.98
-        && cells.len() >= 8;
+        && cells.len() >= 6;
 
     let score = PoseScore {
         focal_px: k[(0, 0)],
@@ -307,65 +371,6 @@ fn sample_six(indices: &[usize], seed: u64) -> [usize; 6] {
         guard += 1;
     }
     picked
-}
-
-fn dlt_pnp(
-    subset: &[usize; 6],
-    world: &[[f64; 3]],
-    pixels: &[[f64; 2]],
-    k: &Matrix3<f64>,
-) -> Option<([f64; 3], Matrix3<f64>)> {
-    let fx = k[(0, 0)].max(1e-6);
-    let fy = k[(1, 1)].max(1e-6);
-    let cx = k[(0, 2)];
-    let cy = k[(1, 2)];
-    let mut a = nalgebra::DMatrix::<f64>::zeros(12, 12);
-    for (row_pair, &idx) in subset.iter().enumerate() {
-        let p = world[idx];
-        let xn = (pixels[idx][0] - cx) / fx;
-        let yn = (pixels[idx][1] - cy) / fy;
-        let r0 = row_pair * 2;
-        let r1 = r0 + 1;
-        for c in 0..3 {
-            a[(r0, c)] = p[c];
-            a[(r0, 8 + c)] = -xn * p[c];
-            a[(r1, 4 + c)] = p[c];
-            a[(r1, 8 + c)] = -yn * p[c];
-        }
-        a[(r0, 3)] = 1.0;
-        a[(r0, 11)] = -xn;
-        a[(r1, 7)] = 1.0;
-        a[(r1, 11)] = -yn;
-    }
-    let svd = a.svd(false, true);
-    let v_t = svd.v_t?;
-    let last = v_t.row(v_t.nrows() - 1);
-    let m = Matrix3::new(
-        last[0], last[1], last[2], last[4], last[5], last[6], last[8], last[9], last[10],
-    );
-    let mut t = Vector3::new(last[3], last[7], last[11]);
-    let m_svd = m.svd(true, true);
-    let (u, vt) = (m_svd.u?, m_svd.v_t?);
-    let scale = m_svd.singular_values.sum() / 3.0;
-    if scale <= 1e-12 {
-        return None;
-    }
-    let mut r = u * vt;
-    if r.determinant() < 0.0 {
-        r = -r;
-        t = -t;
-    }
-    t /= scale;
-    let p0 = r * Vector3::from(world[subset[0]]) + t;
-    if p0.z < 0.0 {
-        r = -r;
-        t = -t;
-        if r.determinant() < 0.0 {
-            return None;
-        }
-    }
-    let eye = -(r.transpose() * t);
-    Some(([eye.x, eye.y, eye.z], r))
 }
 
 pub(crate) fn refine_pose_lm(

@@ -274,6 +274,82 @@ impl XFeat {
         decode::decode(&maps, &prepared, image, valid_mask, limit)
     }
 
+    /// Extract up to `limit` sparse keypoints inside optional `valid_mask` across a batch of images.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when any image or mask fails validation or when device read-back fails.
+    pub async fn extract_batch_masked(
+        &self,
+        items: &[(&GrayImage, Option<&GrayImage>)],
+        limit: usize,
+    ) -> Result<Vec<SparseFeatures>, MatchError> {
+        if limit == 0 || limit > 4096 {
+            return Err(MatchError::Output("feature limit must be 1 through 4096"));
+        }
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        const MAX_BATCH: usize = 12;
+        let mut results = vec![SparseFeatures::empty(); items.len()];
+        let mut active_indices = Vec::with_capacity(items.len());
+        let mut prepared_list = Vec::with_capacity(items.len());
+        let mut normalized_list = Vec::with_capacity(items.len());
+
+        for (idx, &(image, valid_mask)) in items.iter().enumerate() {
+            if let Some(mask) = valid_mask
+                && mask.dimensions() != image.dimensions()
+            {
+                return Err(MatchError::Output(
+                    "valid mask dimensions do not match image",
+                ));
+            }
+            let min = image.as_raw().iter().copied().min().unwrap_or(0);
+            let max = image.as_raw().iter().copied().max().unwrap_or(0);
+            if max.saturating_sub(min) < 2 {
+                continue;
+            }
+            let prepared = input::prepare(image, [PREPARE_WIDTH, PREPARE_HEIGHT])?;
+            let normalized = decode::normalize_resized(&prepared.values);
+            active_indices.push(idx);
+            prepared_list.push(prepared);
+            normalized_list.push(normalized);
+        }
+
+        let frame_elems = XFEAT_INPUT_HEIGHT * XFEAT_INPUT_WIDTH;
+        let desc_stride = 64 * GRID_HEIGHT * GRID_WIDTH;
+        let score_stride = XFEAT_INPUT_HEIGHT * XFEAT_INPUT_WIDTH;
+
+        for start in (0..active_indices.len()).step_by(MAX_BATCH) {
+            let end = (start + MAX_BATCH).min(active_indices.len());
+            let chunk_len = end - start;
+            let mut stacked = Vec::with_capacity(chunk_len * frame_elems);
+            for norm in &normalized_list[start..end] {
+                stacked.extend_from_slice(norm);
+            }
+            let batch_maps = self.forward_scored_batch(stacked, chunk_len).await?;
+            for local in 0..chunk_len {
+                let item_idx = active_indices[start + local];
+                let (image, valid_mask) = items[item_idx];
+                let scored = ScoredMaps {
+                    descriptors: batch_maps.descriptors
+                        [local * desc_stride..(local + 1) * desc_stride]
+                        .to_vec(),
+                    scores: batch_maps.scores[local * score_stride..(local + 1) * score_stride]
+                        .to_vec(),
+                };
+                results[item_idx] = decode::decode(
+                    &scored,
+                    &prepared_list[start + local],
+                    image,
+                    valid_mask,
+                    limit,
+                )?;
+            }
+        }
+        Ok(results)
+    }
+
     /// Run the dense convolutional network on a normalized `576 × 800` buffer.
     ///
     /// # Errors
@@ -281,7 +357,7 @@ impl XFeat {
     /// Returns [`MatchError`] when `normalized` does not have `576 * 800` values or
     /// when device execution fails.
     pub async fn forward_dense(&self, normalized: Vec<f32>) -> Result<DenseMaps, MatchError> {
-        let maps = self.dense_tensors(normalized)?;
+        let maps = self.dense_tensors_batch(normalized, 1)?;
         let transaction = Transaction::default()
             .register(maps.descriptors)
             .register(maps.logits)
@@ -296,7 +372,16 @@ impl XFeat {
 
     /// Run the dense network and score keypoint candidates on the device.
     async fn forward_scored(&self, normalized: Vec<f32>) -> Result<ScoredMaps, MatchError> {
-        let maps = self.dense_tensors(normalized)?;
+        self.forward_scored_batch(normalized, 1).await
+    }
+
+    /// Run the dense network and score keypoint candidates for a batch of `batch` images.
+    async fn forward_scored_batch(
+        &self,
+        normalized: Vec<f32>,
+        batch: usize,
+    ) -> Result<ScoredMaps, MatchError> {
+        let maps = self.dense_tensors_batch(normalized, batch)?;
         let scores = score::score_map(maps.logits, maps.reliability, &self.upsample.reliability)?;
         let transaction = Transaction::default()
             .register(maps.descriptors)
@@ -308,27 +393,32 @@ impl XFeat {
         })
     }
 
-    fn dense_tensors(&self, normalized: Vec<f32>) -> Result<DenseTensors, MatchError> {
-        if normalized.len() != XFEAT_INPUT_HEIGHT * XFEAT_INPUT_WIDTH {
+    fn dense_tensors_batch(
+        &self,
+        normalized: Vec<f32>,
+        batch: usize,
+    ) -> Result<DenseTensors, MatchError> {
+        let frame_elems = XFEAT_INPUT_HEIGHT * XFEAT_INPUT_WIDTH;
+        if batch == 0 || normalized.len() != batch * frame_elems {
             return Err(MatchError::Output("dense XFeat input buffer size mismatch"));
         }
         let x_f32 = upload(
             normalized,
-            [1, 1, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH],
+            [batch, 1, XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH],
             &self.device,
         );
         let pooled_f32 = x_f32
             .clone()
-            .reshape([1, 1, GRID_HEIGHT * 2, 4, GRID_WIDTH * 2, 4])
+            .reshape([batch, 1, GRID_HEIGHT * 2, 4, GRID_WIDTH * 2, 4])
             .mean_dim(5)
             .squeeze_dim::<5>(5)
             .mean_dim(3)
             .squeeze_dim::<4>(3);
         let patches = x_f32
             .clone()
-            .reshape([1, GRID_HEIGHT, 8, GRID_WIDTH, 8])
+            .reshape([batch, GRID_HEIGHT, 8, GRID_WIDTH, 8])
             .permute([0, 2, 4, 1, 3])
-            .reshape([1, 64, GRID_HEIGHT, GRID_WIDTH]);
+            .reshape([batch, 64, GRID_HEIGHT, GRID_WIDTH]);
         let (x, pooled) = if self.precision == XFeatPrecision::F16 {
             (
                 x_f32.cast(FloatDType::F16),

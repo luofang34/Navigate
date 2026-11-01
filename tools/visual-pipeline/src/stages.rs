@@ -285,15 +285,33 @@ pub(super) fn mask_allows(mask: &GrayImage, size: [u32; 2], x: f64, y: f64) -> b
         > 0
 }
 
+pub(crate) fn has_calibrated_focal_prior(case: &PhotoCase) -> bool {
+    case.prior
+        .as_ref()
+        .and_then(|p| p.focal_35mm_mm)
+        .is_some_and(|f35| f35 > 5.0)
+}
+
 pub(crate) fn estimate_intrinsics(case: &PhotoCase) -> Matrix3<f64> {
-    let long = f64::from(case.size[0].max(case.size[1]).max(1));
-    let f_px = case
+    estimate_intrinsics_with_estimator(case, &focal::FocalLengthEstimator::default())
+}
+
+pub(crate) fn estimate_intrinsics_with_estimator(
+    case: &PhotoCase,
+    estimator: &focal::FocalLengthEstimator,
+) -> Matrix3<f64> {
+    let f_px = if let Some(locked_px) = estimator.locked_focal_px.filter(|&px| px > 1.0) {
+        locked_px
+    } else if let Some(f35) = case
         .prior
         .as_ref()
         .and_then(|p| p.focal_35mm_mm)
         .filter(|&f35| f35 > 5.0)
-        .map(|f35| f64::from(case.size[0]).hypot(f64::from(case.size[1])) * f35 / 43.266_615_3)
-        .unwrap_or(long * 1.1);
+    {
+        f64::from(case.size[0]).hypot(f64::from(case.size[1])) * f35 / 43.266_615_3
+    } else {
+        estimator.baseline_focal_px(case.size[0].max(1))
+    };
     Matrix3::new(
         f_px,
         0.0,
