@@ -92,3 +92,86 @@ fn test_gpu_renderer_queue_roles_and_identities() {
         }
     }
 }
+
+#[test]
+fn large_z18_catalog_uses_bounded_subatlas_without_overflowing_16k_texture_limit() {
+    let origin_lat = 39.75_f64;
+    let origin_lon = -75.55_f64;
+    let z_img = 18_u32;
+    let z_dem = 14_u32;
+    let (cx, cy, _, _) = mercator_tile_coords(origin_lat, origin_lon, z_img);
+    let mut surface = Surface::synthetic(
+        origin_lat,
+        origin_lon,
+        55.0,
+        RgbImage::from_pixel(16, 16, Rgb([120, 140, 110])),
+    );
+    surface.catalog_sha256 = "f".repeat(64);
+    surface.imagery_zoom = z_img;
+    surface.dem_zoom = z_dem;
+    surface.imagery_tiles.clear();
+    surface.dem_tiles.clear();
+    surface.dem_tile_size = 16;
+
+    let small_rgb = RgbImage::from_pixel(16, 16, Rgb([135, 145, 125]));
+    let small_dem = vec![55.0_f32; 16 * 16];
+    let min_tx = cx - 40;
+    let max_tx = cx + 40;
+    let min_ty = cy - 40;
+    let max_ty = cy + 40;
+    // Populate corners and center across an 81 x 81 z=18 span (20,736 px > 16,384 px).
+    for &(tx, ty) in &[
+        (min_tx, min_ty),
+        (max_tx, max_ty),
+        (cx, cy),
+        (cx + 1, cy),
+        (max_tx - 1, max_ty - 1),
+    ] {
+        surface.imagery_tiles.insert((tx, ty), small_rgb.clone());
+        surface
+            .dem_tiles
+            .insert((tx >> 4, ty >> 4), small_dem.clone());
+    }
+
+    assert!(
+        build_image_atlas(&surface).is_none(),
+        "full 81x81 tile span must be rejected before allocating >16k texture"
+    );
+
+    let mut template =
+        SceneTemplate::from_surface(&surface).expect("sub-atlas SceneTemplate must succeed");
+    let first_win = template
+        .subatlas_window
+        .expect("81x81 span must activate sub-atlas windowing");
+    assert!(template.imagery_layout.size[0] <= 60 * 256);
+    assert!(template.imagery_layout.size[1] <= 60 * 256);
+
+    // Shift focus near `(max_tx, max_ty)` and confirm sub-atlas re-centers cleanly.
+    let n = f64::from(1_u32 << z_img);
+    let corner_lon = ((f64::from(max_tx) + 0.5) / n) * 360.0 - 180.0;
+    let merc_y = std::f64::consts::PI * (1.0 - 2.0 * (f64::from(max_ty) + 0.5) / n);
+    let corner_lat = merc_y.sinh().atan().to_degrees();
+    assert!(template.update_subatlas_at(&surface, corner_lat, corner_lon, MAX_ATLAS_DIM_PX));
+    let next_win = template.subatlas_window.expect("sub-atlas window");
+    assert_ne!(first_win, next_win);
+    assert!(next_win[1] >= max_tx && next_win[3] >= max_ty);
+    assert!(template.imagery_layout.size[0] <= 60 * 256);
+    assert!(template.imagery_layout.size[1] <= 60 * 256);
+
+    let k = Matrix3::new(140.0, 0.0, 79.5, 0.0, 140.0, 59.5, 0.0, 0.0, 1.0);
+    if let Some(mut gpu) = SurfaceGpuRenderer::try_new(&surface, &k, [160, 120]) {
+        let eye_center = surface.local(origin_lat, origin_lon, 300.0);
+        let rot_center = surface.camera_rotation(origin_lat, origin_lon, 0.0, 90.0, 0.0);
+        let v0 = gpu
+            .render_view(&surface, eye_center, &rot_center, &k, [160, 120])
+            .expect("GPU render at center sub-atlas");
+        assert_eq!(v0.image.dimensions(), (160, 120));
+
+        let eye_corner = surface.local(corner_lat, corner_lon, 300.0);
+        let rot_corner = surface.camera_rotation(corner_lat, corner_lon, 0.0, 90.0, 0.0);
+        let v1 = gpu
+            .render_view(&surface, eye_corner, &rot_corner, &k, [160, 120])
+            .expect("GPU render after shifting sub-atlas to far corner");
+        assert_eq!(v1.image.dimensions(), (160, 120));
+    }
+}

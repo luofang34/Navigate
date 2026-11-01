@@ -7,7 +7,6 @@ use super::{
     },
     anchor::multitier::load_search_tier_matcher,
     anchor_worker::{AnchorArrival, AnchorContext, BackgroundAnchor},
-    kinematics::compute_dt_s,
     latency::StageLatencies,
     masking::{AmortizedMasker, MaskFrameTelemetry},
     motion::{TrackState, advance_unsolved_prepared, record_odometry_step, update_motion_state},
@@ -30,11 +29,14 @@ use crate::{
     xfeat_runtime::LoadedXFeat,
 };
 use image::imageops::{FilterType, colorops::grayscale};
-use lookahead::ensure_lookahead_tiles;
+use lookahead::{
+    advance_case_timing_and_continuity, ensure_lookahead_tiles, init_tracker_session,
+    pace_if_realtime, should_wait_cold_anchor,
+};
 use navigate_match::{
     CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery, SparseFeatures,
 };
-use navigate_visual::{CameraModel, LocalFrame};
+use navigate_visual::LocalFrame;
 use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
 use serde_json::{Value, json};
 use solve::{FrameSolveParams, solve_frame_pose, tracking_render_size};
@@ -172,25 +174,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     let min_trk_inliers = opts.min_track_inliers.max(24);
     let mut state = TrackState::new();
     let mut focal_estimator = FocalLengthEstimator::default();
-    if let Some(first_raw) = cases.first() {
-        let first_case = apply_case_overrides(first_raw, opts);
-        let rs = tracking_render_size(first_case.size);
-        let kf = estimate_intrinsics_with_estimator(&first_case, &focal_estimator);
-        let sx = f64::from(rs[0]) / f64::from(first_case.size[0].max(1));
-        let sy = f64::from(rs[1]) / f64::from(first_case.size[1].max(1));
-        let kr = scale_k(&kf, sx, sy);
-        let cam_model = CameraModel {
-            width: rs[0].max(32),
-            height: rs[1].max(32),
-            fx: kr[(0, 0)].max(10.0),
-            fy: kr[(1, 1)].max(10.0),
-            cx: kr[(0, 2)],
-            cy: kr[(1, 2)],
-        };
-        state
-            .configure_session(cam_model, cell_m)
-            .map_err(PipelineError::Invalid)?;
-    }
+    init_tracker_session(&mut state, &cases, opts, &focal_estimator, cell_m)?;
 
     let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
     let (mut warm_tracked_frames, mut independent_fixes, mut seg_refreshes) =
@@ -205,29 +189,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             continue;
         }
         evaluated += 1;
-        if opts.pace_realtime
-            && let Some(t_s) = raw_case.time_s.filter(|t| t.is_finite())
-        {
-            if let Some((t0_s, wall0)) = pace_origin {
-                let target_s = (t_s - t0_s).max(0.0);
-                let elapsed_s = wall0.elapsed().as_secs_f64();
-                if target_s > elapsed_s {
-                    std::thread::sleep(std::time::Duration::from_secs_f64(target_s - elapsed_s));
-                }
+        pace_if_realtime(opts.pace_realtime, raw_case, &mut pace_origin);
+        let cold_blocked_outcome =
+            if should_wait_cold_anchor(opts.pace_realtime, evaluated, raw_case, &state)
+                && let Some(worker) = background_anchor.as_mut()
+            {
+                worker.wait_for_shutdown()?
             } else {
-                pace_origin = Some((t_s, Instant::now()));
-            }
-        }
-        let cold_blocked_outcome = if !opts.pace_realtime
-            && evaluated > 1
-            && state.active_tracks.is_empty()
-            && state.prev_eye.is_none()
-            && let Some(worker) = background_anchor.as_mut()
-        {
-            worker.wait_for_shutdown()?
-        } else {
-            None
-        };
+                None
+            };
         let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
 
@@ -304,11 +274,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         };
         let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;
 
-        let dt_s = compute_dt_s(case.time_s, state.prev_time_s, 30.0);
-        state.prev_time_s = case.time_s;
-        state.time_since_anchor_s += dt_s;
+        let (obs_time_s, dt_s, discontinuous) = advance_case_timing_and_continuity(
+            &surface,
+            &mut state,
+            &mut focal_estimator,
+            &case,
+            &opts.dynamics_profile,
+        );
         state
-            .observe_frame(case.time_s, dt_s, &case.image_sha256, &case.id)
+            .observe_frame(obs_time_s, dt_s, &case.image_sha256, &case.id)
             .map_err(PipelineError::Invalid)?;
 
         let (prior_rot_hint, nominal_agl_m) =
@@ -323,7 +297,6 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &opts.dynamics_profile,
         );
 
-        let mut arrived_pose = None;
         let polled_outcome = match cold_blocked_outcome {
             Some(done) => Some(done),
             None => background_anchor
@@ -332,8 +305,9 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 .transpose()?
                 .flatten(),
         };
-        if let Some(outcome) = polled_outcome {
-            arrived_pose = AnchorArrival::apply_outcome(
+        let arrived_anchor = polled_outcome.and_then(|outcome| {
+            let target_id = (!discontinuous).then_some(case.id.as_str());
+            let arr = AnchorArrival::apply_outcome(
                 &mut state,
                 &mut independent_fixes,
                 &mut latencies,
@@ -342,14 +316,17 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 cell_m,
                 local_frame,
                 &mut focal_estimator,
+                opts.dynamics_profile,
                 outcome,
-                Some(&case.id),
+                target_id,
             );
-            if arrived_pose.is_some() {
-                state.time_since_anchor_s = 0.0;
+            if discontinuous {
+                state.reset_discontinuous_track();
             }
-        }
+            arr
+        });
 
+        let had_arrived_anchor = arrived_anchor.is_some();
         let k_after_arrival = estimate_intrinsics_with_estimator(&case, &focal_estimator);
         let k_render_after_arrival = scale_k(&k_after_arrival, sx, sy);
 
@@ -375,7 +352,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             dt_s,
             cell_m,
             min_trk_inliers,
-            arrived_pose,
+            arrived_anchor,
         };
         let outcome = solve_frame_pose(
             solve_params,
@@ -387,18 +364,26 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &mut warm_tracked_frames,
             &mut acquiring_frames,
         )?;
-        let best = outcome.best;
-        let admission = outcome.admission;
-        let lg_layers = outcome.lg_layers;
-        let polish_rays = outcome.polish_rays;
-        let solve_ms = outcome.solve_ms;
-        let attempts_log = outcome.attempts_log;
+        let (best, admission, lg_layers, polish_rays, solve_ms, attempts_log) = (
+            outcome.best,
+            outcome.admission,
+            outcome.lg_layers,
+            outcome.polish_rays,
+            outcome.solve_ms,
+            outcome.attempts_log,
+        );
 
         if let Some((_, _, ref cand)) = best
             && cand.score.geometry_accepted
         {
             masker.note_solved_rotation(cand.rotation);
-            update_motion_state(&mut state, cand, prepared, dt_s, &opts.dynamics_profile);
+            if outcome.used_arrived_anchor {
+                state.prev_prepared = Some(prepared);
+            } else if had_arrived_anchor {
+                state.snap_pose_preserving_velocity(cand, prepared);
+            } else {
+                update_motion_state(&mut state, cand, prepared, dt_s, &opts.dynamics_profile);
+            }
         } else {
             advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
         }
@@ -455,6 +440,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 cell_m,
                 local_frame,
                 &mut focal_estimator,
+                opts.dynamics_profile,
                 outcome,
                 None,
             );

@@ -1,8 +1,8 @@
 //! Deterministic L1 IRLS and graduated non-convexity (GNC) pose solver with spatial holdout.
 
 use super::{
-    PoseCandidate, fit_pose_ransac, refine_pose_lm, scaled_inlier_px, score_pose_candidate,
-    spatial_holdout,
+    PoseCandidate, fit_pose_ransac, low_agl_relief_inlier_px, refine_pose_lm, scaled_inlier_px,
+    score_pose_candidate, spatial_holdout,
     two_point::{solve_2pt_gravity_pose, solve_2pt_rot_at_eye, triad_rotation},
 };
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
@@ -155,8 +155,9 @@ pub fn fit_pose_l1_gnc(
         return None;
     }
 
-    let inlier_px = scaled_inlier_px(size);
-    let floor_px = 0.5 * (inlier_px / 5.0).max(1.0);
+    let base_inlier_px = scaled_inlier_px(size);
+    let inlier_px = low_agl_relief_inlier_px(base_inlier_px, world_points, initial_pose.0, k);
+    let floor_px = 0.5 * (base_inlier_px / 5.0).max(1.0);
     let cap_px = 2.0 * f64::from(size[0].max(size[1]).max(640));
 
     let mut opt = TrainOptimizer {

@@ -46,7 +46,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
     time::Instant,
 };
 
@@ -178,7 +177,8 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         .transpose()?
         .unwrap_or_default();
 
-    let tile_keys = select_corridor_tiles(&surface, &cases, tile_m, opts.corridor_radius_m);
+    let mut tile_keys = select_corridor_tiles(&surface, &cases, tile_m, opts.corridor_radius_m);
+    tile_keys.sort_by_key(|&(tx, ty)| ((tx.div_euclid(16), ty.div_euclid(16)), tx, ty));
     let prior_points_enu: Vec<[f64; 2]> = cases
         .iter()
         .filter_map(|c| c.prior.as_ref().and_then(|p| p.position.as_ref()))
@@ -191,7 +191,13 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
     let render_size = [800_u32, 600_u32];
     let k_base = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
     let k_render = scale_k(&k_base, 1.0, 1.0);
-    let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(None);
+    let mut gpu_renderer = SurfaceGpuRenderer::try_new(&surface, &k_render, render_size);
+    if gpu_renderer.is_none() {
+        tracing::warn!(
+            catalog_sha256 = %surface.catalog_sha256,
+            "corridor-build GPU terrain renderer unavailable; using adaptive CPU raycasting"
+        );
+    }
 
     let mut tile_buckets: BTreeMap<(i32, i32), BandVoxelMap> = BTreeMap::new();
     let mut canonical_views = 0_usize;
@@ -224,17 +230,10 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         let mut rendered = Vec::with_capacity(views.len());
         for (band, eye, rot) in views {
             canonical_views += 1;
-            let mut gpu_view_opt = None;
-            if let Ok(mut guard) = gpu_renderer.lock() {
-                if guard.is_none() {
-                    *guard = SurfaceGpuRenderer::try_new(&surface, &k_render, render_size);
-                }
-                if let Some(gpu) = guard.as_mut() {
-                    gpu_view_opt = gpu
-                        .render_view(&surface, eye, &rot, &k_render, render_size)
-                        .ok();
-                }
-            }
+            let gpu_view_opt = gpu_renderer.as_mut().and_then(|gpu| {
+                gpu.render_view(&surface, eye, &rot, &k_render, render_size)
+                    .ok()
+            });
             let gray_img = if let Some(ref gv) = gpu_view_opt {
                 total_pixels += (render_size[0] as usize) * (render_size[1] as usize);
                 gv.image.clone()

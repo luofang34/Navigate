@@ -338,6 +338,27 @@ pub fn is_sane_seed_candidate<S: CorridorTerrain + ?Sized>(
     (geodetic[2] - dem_msl_m) >= min_agl_m
 }
 
+fn compute_inlier_median_depth_m(cand: &PoseCandidate) -> Option<f64> {
+    let eye_v = Vector3::from(cand.eye);
+    let mut depths: Vec<f64> = cand
+        .inliers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &is_inlier)| {
+            if !is_inlier || i >= cand.points.len() {
+                return None;
+            }
+            let z = (cand.rotation * (Vector3::from(cand.points[i]) - eye_v)).z;
+            (z > 0.5 && z.is_finite()).then_some(z)
+        })
+        .collect();
+    if depths.is_empty() {
+        return None;
+    }
+    depths.sort_by(|a, b| a.total_cmp(b));
+    Some(depths[depths.len() / 2])
+}
+
 /// Verify that a candidate pose satisfies all physical plausibility requirements.
 ///
 /// # Errors
@@ -361,6 +382,13 @@ pub fn verify_candidate_plausibility<S: CorridorTerrain + ?Sized>(
     let res_scale = (f64::from(cand.size[0].max(cand.size[1])) / 640.0).max(1.0);
     let mut scaled_cfg = config.clone();
     scaled_cfg.max_reprojection_rmse_px *= res_scale;
+    if let Some(depth_m) = compute_inlier_median_depth_m(cand)
+        && depth_m < 200.0
+    {
+        let focal_px = 0.5 * (cand.k[(0, 0)] + cand.k[(1, 1)]);
+        let relief_px = (0.55 * (10.0 / depth_m.max(25.0)) * focal_px).min(12.0);
+        scaled_cfg.max_reprojection_rmse_px = scaled_cfg.max_reprojection_rmse_px.max(relief_px);
+    }
 
     verify_physical_plausibility(
         eye_msl_m,

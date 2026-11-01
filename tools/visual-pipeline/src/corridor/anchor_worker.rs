@@ -2,12 +2,13 @@
 
 use super::{
     CorridorTrackOptions,
-    admission::{classify_anchor_cell, seed_tracks},
+    admission::{FusionAdmission, classify_anchor_cell, seed_tracks},
     anchor::{
         AnchorQueryAux, acquire_corridor_anchor, is_plausible_anchor_candidate,
         multitier::SearchTierMatcher,
     },
     background::BackgroundWorker,
+    kinematics::VehicleDynamicsProfile,
     latency::StageLatencies,
     motion::{TrackState, propagate_pose_from},
 };
@@ -72,8 +73,16 @@ pub(super) struct AnchorOutcome {
     pub(super) best: Option<PoseCandidate>,
     pub(super) seeded: Option<ActiveTrackSet>,
     pub(super) locked_focal_px: Option<f64>,
-    pub(super) attempts: usize,
+    pub(super) attempts: Vec<Value>,
     pub(super) elapsed_ms: f64,
+}
+
+/// Propagated candidate pose, admission telemetry, and attempt log from an arrived map anchor.
+pub(super) struct ArrivedAnchor {
+    pub(super) pose: ([f64; 3], Matrix3<f64>),
+    pub(super) candidate: PoseCandidate,
+    pub(super) admission: FusionAdmission,
+    pub(super) attempts: Vec<Value>,
 }
 
 impl AnchorContext {
@@ -124,7 +133,7 @@ impl AnchorContext {
             best,
             seeded,
             locked_focal_px: acq.locked_focal_px,
-            attempts: attempts.len(),
+            attempts,
             elapsed_ms: t0.elapsed().as_secs_f64() * 1000.0,
         })
     }
@@ -205,15 +214,16 @@ pub(super) struct AnchorArrival<'a> {
     pub(super) cell_m: f64,
     pub(super) local_frame: Option<LocalFrame>,
     pub(super) focal_estimator: Option<&'a mut FocalLengthEstimator>,
+    pub(super) dynamics_profile: VehicleDynamicsProfile,
 }
 
 impl<'a> AnchorArrival<'a> {
-    /// Apply `outcome` on frame `arrived_at` (`None` after the last frame) and return the propagated pose.
+    /// Apply `outcome` on frame `arrived_at` (`None` after the last frame) and return the arrived anchor.
     pub(super) fn apply(
         &mut self,
         outcome: AnchorOutcome,
         arrived_at: Option<&str>,
-    ) -> Option<([f64; 3], Matrix3<f64>)> {
+    ) -> Option<ArrivedAnchor> {
         self.latencies.anchor_ms.push(outcome.elapsed_ms);
         if let (Some(locked), Some(est)) = (outcome.locked_focal_px, self.focal_estimator.as_mut())
         {
@@ -229,10 +239,11 @@ impl<'a> AnchorArrival<'a> {
             "arrived_at": arrived_at,
             "propagated_frames": propagated_frames,
             "accepted": outcome.seeded.is_some(),
-            "attempts": outcome.attempts,
+            "attempt_count": outcome.attempts.len(),
+            "attempts": &outcome.attempts,
             "anchor_ms": outcome.elapsed_ms,
         });
-        let mut propagated_pose = None;
+        let mut arrived_anchor = None;
         if let (Some(mut tracks), Some(cand)) = (outcome.seeded, outcome.best.as_ref()) {
             let (prop_eye, prop_rot) = if arrived_at.is_some() {
                 propagate_pose_from(self.state, outcome.sent_frame_seq, cand.eye, cand.rotation)
@@ -255,26 +266,34 @@ impl<'a> AnchorArrival<'a> {
                 );
             }
             self.state.active_tracks = tracks;
-            self.state.frames_since_anchor = 0;
-            self.state.time_since_anchor_s = 0.0;
             if arrived_at.is_some() {
-                if let Some(prev) = self.state.prev_eye {
-                    let dt = self.state.time_since_anchor_s.clamp(1e-4, 60.0);
-                    self.state.prev_vel = [
-                        (prop_eye[0] - prev[0]) / dt,
-                        (prop_eye[1] - prev[1]) / dt,
-                        (prop_eye[2] - prev[2]) / dt,
-                    ];
-                } else {
+                if self.state.prev_eye.is_none() || self.state.time_since_accepted_pose_s > 2.0 {
                     self.state.prev_vel = [0.0, 0.0, 0.0];
+                } else {
+                    let [vx, vy, vz] = self.state.prev_vel;
+                    let horiz = vx.hypot(vy);
+                    let max_h = self.dynamics_profile.max_speed_mps.max(0.0);
+                    let scale_h = if horiz > max_h && horiz > 0.0 {
+                        max_h / horiz
+                    } else {
+                        1.0
+                    };
+                    let max_v = self.dynamics_profile.max_vertical_speed_mps.max(0.0);
+                    self.state.prev_vel = [vx * scale_h, vy * scale_h, vz.clamp(-max_v, max_v)];
                 }
                 self.state.prev_eye = Some(prop_eye);
                 self.state.prev_rot = Some(prop_rot);
                 self.state.vo_rot = Some(prop_rot);
+                self.state.time_since_accepted_pose_s = 0.0;
                 if let Some(kin) = self.state.kinematic.as_mut() {
                     kin.eye_enu = prop_eye;
                     kin.rot_world_to_cam = prop_rot;
                     kin.vel_enu_mps = self.state.prev_vel;
+                } else {
+                    let mut kin =
+                        navigate_locate::corridor::KinematicState::new(prop_eye, prop_rot);
+                    kin.vel_enu_mps = self.state.prev_vel;
+                    self.state.kinematic = Some(kin);
                 }
                 if let (Some(session), Some(kin)) = (
                     self.state.corridor_session.as_mut(),
@@ -283,7 +302,8 @@ impl<'a> AnchorArrival<'a> {
                     session.dead_reckoner.kinematic = kin;
                 }
             }
-            propagated_pose = Some((prop_eye, prop_rot));
+            self.state.frames_since_anchor = 0;
+            self.state.time_since_anchor_s = 0.0;
 
             let mut prop_cand = cand.clone();
             prop_cand.eye = prop_eye;
@@ -303,7 +323,7 @@ impl<'a> AnchorArrival<'a> {
                 if report.independent_ekf_fix {
                     *self.independent_fixes += 1;
                 }
-                super::admission::FusionAdmission::from_session_report(report)
+                FusionAdmission::from_session_report(report)
             } else {
                 classify_anchor_cell(
                     &mut self.state.visited_cells,
@@ -323,9 +343,15 @@ impl<'a> AnchorArrival<'a> {
                     self.state.active_tracks.len().into(),
                 );
             }
+            arrived_anchor = Some(ArrivedAnchor {
+                pose: (prop_eye, prop_rot),
+                candidate: prop_cand,
+                admission: adm,
+                attempts: outcome.attempts,
+            });
         }
         self.results.push(record);
-        propagated_pose
+        arrived_anchor
     }
 
     /// Apply an anchor outcome to the track state and record telemetry.
@@ -339,9 +365,10 @@ impl<'a> AnchorArrival<'a> {
         cell_m: f64,
         local_frame: Option<LocalFrame>,
         focal_estimator: &'a mut FocalLengthEstimator,
+        dynamics_profile: VehicleDynamicsProfile,
         outcome: AnchorOutcome,
         arrived_at: Option<&str>,
-    ) -> Option<([f64; 3], Matrix3<f64>)> {
+    ) -> Option<ArrivedAnchor> {
         Self {
             state,
             independent_fixes,
@@ -351,6 +378,7 @@ impl<'a> AnchorArrival<'a> {
             cell_m,
             local_frame,
             focal_estimator: Some(focal_estimator),
+            dynamics_profile,
         }
         .apply(outcome, arrived_at)
     }

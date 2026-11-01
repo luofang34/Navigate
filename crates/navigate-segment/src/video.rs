@@ -66,6 +66,10 @@ impl PropellerDetector {
         let h = det_h as usize;
         let n = w * h;
 
+        if self.history.front().is_some_and(|f| f.len() != cur.len()) {
+            self.history.clear();
+        }
+
         if self.history.len() < 3 {
             self.push_frame(cur);
             return vec![false; total];
@@ -335,4 +339,24 @@ pub fn frame_masks(
         propeller,
         sky,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+
+    #[test]
+    fn propeller_detector_resets_history_across_mixed_aspect_ratios() {
+        let mut detector = PropellerDetector::default();
+        let landscape = GrayImage::from_pixel(1600, 1200, Luma([180]));
+        for _ in 0..4 {
+            let m = detector.mask_luma(&landscape);
+            assert_eq!(m.len(), 1600 * 1200);
+        }
+        let portrait = GrayImage::from_pixel(1200, 1600, Luma([40]));
+        let m_port = detector.mask_luma(&portrait);
+        assert_eq!(m_port.len(), 1200 * 1600);
+        assert!(m_port.iter().all(|&b| !b));
+    }
 }

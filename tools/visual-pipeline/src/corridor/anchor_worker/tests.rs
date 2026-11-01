@@ -1,14 +1,15 @@
 use super::{AnchorArrival, AnchorOutcome};
 use crate::{
     corridor::{
+        kinematics::VehicleDynamicsProfile,
         latency::StageLatencies,
         motion::{OdometryStep, TrackState},
     },
     pose::{PoseCandidate, PoseScore},
 };
-use nalgebra::Matrix3;
-use navigate_match::ActiveTrackSet;
-use serde_json::Value;
+use nalgebra::{Matrix3, Vector3};
+use navigate_match::{ActiveTrackSet, HadamardProjector, PreparedKashinQuery, SparseFeatures};
+use serde_json::{Value, json};
 
 fn k_test() -> Matrix3<f64> {
     Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0)
@@ -48,7 +49,7 @@ fn outcome(seq: usize, case_id: &str, eye: [f64; 3], accepted: bool) -> AnchorOu
         best: Some(candidate(eye)),
         seeded: accepted.then(ActiveTrackSet::empty),
         locked_focal_px: None,
-        attempts: 3,
+        attempts: vec![json!({"seed": 0}), json!({"seed": 1}), json!({"seed": 2})],
         elapsed_ms: 12.5,
     }
 }
@@ -70,6 +71,7 @@ fn arrivals_count_fixes_for_the_sent_frame_and_keep_tracks_on_rejection() {
         cell_m: 500.0,
         local_frame: None,
         focal_estimator: None,
+        dynamics_profile: VehicleDynamicsProfile::rotary_survey(),
     };
 
     arrival.state.frames_since_anchor = 7;
@@ -137,7 +139,7 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         best: Some(candidate([0.0, 0.0, 0.0])),
         seeded: Some(tracks),
         locked_focal_px: None,
-        attempts: 1,
+        attempts: vec![json!({"seed": 0})],
         elapsed_ms: 8.0,
     };
 
@@ -153,11 +155,12 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         cell_m: 500.0,
         local_frame: None,
         focal_estimator: None,
+        dynamics_profile: VehicleDynamicsProfile::rotary_survey(),
     }
     .apply(delayed, Some("f-0003"))
     .expect("propagated pose");
 
-    assert!((prop.0[0] - 10.0).abs() < 1e-9);
+    assert!((prop.pose.0[0] - 10.0).abs() < 1e-9);
     assert_eq!(state.active_tracks.len(), 1);
     assert_eq!(state.active_tracks.world_points_enu[0], [10.0, 0.0, 200.0]);
     assert_eq!(state.prev_eye, Some([10.0, 0.0, 0.0]));
@@ -191,4 +194,82 @@ fn test_anchor_worker_state_transitions() {
     assert!(state.prev_eye.is_none());
     assert!(state.prev_rot.is_none());
     assert_eq!(state.vel_enu_mps, [0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn sequential_anchor_arrivals_with_5m_snap_keep_velocity_bounded() {
+    let mut state = TrackState::new();
+    let mut fixes = 0;
+    let mut latencies = StageLatencies::default();
+    let mut results = Vec::new();
+    let profile = VehicleDynamicsProfile::rotary_survey();
+
+    state.frame_seq = 2;
+    {
+        let mut arrival = AnchorArrival {
+            state: &mut state,
+            independent_fixes: &mut fixes,
+            latencies: &mut latencies,
+            results: &mut results,
+            catalog_sha256: "catalog",
+            cell_m: 500.0,
+            local_frame: None,
+            focal_estimator: None,
+            dynamics_profile: profile,
+        };
+        let first = arrival
+            .apply(
+                outcome(1, "f-0001", [100.0, 200.0, 350.0], true),
+                Some("f-0002"),
+            )
+            .expect("first anchor");
+        assert_eq!(first.pose.0, [100.0, 200.0, 350.0]);
+    }
+    assert_eq!(state.prev_vel, [0.0, 0.0, 0.0]);
+
+    // Simulate steady warm-tracked velocity (12 m/s East) followed by a 5 m map-anchor snap.
+    state.prev_vel = [12.0, 0.0, 0.0];
+    state.time_since_accepted_pose_s = 0.033;
+    state.frame_seq = 12;
+    {
+        let mut arrival = AnchorArrival {
+            state: &mut state,
+            independent_fixes: &mut fixes,
+            latencies: &mut latencies,
+            results: &mut results,
+            catalog_sha256: "catalog",
+            cell_m: 500.0,
+            local_frame: None,
+            focal_estimator: None,
+            dynamics_profile: profile,
+        };
+        let second = arrival
+            .apply(
+                outcome(10, "f-0010", [105.0, 200.0, 350.0], true),
+                Some("f-0012"),
+            )
+            .expect("second anchor");
+        assert_eq!(second.pose.0, [105.0, 200.0, 350.0]);
+    }
+    let speed = Vector3::from(state.prev_vel).norm();
+    assert!(
+        speed <= profile.max_speed_mps,
+        "velocity exploded to {speed} m/s (> {})",
+        profile.max_speed_mps
+    );
+    assert!((state.prev_vel[0] - 12.0).abs() < 1e-9);
+    let kin = state.kinematic.as_ref().expect("kinematic initialized");
+    assert!(Vector3::from(kin.vel_enu_mps).norm() <= profile.max_speed_mps);
+
+    // Same-frame warm-track solve on the arrival frame must snap pose without adding (8 m / dt_s) velocity.
+    let proj = HadamardProjector::new(0xBEEF);
+    let empty_q = PreparedKashinQuery::from_features(&proj, &SparseFeatures::empty()).expect("q");
+    let warm_on_arrival = candidate([113.0, 196.0, 352.0]);
+    state.snap_pose_preserving_velocity(&warm_on_arrival, empty_q);
+    assert_eq!(state.prev_eye, Some([113.0, 196.0, 352.0]));
+    assert!((state.prev_vel[0] - 12.0).abs() < 1e-9);
+    assert_eq!(
+        state.kinematic.as_ref().expect("kinematic").vel_enu_mps,
+        [12.0, 0.0, 0.0]
+    );
 }

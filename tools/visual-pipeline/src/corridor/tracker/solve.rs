@@ -4,18 +4,22 @@ use crate::{
     PipelineError,
     corridor::{
         CorridorTrackOptions,
-        admission::{FusionAdmission, classify_anchor_cell, seed_tracks, top_up_tracks_with_bank},
+        admission::{
+            FusionAdmission, TOP_UP_FRUSTUM_MARGIN_PX, classify_anchor_cell, seed_tracks,
+            top_up_tracks_with_bank,
+        },
         anchor::{
             AnchorQueryAux, acquire_corridor_anchor, is_plausible_anchor_candidate,
             multitier::SearchTierMatcher, plausibility::compute_fisher_geometry_covariance,
         },
-        anchor_worker::{AnchorJob, BackgroundAnchor},
+        anchor_worker::{AnchorJob, ArrivedAnchor, BackgroundAnchor},
         kinematics::{CHI2_GATE_3DOF_99, project_track_strategy, should_force_anchor},
         latency::StageLatencies,
         masking::AmortizedMasker,
         motion::{TrackState, predict_interframe_pose, try_warm_track},
     },
     pose::PoseCandidate,
+    realtime::helpers::rot_to_row_major,
     stages::{focal::FocalLengthEstimator, scaled_size},
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
@@ -60,7 +64,7 @@ pub(super) struct FrameSolveParams<'a> {
     pub dt_s: f64,
     pub cell_m: f64,
     pub min_trk_inliers: usize,
-    pub arrived_pose: Option<([f64; 3], Matrix3<f64>)>,
+    pub arrived_anchor: Option<ArrivedAnchor>,
 }
 
 /// Outcome of solving a single frame pose.
@@ -71,6 +75,7 @@ pub(super) struct FrameSolveOutcome {
     pub polish_rays: usize,
     pub solve_ms: f64,
     pub attempts_log: Vec<Value>,
+    pub used_arrived_anchor: bool,
 }
 
 /// Solve camera pose for the current frame using warm tracking or anchor acquisition.
@@ -91,7 +96,7 @@ pub(super) fn solve_frame_pose(
     let mut polish_rays = 0_usize;
     let focal_locked = focal_estimator.locked_focal_px.is_some();
 
-    let pred_pose = params.arrived_pose.or_else(|| {
+    let pred_pose = params.arrived_anchor.as_ref().map(|a| a.pose).or_else(|| {
         predict_interframe_pose(
             state,
             params.prepared,
@@ -115,7 +120,7 @@ pub(super) fn solve_frame_pose(
     );
 
     if force_anchor && !state.active_tracks.is_empty() && background_anchor.is_some() {
-        if state.frames_since_anchor >= 3
+        if state.frames_since_anchor >= 8
             && let Some(worker) = background_anchor.as_mut()
         {
             let seq = state.frame_seq;
@@ -197,12 +202,29 @@ pub(super) fn solve_frame_pose(
         }
     }
 
+    let mut used_arrived_anchor = false;
     let (best, admission) = if let Some(cand) = solved_warm {
         *warm_tracked_frames += 1;
         state.frames_since_anchor += 1;
         state.record_warm_track(&cand, &params.surface.catalog_sha256);
         let visible_cap = params.qry_feat.len();
-        let target_tracks = 640.min((visible_cap * 3) / 5).max(160);
+        let target_tracks = 1280.min(visible_cap);
+        let check_frustum = state.frames_since_anchor.is_multiple_of(6) || cand.score.inliers < 180;
+        if check_frustum {
+            let intrinsics = [
+                cand.k[(0, 0)],
+                cand.k[(1, 1)],
+                cand.k[(0, 2)],
+                cand.k[(1, 2)],
+            ];
+            state.active_tracks.retain_in_frustum(
+                cand.eye,
+                &rot_to_row_major(&cand.rotation),
+                intrinsics,
+                params.render_size,
+                TOP_UP_FRUSTUM_MARGIN_PX,
+            );
+        }
         let need_urgent_top_up = state.active_tracks.len() < 128 || cand.score.inliers < 40;
         let need_periodic_top_up = state.frames_since_anchor.is_multiple_of(6)
             && state.active_tracks.len() < target_tracks;
@@ -219,6 +241,10 @@ pub(super) fn solve_frame_pose(
             );
         }
         (Some((0, 0, cand)), FusionAdmission::warm_track())
+    } else if let Some(arr) = params.arrived_anchor {
+        used_arrived_anchor = true;
+        attempts_log.extend(arr.attempts);
+        (Some((0, 0, arr.candidate)), arr.admission)
     } else if let Some(worker) = background_anchor.as_mut() {
         if params.masker.has_usable_key(params.render_size) || !params.masker.has_segformer() {
             let seq = state.frame_seq;
@@ -316,5 +342,6 @@ pub(super) fn solve_frame_pose(
         polish_rays,
         solve_ms,
         attempts_log,
+        used_arrived_anchor,
     })
 }

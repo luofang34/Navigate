@@ -145,6 +145,13 @@ impl Surface {
                 imagery_tiles.insert(xy, img);
             }
         }
+        if !tiles.is_empty() && imagery_tiles.is_empty() {
+            return Err(PipelineError::Invalid(format!(
+                "catalog {} lists {} tiles, but zero imagery tiles exist on disk",
+                catalog_path.display(),
+                tiles.len()
+            )));
+        }
         if !min_elev.is_finite() {
             min_elev = 0.0;
             max_elev = 500.0;

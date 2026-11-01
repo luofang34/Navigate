@@ -1,19 +1,30 @@
 //! Resident `wgpu-terrain-v1` GPU renderer and depth-buffer unprojector for [`Surface`].
 
 mod atlas;
+mod camera;
 
-use super::Surface;
+pub(crate) use camera::surface_pose_to_gpu;
+
+use super::{Surface, mercator_tile_coords};
 use crate::PipelineError;
-use atlas::{MAX_SCENE_BYTES, build_image_atlas, build_terrain_atlas, sample_depth};
+use atlas::{
+    GPU_TILE_PIXELS, MAX_ATLAS_DIM_PX, MAX_SUBATLAS_TILES, build_image_atlas,
+    build_image_atlas_window, build_terrain_atlas, build_terrain_atlas_for_imagery_window,
+    sample_depth, subatlas_contains_comfortably, subatlas_window_around, surface_imagery_bounds,
+};
+use camera::{camera_model, default_limits, manifest_hex64};
 use image::GrayImage;
-use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Matrix3, Vector2};
 use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceRenderer};
 use navigate_visual_render::{
     AtlasLayout, GpuRenderer, ImageAtlas, RenderLimits, RenderScene, TerrainAtlas, wgpu,
 };
-use sha2::{Digest, Sha256};
+use std::{
+    collections::HashSet,
+    sync::{Mutex, OnceLock},
+};
 
-const MAX_VIEW_PIXELS: usize = 4_194_304;
+static FAILED_GPU_INIT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CameraKey {
@@ -42,25 +53,48 @@ impl CameraKey {
 pub(super) struct SceneTemplate {
     map: MapRevision,
     frame: LocalFrame,
-    imagery_layout: AtlasLayout,
+    pub(super) imagery_bounds: [u32; 4],
+    pub(super) subatlas_window: Option<[u32; 4]>,
+    pub(super) imagery_layout: AtlasLayout,
     imagery_pixels: Vec<u8>,
     imagery_coverage: Vec<u8>,
-    terrain_layout: AtlasLayout,
+    pub(super) terrain_layout: AtlasLayout,
     terrain_heights: Vec<f32>,
     terrain_coverage: Vec<u8>,
 }
 
 impl SceneTemplate {
     pub(super) fn from_surface(surface: &Surface) -> Option<Self> {
+        Self::from_surface_with_span(surface, MAX_SUBATLAS_TILES)
+    }
+
+    pub(super) fn from_surface_with_span(surface: &Surface, max_tiles: u32) -> Option<Self> {
         let frame = LocalFrame::wgs84_enu(surface.origin_lat, surface.origin_lon).ok()?;
-        let imagery = build_image_atlas(surface)?;
-        let terrain = build_terrain_atlas(surface)?;
+        let imagery_bounds = surface_imagery_bounds(surface)?;
+        let max_dim = max_tiles
+            .saturating_mul(GPU_TILE_PIXELS)
+            .min(MAX_ATLAS_DIM_PX);
+        let (subatlas_window, imagery, terrain) = if max_tiles >= MAX_SUBATLAS_TILES
+            && let (Some(img), Some(ter)) =
+                (build_image_atlas(surface), build_terrain_atlas(surface))
+        {
+            (None, img, ter)
+        } else {
+            let (cx, cy, _, _) =
+                mercator_tile_coords(surface.origin_lat, surface.origin_lon, surface.imagery_zoom);
+            let win = subatlas_window_around(imagery_bounds, cx, cy, max_tiles);
+            let img = build_image_atlas_window(surface, win, max_dim)?;
+            let ter = build_terrain_atlas_for_imagery_window(surface, win, max_dim)?;
+            (Some(win), img, ter)
+        };
         Some(Self {
             map: MapRevision {
                 release_id: "catalog-surface".into(),
                 manifest_sha256: manifest_hex64(&surface.catalog_sha256),
             },
             frame,
+            imagery_bounds,
+            subatlas_window,
             imagery_layout: imagery.layout,
             imagery_pixels: imagery.pixels,
             imagery_coverage: imagery.coverage,
@@ -68,6 +102,42 @@ impl SceneTemplate {
             terrain_heights: terrain.heights_m,
             terrain_coverage: terrain.coverage,
         })
+    }
+
+    pub(super) fn update_subatlas_at(
+        &mut self,
+        surface: &Surface,
+        lat_deg: f64,
+        lon_deg: f64,
+        max_tex_dim: u32,
+    ) -> bool {
+        let Some(cur_win) = self.subatlas_window else {
+            return false;
+        };
+        let (cx, cy, _, _) = mercator_tile_coords(lat_deg, lon_deg, surface.imagery_zoom);
+        if subatlas_contains_comfortably(self.imagery_bounds, cur_win, cx, cy) {
+            return false;
+        }
+        let max_tiles = (max_tex_dim / GPU_TILE_PIXELS).clamp(1, MAX_SUBATLAS_TILES);
+        let next_win = subatlas_window_around(self.imagery_bounds, cx, cy, max_tiles);
+        if next_win == cur_win {
+            return false;
+        }
+        let Some(img) = build_image_atlas_window(surface, next_win, max_tex_dim) else {
+            return false;
+        };
+        let Some(ter) = build_terrain_atlas_for_imagery_window(surface, next_win, max_tex_dim)
+        else {
+            return false;
+        };
+        self.subatlas_window = Some(next_win);
+        self.imagery_layout = img.layout;
+        self.imagery_pixels = img.pixels;
+        self.imagery_coverage = img.coverage;
+        self.terrain_layout = ter.layout;
+        self.terrain_heights = ter.heights_m;
+        self.terrain_coverage = ter.coverage;
+        true
     }
 
     pub(super) fn to_render_scene(&self) -> RenderScene {
@@ -174,12 +244,51 @@ impl SurfaceGpuRenderer {
         render_size: [u32; 2],
         role: GpuQueueRole,
     ) -> Option<Self> {
-        let template = SceneTemplate::from_surface(surface)?;
         let camera = camera_model(k_render, render_size)?;
+        let fail_key = format!(
+            "{}:{}:{}:{}",
+            surface.catalog_sha256,
+            surface.imagery_tiles.len(),
+            surface.dem_tiles.len(),
+            role.as_str()
+        );
+        let failed = FAILED_GPU_INIT.get_or_init(|| Mutex::new(HashSet::new()));
+        if failed.lock().ok().is_some_and(|s| s.contains(&fail_key)) {
+            return None;
+        }
+        let Some(mut template) = SceneTemplate::from_surface(surface) else {
+            record_gpu_init_failure(failed, fail_key, &surface.catalog_sha256, role, "atlas");
+            return None;
+        };
         let limits = default_limits(&camera);
-        let renderer =
-            pollster::block_on(GpuRenderer::new(template.to_render_scene(), camera, limits))
-                .ok()?;
+        let renderer = match pollster::block_on(GpuRenderer::new(
+            template.to_render_scene(),
+            camera,
+            limits,
+        )) {
+            Ok(r) => r,
+            Err(first_err) => {
+                if let Some(smaller) = SceneTemplate::from_surface_with_span(surface, 32)
+                    && let Ok(r) = pollster::block_on(GpuRenderer::new(
+                        smaller.to_render_scene(),
+                        camera,
+                        limits,
+                    ))
+                {
+                    template = smaller;
+                    r
+                } else {
+                    record_gpu_init_failure(
+                        failed,
+                        fail_key,
+                        &surface.catalog_sha256,
+                        role,
+                        &first_err.to_string(),
+                    );
+                    return None;
+                }
+            }
+        };
         Some(Self {
             template,
             limits,
@@ -239,6 +348,40 @@ impl SurfaceGpuRenderer {
         self.renderer.queue()
     }
 
+    fn rebind_renderer(
+        &mut self,
+        camera: CameraModel,
+        key: CameraKey,
+    ) -> Result<(), PipelineError> {
+        let limits = default_limits(&camera);
+        let device = self.renderer.device().clone();
+        let queue = self.renderer.queue().clone();
+        let base_adapter = self
+            .renderer
+            .backend_identity()
+            .strip_prefix("wgpu-terrain-v1/")
+            .unwrap_or("gpu");
+        let clean_adapter = base_adapter
+            .strip_prefix(&format!("{}/", self.role.as_str()))
+            .unwrap_or(base_adapter);
+        let label = if self.role.is_isolated() {
+            format!("{}/{}", self.role.as_str(), clean_adapter)
+        } else {
+            format!("shared/{}", clean_adapter)
+        };
+        self.renderer = pollster::block_on(GpuRenderer::with_device(
+            self.template.to_render_scene(),
+            camera,
+            limits,
+            device,
+            queue,
+            label,
+        ))?;
+        self.limits = limits;
+        self.active_key = key;
+        Ok(())
+    }
+
     /// Render grayscale imagery and optical depth at `(eye_enu, world_to_cam)` on the GPU.
     ///
     /// # Errors
@@ -255,63 +398,44 @@ impl SurfaceGpuRenderer {
         let camera = camera_model(k_render, render_size)
             .ok_or_else(|| PipelineError::Invalid("invalid GPU camera intrinsics".into()))?;
         let key = CameraKey::from_model(camera);
-        if key != self.active_key {
-            let limits = default_limits(&camera);
-            let device = self.renderer.device().clone();
-            let queue = self.renderer.queue().clone();
-            let base_adapter = self
-                .renderer
-                .backend_identity()
-                .strip_prefix("wgpu-terrain-v1/")
-                .unwrap_or("gpu");
-            let clean_adapter = base_adapter
-                .strip_prefix(&format!("{}/", self.role.as_str()))
-                .unwrap_or(base_adapter);
-            let label = if self.role.is_isolated() {
-                format!("{}/{}", self.role.as_str(), clean_adapter)
-            } else {
-                format!("shared/{}", clean_adapter)
-            };
-            self.renderer = pollster::block_on(GpuRenderer::with_device(
-                self.template.to_render_scene(),
-                camera,
-                limits,
-                device,
-                queue,
-                label,
-            ))?;
-            self.limits = limits;
-            self.active_key = key;
+        let max_tex_dim = self
+            .renderer
+            .device()
+            .limits()
+            .max_texture_dimension_2d
+            .min(MAX_ATLAS_DIM_PX);
+        let fwd_z = world_to_cam[(2, 2)];
+        let agl_est = (eye_enu[2] - surface.min_elev_m).clamp(50.0, 4_000.0);
+        let look_t = if fwd_z < -0.05 {
+            (-agl_est / fwd_z).clamp(0.0, 1_500.0)
+        } else {
+            500.0
+        };
+        let focus_enu = [
+            eye_enu[0] + world_to_cam[(2, 0)] * look_t,
+            eye_enu[1] + world_to_cam[(2, 1)] * look_t,
+            eye_enu[2],
+        ];
+        let [focus_lat, focus_lon, _] = surface.geodetic(focus_enu);
+        let subatlas_changed =
+            self.template
+                .update_subatlas_at(surface, focus_lat, focus_lon, max_tex_dim);
+        if key != self.active_key || subatlas_changed {
+            self.rebind_renderer(camera, key)?;
         }
         let pose = surface_pose_to_gpu(surface, self.template.frame, eye_enu, world_to_cam)?;
         let view = match self.renderer.render_blocking(pose) {
             Ok(v) => v,
             Err(e) => {
-                if let Ok(mut new_renderer) = pollster::block_on(GpuRenderer::new(
+                if let Ok(new_renderer) = pollster::block_on(GpuRenderer::new(
                     self.template.to_render_scene(),
                     camera,
                     self.limits,
                 )) {
-                    if self.role.is_isolated() {
-                        let dev = new_renderer.device().clone();
-                        let q = new_renderer.queue().clone();
-                        let base_adapter = new_renderer
-                            .backend_identity()
-                            .strip_prefix("wgpu-terrain-v1/")
-                            .unwrap_or("gpu");
-                        let label = format!("{}/{}", self.role.as_str(), base_adapter);
-                        if let Ok(reconfigured) = pollster::block_on(GpuRenderer::with_device(
-                            self.template.to_render_scene(),
-                            camera,
-                            self.limits,
-                            dev,
-                            q,
-                            label,
-                        )) {
-                            new_renderer = reconfigured;
-                        }
-                    }
                     self.renderer = new_renderer;
+                    if self.role.is_isolated() {
+                        self.rebind_renderer(camera, key)?;
+                    }
                     self.renderer.render_blocking(pose)?
                 } else {
                     return Err(PipelineError::Render(e));
@@ -328,84 +452,22 @@ impl SurfaceGpuRenderer {
     }
 }
 
-pub(crate) fn surface_pose_to_gpu(
-    surface: &Surface,
-    frame: LocalFrame,
-    eye_enu: [f64; 3],
-    world_to_cam: &Matrix3<f64>,
-) -> Result<CameraPose, PipelineError> {
-    let [lat, lon, alt] = surface.geodetic(eye_enu);
-    let position = frame.local([lat, lon, alt])?;
-    let gl_to_cv = Matrix3::from_diagonal(&Vector3::new(1.0, -1.0, -1.0));
-    let raw_eye_to_world = world_to_cam.transpose() * gl_to_cv;
-    let ortho = orthonormalize_so3(&raw_eye_to_world);
-    let orientation =
-        UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(ortho));
-    let pose = CameraPose {
-        position,
-        orientation,
-    };
-    pose.validate()?;
-    Ok(pose)
-}
-
-fn orthonormalize_so3(m: &Matrix3<f64>) -> Matrix3<f64> {
-    let svd = m.svd(true, true);
-    if let (Some(u), Some(v_t)) = (svd.u, svd.v_t) {
-        let mut r = u * v_t;
-        if r.determinant() < 0.0 {
-            let mut u_fix = u;
-            u_fix.set_column(2, &(-u.column(2)));
-            r = u_fix * v_t;
-        }
-        r
-    } else {
-        Matrix3::identity()
-    }
-}
-
-fn camera_model(k: &Matrix3<f64>, size: [u32; 2]) -> Option<CameraModel> {
-    let model = CameraModel {
-        width: size[0],
-        height: size[1],
-        fx: k[(0, 0)],
-        fy: k[(1, 1)],
-        cx: k[(0, 2)],
-        cy: k[(1, 2)],
-    };
-    model.validate().ok()?;
-    Some(model)
-}
-
-fn default_limits(camera: &CameraModel) -> RenderLimits {
-    let corner_norm = [
-        (0.0 - camera.cx) / camera.fx,
-        (f64::from(camera.width - 1) - camera.cx) / camera.fx,
-    ]
-    .into_iter()
-    .fold(0.0_f64, |acc, dx| {
-        let dy0 = (camera.cy - 0.0) / camera.fy;
-        let dy1 = (camera.cy - f64::from(camera.height - 1)) / camera.fy;
-        acc.max((dx * dx + dy0 * dy0 + 1.0).sqrt())
-            .max((dx * dx + dy1 * dy1 + 1.0).sqrt())
-    })
-    .max(1.0);
-    let max_far = (195_000.0 / corner_norm).clamp(1_000.0, 65_000.0) as f32;
-    RenderLimits {
-        scene_bytes: MAX_SCENE_BYTES,
-        pixels: MAX_VIEW_PIXELS,
-        far_m: max_far,
-        steps: 144,
-        refinements: 12,
-    }
-}
-
-fn manifest_hex64(raw: &str) -> String {
-    if raw.len() == 64 && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
-        raw.to_ascii_lowercase()
-    } else {
-        let digest = Sha256::digest(raw.as_bytes());
-        digest.iter().map(|b| format!("{b:02x}")).collect()
+fn record_gpu_init_failure(
+    failed: &Mutex<HashSet<String>>,
+    fail_key: String,
+    catalog_sha256: &str,
+    role: GpuQueueRole,
+    reason: &str,
+) {
+    if let Ok(mut guard) = failed.lock()
+        && guard.insert(fail_key)
+    {
+        tracing::warn!(
+            catalog_sha256,
+            role = role.as_str(),
+            reason,
+            "GPU terrain renderer unavailable; falling back to adaptive CPU raycasting"
+        );
     }
 }
 

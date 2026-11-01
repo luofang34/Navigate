@@ -71,6 +71,10 @@ pub struct CorridorTracker {
     pub prev_time_s: Option<f64>,
     /// Elapsed seconds since the last accepted map anchor.
     pub time_since_anchor_s: f64,
+    /// Elapsed seconds since the last accepted visual pose (anchor or warm track).
+    pub time_since_accepted_pose_s: f64,
+    /// Previous frame's search-prior position in `ENU` meters.
+    pub prev_prior_enu: Option<[f64; 3]>,
     /// Continuous-time kinematic state and covariance.
     pub kinematic: Option<KinematicState>,
     /// Count of inter-frame ground optical-flow matches on the current step.
@@ -105,6 +109,8 @@ impl CorridorTracker {
             visited_cells: BTreeMap::new(),
             prev_time_s: None,
             time_since_anchor_s: 0.0,
+            time_since_accepted_pose_s: f64::INFINITY,
+            prev_prior_enu: None,
             kinematic: None,
             last_flow_vectors: 0,
             monotonic_time_ns: 1_000_000_000,
@@ -267,6 +273,30 @@ impl CorridorTracker {
         self.prev_rot = Some(cand.rotation);
         self.vo_rot = Some(cand.rotation);
         self.prev_prepared = Some(prepared);
+        self.time_since_accepted_pose_s = 0.0;
+    }
+
+    /// Snap tracker pose on an anchor-arrival frame without inferring velocity from the same-frame residual.
+    pub fn snap_pose_preserving_velocity(
+        &mut self,
+        cand: &PoseCandidate,
+        prepared: PreparedKashinQuery,
+    ) {
+        self.prev_eye = Some(cand.eye);
+        self.prev_rot = Some(cand.rotation);
+        self.vo_rot = Some(cand.rotation);
+        self.prev_prepared = Some(prepared);
+        self.time_since_accepted_pose_s = 0.0;
+        if let Some(kin) = self.kinematic.as_mut() {
+            kin.eye_enu = cand.eye;
+            kin.rot_world_to_cam = cand.rotation;
+        } else {
+            self.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
+        }
+        if let (Some(session), Some(kin)) = (self.corridor_session.as_mut(), self.kinematic.clone())
+        {
+            session.dead_reckoner.kinematic = kin;
+        }
     }
 
     /// Coast tracker state across an unsolved frame via [`DualPathDeadReckoner`](super::session::DualPathDeadReckoner).
@@ -326,6 +356,7 @@ impl CorridorTracker {
             }
         }
         self.prev_prepared = Some(prepared);
+        self.time_since_accepted_pose_s += dt_s.max(0.0);
     }
 
     /// Predict the next frame camera pose from dead-reckoned kinematics and inter-frame rotation.
@@ -337,6 +368,9 @@ impl CorridorTracker {
         dt_s: f64,
         profile: &VehicleDynamicsProfile,
     ) -> Option<([f64; 3], Matrix3<f64>)> {
+        if !dt_s.is_finite() || dt_s > 5.0 {
+            return None;
+        }
         let (prev_eye, prev_rot) = (self.prev_eye?, self.prev_rot?);
         let pred_eye = if let Some(kin) = &self.kinematic {
             kin.predict_position(dt_s)
