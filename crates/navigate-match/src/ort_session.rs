@@ -74,6 +74,7 @@ pub fn init_ort_runtime(explicit_dylib: Option<&Path>) -> Result<(), MatchError>
 pub struct OrtSession {
     session: Session,
     primary_input: String,
+    input_shape_hint: Vec<Option<usize>>,
     output_names: Vec<String>,
 }
 
@@ -133,11 +134,21 @@ impl OrtSession {
                 stage: "ort commit",
                 message: format!("{}: {e}", onnx_path.display()),
             })?;
-        let primary_input = session
+        let first_input = session
             .inputs()
             .first()
-            .map(|input| input.name().to_owned())
             .ok_or(MatchError::Output("ORT model declares no input tensors"))?;
+        let primary_input = first_input.name().to_owned();
+        let input_shape_hint = first_input
+            .dtype()
+            .tensor_shape()
+            .map(|shape| {
+                shape
+                    .iter()
+                    .map(|&d| (d > 0).then(|| usize::try_from(d).ok()).flatten())
+                    .collect()
+            })
+            .unwrap_or_default();
         let output_names = session
             .outputs()
             .iter()
@@ -146,6 +157,7 @@ impl OrtSession {
         Ok(Self {
             session,
             primary_input,
+            input_shape_hint,
             output_names,
         })
     }
@@ -169,6 +181,14 @@ impl ModelInference for OrtSession {
 
     fn engine_kind(&self) -> EngineKind {
         EngineKind::Ort
+    }
+
+    fn input_shape_hint(&self) -> Option<&[Option<usize>]> {
+        if self.input_shape_hint.is_empty() {
+            None
+        } else {
+            Some(&self.input_shape_hint)
+        }
     }
 
     fn forward(

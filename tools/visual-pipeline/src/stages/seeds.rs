@@ -37,7 +37,12 @@ pub fn generate_seeds(
             surface.min_elev_m + 900.0,
         ));
     let pitches: Vec<(f64, f64)> = match attitude {
-        Some(att) => vec![att],
+        Some((down_deg, roll_deg)) => vec![
+            (down_deg, roll_deg),
+            ((down_deg + 10.0).clamp(-30.0, 88.0), roll_deg),
+            ((down_deg - 10.0).clamp(-30.0, 88.0), roll_deg),
+            ((down_deg + 22.0).clamp(-30.0, 88.0), 0.0),
+        ],
         None => {
             let mut list =
                 Vec::with_capacity(GRAZING_PITCH_SEEDS_DEG.len() * BANKED_ROLL_SEEDS_DEG.len());
@@ -74,8 +79,8 @@ pub fn generate_seeds(
     for &hf in &opts.height_factors {
         let eye = surface.local(lat, lon, dem_h + agl.max(25.0) * hf.max(0.25));
         if prioritize_nadir {
-            for &hdg in &headings {
-                for &down_deg in &[88.0, 75.0] {
+            for &down_deg in &[88.0, 75.0] {
+                for &hdg in &headings {
                     if out.len() >= opts.attempts.max(1) {
                         return out;
                     }
@@ -94,6 +99,22 @@ pub fn generate_seeds(
                         eye,
                         surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
                     ));
+                }
+            }
+        } else if attitude.is_none() && headings.len() > 2 {
+            let n_pitches = GRAZING_PITCH_SEEDS_DEG.len();
+            for &roll_deg in &BANKED_ROLL_SEEDS_DEG {
+                for pass in 0..n_pitches {
+                    for (h_idx, &hdg) in headings.iter().enumerate() {
+                        if out.len() >= opts.attempts.max(1) {
+                            return out;
+                        }
+                        let down_deg = GRAZING_PITCH_SEEDS_DEG[(h_idx + pass) % n_pitches];
+                        out.push((
+                            eye,
+                            surface.camera_rotation(lat, lon, hdg, down_deg, roll_deg),
+                        ));
+                    }
                 }
             }
         } else {
@@ -179,11 +200,60 @@ mod tests {
             "expected 88 deg nadir fallback pitch, got -r22={}",
             -nadir_rot[(2, 2)]
         );
-        let nadir75_rot = seeds[1].1;
+        let nadir75_rot = seeds[12].1;
         assert!(
-            -nadir75_rot[(2, 2)] > 0.96,
-            "expected 75 deg nadir pitch, got -r22={}",
+            -nadir75_rot[(2, 2)] > 0.96 && -nadir75_rot[(2, 2)] < 0.98,
+            "expected 75 deg nadir pitch after 12 compass headings, got -r22={}",
             -nadir75_rot[(2, 2)]
+        );
+    }
+
+    #[test]
+    fn generate_seeds_high_agl_interleaves_pitches_across_first_twelve_attempts() {
+        let img = RgbImage::from_pixel(256, 256, Rgb([100, 120, 90]));
+        let surface = Surface::synthetic(41.0, -75.0, 100.0, img);
+        let case = PhotoCase {
+            id: "high-agl".into(),
+            image: "img.png".into(),
+            image_sha256: "0".repeat(64),
+            size: [800, 600],
+            valid_mask: String::new(),
+            mask_sha256: String::new(),
+            mask_status: String::new(),
+            semantic_labels: None,
+            semantic_sha256: None,
+            prior: Some(PhotoClaims {
+                position: Some(PositionClaim {
+                    latitude: 41.0,
+                    longitude: -75.0,
+                    reported_horizontal_error_m: None,
+                    altitude_m: Some(1_100.0),
+                    unsigned_altitude_m: Some(1_100.0),
+                    altitude_reference_text: None,
+                    altitude_datum: "msl".into(),
+                }),
+                ..PhotoClaims::default()
+            }),
+            sequence: None,
+            time_s: None,
+        };
+
+        let seeds = generate_seeds(&surface, &case, &dummy_opts(12), None);
+        assert_eq!(seeds.len(), 12);
+        let mut distinct_sin_pitches = Vec::new();
+        for &(_, rot) in &seeds {
+            let sin_down = (-rot[(2, 2)]).clamp(-1.0, 1.0);
+            if !distinct_sin_pitches
+                .iter()
+                .any(|&prev: &f64| (prev - sin_down).abs() < 0.02)
+            {
+                distinct_sin_pitches.push(sin_down);
+            }
+        }
+        assert_eq!(
+            distinct_sin_pitches.len(),
+            GRAZING_PITCH_SEEDS_DEG.len(),
+            "first 12 seeds must cover all 6 grazing pitches rather than repeating -10 deg"
         );
     }
 }

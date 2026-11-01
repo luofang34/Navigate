@@ -116,3 +116,66 @@ fn enforces_displacement_guard_and_minimum_pair_count() {
     let far_eye = [s.true_eye[0] + 5_500.0, s.true_eye[1], s.true_eye[2]];
     assert!(fit_pose_l1_gnc(&s.world, &s.pixels, &s.k, s.size, (far_eye, s.true_rot)).is_none());
 }
+
+#[test]
+fn hybrid_recovers_low_agl_coplanar_nadir_under_large_shift_and_yaw_offset() {
+    let size = [800, 450];
+    let k = Matrix3::new(533.0, 0.0, 400.0, 0.0, 533.0, 225.0, 0.0, 0.0, 1.0);
+    let true_eye = [42.0, -31.0, 56.0];
+    let look_down = Matrix3::new(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0);
+    let yaw_68 = 68.0_f64.to_radians();
+    let g_true = Matrix3::new(
+        yaw_68.cos(),
+        -yaw_68.sin(),
+        0.0,
+        yaw_68.sin(),
+        yaw_68.cos(),
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    );
+    let true_rot = look_down * g_true.transpose();
+
+    let mut world = Vec::new();
+    let mut pixels = Vec::new();
+    for gy in 0..7 {
+        for gx in 0..9 {
+            let u = 48.0 + f64::from(gx) * 88.0;
+            let v = 36.0 + f64::from(gy) * 63.0;
+            let ray_cam = Vector3::new((u - 400.0) / 533.0, (v - 225.0) / 533.0, 1.0);
+            let ray_w = true_rot.transpose() * ray_cam;
+            let t = -true_eye[2] / ray_w.z;
+            let pt = Vector3::from(true_eye) + ray_w * t;
+            world.push([pt.x, pt.y, 0.0]);
+            pixels.push([u, v]);
+        }
+    }
+    for (idx, px) in pixels.iter_mut().enumerate() {
+        if idx % 3 == 0 {
+            px[0] = (px[0] + 210.0) % 780.0;
+            px[1] = (px[1] + 155.0) % 430.0;
+        }
+    }
+
+    let seed_eye = [0.0, 0.0, 72.0];
+    let yaw_30 = 30.0_f64.to_radians();
+    let g_seed = Matrix3::new(
+        yaw_30.cos(),
+        -yaw_30.sin(),
+        0.0,
+        yaw_30.sin(),
+        yaw_30.cos(),
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    );
+    let seed_rot = look_down * g_seed.transpose();
+
+    let cand = fit_pose_hybrid(&world, &pixels, &k, size, Some((seed_eye, seed_rot)))
+        .expect("planar low-AGL nadir with 38 deg yaw offset must solve");
+    assert!(cand.score.geometry_accepted, "score: {:?}", cand.score);
+    let err_m = (Vector3::from(cand.eye) - Vector3::from(true_eye)).norm();
+    assert!(err_m < 0.25, "expected < 0.25 m error, got {err_m}");
+}

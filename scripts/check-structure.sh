@@ -57,7 +57,38 @@ fi
 while IFS= read -r path; do
     echo "FAIL: $path — build output in a target/ directory must not be in git" >&2
     fail=1
-done < <(git ls-files | grep -E '(^|/)target/')
+done < <(git ls-files | grep -E '(^|/)target/' || true)
+
+# JavaScript, TypeScript, HTML, CSS, and npm manifests must not enter git.
+while IFS= read -r path; do
+    case "$path" in
+        *.js|*.mjs|*.cjs|*.ts|*.tsx|*.jsx|*.html|*.css|package.json|*/package.json)
+            echo "FAIL: $path — web script, markup, stylesheet, and package.json files are banned" >&2
+            fail=1
+            ;;
+    esac
+done < <(git ls-files)
+
+# Every GitHub Actions uses: reference must pin a 40-character lowercase hex commit SHA.
+for wf in .github/workflows/*.yml; do
+    [ -f "$wf" ] || continue
+    while IFS= read -r bad_line; do
+        [ -n "$bad_line" ] || continue
+        echo "FAIL: $bad_line" >&2
+        fail=1
+    done < <(awk -v file="$wf" '
+        /^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*/ {
+            line = $0
+            sub(/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*/, "", line)
+            sub(/[[:space:]]+#.*/, "", line)
+            sub(/^#.*/, "", line)
+            gsub(/^[[:space:]"\x27]+|[[:space:]"\x27]+$/, "", line)
+            if (line !~ /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]+@[0-9a-f]{40}$/) {
+                printf "%s:%d — uses: %s must pin a 40-hex commit SHA\n", file, NR, line
+            }
+        }
+    ' "$wf")
+done
 max_bytes=$((5 * 1024 * 1024))
 while IFS= read -r path; do
     [ -f "$path" ] || continue

@@ -130,6 +130,11 @@ pub trait ModelInference {
     /// Return the active runtime track.
     fn engine_kind(&self) -> EngineKind;
 
+    /// Return optional static or dynamic input axis dimensions (`Some(dim)` when fixed, `None` when dynamic).
+    fn input_shape_hint(&self) -> Option<&[Option<usize>]> {
+        None
+    }
+
     /// Run one synchronous forward pass on named input tensors.
     ///
     /// # Errors

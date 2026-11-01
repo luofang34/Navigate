@@ -19,18 +19,57 @@ impl Grid {
 
 /// Resize `800 × 600` grayscale values vertically to `800 × 576` and instance-normalize.
 pub(super) fn normalize_resized(prepared: &[f32]) -> Vec<f32> {
-    let mut resized = vec![0.0; XFEAT_INPUT_WIDTH * XFEAT_INPUT_HEIGHT];
-    for y in 0..XFEAT_INPUT_HEIGHT {
-        let sy = (y as f64 + 0.5) * PREPARE_HEIGHT as f64 / XFEAT_INPUT_HEIGHT as f64 - 0.5;
-        let top = sy.floor().max(0.0) as usize;
-        let fraction = (sy - sy.floor()) as f32;
-        for x in 0..XFEAT_INPUT_WIDTH {
-            resized[y * XFEAT_INPUT_WIDTH + x] = prepared[top * XFEAT_INPUT_WIDTH + x]
-                * (1.0 - fraction)
-                + prepared[(top + 1).min(PREPARE_HEIGHT - 1) * XFEAT_INPUT_WIDTH + x] * fraction;
+    normalize_resized_dims(
+        prepared,
+        [XFEAT_INPUT_WIDTH, PREPARE_HEIGHT],
+        [XFEAT_INPUT_WIDTH, XFEAT_INPUT_HEIGHT],
+    )
+}
+
+/// Resize `prep_dims` (`[width, height]`) values to `in_dims` (`[width, height]`) and instance-normalize.
+pub(super) fn normalize_resized_dims(
+    prepared: &[f32],
+    prep_dims: [usize; 2],
+    in_dims: [usize; 2],
+) -> Vec<f32> {
+    let [prep_w, prep_h] = prep_dims;
+    let [in_w, in_h] = in_dims;
+    let mut resized = if prep_w == in_w && prep_h == in_h {
+        prepared.to_vec()
+    } else if prep_w == in_w {
+        let mut buf = vec![0.0; in_w * in_h];
+        for y in 0..in_h {
+            let sy = (y as f64 + 0.5) * prep_h as f64 / in_h as f64 - 0.5;
+            let top = sy.floor().max(0.0) as usize;
+            let fraction = (sy - sy.floor()) as f32;
+            for x in 0..in_w {
+                buf[y * in_w + x] = prepared[top * prep_w + x] * (1.0 - fraction)
+                    + prepared[(top + 1).min(prep_h - 1) * prep_w + x] * fraction;
+            }
         }
-    }
-    let count = resized.len() as f64;
+        buf
+    } else {
+        let mut buf = vec![0.0; in_w * in_h];
+        for y in 0..in_h {
+            let sy = ((y as f64 + 0.5) * prep_h as f64 / in_h as f64 - 0.5)
+                .clamp(0.0, (prep_h.saturating_sub(1)) as f64);
+            let y0 = sy.floor() as usize;
+            let y1 = (y0 + 1).min(prep_h.saturating_sub(1));
+            let fy = (sy - y0 as f64) as f32;
+            for x in 0..in_w {
+                let sx = ((x as f64 + 0.5) * prep_w as f64 / in_w as f64 - 0.5)
+                    .clamp(0.0, (prep_w.saturating_sub(1)) as f64);
+                let x0 = sx.floor() as usize;
+                let x1 = (x0 + 1).min(prep_w.saturating_sub(1));
+                let fx = (sx - x0 as f64) as f32;
+                let v0 = prepared[y0 * prep_w + x0] * (1.0 - fx) + prepared[y0 * prep_w + x1] * fx;
+                let v1 = prepared[y1 * prep_w + x0] * (1.0 - fx) + prepared[y1 * prep_w + x1] * fx;
+                buf[y * in_w + x] = v0 * (1.0 - fy) + v1 * fy;
+            }
+        }
+        buf
+    };
+    let count = resized.len().max(1) as f64;
     let mean = resized.iter().map(|v| f64::from(*v)).sum::<f64>() / count;
     let variance = resized
         .iter()
@@ -52,9 +91,39 @@ pub(super) fn decode(
     valid_mask: Option<&GrayImage>,
     limit: usize,
 ) -> Result<SparseFeatures, MatchError> {
+    decode_grid(
+        maps,
+        prepared,
+        [XFEAT_INPUT_WIDTH, PREPARE_HEIGHT],
+        [XFEAT_INPUT_WIDTH, XFEAT_INPUT_HEIGHT],
+        image,
+        valid_mask,
+        limit,
+    )
+}
+
+/// Decode dense maps at arbitrary multiple-of-8 `in_dims` (`[width, height]`) and letterbox `prep_dims`.
+pub(super) fn decode_grid(
+    maps: &ScoredMaps,
+    prepared: &input::InputImage,
+    prep_dims: [usize; 2],
+    in_dims: [usize; 2],
+    image: &GrayImage,
+    valid_mask: Option<&GrayImage>,
+    limit: usize,
+) -> Result<SparseFeatures, MatchError> {
+    if in_dims[0] < 16
+        || in_dims[1] < 16
+        || !in_dims[0].is_multiple_of(8)
+        || !in_dims[1].is_multiple_of(8)
+    {
+        return Err(MatchError::Output(
+            "dense XFeat input dimensions must be multiples of 8",
+        ));
+    }
     let grid = Grid {
-        width: XFEAT_INPUT_WIDTH,
-        height: XFEAT_INPUT_HEIGHT,
+        width: in_dims[0],
+        height: in_dims[1],
     };
     let cells = grid.cells();
     if maps.descriptors.len() != 64 * cells || maps.scores.len() != grid.width * grid.height {
@@ -71,13 +140,12 @@ pub(super) fn decode(
             descriptors[c * cells + cell] /= norm;
         }
     }
+    let sx = prep_dims[0] as f32 / grid.width as f32;
+    let sy = prep_dims[1] as f32 / grid.height as f32;
     let mut candidates = candidates(&maps.scores, grid);
     if let Some(mask) = valid_mask {
         candidates.retain(|&(x, y, _)| {
-            let model = [
-                x as f32,
-                y as f32 * PREPARE_HEIGHT as f32 / grid.height as f32,
-            ];
+            let model = [x as f32 * sx, y as f32 * sy];
             let pixel = prepared.source([f64::from(model[0]), f64::from(model[1])]);
             input::inside(pixel, image) && mask_allows(pixel, mask)
         });
@@ -85,10 +153,7 @@ pub(super) fn decode(
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2));
     let mut out = SparseFeatures::empty();
     for (x, y, score) in candidates.into_iter().take(4096) {
-        let model = [
-            x as f32,
-            y as f32 * PREPARE_HEIGHT as f32 / grid.height as f32,
-        ];
+        let model = [x as f32 * sx, y as f32 * sy];
         let pixel = prepared.source([f64::from(model[0]), f64::from(model[1])]);
         if !input::inside(pixel, image) {
             continue;
@@ -114,7 +179,7 @@ pub(super) fn decode(
     Ok(out)
 }
 
-fn mask_allows(pixel: [f64; 2], mask: &GrayImage) -> bool {
+pub(super) fn mask_allows(pixel: [f64; 2], mask: &GrayImage) -> bool {
     let (width, height) = mask.dimensions();
     if width == 0
         || height == 0
@@ -145,13 +210,35 @@ fn candidates(scores: &[f32], grid: Grid) -> Vec<(usize, usize, f32)> {
 
 /// Host score map equivalent to [`super::score::score_map`] for `[1, 65, 72, 100]` logits.
 pub(super) fn reference_scores(logits: &[f32], reliability: &[f32]) -> Vec<f32> {
+    reference_scores_grid(logits, reliability, [XFEAT_INPUT_WIDTH, XFEAT_INPUT_HEIGHT])
+}
+
+/// Host score map for `[1, 65, H/8, W/8]` logits and `[1, 1, H/8, W/8]` reliability at `in_dims`.
+pub(super) fn reference_scores_grid(
+    logits: &[f32],
+    reliability: &[f32],
+    in_dims: [usize; 2],
+) -> Vec<f32> {
     let grid = Grid {
-        width: XFEAT_INPUT_WIDTH,
-        height: XFEAT_INPUT_HEIGHT,
+        width: in_dims[0],
+        height: in_dims[1],
     };
     let heatmap = build_heatmap(logits, grid);
+    scores_from_heatmap_grid(&heatmap, reliability, in_dims)
+}
+
+/// Host NMS peak score map for a `[1, 1, H, W]` heatmap and `[1, 1, H/8, W/8]` reliability.
+pub(super) fn scores_from_heatmap_grid(
+    heatmap: &[f32],
+    reliability: &[f32],
+    in_dims: [usize; 2],
+) -> Vec<f32> {
+    let grid = Grid {
+        width: in_dims[0],
+        height: in_dims[1],
+    };
     let mut scores = vec![0.0; grid.width * grid.height];
-    for (x, y, score) in find_peaks(&heatmap, reliability, grid) {
+    for (x, y, score) in find_peaks(heatmap, reliability, grid) {
         scores[y * grid.width + x] = score;
     }
     scores

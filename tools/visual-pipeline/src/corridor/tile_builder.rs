@@ -80,6 +80,7 @@ pub(super) fn synthesize_corridor_tiles(
     let max_oblique_dist_m = (params.agl_m * 14.0).max(4_000.0);
     let mut tile_buckets: BTreeMap<CorridorTileKey, BandVoxelMap> = BTreeMap::new();
 
+    let mut rendered = Vec::with_capacity(views.len());
     for (band, eye, rot) in views {
         let mut gpu_view_opt = None;
         if let Some(lock) = gpu_renderer
@@ -99,11 +100,8 @@ pub(super) fn synthesize_corridor_tiles(
                     .ok();
             }
         }
-
-        let (gray_img, raw, world_hits) = if let Some(ref gv) = gpu_view_opt {
-            let raw = xfeat.extract(&gv.image, 1536)?;
-            let unproj = gv.unproject_pixels(surface, &raw.pixels);
-            (gv.image.clone(), raw, unproj)
+        let gray_img = if let Some(ref gv) = gpu_view_opt {
+            gv.image.clone()
         } else {
             let ((rgb, _, _), _) = surface.render_adaptive(
                 eye,
@@ -114,11 +112,26 @@ pub(super) fn synthesize_corridor_tiles(
                 8,
                 0.025,
             );
-            let gray_img = DynamicImage::ImageRgb8(rgb).into_luma8();
-            let raw = xfeat.extract(&gray_img, 1536)?;
-            let hits = surface.raycast_pixels(eye, &rot, &k_render, &raw.pixels);
-            let unproj = hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect();
-            (gray_img, raw, unproj)
+            DynamicImage::ImageRgb8(rgb).into_luma8()
+        };
+        rendered.push((band, eye, rot, gray_img, gpu_view_opt));
+    }
+
+    let batch_pairs: Vec<(&image::GrayImage, Option<&image::GrayImage>)> = rendered
+        .iter()
+        .map(|(_, _, _, img, _)| (img, None))
+        .collect();
+    let batch_feats = xfeat.extract_batch_masked(&batch_pairs, 1536)?;
+
+    for ((band, eye, rot, gray_img, gpu_view_opt), raw) in rendered.into_iter().zip(batch_feats) {
+        let world_hits: Vec<Option<[f64; 3]>> = if let Some(ref gv) = gpu_view_opt {
+            gv.unproject_pixels(surface, &raw.pixels)
+        } else {
+            surface
+                .raycast_pixels(eye, &rot, &k_render, &raw.pixels)
+                .into_iter()
+                .map(|h| h.map(|x| x.world_enu))
+                .collect()
         };
 
         let mut insert_band = |band_idx: u8,
@@ -173,7 +186,7 @@ pub(super) fn synthesize_corridor_tiles(
 
         if is_nadir_pose(&rot)
             && let Ok(rot_bands) =
-                synthesize_rotated_bands(&gray_img, surface, clat, clon, xfeat, 1536)
+                synthesize_rotated_bands(&gray_img, surface, clat, clon, xfeat, 1536, false)
         {
             for (b_idx, r_band) in rot_bands.into_iter().enumerate() {
                 let r_band_idx = band.saturating_add((b_idx as u8) + 1);

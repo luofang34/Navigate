@@ -13,9 +13,25 @@ pub(crate) fn canonical_tile_poses(
     include_obliques: bool,
 ) -> Vec<(u8, [f64; 3], Matrix3<f64>)> {
     let [clat, clon, _] = surface.geodetic([ce, cn, 0.0]);
-    let nadir_eye = surface.local(clat, clon, ground_msl + (tile_m * 0.9).max(agl_m));
+    let nadir_eye = surface.local(clat, clon, ground_msl + (tile_m * 1.45).max(agl_m));
     let nadir_rot = surface.camera_rotation(clat, clon, 0.0, 89.0, 0.0);
     if !include_obliques {
+        if !cfg!(debug_assertions) && agl_m <= 250.0 && tile_m * 1.45 > agl_m * 1.6 {
+            let sub_m = tile_m * 0.5;
+            let sub_agl = (sub_m * 1.45).max(agl_m);
+            let mut sub_views = Vec::with_capacity(4);
+            for sy in [-0.25_f64, 0.25_f64] {
+                for sx in [-0.25_f64, 0.25_f64] {
+                    let [slat, slon, _] =
+                        surface.geodetic([ce + sx * tile_m, cn + sy * tile_m, 0.0]);
+                    let sdem = surface.sample_dem(slat, slon).unwrap_or(ground_msl);
+                    let seye = surface.local(slat, slon, sdem + sub_agl);
+                    let srot = surface.camera_rotation(slat, slon, 0.0, 89.0, 0.0);
+                    sub_views.push((0, seye, srot));
+                }
+            }
+            return sub_views;
+        }
         return vec![(0, nadir_eye, nadir_rot)];
     }
 

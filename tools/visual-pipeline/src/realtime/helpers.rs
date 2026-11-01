@@ -2,7 +2,7 @@
 
 use crate::{
     PipelineError,
-    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid},
+    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
     surface::{Surface, SurfaceGpuRenderer, SurfaceRayHit},
     xfeat_runtime::LoadedXFeat,
 };
@@ -56,7 +56,17 @@ pub(crate) fn polish_pose_sparse(
         )
     };
 
-    let ref_feat = xfeat.extract(&ref_gray, kp_cap)?;
+    let raw_ref = xfeat.extract(&ref_gray, kp_cap)?;
+    let (ref_feat, pre_world) = if let Some(ref gv) = gpu_view_opt {
+        let unproj_all = gv.unproject_pixels(surface, &raw_ref.pixels);
+        let (filtered, world) = filter_terrain_world_points(&raw_ref, &unproj_all);
+        if filtered.len() < 16 {
+            return Ok(None);
+        }
+        (filtered, Some(world))
+    } else {
+        (raw_ref, None)
+    };
     let (matches, layers) = if let Some(lg) = lighterglue {
         let cfg = FastMatchConfig {
             max_keypoints: kp_cap,
@@ -75,6 +85,7 @@ pub(crate) fn polish_pose_sparse(
     let mut world_pts = Vec::with_capacity(matches.len());
     let mut img_px = Vec::with_capacity(matches.len());
     let rays_used = if let Some(gv) = gpu_view_opt {
+        let _ = pre_world;
         let unproj = gv.unproject_pixels(surface, &ref_pixels);
         for (m, w_opt) in matches.iter().zip(unproj) {
             if let Some(w) = w_opt {
@@ -94,7 +105,17 @@ pub(crate) fn polish_pose_sparse(
         pre_rays + ref_pixels.len()
     };
 
-    let cand = fit_pose_hybrid(&world_pts, &img_px, k_render, render_size, Some(pose));
+    let mut cand = fit_pose_hybrid(&world_pts, &img_px, k_render, render_size, Some(pose));
+    if !cand.as_ref().is_some_and(|c| c.score.geometry_accepted)
+        && let Some(tri_init) = refine_seed_eye_2pt(&world_pts, &img_px, pose, k_render)
+        && let Some(tri_cand) =
+            fit_pose_hybrid(&world_pts, &img_px, k_render, render_size, Some(tri_init))
+        && cand.as_ref().is_none_or(|prev| {
+            candidate_priority(&tri_cand.score) > candidate_priority(&prev.score)
+        })
+    {
+        cand = Some(tri_cand);
+    }
     Ok(cand.map(|c| (c, rays_used, layers)))
 }
 

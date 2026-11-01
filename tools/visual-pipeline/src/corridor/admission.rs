@@ -1,6 +1,11 @@
 //! Track seeding, [`MapCell`] EKF independence gating, and report emission for `corridor-track`.
 
-use super::{CorridorTrackOptions, masking::AmortizedMasker, motion::TrackState};
+use super::{
+    CorridorTrackOptions,
+    masking::AmortizedMasker,
+    motion::TrackState,
+    session::{FilterIntegritySnapshot, SessionAnchorReport},
+};
 use crate::{
     PipelineError,
     metadata::PositionClaim,
@@ -11,7 +16,10 @@ use crate::{
     util::write_json,
 };
 use nalgebra::Matrix3;
-use navigate_match::{ActiveTrackSet, PreparedKashinQuery, SparseFeatures, VirtualCorridorView};
+use navigate_match::{
+    ActiveTrackSet, CorridorTileStore, HadamardProjector, PreparedKashinQuery, SparseFeatures,
+    VirtualCorridorView, VirtualViewCamera,
+};
 use navigate_visual_session::MapCell;
 use serde_json::{Value, json};
 use std::{
@@ -63,6 +71,17 @@ impl FusionAdmission {
             fusion_eligibility: "rejected",
             map_cell: None,
             earlier_anchor_id: None,
+        }
+    }
+
+    pub(super) fn from_session_report(report: SessionAnchorReport) -> Self {
+        Self {
+            tracking_mode: "corridor_anchor",
+            evidence_kind: "corridor_map_anchor",
+            independent_ekf_fix: report.independent_ekf_fix,
+            fusion_eligibility: report.fusion_eligibility,
+            map_cell: report.map_cell,
+            earlier_anchor_id: report.earlier_anchor_id,
         }
     }
 }
@@ -160,10 +179,16 @@ pub(super) fn seed_tracks(
     cand: &PoseCandidate,
     virt_opt: &Option<VirtualCorridorView>,
 ) -> ActiveTrackSet {
-    let hits = surface.raycast_pixels(cand.eye, &cand.rotation, &cand.k, &qry_feat.pixels);
+    let seed_cap = qry_feat.pixels.len().min(1024);
+    let hits = surface.raycast_pixels(
+        cand.eye,
+        &cand.rotation,
+        &cand.k,
+        &qry_feat.pixels[..seed_cap],
+    );
     let world_opts: Vec<Option<[f64; 3]>> =
         hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect();
-    let mut set = ActiveTrackSet::from_prepared_query(prepared, &world_opts, 1536);
+    let mut set = ActiveTrackSet::from_prepared_query(prepared, &world_opts, 1024);
     if let Some(virt) = virt_opt {
         set.extend_capped(
             &virt.world_points_enu,
@@ -196,11 +221,70 @@ pub(super) fn top_up_tracks(
         render_size,
         TOP_UP_FRUSTUM_MARGIN_PX,
     );
-    let hits = surface.raycast_pixels(cand.eye, &cand.rotation, &cand.k, &qry_feat.pixels);
+    let sin_down = -cand.rotation[(2, 2)];
+    let ray_cap = if sin_down < 0.08 {
+        qry_feat.pixels.len().min(128)
+    } else {
+        qry_feat.pixels.len().min(384)
+    };
+    let hits = surface.raycast_pixels(
+        cand.eye,
+        &cand.rotation,
+        &cand.k,
+        &qry_feat.pixels[..ray_cap],
+    );
     let world_opts: Vec<Option<[f64; 3]>> =
         hits.into_iter().map(|h| h.map(|x| x.world_enu)).collect();
-    let fresh = ActiveTrackSet::from_prepared_query(prepared, &world_opts, 768);
+    let fresh = ActiveTrackSet::from_prepared_query(prepared, &world_opts, 384);
     extend_dedup_enu(tracks, &fresh, TOP_UP_DEDUP_METRES, 2048);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn top_up_tracks_with_bank(
+    tracks: &mut ActiveTrackSet,
+    surface: &Surface,
+    store: &CorridorTileStore,
+    projector: &HadamardProjector,
+    prepared: &PreparedKashinQuery,
+    qry_feat: &SparseFeatures,
+    cand: &PoseCandidate,
+    render_size: [u32; 2],
+) {
+    top_up_tracks(tracks, surface, prepared, qry_feat, cand, render_size);
+    let sin_down = -cand.rotation[(2, 2)];
+    let is_nadir = sin_down > 0.95;
+    let intrinsics = [
+        cand.k[(0, 0)],
+        cand.k[(1, 1)],
+        cand.k[(0, 2)],
+        cand.k[(1, 2)],
+    ];
+    if let Ok(virt) = store.project_virtual_view(
+        &VirtualViewCamera {
+            eye_enu: cand.eye,
+            world_to_cam: rot_to_row_major(&cand.rotation),
+            intrinsics,
+            image_size: render_size,
+            max_landmarks: 512,
+            min_cos_incidence: if is_nadir {
+                0.45
+            } else if sin_down < 0.25 {
+                0.72
+            } else {
+                0.84
+            },
+            min_cos_orientation: 0.80,
+        },
+        projector,
+    ) && !virt.world_points_enu.is_empty()
+    {
+        let bank_fresh = ActiveTrackSet {
+            world_points_enu: virt.world_points_enu,
+            sign_bits: virt.sign_bits,
+            kashin_i8: virt.kashin_i8,
+        };
+        extend_dedup_enu(tracks, &bank_fresh, TOP_UP_DEDUP_METRES, 2048);
+    }
 }
 
 fn extend_dedup_enu(
@@ -304,15 +388,24 @@ pub(super) fn classify_anchor_cell(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn write_corridor_report(
     output_dir: &Path,
     surface: &Surface,
     case_id: &str,
     adm: &FusionAdmission,
+    filter_snap: &FilterIntegritySnapshot,
     attempts: Vec<Value>,
     best: Option<(usize, usize, PoseCandidate)>,
     accepted_count: &mut usize,
 ) -> Result<(), PipelineError> {
+    let filter_integrity = json!({
+        "quality": filter_snap.quality,
+        "redundancy": filter_snap.redundancy,
+        "fault_detection": filter_snap.fault_detection,
+        "horizontal_1sigma_m": filter_snap.horizontal_1sigma_m,
+        "vertical_1sigma_m": filter_snap.vertical_1sigma_m,
+    });
     let report = if let Some((seed, step, cand)) = best
         && cand.score.geometry_accepted
     {
@@ -328,6 +421,9 @@ pub(super) fn write_corridor_report(
             "id": case_id,
             "status": "candidate_requires_review",
             "attempts": attempts,
+            "filter_integrity": filter_integrity,
+            "session_revision": filter_snap.session_revision,
+            "trajectory_revisions": filter_snap.trajectory_revisions,
             "candidate": {
                 "latitude": lat,
                 "longitude": lon,
@@ -355,6 +451,9 @@ pub(super) fn write_corridor_report(
             "tracking_mode": adm.tracking_mode,
             "evidence_kind": adm.evidence_kind,
             "fusion_eligibility": adm.fusion_eligibility,
+            "filter_integrity": filter_integrity,
+            "session_revision": filter_snap.session_revision,
+            "trajectory_revisions": filter_snap.trajectory_revisions,
             "attempts": attempts,
             "candidate": null,
         })

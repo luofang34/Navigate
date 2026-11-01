@@ -96,6 +96,8 @@ pub(crate) fn commands() -> [Command; 2] {
                 .arg(path_arg("model", true))
                 .arg(path_arg("lighterglue", false))
                 .arg(path_arg("seg-model", false))
+                .arg(path_arg("dinov2-weights", false))
+                .arg(path_arg("place-index", false))
                 .arg(
                     Arg::new("mask-policy")
                         .long("mask-policy")
@@ -167,6 +169,12 @@ pub(crate) fn commands() -> [Command; 2] {
                     Arg::new("sync-refresh")
                         .long("sync-refresh")
                         .help("Run Segformer refreshes and map anchors synchronously inside the frame loop")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("pace-realtime")
+                        .long("pace-realtime")
+                        .help("Pace offline disk replay to real-time capture timestamps")
                         .action(ArgAction::SetTrue),
                 )
                 .arg(float_arg("prior-lat", None))
@@ -244,6 +252,8 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 xfeat_weights_path: req(args, "model")?,
                 lighterglue_weights_path: args.get_one::<PathBuf>("lighterglue").cloned(),
                 seg_model_dir: args.get_one::<PathBuf>("seg-model").cloned(),
+                dinov2_weights_path: args.get_one::<PathBuf>("dinov2-weights").cloned(),
+                place_index_path: args.get_one::<PathBuf>("place-index").cloned(),
                 dynamics_profile,
                 mask_policy: req(args, "mask-policy")?,
                 mask_interval: req(args, "mask-interval")?,
@@ -264,6 +274,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineEr
                 focal_35mm_override: args.get_one::<f64>("focal-35mm").copied(),
                 only_cases,
                 background_refresh,
+                pace_realtime: args.get_flag("pace-realtime"),
                 xfeat_runtime,
             })
         }

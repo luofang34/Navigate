@@ -4,6 +4,7 @@ use super::super::{
     admission::FusionAdmission,
     latency::{StageLatencies, percentile},
     masking::MaskFrameTelemetry,
+    session::FilterIntegritySnapshot,
 };
 use serde_json::{Value, json};
 
@@ -15,6 +16,7 @@ pub(crate) fn record_frame_telemetry(
     is_accepted: bool,
     runtime_name: &str,
     admission: &FusionAdmission,
+    filter_snap: &FilterIntegritySnapshot,
     active_tracks: usize,
     cached_tiles: usize,
     resident_bytes: usize,
@@ -35,6 +37,15 @@ pub(crate) fn record_frame_telemetry(
         "independent_ekf_fix": admission.independent_ekf_fix,
         "fusion_eligibility": admission.fusion_eligibility,
         "map_cell": admission.map_cell,
+        "filter_integrity": {
+            "quality": filter_snap.quality,
+            "redundancy": filter_snap.redundancy,
+            "fault_detection": filter_snap.fault_detection,
+            "horizontal_1sigma_m": filter_snap.horizontal_1sigma_m,
+            "vertical_1sigma_m": filter_snap.vertical_1sigma_m,
+        },
+        "session_revision": filter_snap.session_revision,
+        "trajectory_revisions": filter_snap.trajectory_revisions,
         "active_tracks": active_tracks,
         "cached_tiles": cached_tiles,
         "resident_window_bytes": resident_bytes,
@@ -73,6 +84,8 @@ pub(crate) struct RunSummaryParams<'a> {
     pub(crate) background_refresh: bool,
     pub(crate) anchor_results: Vec<Value>,
     pub(crate) latencies: &'a StageLatencies,
+    pub(crate) filter_snap: &'a FilterIntegritySnapshot,
+    pub(crate) locked_focal_px: Option<f64>,
 }
 
 /// Build summary JSON for the complete tracker run.
@@ -96,6 +109,16 @@ pub(crate) fn build_run_summary(p: RunSummaryParams<'_>) -> Value {
         "telemetry": p.telemetry,
         "background_refresh": p.background_refresh,
         "anchor_results": p.anchor_results,
+        "locked_focal_px": p.locked_focal_px,
+        "session_revision": p.filter_snap.session_revision,
+        "trajectory_revisions": p.filter_snap.trajectory_revisions,
+        "filter_integrity": {
+            "quality": p.filter_snap.quality,
+            "redundancy": p.filter_snap.redundancy,
+            "fault_detection": p.filter_snap.fault_detection,
+            "horizontal_1sigma_m": p.filter_snap.horizontal_1sigma_m,
+            "vertical_1sigma_m": p.filter_snap.vertical_1sigma_m,
+        },
     });
     if let Some(map) = summary.as_object_mut() {
         p.latencies.write_summary(map);

@@ -190,6 +190,14 @@ impl LoadedXFeat {
             .extract_masked_blocking(image, valid_mask, limit)?)
     }
 
+    pub(crate) fn extract_batch_masked(
+        &self,
+        items: &[(&GrayImage, Option<&GrayImage>)],
+        limit: usize,
+    ) -> Result<Vec<SparseFeatures>, PipelineError> {
+        Ok(self.extractor.extract_batch_masked_blocking(items, limit)?)
+    }
+
     pub(crate) fn warmup(&self, lighterglue: Option<&LighterGlue>) -> Result<f64, PipelineError> {
         #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
         {

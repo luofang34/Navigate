@@ -73,11 +73,16 @@ pub fn project_tiles_virtual_view<'a>(
             if depth_f < min_depth[z_cell] {
                 min_depth[z_cell] = depth_f;
             }
+            let is_nadir = tile.obs_dirs_i8[l_idx][2] > 120;
+            let min_cos_inc = if is_nadir {
+                cam.min_cos_incidence.min(0.45)
+            } else {
+                cam.min_cos_incidence
+            };
             let cos_ray = incidence_cosine(tile.obs_dirs_i8[l_idx], v);
-            if cos_ray < cam.min_cos_incidence {
+            if cos_ray < min_cos_inc {
                 continue;
             }
-            let is_nadir = tile.obs_dirs_i8[l_idx][2] > 120;
             let cos_ori = unit_cosine_i8(tile.cam_x_i8[l_idx], live_cam_x);
             if cos_ori < cam.min_cos_orientation {
                 continue;

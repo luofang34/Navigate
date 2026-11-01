@@ -357,17 +357,30 @@ impl CorridorTileStore {
         };
         let s = f64::from(self.tile_size_m.max(10.0));
         let fwd = [cam.world_to_cam[6], cam.world_to_cam[7]];
+        let fwd_z = cam.world_to_cam[8];
         let fwd_h = (fwd[0] * fwd[0] + fwd[1] * fwd[1]).sqrt();
-        let look_dist = if fwd_h > 0.25 {
+        let upward_horizon = fwd_h > 0.25 && -fwd_z < 0.05;
+        let shallow_horizon = fwd_h > 0.25 && -fwd_z < 0.25;
+        let look_dist = if upward_horizon {
+            (cam.eye_enu[2].abs() * 8.5).clamp(5_500.0, 13_000.0)
+        } else if shallow_horizon {
+            (cam.eye_enu[2].abs() * 5.5).clamp(3_500.0, 7_500.0)
+        } else if fwd_h > 0.25 {
             (cam.eye_enu[2].abs() * 2.5).clamp(0.0, 3_000.0)
         } else {
             0.0
         };
-        let focus_e =
-            cam.eye_enu[0] + (if fwd_h > 1e-6 { fwd[0] / fwd_h } else { 0.0 }) * look_dist;
-        let focus_n =
-            cam.eye_enu[1] + (if fwd_h > 1e-6 { fwd[1] / fwd_h } else { 0.0 }) * look_dist;
-        let max_range_sq = (6_800.0_f64 + s).powi(2);
+        let ux = if fwd_h > 1e-6 { fwd[0] / fwd_h } else { 0.0 };
+        let uy = if fwd_h > 1e-6 { fwd[1] / fwd_h } else { 0.0 };
+        let focus_e = cam.eye_enu[0] + ux * look_dist;
+        let focus_n = cam.eye_enu[1] + uy * look_dist;
+        let max_range_sq = if upward_horizon {
+            (22_000.0_f64 + s).powi(2)
+        } else if shallow_horizon {
+            (14_000.0_f64 + s).powi(2)
+        } else {
+            (6_800.0_f64 + s).powi(2)
+        };
 
         let mut ranked: Vec<(f64, CorridorTileKey)> = guard
             .indexed_keys
@@ -378,6 +391,9 @@ impl CorridorTileStore {
                 let de_eye = cx - cam.eye_enu[0];
                 let dn_eye = cy - cam.eye_enu[1];
                 if de_eye * de_eye + dn_eye * dn_eye > max_range_sq {
+                    return None;
+                }
+                if fwd_h > 0.5 && (de_eye * ux + dn_eye * uy) < -s * 1.25 {
                     return None;
                 }
                 let de_foc = cx - focus_e;

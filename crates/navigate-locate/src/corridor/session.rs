@@ -1,121 +1,37 @@
 //! Visual session lifecycle, filter fix admission, and dual-path dead reckoning.
 
+pub mod bridge;
+mod dead_reckon;
 mod worker;
 
 pub use super::kinematics::can_update_vertical_velocity;
+pub use bridge::{
+    FilterIntegritySnapshot, SessionAnchorReport, build_estimate_from_candidate,
+    cv_fisher_to_camera_covariance, cv_world_to_cam_to_camera_pose,
+    cv_world_to_cam_to_session_pose,
+};
+pub use dead_reckon::{DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner};
 pub use worker::AnchorWorkerState;
 
-use super::kinematics::{KinematicState, MAX_DELTA_T_S, MIN_DELTA_T_S};
+use super::kinematics::{MAX_DELTA_T_S, MIN_DELTA_T_S};
 use nalgebra::Matrix3;
 use navigate_contract::{
-    ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, ObservationStamp,
-    SensorClass, SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
+    ClockDomainId, GeodeticPosition, MonotonicNanos, ObservationStamp, SensorClass,
+    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
-use navigate_visual::{CameraModel, Estimate, LocalFrame, SearchPrior};
+use navigate_visual::{CameraModel, Estimate};
 use navigate_visual_fusion::{
-    EvidenceIndependence, FrameCapture, PropagationBudget, VerticalDatum, VisualErrorBudget,
-    VisualFixSource, VisualFusionError, VisualSourceIdentity, search_prior,
+    EvidenceIndependence, VerticalDatum, VisualErrorBudget, VisualFixSource, VisualSourceIdentity,
 };
 use navigate_visual_session::{
     AnchorDecision, AnchorObservation, AnchorPolicy, Calibration, CameraMount, CaptureTime,
     ContinuityEpoch, FrameKey, FrameRecord, LensModel, MotionOutcome, Pose, RelativeMotion,
     ScaleSource, SessionConfig, SessionError, StreamId, VerticalReference, VisualSession,
 };
-
-/// Active dead-reckoning mode during track loss.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeadReckonPath {
-    /// Path A uses an external sensor prior from the navigation filter.
-    PathA,
-    /// Path B uses optical flow or kinematic coasting without external sensors.
-    PathB,
-}
-
-/// Dead-reckoning position and covariance estimate during track loss.
-#[derive(Debug, Clone)]
-pub struct DeadReckonEstimate {
-    /// Estimated camera position in `ENU` meters.
-    pub eye_enu: [f64; 3],
-    /// Propagated position covariance matrix in meters squared.
-    pub pos_cov_enu_m2: Matrix3<f64>,
-    /// Active dead-reckoning path.
-    pub path: DeadReckonPath,
-}
-
-/// Dual-path dead reckoner for external sensor priors and vision fallback.
-#[derive(Debug, Clone)]
-pub struct DualPathDeadReckoner {
-    /// Kinematic state for coasting.
-    pub kinematic: KinematicState,
-    /// Flag that indicates whether external sensors are available.
-    pub external_sensors_available: bool,
-}
-
-impl DualPathDeadReckoner {
-    /// Create a dead reckoner from initial position and velocity.
-    #[must_use]
-    pub fn new(initial_eye: [f64; 3], initial_vel: [f64; 3], external_sensors: bool) -> Self {
-        let mut kin = KinematicState::new(initial_eye, Matrix3::identity());
-        kin.vel_enu_mps = initial_vel;
-        Self {
-            kinematic: kin,
-            external_sensors_available: external_sensors,
-        }
-    }
-
-    /// Propagate dead-reckoning position and covariance across interval `dt_s`.
-    pub fn step(
-        &mut self,
-        dt_s: f64,
-        ground_flow_vectors: usize,
-        a_rms_mps2: f64,
-        omega_rms_rad_s: f64,
-    ) -> DeadReckonEstimate {
-        if self.external_sensors_available {
-            self.kinematic
-                .propagate_covariance(dt_s, a_rms_mps2 * 0.5, omega_rms_rad_s * 0.5);
-            let pred_eye = self.kinematic.predict_position(dt_s);
-            self.kinematic.eye_enu = pred_eye;
-            DeadReckonEstimate {
-                eye_enu: pred_eye,
-                pos_cov_enu_m2: self.kinematic.pos_cov_enu_m2,
-                path: DeadReckonPath::PathA,
-            }
-        } else {
-            let dt = dt_s.clamp(MIN_DELTA_T_S, MAX_DELTA_T_S);
-            if ground_flow_vectors >= 6 {
-                self.kinematic
-                    .propagate_covariance(dt, a_rms_mps2 * 0.8, omega_rms_rad_s * 0.8);
-            } else {
-                self.kinematic
-                    .propagate_covariance(dt, a_rms_mps2, omega_rms_rad_s);
-            }
-            let pred_eye = self.kinematic.predict_position(dt);
-            self.kinematic.eye_enu = pred_eye;
-            DeadReckonEstimate {
-                eye_enu: pred_eye,
-                pos_cov_enu_m2: self.kinematic.pos_cov_enu_m2,
-                path: DeadReckonPath::PathB,
-            }
-        }
-    }
-
-    /// Project a Path A `SearchPrior` from the navigation filter solution.
-    ///
-    /// # Errors
-    /// Returns [`VisualFusionError`] when clock domains do not match or coordinates are invalid.
-    pub fn project_search_prior(
-        solution: &NavigationSolution,
-        frame: LocalFrame,
-        capture: FrameCapture,
-        budget: PropagationBudget,
-    ) -> Result<SearchPrior, VisualFusionError> {
-        search_prior(solution, frame, capture, budget)
-    }
-}
+use std::collections::{BTreeMap, HashSet};
 
 /// Integrated visual session, fix source, and tangent-plane navigation filter.
 pub struct VisualCorridorSession {
@@ -133,6 +49,20 @@ pub struct VisualCorridorSession {
     pub prev_registered_key: Option<FrameKey>,
     /// Most recent registered frame key.
     pub last_registered_key: Option<FrameKey>,
+    /// Evidence digest of `prev_registered_key`.
+    pub prev_registered_sha256: Option<String>,
+    /// Evidence digest of `last_registered_key`.
+    pub last_registered_sha256: Option<String>,
+    /// Newest frame with odometry in the current continuity epoch.
+    pub last_odom_frame: Option<(FrameKey, String, Pose)>,
+    /// Seen frame digests in this session.
+    pub seen_digests: HashSet<String>,
+    /// Case identifier for each registered frame key.
+    pub frame_case_ids: BTreeMap<FrameKey, String>,
+    /// Cumulative count of `TrajectoryRevised` events emitted by `VisualSession`.
+    pub trajectory_revisions: usize,
+    /// Most recent registered monotonic capture timestamp in nanoseconds.
+    pub last_capture_ns: u64,
     /// Dead reckoner for track-loss intervals.
     pub dead_reckoner: DualPathDeadReckoner,
 }
@@ -186,6 +116,13 @@ impl VisualCorridorSession {
             current_epoch: ContinuityEpoch(0),
             prev_registered_key: None,
             last_registered_key: None,
+            prev_registered_sha256: None,
+            last_registered_sha256: None,
+            last_odom_frame: None,
+            seen_digests: HashSet::new(),
+            frame_case_ids: BTreeMap::new(),
+            trajectory_revisions: 0,
+            last_capture_ns: 0,
             dead_reckoner,
         })
     }
@@ -222,12 +159,20 @@ impl VisualCorridorSession {
     /// # Errors
     /// Returns an error string when the timestamp is duplicate or out of order.
     pub fn register_frame(&mut self, t_ns: u64) -> Result<(), String> {
+        let sha = format!("{:064x}", self.next_seq + 1);
+        self.register_frame_with_digest(t_ns, &sha)
+    }
+
+    /// Register a camera frame at monotonic timestamp `t_ns` with explicit digest `sha256`.
+    ///
+    /// # Errors
+    /// Returns an error string when the timestamp or digest is invalid.
+    pub fn register_frame_with_digest(&mut self, t_ns: u64, sha256: &str) -> Result<(), String> {
         let key = FrameKey {
             stream: StreamId(1),
             continuity: self.current_epoch,
             index: self.next_seq,
         };
-        self.next_seq += 1;
         let record = FrameRecord {
             key,
             media: None,
@@ -236,19 +181,24 @@ impl VisualCorridorSession {
                 at_ns: t_ns,
                 error_bound_ns: 1000,
             },
-            observation_sha256: format!("{:064x}", self.next_seq),
+            observation_sha256: sha256.to_owned(),
         };
         self.session
             .observe_frame(record)
             .map_err(|e| format!("{e:?}"))?;
+        self.next_seq += 1;
         self.prev_registered_key = self.last_registered_key;
         self.last_registered_key = Some(key);
+        self.prev_registered_sha256 = self.last_registered_sha256.take();
+        self.last_registered_sha256 = Some(sha256.to_owned());
+        self.last_capture_ns = t_ns;
         Ok(())
     }
 
     /// Advance the continuity epoch after track loss or unobservable scale.
     pub fn advance_epoch(&mut self) {
         self.current_epoch = ContinuityEpoch(self.current_epoch.0 + 1);
+        self.last_odom_frame = None;
     }
 
     /// Apply relative motion between the two most recent registered frames.
@@ -276,13 +226,22 @@ impl VisualCorridorSession {
             });
         }
 
+        let from_sha = self
+            .prev_registered_sha256
+            .clone()
+            .unwrap_or_else(|| format!("{:064x}", from_key.index + 1));
+        let to_sha = self
+            .last_registered_sha256
+            .clone()
+            .unwrap_or_else(|| format!("{:064x}", to_key.index + 1));
+
         let motion = RelativeMotion {
             from: from_key,
             to: to_key,
             from_to,
             scale,
-            from_observation_sha256: format!("{:064x}", from_key.index + 1),
-            to_observation_sha256: format!("{:064x}", to_key.index + 1),
+            from_observation_sha256: from_sha,
+            to_observation_sha256: to_sha,
         };
         match self.session.apply_motion(motion) {
             Ok(outcome) => Ok(outcome),
@@ -325,6 +284,7 @@ impl VisualCorridorSession {
         dt_s: f64,
     ) {
         self.filter.reset();
+        self.dead_reckoner.clear_filter_solution();
         let prev_eye = self.dead_reckoner.kinematic.eye_enu;
         if dt_s > 0.0 {
             let dt = dt_s.clamp(MIN_DELTA_T_S, MAX_DELTA_T_S);
@@ -354,6 +314,7 @@ impl VisualCorridorSession {
             .session
             .submit_anchor(anchor)
             .map_err(|e| format!("{e:?}"))?;
+        let _ = self.drain_session_events();
         match decision {
             AnchorDecision::Accepted { eligibility } => {
                 let ind = EvidenceIndependence::ValidatedIndependent.restricted_by(&eligibility);
@@ -367,6 +328,10 @@ impl VisualCorridorSession {
                 let outcome = self
                     .filter
                     .ingest(&fix.observation, MonotonicNanos::from_nanos(t_ns));
+                if let Some(sol) = self.filter.tick(MonotonicNanos::from_nanos(t_ns)) {
+                    self.dead_reckoner
+                        .set_filter_solution(sol, estimate.frame, t_ns);
+                }
                 if outcome == IngestOutcome::Accepted {
                     Ok(Some(fix.observation))
                 } else {
@@ -389,6 +354,10 @@ impl VisualCorridorSession {
                 let outcome = self
                     .filter
                     .ingest(&fix.observation, MonotonicNanos::from_nanos(t_ns));
+                if let Some(sol) = self.filter.tick(MonotonicNanos::from_nanos(t_ns)) {
+                    self.dead_reckoner
+                        .set_filter_solution(sol, estimate.frame, t_ns);
+                }
                 if outcome == IngestOutcome::Accepted {
                     Ok(Some(fix.observation))
                 } else {

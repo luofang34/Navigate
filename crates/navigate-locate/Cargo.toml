@@ -35,6 +35,9 @@ kamadak-exif = "0.6.1"
 serde = { version = "1", features = ["derive"], optional = true }
 ureq = { version = "3.5.0", optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.3"
+
 [dev-dependencies]
 pollster = "0.3"
 navigate-match = { path = "../navigate-match", features = ["wgpu"] }
