@@ -39,6 +39,7 @@ pub(super) struct ClipSpec<'a> {
     pub max_pos_offset_m: f64,
     pub auto_catalog_zoom: Option<(u32, u32, f64)>,
     pub runtime_override: Option<XFeatRuntimeConfig>,
+    pub pace_realtime: bool,
 }
 
 impl<'a> ClipSpec<'a> {
@@ -68,6 +69,7 @@ impl<'a> ClipSpec<'a> {
             max_pos_offset_m: 4500.0,
             auto_catalog_zoom: None,
             runtime_override: None,
+            pace_realtime: false,
         }
     }
 
@@ -91,6 +93,7 @@ impl<'a> ClipSpec<'a> {
             max_pos_offset_m: 600.0,
             auto_catalog_zoom: Some((19, 14, 360.0)),
             runtime_override: None,
+            pace_realtime: false,
         }
     }
 }
@@ -104,6 +107,7 @@ pub(super) struct ClipRunReport {
     pub locked_focal_px: Option<f64>,
     pub best_filter_quality: String,
     pub build_elapsed_ms: f64,
+    pub first_anchor_ms: Option<f64>,
     pub p50_total_ms: f64,
     pub p50_warm_ms: f64,
 }
@@ -357,7 +361,7 @@ pub(super) fn execute_real_corridor_clip(
         focal_35mm_override: None,
         only_cases: None,
         background_refresh: true,
-        pace_realtime: false,
+        pace_realtime: spec.pace_realtime,
         xfeat_runtime: track_runtime,
     })?;
 
@@ -365,6 +369,10 @@ pub(super) fn execute_real_corridor_clip(
     let accepted = summary["accepted"].as_u64().unwrap_or(0) as usize;
     let warm_tracked_frames = summary["warm_tracked_frames"].as_u64().unwrap_or(0) as usize;
     let seg_refreshes = summary["segformer_refreshes"].as_u64().unwrap_or(0) as usize;
+    let first_anchor_ms = summary["anchor_results"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|r| r["anchor_ms"].as_f64());
 
     let telemetry = summary["telemetry"].as_array().ok_or("missing telemetry")?;
     let mut total_ms = Vec::with_capacity(frames);
@@ -438,8 +446,9 @@ pub(super) fn execute_real_corridor_clip(
     let p50_warm_ms = percentile_p50(&mut warm_ms);
     writeln!(
         std::io::stdout(),
-        "[live-benchmark] {} | build_ms={build_elapsed_ms:.0} frames={frames} accepted={accepted} warm={warm_tracked_frames} max_inliers={max_inliers} mask_frac={first_valid_mask_fraction:.3} locked_focal_px={locked_focal_px:?} filter={best_filter_quality} p50_total_ms={p50_total_ms:.2} p50_warm_ms={p50_warm_ms:.2} first_pose={first_pose:?}",
-        spec.file_name
+        "[live-benchmark] {} (pace={}) | build_ms={build_elapsed_ms:.0} anchor0_ms={first_anchor_ms:?} frames={frames} accepted={accepted} warm={warm_tracked_frames} max_inliers={max_inliers} mask_frac={first_valid_mask_fraction:.3} locked_focal_px={locked_focal_px:?} filter={best_filter_quality} p50_total_ms={p50_total_ms:.2} p50_warm_ms={p50_warm_ms:.2} first_pose={first_pose:?}",
+        spec.file_name,
+        spec.pace_realtime
     )?;
     assert!(
         seg_refreshes >= 1,
@@ -463,6 +472,7 @@ pub(super) fn execute_real_corridor_clip(
         locked_focal_px,
         best_filter_quality,
         build_elapsed_ms,
+        first_anchor_ms,
         p50_total_ms,
         p50_warm_ms,
     })

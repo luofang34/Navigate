@@ -21,6 +21,21 @@ pub fn project_tiles_virtual_view<'a>(
     cam: &VirtualViewCamera,
     projector: &HadamardProjector,
 ) -> VirtualCorridorView {
+    project_tiles_virtual_view_opt(tiles, cam, Some(projector))
+}
+
+pub(super) fn project_tiles_virtual_kashin<'a>(
+    tiles: impl IntoIterator<Item = &'a CorridorTileEntry>,
+    cam: &VirtualViewCamera,
+) -> VirtualCorridorView {
+    project_tiles_virtual_view_opt(tiles, cam, None)
+}
+
+fn project_tiles_virtual_view_opt<'a>(
+    tiles: impl IntoIterator<Item = &'a CorridorTileEntry>,
+    cam: &VirtualViewCamera,
+    projector: Option<&HadamardProjector>,
+) -> VirtualCorridorView {
     let [w, h] = cam.image_size;
     let [fx, fy, cx, cy] = cam.intrinsics;
     if w == 0 || h == 0 || cam.max_landmarks == 0 || fx <= 1e-6 || fy <= 1e-6 {
@@ -123,7 +138,11 @@ pub fn project_tiles_virtual_view<'a>(
             pixels: Vec::with_capacity(keep_cap),
             model_pixels: Vec::with_capacity(keep_cap),
             scores: Vec::with_capacity(keep_cap),
-            descriptors: Vec::with_capacity(keep_cap * 64),
+            descriptors: Vec::with_capacity(if projector.is_some() {
+                keep_cap * 64
+            } else {
+                0
+            }),
         },
         world_points_enu: Vec::with_capacity(keep_cap),
         sign_bits: Vec::with_capacity(keep_cap),
@@ -172,18 +191,20 @@ fn push_virtual_landmark(
     tile: &CorridorTileEntry,
     (prio, _, _, _, l_idx, px, world): ProjectedCand,
     (scale, ox, oy): (f64, f64, f64),
-    projector: &HadamardProjector,
+    projector: Option<&HadamardProjector>,
 ) {
     let code = tile.kashin_i8[l_idx];
-    let unit = try_normalize64(&unpack_kashin_i8(&code)).unwrap_or([0.0; 64]);
     out.features.pixels.push(px);
     out.features
         .model_pixels
         .push([(px[0] * scale + ox) as f32, (px[1] * scale + oy) as f32]);
     out.features.scores.push(prio);
-    out.features
-        .descriptors
-        .extend_from_slice(&projector.unproject(&unit));
+    if let Some(proj) = projector {
+        let unit = try_normalize64(&unpack_kashin_i8(&code)).unwrap_or([0.0; 64]);
+        out.features
+            .descriptors
+            .extend_from_slice(&proj.unproject(&unit));
+    }
     out.world_points_enu.push(world);
     out.sign_bits.push(tile.sign_bits[l_idx]);
     out.kashin_i8.push(code);

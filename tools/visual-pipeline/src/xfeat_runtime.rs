@@ -202,33 +202,80 @@ impl LoadedXFeat {
         #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
         {
             let t0 = std::time::Instant::now();
-            let (w, h, cap) = if cfg!(debug_assertions) {
-                (32_u32, 32_u32, 32_usize)
+            let (w, h, h_wide, cap) = if cfg!(debug_assertions) {
+                (32_u32, 32_u32, 24_u32, 32_usize)
             } else {
-                (800_u32, 600_u32, 2048_usize)
+                (800_u32, 600_u32, 450_u32, 2048_usize)
+            };
+            let fill_noise = |img: &mut GrayImage| {
+                for (x, y, p) in img.enumerate_pixels_mut() {
+                    p.0[0] = ((x.wrapping_mul(37) ^ y.wrapping_mul(73))
+                        .wrapping_add(x.wrapping_mul(y).wrapping_mul(11))
+                        & 0xff) as u8;
+                }
             };
             let mut patch = GrayImage::new(w, h);
-            for (x, y, p) in patch.enumerate_pixels_mut() {
-                p.0[0] = ((x.wrapping_mul(37) ^ y.wrapping_mul(73))
-                    .wrapping_add(x.wrapping_mul(y).wrapping_mul(11))
-                    & 0xff) as u8;
-            }
+            fill_noise(&mut patch);
+            let mut patch_wide = GrayImage::new(w, h_wide);
+            fill_noise(&mut patch_wide);
+            let mask_std = GrayImage::from_pixel(w, h, image::Luma([255]));
+            let mask_wide = GrayImage::from_pixel(w, h_wide, image::Luma([255]));
             let feat = self.extract(&patch, cap)?;
+            let _ = self.extract_masked(&patch, Some(&mask_std), cap)?;
+            let _ = self.extract(&patch_wide, cap)?;
+            let feat_wide = self.extract_masked(&patch_wide, Some(&mask_wide), cap)?;
             if let Some(lg) = lighterglue
                 && !feat.is_empty()
+                && !feat_wide.is_empty()
             {
-                let cfg_full = navigate_match::FastMatchConfig {
-                    max_keypoints: cap,
-                    ..navigate_match::FastMatchConfig::balanced_search()
+                let slice_feat = |src: &SparseFeatures, keep: usize| {
+                    let n = keep.max(1).min(src.len());
+                    SparseFeatures {
+                        pixels: src.pixels[..n].to_vec(),
+                        model_pixels: src.model_pixels[..n].to_vec(),
+                        scores: src.scores[..n].to_vec(),
+                        descriptors: src.descriptors[..n * 64].to_vec(),
+                    }
                 };
-                let _ = pollster::block_on(lg.match_features_fast(&feat, &feat, &cfg_full))?;
-                let cfg_batch = navigate_match::FastMatchConfig {
+                let f256 = slice_feat(&feat, 240);
+                let f512 = slice_feat(&feat, 480);
+                let f768 = slice_feat(&feat, 720);
+                let f1024 = slice_feat(&feat, 960);
+                let cfg_1024 = navigate_match::FastMatchConfig {
                     max_keypoints: cap.min(1024),
-                    ..navigate_match::FastMatchConfig::balanced_search()
+                    min_layers: 6,
+                    max_layers: 6,
+                    exit_check_layers: 0,
+                    prune_after_layer: None,
+                    ..navigate_match::FastMatchConfig::default()
                 };
-                let batch = [&feat, &feat, &feat, &feat];
+                let cfg_768 = navigate_match::FastMatchConfig {
+                    max_keypoints: cap.min(768),
+                    ..cfg_1024
+                };
+                for single in [&f256, &f512, &f768] {
+                    let _ = pollster::block_on(lg.match_features_batch_indexed_fast(
+                        &[single],
+                        &feat_wide,
+                        &cfg_768,
+                    ))?;
+                }
+                for single in [&f512, &f768, &f1024] {
+                    let _ = pollster::block_on(lg.match_features_batch_indexed_fast(
+                        &[single],
+                        &feat_wide,
+                        &cfg_1024,
+                    ))?;
+                }
+                for lead in [&f256, &f512, &f768] {
+                    let b4 = [lead, &f256, lead, &f256];
+                    let _ = pollster::block_on(
+                        lg.match_features_batch_indexed_fast(&b4, &feat_wide, &cfg_768),
+                    )?;
+                }
+                let b4_1024 = [&f1024, &f512, &f768, &f256];
                 let _ = pollster::block_on(
-                    lg.match_features_batch_indexed_fast(&batch, &feat, &cfg_batch),
+                    lg.match_features_batch_indexed_fast(&b4_1024, &feat_wide, &cfg_1024),
                 )?;
             }
             Ok(t0.elapsed().as_secs_f64() * 1000.0)

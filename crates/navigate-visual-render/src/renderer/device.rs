@@ -18,13 +18,14 @@ pub(super) async fn create(
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(RenderError::Adapter);
     }
-    if dimension > adapter.limits().max_texture_dimension_2d {
+    let target_max_tex = adapter.limits().max_texture_dimension_2d.min(16_384);
+    if dimension > target_max_tex {
         return Err(RenderError::Invalid(
             "atlas dimension exceeds hardware adapter limits",
         ));
     }
     let required_limits = wgpu::Limits {
-        max_texture_dimension_2d: dimension.max(wgpu::Limits::default().max_texture_dimension_2d),
+        max_texture_dimension_2d: target_max_tex,
         ..wgpu::Limits::default()
     };
     let (device, queue) = adapter
@@ -73,32 +74,34 @@ pub(super) async fn upload(
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let (image_texture, height_texture) = scene_textures(&device, &queue, &scene);
     let (parameters, output, readback) = buffers(&device, output_bytes);
-    let layout = layout(&device);
+    let bind_layout = layout(&device);
     let bindings = bindings(
         &device,
-        &layout,
+        &bind_layout,
         &parameters,
         &output,
         &image_texture,
         &height_texture,
     );
-    let pipeline = pipeline(&device, &layout);
+    let pipeline = pipeline(&device, &bind_layout);
     if let Some(error) = scope.pop().await {
         return Err(error.into());
     }
-    let style = format!(
-        "{:?}/{:?}/{:?}/{:?}/{:?}",
-        scene.frame, scene.imagery.layout, scene.terrain.layout, camera, limits
+    let style_sha256 = compute_style_sha256(
+        scene.frame,
+        scene.imagery.layout,
+        scene.terrain.layout,
+        camera,
+        limits,
     );
-    let mut hash = Sha256::new();
-    hash.update(include_str!("terrain.wgsl"));
-    hash.update(style.as_bytes());
-    let style_sha256 = format!("{:x}", hash.finalize());
     Ok(GpuRenderer {
         device,
         queue,
         pipeline,
+        bind_layout,
         bindings,
+        image_texture,
+        height_texture,
         parameters,
         output,
         readback,
@@ -112,6 +115,20 @@ pub(super) async fn upload(
         style_sha256,
         resident_texture_bytes: bytes,
     })
+}
+
+pub(super) fn compute_style_sha256(
+    frame: LocalFrame,
+    imagery: AtlasLayout,
+    terrain: AtlasLayout,
+    camera: CameraModel,
+    limits: RenderLimits,
+) -> String {
+    let style = format!("{frame:?}/{imagery:?}/{terrain:?}/{camera:?}/{limits:?}");
+    let mut hash = Sha256::new();
+    hash.update(include_str!("terrain.wgsl"));
+    hash.update(style.as_bytes());
+    format!("{:x}", hash.finalize())
 }
 
 fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
@@ -248,6 +265,14 @@ fn buffers(device: &wgpu::Device, output_bytes: u64) -> (wgpu::Buffer, wgpu::Buf
         contents: &[0; 256],
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
+    let (output, readback) = output_buffers(device, output_bytes);
+    (parameters, output, readback)
+}
+
+pub(super) fn output_buffers(
+    device: &wgpu::Device,
+    output_bytes: u64,
+) -> (wgpu::Buffer, wgpu::Buffer) {
     let output = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("terrain image and depth"),
         size: output_bytes,
@@ -260,10 +285,10 @@ fn buffers(device: &wgpu::Device, output_bytes: u64) -> (wgpu::Buffer, wgpu::Buf
         mapped_at_creation: false,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
     });
-    (parameters, output, readback)
+    (output, readback)
 }
 
-fn bindings(
+pub(super) fn bindings(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     parameters: &wgpu::Buffer,

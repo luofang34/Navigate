@@ -18,6 +18,13 @@ use std::sync::Mutex;
 
 pub(super) type SeedEvalTuple = (Option<PoseCandidate>, VirtualCorridorView, usize);
 
+#[derive(Clone, Copy)]
+pub(super) struct SeedBatchFlags {
+    pub fast_exit: bool,
+    pub coarse_screen: bool,
+    pub allow_horizon_gpu: bool,
+}
+
 pub(super) fn eval_seed_batch(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
@@ -25,17 +32,26 @@ pub(super) fn eval_seed_batch(
     (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
     poses: &[([f64; 3], Matrix3<f64>)],
     (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
-    (fast_exit, allow_horizon_gpu): (bool, bool),
+    flags: SeedBatchFlags,
 ) -> Result<Vec<SeedEvalTuple>, PipelineError> {
-    let k_cap = if lighterglue.is_some() { 640 } else { max_lm };
+    let virt_lm_cap = if flags.coarse_screen {
+        max_lm.min(1024)
+    } else {
+        max_lm
+    };
+    let k_cap = if lighterglue.is_some() {
+        640
+    } else {
+        virt_lm_cap
+    };
     let mut results: Vec<SeedEvalTuple> = Vec::with_capacity(poses.len());
     let mut need_lg: Vec<usize> = Vec::new();
 
     for (i, &(hyp_eye, hyp_rot)) in poses.iter().enumerate() {
         let sin_down = -hyp_rot[(2, 2)];
-        let is_nadir = sin_down > 0.95;
-        let min_cos_orientation = if is_nadir { 0.94 } else { 0.80 };
-        let min_cos_incidence = if is_nadir {
+        let steep_nadir = sin_down > 0.85;
+        let min_cos_orientation = if sin_down > 0.95 { 0.94 } else { 0.80 };
+        let min_cos_incidence = if steep_nadir {
             0.45
         } else if sin_down < 0.25 {
             0.72
@@ -48,29 +64,29 @@ pub(super) fn eval_seed_batch(
                 world_to_cam: rot_to_row_major(&hyp_rot),
                 intrinsics,
                 image_size: render_size,
-                max_landmarks: max_lm,
+                max_landmarks: virt_lm_cap,
                 min_cos_incidence,
                 min_cos_orientation,
             },
             projector,
         )?;
-        if is_nadir && virt.world_points_enu.len() < 48 {
+        if sin_down > 0.95 && virt.world_points_enu.len() < 48 {
             virt = store.project_virtual_view(
                 &VirtualViewCamera {
                     eye_enu: hyp_eye,
                     world_to_cam: rot_to_row_major(&hyp_rot),
                     intrinsics,
                     image_size: render_size,
-                    max_landmarks: max_lm,
+                    max_landmarks: virt_lm_cap,
                     min_cos_incidence,
                     min_cos_orientation: 0.80,
                 },
                 projector,
             )?;
         }
-        if virt.world_points_enu.len() < 12 || (allow_horizon_gpu && sin_down < 0.02) {
+        if virt.world_points_enu.len() < 12 || (flags.allow_horizon_gpu && sin_down < 0.02) {
             if let Some(gpu_lock) = gpu_renderer
-                && let Some((polished, _, layers)) = polish_pose_sparse(
+                && let Some((mut polished, _, mut layers)) = polish_pose_sparse(
                     surface,
                     Some(gpu_lock),
                     xfeat,
@@ -82,8 +98,28 @@ pub(super) fn eval_seed_batch(
                 )?
                 && is_sane_anchor_seed(&polished, surface)
             {
-                let acc_gpu = polished.score.geometry_accepted
+                let mut acc_gpu = polished.score.geometry_accepted
                     && is_plausible_anchor_candidate(&polished, surface);
+                if !acc_gpu
+                    && polished.score.inliers >= 20
+                    && let Some((pol2, _, layers2)) = polish_pose_sparse(
+                        surface,
+                        Some(gpu_lock),
+                        xfeat,
+                        lighterglue,
+                        qry_feat,
+                        (polished.eye, polished.rotation),
+                        k_render,
+                        render_size,
+                    )?
+                    && is_sane_anchor_seed(&pol2, surface)
+                    && candidate_priority(&pol2.score) >= candidate_priority(&polished.score)
+                {
+                    layers += layers2;
+                    acc_gpu = pol2.score.geometry_accepted
+                        && is_plausible_anchor_candidate(&pol2, surface);
+                    polished = pol2;
+                }
                 results.push((Some(polished), virt, layers));
                 if acc_gpu {
                     return Ok(results);
@@ -117,14 +153,25 @@ pub(super) fn eval_seed_batch(
     if let Some(lg) = lighterglue
         && !need_lg.is_empty()
     {
-        let base_cfg = if fast_exit {
-            FastMatchConfig::realtime_tracking()
+        let dense_coarse = flags.coarse_screen
+            && need_lg
+                .iter()
+                .all(|&idx| results[idx].1.features.len() >= 512);
+        let max_kp = if flags.fast_exit {
+            max_lm.min(512)
+        } else if dense_coarse {
+            max_lm.min(768)
         } else {
-            FastMatchConfig::balanced_search()
+            max_lm.min(1024)
         };
+        let layers = if dense_coarse { 4 } else { 6 };
         let cfg = FastMatchConfig {
-            max_keypoints: max_lm.min(1024),
-            ..base_cfg
+            max_keypoints: max_kp,
+            min_layers: layers,
+            max_layers: layers,
+            exit_check_layers: 0,
+            prune_after_layer: None,
+            ..FastMatchConfig::default()
         };
         let ref_slices: Vec<&SparseFeatures> = need_lg
             .iter()
@@ -230,7 +277,11 @@ pub(super) fn eval_global_fallback_seeds(
             (qry_feat, prepared),
             ch,
             (intrinsics, k_render, render_size, max_lm),
-            (false, true),
+            SeedBatchFlags {
+                fast_exit: false,
+                coarse_screen: false,
+                allow_horizon_gpu: true,
+            },
         )?;
         let mut accepted_fb = false;
         for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
@@ -298,10 +349,15 @@ pub(super) fn polish_anchor_seed_pool(
     let best_accepted = best.as_ref().is_some_and(|(_, _, c)| {
         c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
     });
+    let has_strong_seed = seed_pool
+        .first()
+        .is_some_and(|(_, c)| c.score.inliers >= 16);
     let mut selected: Vec<(usize, PoseCandidate)> = if best_accepted {
         seed_pool.into_iter().take(1).collect()
+    } else if has_strong_seed {
+        seed_pool.into_iter().take(2).collect()
     } else if let Some(scr) = screened_seeds {
-        for (idx, &(s_eye, s_rot)) in scr.iter().take(4).enumerate() {
+        for (idx, &(s_eye, s_rot)) in scr.iter().take(2).enumerate() {
             if !seed_pool
                 .iter()
                 .any(|(_, c)| same_seed_neighborhood(c, s_eye, &s_rot))
@@ -312,37 +368,39 @@ pub(super) fn polish_anchor_seed_pool(
                 ));
             }
         }
-        let mut top: Vec<(usize, PoseCandidate)> = seed_pool.into_iter().take(4).collect();
-        if let Some((n_eye, n_rot)) = closest_nadir
-            && !top
-                .iter()
-                .any(|(_, c)| same_seed_neighborhood(c, n_eye, &n_rot))
-        {
-            top.insert(
-                0,
-                (0, seed_only_candidate(n_eye, n_rot, k_render, render_size)),
-            );
+        let mut top: Vec<(usize, PoseCandidate)> = seed_pool.into_iter().take(2).collect();
+        if top.first().is_none_or(|(_, c)| c.score.inliers < 8) {
+            if let Some((n_eye, n_rot)) = closest_nadir
+                && !top
+                    .iter()
+                    .any(|(_, c)| same_seed_neighborhood(c, n_eye, &n_rot))
+            {
+                top.insert(
+                    0,
+                    (0, seed_only_candidate(n_eye, n_rot, k_render, render_size)),
+                );
+            }
+            top.truncate(1);
         }
         top
     } else {
         let polish_cap = if seed_pool
             .first()
-            .is_some_and(|(_, c)| c.score.inliers >= 12)
+            .is_some_and(|(_, c)| c.score.geometry_accepted)
         {
             1
         } else {
-            2
+            3
         };
         seed_pool.into_iter().take(polish_cap).collect()
     };
-    let unaccepted_steps = if screened_seeds.is_some() { 3 } else { 2 };
     let mut polish_rays = 0_usize;
     let mut lg_layers = 0_usize;
     for (seed_idx, mut cur_cand) in selected.drain(..) {
         let steps = if cur_cand.score.geometry_accepted {
             1
         } else {
-            unaccepted_steps
+            3
         };
         for p_step in 1..=steps {
             let Some((polished, rays, layers)) = polish_pose_sparse(
@@ -369,11 +427,14 @@ pub(super) fn polish_anchor_seed_pool(
                 polished.score.pairs,
                 Some(&polished),
             );
+            let polished_inliers = polished.score.inliers;
             let acc_now = polished.score.geometry_accepted
                 && is_plausible_anchor_candidate(&polished, surface);
+            let mut improved_cur = false;
             if is_sane_anchor_seed(&polished, surface) {
-                if candidate_priority(&polished.score) >= candidate_priority(&cur_cand.score) {
+                if candidate_priority(&polished.score) > candidate_priority(&cur_cand.score) {
                     cur_cand = polished.clone();
+                    improved_cur = true;
                 }
                 if best.as_ref().is_none_or(|(_, _, prev)| {
                     let prev_acc = prev.score.geometry_accepted
@@ -384,7 +445,11 @@ pub(super) fn polish_anchor_seed_pool(
                     *best = Some((seed_idx, p_step + 1, polished));
                 }
             }
-            if acc_now {
+            if acc_now
+                || !improved_cur
+                || (p_step == 1 && polished_inliers < 8)
+                || (p_step == 2 && polished_inliers < 32)
+            {
                 break;
             }
         }

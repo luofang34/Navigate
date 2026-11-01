@@ -1,6 +1,7 @@
 //! Inter-frame rotation RANSAC and ground visual-odometry translation helpers.
 
-use crate::corridor::kinematics::VehicleDynamicsProfile;
+use super::{CorridorTracker, MAX_ODOMETRY_STEPS, OdometryStep};
+use crate::corridor::kinematics::{VehicleDynamicsProfile, orthonormalize_so3};
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::PreparedKashinQuery;
 
@@ -206,4 +207,123 @@ pub(super) fn match_interframe_top(
         }
     }
     (out_a, out_b)
+}
+
+pub(super) fn estimate_derotated_pixel_flow(
+    px_a: &[[f64; 2]],
+    px_b: &[[f64; 2]],
+    rot_step: &Matrix3<f64>,
+    k: &Matrix3<f64>,
+) -> Option<[f64; 2]> {
+    if px_a.len() < 8 || px_a.len() != px_b.len() {
+        return None;
+    }
+    let fx = k[(0, 0)].max(1e-6);
+    let fy = k[(1, 1)].max(1e-6);
+    let (cx, cy) = (k[(0, 2)], k[(1, 2)]);
+    let mut du = Vec::with_capacity(px_a.len());
+    let mut dv = Vec::with_capacity(px_a.len());
+    for (&[ax, ay], &[bx, by]) in px_a.iter().zip(px_b.iter()) {
+        let ray_a = Vector3::new((ax - cx) / fx, (ay - cy) / fy, 1.0);
+        let rot_ray = rot_step * ray_a;
+        if rot_ray.z <= 1e-3 {
+            continue;
+        }
+        du.push(bx - (fx * (rot_ray.x / rot_ray.z) + cx));
+        dv.push(by - (fy * (rot_ray.y / rot_ray.z) + cy));
+    }
+    if du.len() < 6 {
+        return None;
+    }
+    du.sort_by(f64::total_cmp);
+    dv.sort_by(f64::total_cmp);
+    let mid = du.len() / 2;
+    Some([du[mid], dv[mid]])
+}
+
+pub(super) fn project_calibrated_flow_enu(
+    flow_px: [f64; 2],
+    world_to_cam: &Matrix3<f64>,
+    k: &Matrix3<f64>,
+    agl_m: f64,
+    dt_s: f64,
+    profile: &VehicleDynamicsProfile,
+) -> Option<[f64; 3]> {
+    if !agl_m.is_finite() || agl_m < 15.0 {
+        return None;
+    }
+    let fx = k[(0, 0)].max(1e-6);
+    let fy = k[(1, 1)].max(1e-6);
+    let cam_to_world = world_to_cam.transpose();
+    let d1 = cam_to_world * Vector3::new(0.0, 0.0, 1.0);
+    let d2 = cam_to_world * Vector3::new(flow_px[0] / fx, flow_px[1] / fy, 1.0);
+    if d1.z >= -0.20 || d2.z >= -0.20 {
+        return None;
+    }
+    let g1 = d1 * (agl_m / (-d1.z)).clamp(15.0, 8_000.0);
+    let g2 = d2 * (agl_m / (-d2.z)).clamp(15.0, 8_000.0);
+    let (mut de, mut dn) = (g1.x - g2.x, g1.y - g2.y);
+    let (_, clamp_gate) = profile.ground_vo_bounds(dt_s.max(1e-3));
+    let norm = de.hypot(dn);
+    if norm > clamp_gate && norm > 1e-9 {
+        let s = clamp_gate / norm;
+        de *= s;
+        dn *= s;
+    }
+    Some([de, dn, 0.0])
+}
+
+impl CorridorTracker {
+    /// Record an identity odometry placeholder when cold-frame feature extraction is skipped.
+    pub fn record_skipped_odometry_step(&mut self, dt_s: f64) {
+        self.frame_seq += 1;
+        self.last_flow_vectors = 0;
+        self.prev_rot_step = Matrix3::identity();
+        self.time_since_accepted_pose_s += dt_s.max(0.0);
+        if self.pose_steps.len() >= MAX_ODOMETRY_STEPS {
+            let _ = self.pose_steps.pop_front();
+        }
+        self.pose_steps.push_back(OdometryStep {
+            frame_seq: self.frame_seq,
+            rot_step: Matrix3::identity(),
+            eye_delta: [0.0; 3],
+            derotated_flow_px: None,
+            dt_s: dt_s.max(0.0),
+            has_world_pose: self.prev_eye.is_some(),
+        });
+    }
+
+    /// Propagate an anchor pose forward using calibrated camera intrinsics, attitude, and `AGL`.
+    #[must_use]
+    pub fn propagate_pose_from_calibrated(
+        &self,
+        sent_frame_seq: usize,
+        init_eye: [f64; 3],
+        init_rot: Matrix3<f64>,
+        k_render: &Matrix3<f64>,
+        agl_m: f64,
+        profile: &VehicleDynamicsProfile,
+    ) -> ([f64; 3], Matrix3<f64>) {
+        let mut eye = init_eye;
+        let mut rot = init_rot;
+        for step in &self.pose_steps {
+            if step.frame_seq > sent_frame_seq && step.frame_seq <= self.frame_seq {
+                rot = orthonormalize_so3(&(step.rot_step * rot));
+                let delta = if step.has_world_pose {
+                    step.eye_delta
+                } else if let Some(flow) = step.derotated_flow_px
+                    && let Some(cal) =
+                        project_calibrated_flow_enu(flow, &rot, k_render, agl_m, step.dt_s, profile)
+                {
+                    cal
+                } else {
+                    step.eye_delta
+                };
+                eye[0] += delta[0];
+                eye[1] += delta[1];
+                eye[2] += delta[2];
+            }
+        }
+        (eye, rot)
+    }
 }

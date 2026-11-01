@@ -252,3 +252,59 @@ fn from_catalog_rejects_missing_imagery_tiles_when_catalog_is_nonempty() {
         "unexpected error: {err:?}"
     );
 }
+
+#[test]
+fn build_reference_catalog_zoom_fetches_tiles_in_parallel_deterministically() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src_img = tmp.path().join("src.jpg");
+    let src_dem = tmp.path().join("src.png");
+    std::fs::write(&src_img, b"fake-jpeg-bytes").expect("write src jpg");
+    std::fs::write(&src_dem, b"fake-png-bytes").expect("write src png");
+    let profile_path = tmp.path().join("profile.json");
+    let profile = serde_json::json!({
+        "cases": [
+            { "prior": { "position": { "latitude": 40.95, "longitude": -75.15 } } },
+            { "prior": { "position": { "latitude": 41.05, "longitude": -75.05 } } }
+        ]
+    });
+    std::fs::write(&profile_path, serde_json::to_vec(&profile).expect("json"))
+        .expect("write profile");
+    let out_dir = tmp.path().join("catalog");
+    let cache_dir = tmp.path().join("cache");
+    let img_url = format!("file://{}", src_img.display());
+    let dem_url = format!("file://{}", src_dem.display());
+    let doc = super::catalog::build_reference_catalog_zoom(
+        &profile_path,
+        &out_dir,
+        &img_url,
+        &dem_url,
+        Some(&cache_dir),
+        4_000.0,
+        14,
+        12,
+    )
+    .expect("parallel catalog build");
+    let tiles = doc["tiles"].as_array().expect("tiles array");
+    assert!(
+        tiles.len() >= 20,
+        "expected >= 20 tiles to exercise the 16-thread worker pool, got {}",
+        tiles.len()
+    );
+    let mut saw_dem = false;
+    let mut prev_img_xy: Option<(u64, u64)> = None;
+    for t in tiles {
+        let kind = t["kind"].as_str().expect("kind");
+        let xyz = t["xyz"].as_array().expect("xyz");
+        let xy = (xyz[1].as_u64().expect("x"), xyz[2].as_u64().expect("y"));
+        if kind == "imagery" {
+            assert!(!saw_dem, "imagery tiles must precede dem tiles");
+            if let Some(prev) = prev_img_xy {
+                assert!(prev < xy, "imagery tiles must be strictly ordered");
+            }
+            prev_img_xy = Some(xy);
+        } else {
+            saw_dem = true;
+        }
+    }
+    assert!(saw_dem);
+}

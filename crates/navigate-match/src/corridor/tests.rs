@@ -335,3 +335,42 @@ fn corridor_tile_store_bounds_lru_window_and_supports_live_tile_insertion() -> R
     assert!(store.cached_tile_count() <= 9);
     Ok(())
 }
+
+#[test]
+fn corridor_tile_store_directory_culls_frustum_without_lru_self_eviction() -> Result<(), MatchError>
+{
+    let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
+    let mut tiles = Vec::new();
+    for ty in -2..=2 {
+        for tx in -2..=2 {
+            tiles.push(build_tile_landmarks(tx, ty, 150.0, 5_000, &projector));
+        }
+    }
+    let bank = CorridorLandmarkBank::new([9; 32], [10; 32], DEFAULT_KASHIN_SEED, 150.0, tiles)?;
+    let tmp =
+        std::env::temp_dir().join(format!("navigate_store_frustum_lru_{}", std::process::id()));
+    std::fs::remove_dir_all(&tmp).ok();
+    drop(super::CorridorTileStore::write_bank_dir(&bank, &tmp, 25)?);
+    let reopened = super::CorridorTileStore::open(&tmp, 25)?;
+    let cam = VirtualViewCamera {
+        eye_enu: [75.0, 75.0, 220.0],
+        world_to_cam: [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+        intrinsics: [700.0, 700.0, 400.0, 300.0],
+        image_size: [800, 600],
+        max_landmarks: 512,
+        min_cos_incidence: 0.45,
+        min_cos_orientation: 0.50,
+    };
+    let expected = bank.project_virtual_view(&cam, &projector);
+    let first = reopened.project_virtual_view(&cam, &projector)?;
+    let cached_after_first = reopened.cached_tile_count();
+    let second = reopened.project_virtual_view(&cam, &projector)?;
+    std::fs::remove_dir_all(&tmp).ok();
+
+    assert_eq!(first.features.pixels, expected.features.pixels);
+    assert_eq!(second.features.pixels, expected.features.pixels);
+    assert!((1..=9).contains(&cached_after_first));
+    assert_eq!(reopened.cached_tile_count(), cached_after_first);
+    assert!(reopened.resident_window_bytes() < 10 * 1024 * 1024);
+    Ok(())
+}

@@ -219,25 +219,35 @@ fn test_vertical_velocity_preserved_when_gated_and_updated_when_admitted() -> Te
     let cand_eye = [2.0, 1.0, 103.0];
     let cand_rot = Matrix3::identity();
 
-    // Step 1: Gate is active (allow_vertical = false)
-    // vx and vy update to 10.0 and 5.0. vz MUST remain locked at -3.5!
-    state.update_from_pose_gated(cand_eye, cand_rot, dt, &profile, false);
-    assert!((state.vel_enu_mps[0] - 10.0).abs() < 1e-6);
-    assert!((state.vel_enu_mps[1] - 5.0).abs() < 1e-6);
+    // Step 1: Gate is active (allow_vertical = false); dt = 0.2 -> alpha = 0.5
+    // vx and vy smooth with alpha = 0.5 toward (10.0, 5.0). vz MUST remain locked at -3.5!
+    let prev_vx = state.vel_enu_mps[0];
+    let prev_vy = state.vel_enu_mps[1];
+    state.update_from_pose_gated(cand_eye, cand_rot, dt, &profile, false, None);
+    let exp_vx1 = 0.5 * prev_vx + 0.5 * 10.0;
+    let exp_vy1 = 0.5 * prev_vy + 0.5 * 5.0;
+    assert!((state.vel_enu_mps[0] - exp_vx1).abs() < 1e-6);
+    assert!((state.vel_enu_mps[1] - exp_vy1).abs() < 1e-6);
     assert!(
         (state.vel_enu_mps[2] - (-3.5)).abs() < 1e-9,
         "Vertical velocity must be preserved when allow_vertical is false"
     );
     assert_eq!(state.eye_enu, cand_eye);
 
-    // Step 2: Gate is released (allow_vertical = true)
-    // Next candidate eye implies vz = -5.0 / 0.2 = -25.0
+    // Step 2: Gate is released (allow_vertical = true); dt = 0.2 -> alpha = 0.5
+    // Next candidate eye implies vz = -5.0 / 0.2 = -25.0, smoothed with -3.5 and clamped to max_vertical_speed_mps.
     let cand_eye_2 = [4.0, 2.0, 98.0];
-    state.update_from_pose_gated(cand_eye_2, cand_rot, dt, &profile, true);
-    assert!((state.vel_enu_mps[0] - 10.0).abs() < 1e-6);
-    assert!((state.vel_enu_mps[1] - 5.0).abs() < 1e-6);
+    state.update_from_pose_gated(cand_eye_2, cand_rot, dt, &profile, true, None);
+    let exp_vx2 = 0.5 * exp_vx1 + 0.5 * 10.0;
+    let exp_vy2 = 0.5 * exp_vy1 + 0.5 * 5.0;
+    let exp_vz2 = (0.5_f64 * (-3.5) + 0.5_f64 * (-25.0)).clamp(
+        -profile.max_vertical_speed_mps,
+        profile.max_vertical_speed_mps,
+    );
+    assert!((state.vel_enu_mps[0] - exp_vx2).abs() < 1e-6);
+    assert!((state.vel_enu_mps[1] - exp_vy2).abs() < 1e-6);
     assert!(
-        (state.vel_enu_mps[2] - (-25.0)).abs() < 1e-6,
+        (state.vel_enu_mps[2] - exp_vz2).abs() < 1e-6,
         "Vertical velocity must update when allow_vertical is true"
     );
 
@@ -260,7 +270,14 @@ fn test_vertical_velocity_multi_step_coplanar_trajectory() -> TestResult {
             step as f64 * -0.8,
             200.0 + step as f64 * 5.0, // candidate altitude jumps 50 m/s
         ];
-        state.update_from_pose_gated(new_eye, Matrix3::identity(), dt, &profile, allow_vertical);
+        state.update_from_pose_gated(
+            new_eye,
+            Matrix3::identity(),
+            dt,
+            &profile,
+            allow_vertical,
+            None,
+        );
         // Throughout coplanar sequence, vertical velocity remains 1.25 m/s
         assert!(
             (state.vel_enu_mps[2] - 1.25).abs() < 1e-9,
@@ -268,20 +285,27 @@ fn test_vertical_velocity_multi_step_coplanar_trajectory() -> TestResult {
         );
     }
 
-    // Step 6: Holdout count reaches 15 >= 12 -> gate opens
+    // Step 6: Holdout count reaches 15 >= 12 -> gate opens (dt = 0.1 -> alpha = 1/3)
     let allow_vertical = can_update_vertical_velocity(15, 30);
     assert!(allow_vertical);
     let new_eye_open = [6.0 * 1.2, 6.0 * -0.8, 200.0 + 5.0 * 5.0 + 0.5]; // dz = 0.5 over 0.1s = 5.0 m/s
+    let fisher_ray_cov = Matrix3::from_diagonal(&Vector3::new(36.0, 4.0, 9.0));
     state.update_from_pose_gated(
         new_eye_open,
         Matrix3::identity(),
         dt,
         &profile,
         allow_vertical,
+        Some(fisher_ray_cov),
+    );
+    let expected_vz = (2.0 / 3.0) * 1.25 + (1.0 / 3.0) * 5.0;
+    assert!(
+        (state.vel_enu_mps[2] - expected_vz).abs() < 1e-6,
+        "vz did not update when gate opened"
     );
     assert!(
-        (state.vel_enu_mps[2] - 5.0).abs() < 1e-6,
-        "vz did not update when gate opened"
+        (state.pos_cov_enu_m2[(0, 0)] - 38.25).abs() < 1e-6,
+        "anisotropic Fisher ray covariance must be preserved"
     );
 
     Ok(())
@@ -391,7 +415,7 @@ fn test_monte_carlo_property_stress() -> TestResult {
             state.eye_enu[2] + dz,
         ];
 
-        state.update_from_pose_gated(new_eye, Matrix3::identity(), dt, &profile, allow_v);
+        state.update_from_pose_gated(new_eye, Matrix3::identity(), dt, &profile, allow_v, None);
         if !allow_v {
             assert_eq!(
                 state.vel_enu_mps[2], prev_vz,

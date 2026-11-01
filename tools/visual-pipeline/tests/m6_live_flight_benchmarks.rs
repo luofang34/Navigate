@@ -248,3 +248,53 @@ fn live_flight_coreml_xfeat_runtime_smoke() -> TestResult {
     assert!(r.accepted >= 2 && r.max_inliers >= 24 && r.p50_total_ms > 0.0);
     Ok(())
 }
+
+#[test]
+#[ignore = "requires local IMG_4047.MOV, terrain catalog, and .safetensors weights"]
+fn live_flight_img_4047_pace_realtime_warm_handoff() -> TestResult {
+    let mut spec = ClipSpec::aircraft(
+        "IMG_4047.MOV",
+        "NAVIGATE_IMG_4047_PATH",
+        "NAVIGATE_IMG_4047_CATALOG",
+        &[
+            "reference-video/v4047/catalog.json",
+            "reference-region/catalog.json",
+        ],
+        [40.3273, -75.4756, 1120.859],
+    );
+    spec.duration_s = 3.0;
+    spec.fps = 30.0;
+    spec.pace_realtime = true;
+    spec.min_accepted = 10;
+    let r = execute_real_corridor_clip(&spec)?;
+    assert!(
+        r.warm_tracked_frames >= 10 && r.p50_warm_ms > 0.0 && r.p50_warm_ms < 33.3,
+        "IMG_4047 --pace-realtime warm_tracked_frames={} p50_warm_ms={}",
+        r.warm_tracked_frames,
+        r.p50_warm_ms
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires local DJI_0030.MP4, local high-zoom catalog, and .safetensors weights"]
+fn live_flight_dji_0030_pace_realtime_uncalibrated_anchor() -> TestResult {
+    let mut spec = ClipSpec::nadir_drone(
+        "DJI_0030.MP4",
+        "NAVIGATE_DJI_0030_PATH",
+        [40.5439, -74.4556],
+    );
+    spec.duration_s = 3.0;
+    spec.fps = 30.0;
+    spec.pace_realtime = true;
+    spec.min_accepted = 10;
+    let r = execute_real_corridor_clip(&spec)?;
+    let anchor_ms = r.first_anchor_ms.unwrap_or(f64::INFINITY);
+    assert!(
+        anchor_ms < 1200.0 && r.warm_tracked_frames >= 10 && r.p50_warm_ms < 33.3,
+        "DJI_0030 --pace-realtime anchor0_ms={anchor_ms:.1} warm_tracked_frames={} p50_warm_ms={}",
+        r.warm_tracked_frames,
+        r.p50_warm_ms
+    );
+    Ok(())
+}

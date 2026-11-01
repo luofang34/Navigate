@@ -164,6 +164,7 @@ impl CrossBlock {
         a: Tensor<3>,
         b: Tensor<3>,
         a_key_mask: Option<&Tensor<3>>,
+        b_key_mask: Option<&Tensor<3>>,
     ) -> (Tensor<3>, Tensor<3>) {
         let [_, m, _] = b.dims();
         let device = a.device();
@@ -178,8 +179,12 @@ impl CrossBlock {
         let vb = self.to_v.forward(b.clone());
         let va = self.to_v.forward(a.clone());
         let zeros = Tensor::<1>::zeros([MODEL_DIM], &device);
+        let sim_ab = match b_key_mask {
+            Some(mask) => sim.clone() + mask.clone(),
+            None => sim.clone(),
+        };
         let m0 = self.to_out.forward(product(
-            softmax(sim.clone(), 2),
+            softmax(sim_ab, 2),
             vb,
             zeros.clone(),
             Layout::default(),
@@ -387,9 +392,9 @@ impl LighterGlue {
         for layer in &self.layers {
             a = layer.self_attn.forward(a, &cos0, &sin0, None);
             b = layer.self_attn.forward(b, &cos1, &sin1, None);
-            (a, b) = layer.cross_attn.forward(a, b, None);
+            (a, b) = layer.cross_attn.forward(a, b, None, None);
         }
-        let (scores, _, _) = self.assignment_with_logits(a, b, None);
+        let (scores, _, _) = self.assignment_with_logits(a, b, None, None);
         Ok(scores)
     }
 
@@ -398,6 +403,7 @@ impl LighterGlue {
         a: Tensor<3>,
         b: Tensor<3>,
         a_key_mask: Option<&Tensor<3>>,
+        b_key_mask: Option<&Tensor<3>>,
     ) -> (Tensor<3>, Tensor<3>, Tensor<3>) {
         let [_, m, _] = b.dims();
         let scale = (MODEL_DIM as f64).powf(0.25);
@@ -408,18 +414,25 @@ impl LighterGlue {
             ..Layout::default()
         };
         let sim = product(d0, d1, Tensor::<1>::zeros([m], &self.device), trans_b);
-        let sim_col = match a_key_mask {
-            Some(mask) => sim.clone() + mask.clone().swap_dims(1, 2),
+        let sim_row = match b_key_mask {
+            Some(mask) => sim.clone() + mask.clone(),
             None => sim.clone(),
+        };
+        let sim_col = match a_key_mask {
+            Some(mask) => sim + mask.clone().swap_dims(1, 2),
+            None => sim,
         };
         let ma = self.matchability.forward(a);
         let mb = self.matchability.forward(b);
-        let mut scores = log_softmax(sim, 2)
+        let mut scores = log_softmax(sim_row, 2)
             + log_softmax(sim_col, 1)
             + log_sigmoid(ma.clone())
             + log_sigmoid(mb.clone()).swap_dims(1, 2);
         if let Some(mask) = a_key_mask {
             scores = scores + mask.clone().swap_dims(1, 2);
+        }
+        if let Some(mask) = b_key_mask {
+            scores = scores + mask.clone();
         }
         (scores, ma, mb)
     }

@@ -119,7 +119,7 @@ impl Default for PhysicalPlausibilityConfig {
             min_agl_m: 5.0,
             min_positive_depth_fraction: 0.98,
             min_fisher_eigenvalue: 1e-6,
-            max_reprojection_rmse_px: 4.0,
+            max_reprojection_rmse_px: 5.25,
             prior_sigma_scale: 3.0,
         }
     }
@@ -338,25 +338,26 @@ pub fn is_sane_seed_candidate<S: CorridorTerrain + ?Sized>(
     (geodetic[2] - dem_msl_m) >= min_agl_m
 }
 
-fn compute_inlier_median_depth_m(cand: &PoseCandidate) -> Option<f64> {
+fn compute_inlier_low_agl_geometry(cand: &PoseCandidate) -> Option<(f64, f64)> {
     let eye_v = Vector3::from(cand.eye);
-    let mut depths: Vec<f64> = cand
-        .inliers
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &is_inlier)| {
-            if !is_inlier || i >= cand.points.len() {
-                return None;
-            }
-            let z = (cand.rotation * (Vector3::from(cand.points[i]) - eye_v)).z;
-            (z > 0.5 && z.is_finite()).then_some(z)
-        })
-        .collect();
-    if depths.is_empty() {
+    let (mut sum_z, mut sum_dist, mut count) = (0.0, 0.0, 0usize);
+    for (i, &is_inlier) in cand.inliers.iter().enumerate() {
+        if !is_inlier || i >= cand.points.len() {
+            continue;
+        }
+        let pt = cand.points[i];
+        let d = (Vector3::from(pt) - eye_v).norm();
+        if pt.iter().all(|v| v.is_finite()) && d.is_finite() {
+            sum_z += pt[2];
+            sum_dist += d;
+            count += 1;
+        }
+    }
+    if count == 0 {
         return None;
     }
-    depths.sort_by(|a, b| a.total_cmp(b));
-    Some(depths[depths.len() / 2])
+    let n = count as f64;
+    Some((cand.eye[2] - (sum_z / n), sum_dist / n))
 }
 
 /// Verify that a candidate pose satisfies all physical plausibility requirements.
@@ -382,11 +383,13 @@ pub fn verify_candidate_plausibility<S: CorridorTerrain + ?Sized>(
     let res_scale = (f64::from(cand.size[0].max(cand.size[1])) / 640.0).max(1.0);
     let mut scaled_cfg = config.clone();
     scaled_cfg.max_reprojection_rmse_px *= res_scale;
-    if let Some(depth_m) = compute_inlier_median_depth_m(cand)
-        && depth_m < 200.0
+    if let Some((agl_m, mean_dist)) = compute_inlier_low_agl_geometry(cand)
+        && agl_m > 0.0
+        && agl_m < 200.0
+        && mean_dist < 600.0
     {
         let focal_px = 0.5 * (cand.k[(0, 0)] + cand.k[(1, 1)]);
-        let relief_px = (0.55 * (10.0 / depth_m.max(25.0)) * focal_px).min(12.0);
+        let relief_px = (0.55 * (10.0 / agl_m.max(25.0)) * focal_px).min(12.0);
         scaled_cfg.max_reprojection_rmse_px = scaled_cfg.max_reprojection_rmse_px.max(relief_px);
     }
 

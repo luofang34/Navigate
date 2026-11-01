@@ -371,3 +371,62 @@ fn hardware_wgs84_ellipsoid_depth_agrees_with_analytic_ray_intersection() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a hardware GPU"]
+fn hardware_set_camera_updates_intrinsics_and_resizes_without_texture_reupload() {
+    let mut renderer = pollster::block_on(GpuRenderer::new(
+        scene(LocalFrame::anchor_mercator(0.0, 0.0).unwrap()),
+        camera(),
+        limits(),
+    ))
+    .unwrap();
+    let initial_bytes = renderer.resident_texture_bytes();
+    let initial_readback = renderer.readback_bytes_per_view();
+    let initial_style = renderer.identity().style_sha256;
+    let pose = CameraPose {
+        position: Vector3::new(0.0, 0.0, 1000.0),
+        orientation: UnitQuaternion::identity(),
+    };
+
+    // Focal-length-only change keeps output buffer size untouched.
+    let zoomed = CameraModel {
+        fx: 95.0,
+        fy: 95.0,
+        ..camera()
+    };
+    renderer.set_camera(zoomed, limits()).unwrap();
+    assert_eq!(renderer.resident_texture_bytes(), initial_bytes);
+    assert_eq!(renderer.readback_bytes_per_view(), initial_readback);
+    assert_ne!(renderer.identity().style_sha256, initial_style);
+    let view_zoomed = renderer.render_blocking(pose).unwrap();
+    assert_eq!(view_zoomed.image.dimensions(), (48, 40));
+    assert!(
+        view_zoomed
+            .depth_m
+            .iter()
+            .all(|d| (*d - 1000.0).abs() < 0.003)
+    );
+
+    // Resolution change reallocates output/readback and rebinds without touching textures.
+    let resized = CameraModel {
+        width: 32,
+        height: 48,
+        fx: 60.0,
+        fy: 60.0,
+        cx: 15.5,
+        cy: 23.5,
+    };
+    renderer.set_camera(resized, limits()).unwrap();
+    assert_eq!(renderer.resident_texture_bytes(), initial_bytes);
+    assert_eq!(renderer.readback_bytes_per_view(), 32 * 48 * 8);
+    let view_resized = renderer.render_blocking(pose).unwrap();
+    assert_eq!(view_resized.image.dimensions(), (32, 48));
+    assert_eq!(view_resized.depth_m.len(), 32 * 48);
+    assert!(
+        view_resized
+            .depth_m
+            .iter()
+            .all(|d| (*d - 1000.0).abs() < 0.003)
+    );
+}

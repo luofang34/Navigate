@@ -47,7 +47,7 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
 
     // Frame 1 submits to the background worker without blocking the frame loop.
     let first = refresher
-        .step(&mut key, &rgb, Some(&rotation(0.0)), interval)
+        .step(&mut key, &rgb, Some(&rotation(0.0)), interval, true)
         .unwrap();
     started.recv().unwrap();
     assert!(first.submitted && !first.refreshed);
@@ -57,7 +57,7 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
     // While Frame 1's Segformer job runs, early frames return immediately without usable key layers.
     for frame in 0..4 {
         let step = refresher
-            .step(&mut key, &rgb, Some(&rotation(0.08)), interval)
+            .step(&mut key, &rgb, Some(&rotation(0.08)), interval, true)
             .unwrap();
         assert!(
             !step.refreshed && !step.submitted,
@@ -71,7 +71,7 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
     let first_arrived = (0..POLL_LIMIT)
         .find_map(|_| {
             let step = refresher
-                .step(&mut key, &rgb, Some(&rotation(0.1)), interval)
+                .step(&mut key, &rgb, Some(&rotation(0.1)), interval, true)
                 .unwrap();
             std::thread::yield_now();
             step.refreshed.then_some(step)
@@ -90,7 +90,7 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
     // The worker is blocked; later frames still warp the first layers without stalling.
     for frame in 0..20 {
         let step = refresher
-            .step(&mut key, &rgb, Some(&rotation(0.3)), interval)
+            .step(&mut key, &rgb, Some(&rotation(0.3)), interval, true)
             .unwrap();
         assert!(!step.refreshed && !step.submitted, "frame {frame} stalled");
         refresher.note_solved_rotation(&mut key, rotation(0.3));
@@ -101,7 +101,7 @@ fn frames_keep_warping_old_layers_while_a_refresh_runs() {
     let arrived = (0..POLL_LIMIT)
         .find_map(|_| {
             let step = refresher
-                .step(&mut key, &rgb, Some(&rotation(0.4)), interval)
+                .step(&mut key, &rgb, Some(&rotation(0.4)), interval, true)
                 .unwrap();
             std::thread::yield_now();
             step.refreshed.then_some(step)
@@ -120,17 +120,22 @@ fn unsolved_submitted_frames_keep_their_estimated_rotation() {
     let mut key = KeyLayers::default();
     let rgb = RgbImage::new(DIMS[0], DIMS[1]);
     let submit = refresher
-        .step(&mut key, &rgb, Some(&rotation(0.5)), 1)
+        .step(&mut key, &rgb, Some(&rotation(0.5)), 1, true)
         .unwrap();
     assert!(submit.submitted && !submit.refreshed);
     started.recv().unwrap();
     permit.send(2).unwrap();
     let arrived = (0..POLL_LIMIT).any(|_| {
         std::thread::yield_now();
-        refresher.step(&mut key, &rgb, None, 1).unwrap().refreshed
+        refresher
+            .step(&mut key, &rgb, None, 1, false)
+            .unwrap()
+            .refreshed
     });
     assert!(arrived, "released refresh must arrive");
     assert_eq!(key.rot, Some(rotation(0.5)));
+    let suppressed = refresher.step(&mut key, &rgb, None, 1, false).unwrap();
+    assert!(!suppressed.submitted);
 }
 
 #[test]

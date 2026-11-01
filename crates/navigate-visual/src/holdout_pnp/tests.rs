@@ -139,10 +139,10 @@ fn hybrid_recovers_low_agl_coplanar_nadir_under_large_shift_and_yaw_offset() {
 
     let mut world = Vec::new();
     let mut pixels = Vec::new();
-    for gy in 0..7 {
-        for gx in 0..9 {
-            let u = 48.0 + f64::from(gx) * 88.0;
-            let v = 36.0 + f64::from(gy) * 63.0;
+    for gy in 0..10 {
+        for gx in 0..12 {
+            let u = 44.0 + f64::from(gx) * 64.0;
+            let v = 32.0 + f64::from(gy) * 38.0;
             let ray_cam = Vector3::new((u - 400.0) / 533.0, (v - 225.0) / 533.0, 1.0);
             let ray_w = true_rot.transpose() * ray_cam;
             let t = -true_eye[2] / ray_w.z;
@@ -184,60 +184,81 @@ fn hybrid_recovers_low_agl_coplanar_nadir_under_large_shift_and_yaw_offset() {
 fn score_pose_candidate_adapts_to_sparse_holdout_and_low_agl_relief_parallax() {
     let size = [800, 450];
     let k = Matrix3::new(577.0, 0.0, 400.0, 0.0, 577.0, 225.0, 0.0, 0.0, 1.0);
-    let eye = [0.0, 0.0, 98.0];
     let rot = Matrix3::new(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0);
 
-    let mut world = Vec::new();
-    let mut pixels = Vec::new();
+    // 1. Standard-altitude regime (500 m AGL, relief_ratio == 1.0): 30 points with sparse holdout pass.
+    let high_eye = [0.0, 0.0, 500.0];
+    let mut high_world = Vec::new();
+    let mut high_pixels = Vec::new();
     for gy in 0..5 {
         for gx in 0..6 {
             let u = 80.0 + f64::from(gx) * 120.0;
             let v = 50.0 + f64::from(gy) * 85.0;
-            let x = (u - 400.0) * 98.0 / 577.0;
-            let y = -(v - 225.0) * 98.0 / 577.0;
-            world.push([x, y, 0.0]);
-            // Inject ~9.0 px unmodeled suburban roof relief parallax at 98 m AGL.
-            pixels.push([u + 6.5, v - 6.2]);
+            let x = (u - 400.0) * 500.0 / 577.0;
+            let y = -(v - 225.0) * 500.0 / 577.0;
+            high_world.push([x, y, 0.0]);
+            high_pixels.push([u + 2.5, v - 2.0]);
         }
     }
-    // Case A: 30 points with only 3 in holdout (27 train + 3 hold = 30 inliers).
-    let mut held_sparse = vec![false; world.len()];
+    let mut held_sparse = vec![false; high_world.len()];
     held_sparse[0] = true;
     held_sparse[10] = true;
     held_sparse[20] = true;
     let c_sparse = score_pose_candidate(
-        &world,
-        &pixels,
+        &high_world,
+        &high_pixels,
         &held_sparse,
-        (eye, rot),
+        (high_eye, rot),
         &k,
         size,
         scaled_inlier_px(size),
     );
     assert!(c_sparse.score.geometry_accepted, "{:?}", c_sparse.score);
 
-    // Case B: 27 inliers split as 18 train + 9 holdout out of 30 points (3 outliers).
-    let mut pixels_b = pixels.clone();
-    pixels_b[27] = [790.0, 440.0];
-    pixels_b[28] = [10.0, 10.0];
-    pixels_b[29] = [790.0, 10.0];
-    let mut held_12 = vec![false; world.len()];
-    for slot in held_12.iter_mut().take(9) {
-        *slot = true;
+    // 2. Low-AGL relief regime (98 m AGL -> eff_inlier_px = 12 px, relief_ratio > 1.5):
+    //    31 random dark-noise correspondences MUST be rejected, while 60 real relief points pass.
+    let low_eye = [0.0, 0.0, 98.0];
+    let mut low_world = Vec::new();
+    let mut low_pixels = Vec::new();
+    for gy in 0..6 {
+        for gx in 0..10 {
+            let u = 50.0 + f64::from(gx) * 75.0;
+            let v = 40.0 + f64::from(gy) * 72.0;
+            let x = (u - 400.0) * 98.0 / 577.0;
+            let y = -(v - 225.0) * 98.0 / 577.0;
+            low_world.push([x, y, 0.0]);
+            low_pixels.push([u + 6.5, v - 6.2]);
+        }
     }
-    held_12[27] = true;
-    held_12[28] = true;
-    held_12[29] = true;
-    let c_18_9 = score_pose_candidate(
-        &world,
-        &pixels_b,
-        &held_12,
-        (eye, rot),
+    let held_31 = crate::holdout_pnp::spatial_holdout(&low_pixels[..31], size);
+    let c_dark_31 = score_pose_candidate(
+        &low_world[..31],
+        &low_pixels[..31],
+        &held_31,
+        (low_eye, rot),
         &k,
         size,
         scaled_inlier_px(size),
     );
-    assert_eq!(c_18_9.score.train_inliers, 18);
-    assert_eq!(c_18_9.score.inliers, 27);
-    assert!(c_18_9.score.geometry_accepted, "{:?}", c_18_9.score);
+    assert!(
+        !c_dark_31.score.geometry_accepted,
+        "31 low-AGL 12 px correspondences must be rejected to prevent dark-woods false positives: {:?}",
+        c_dark_31.score
+    );
+
+    let held_60 = crate::holdout_pnp::spatial_holdout(&low_pixels, size);
+    let c_real_60 = score_pose_candidate(
+        &low_world,
+        &low_pixels,
+        &held_60,
+        (low_eye, rot),
+        &k,
+        size,
+        scaled_inlier_px(size),
+    );
+    assert!(
+        c_real_60.score.geometry_accepted,
+        "60 low-AGL correspondences with >= 12 holdout inliers and >= 10 cells must pass: {:?}",
+        c_real_60.score
+    );
 }

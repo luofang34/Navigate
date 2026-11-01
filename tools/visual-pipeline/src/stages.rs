@@ -2,6 +2,7 @@
 
 pub mod focal;
 mod followup;
+mod gpu_match;
 pub mod seeds;
 
 pub use followup::{
@@ -19,7 +20,8 @@ use crate::{
     testset::PhotoCase,
     util::{read_json, write_json},
 };
-use image::{GrayImage, RgbImage, imageops::FilterType};
+use gpu_match::{StageTerrainRenderer, TerrainMatchQuery};
+use image::{DynamicImage, GrayImage, RgbImage, imageops::FilterType};
 use nalgebra::Matrix3;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -100,6 +102,7 @@ pub fn run_match_stage(
         .map(Surface::from_catalog)
         .transpose()?;
     let surface = ContextSurface { primary, context };
+    let mut terrain_renderer = StageTerrainRenderer::new(&surface);
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
         source,
@@ -125,6 +128,17 @@ pub fn run_match_stage(
         let k = estimate_intrinsics(case);
         let attitude = load_horizon_attitude(&opts.dataset_dir, case, &k);
         let seeds = generate_seeds(&surface.primary, case, opts, attitude);
+        let render_size = scaled_size(case.size, 800);
+        let scale_x = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
+        let scale_y = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
+        let k_render = scale_k(&k, scale_x, scale_y);
+        let qry_small = image::imageops::resize(
+            &query_rgb,
+            render_size[0],
+            render_size[1],
+            FilterType::Triangle,
+        );
+        let qry_small_gray = DynamicImage::ImageRgb8(qry_small.clone()).into_luma8();
 
         let mut attempts_log = Vec::new();
         let mut best: Option<(usize, usize, PoseCandidate)> = None;
@@ -132,41 +146,21 @@ pub fn run_match_stage(
         for (seed_idx, (mut eye, mut rot)) in seeds.into_iter().enumerate() {
             let max_steps = opts.steps.max(1);
             for step_idx in 0..max_steps {
-                let render_size = scaled_size(case.size, 800);
-                let scale_x = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
-                let scale_y = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
-                let k_render = scale_k(&k, scale_x, scale_y);
-
-                let (ref_rgb, ref_depth, ref_pts) =
-                    surface.render(eye, &rot, &k_render, render_size);
-                let qry_small = image::imageops::resize(
-                    &query_rgb,
-                    render_size[0],
-                    render_size[1],
-                    FilterType::Triangle,
-                );
-                let raw_matches = matcher.match_rgb(&ref_rgb, &qry_small)?;
-                let raw_count = raw_matches.len();
-
-                let mut world_pts = Vec::with_capacity(raw_count);
-                let mut img_px = Vec::with_capacity(raw_count);
-                for m in &raw_matches {
-                    let rx = (m.reference.x.round() as i64).clamp(0, i64::from(render_size[0]) - 1)
-                        as u32;
-                    let ry = (m.reference.y.round() as i64).clamp(0, i64::from(render_size[1]) - 1)
-                        as u32;
-                    let r_idx = (ry * render_size[0] + rx) as usize;
-                    if ref_depth[r_idx] <= 0.5 {
-                        continue;
-                    }
-                    let qx_full = m.query.x / scale_x;
-                    let qy_full = m.query.y / scale_y;
-                    if !mask_allows(&valid_mask, case.size, qx_full, qy_full) {
-                        continue;
-                    }
-                    world_pts.push(ref_pts[r_idx]);
-                    img_px.push([m.query.x, m.query.y]);
-                }
+                let (raw_count, world_pts, img_px) = terrain_renderer.match_view(
+                    &surface,
+                    &TerrainMatchQuery {
+                        eye,
+                        rot: &rot,
+                        k_render: &k_render,
+                        render_size,
+                        qry_small_rgb: &qry_small,
+                        qry_small_gray: &qry_small_gray,
+                        valid_mask: &valid_mask,
+                        full_size: case.size,
+                        q_scale: [scale_x, scale_y],
+                    },
+                    matcher,
+                )?;
 
                 let Some(cand) = fit_pose_ransac(
                     &world_pts,
@@ -458,3 +452,6 @@ pub(crate) fn write_case_report(
     };
     write_json(&output_dir.join(format!("{case_id}.json")), &report)
 }
+
+#[cfg(test)]
+mod tests;

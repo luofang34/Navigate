@@ -119,13 +119,22 @@ pub(super) fn solve_frame_pose(
         params.cell_m,
     );
 
+    let forced_pred_cell = (force_anchor && params.opts.anchor_on_cell_boundary)
+        .then_some(pred_pose)
+        .flatten()
+        .map(|(pe, _)| navigate_visual_session::MapCell {
+            map_manifest_sha256: params.surface.catalog_sha256.clone(),
+            east: (pe[0] / params.cell_m).floor() as i64,
+            north: (pe[1] / params.cell_m).floor() as i64,
+        });
+
     if force_anchor && !state.active_tracks.is_empty() && background_anchor.is_some() {
         if state.frames_since_anchor >= 8
             && let Some(worker) = background_anchor.as_mut()
         {
             let seq = state.frame_seq;
             let mask_clone = params.mask_small.clone();
-            let _ = worker.submit_if_idle(|| AnchorJob {
+            let submitted = worker.submit_if_idle(|| AnchorJob {
                 sent_frame_seq: seq,
                 case: params.case.clone(),
                 qry_feat: params.qry_feat.clone(),
@@ -138,6 +147,12 @@ pub(super) fn solve_frame_pose(
                 mask_small: Some(mask_clone),
                 focal_locked,
             })?;
+            if submitted && let Some(ref cell) = forced_pred_cell {
+                state
+                    .visited_cells
+                    .entry(cell.clone())
+                    .or_insert_with(|| params.case.id.clone());
+            }
         }
         force_anchor = false;
     }
@@ -243,6 +258,16 @@ pub(super) fn solve_frame_pose(
         (Some((0, 0, cand)), FusionAdmission::warm_track())
     } else if let Some(arr) = params.arrived_anchor {
         used_arrived_anchor = true;
+        top_up_tracks_with_bank(
+            &mut state.active_tracks,
+            params.surface,
+            params.store,
+            params.projector,
+            params.prepared,
+            params.qry_feat,
+            &arr.candidate,
+            params.render_size,
+        );
         attempts_log.extend(arr.attempts);
         (Some((0, 0, arr.candidate)), arr.admission)
     } else if let Some(worker) = background_anchor.as_mut() {
@@ -327,6 +352,12 @@ pub(super) fn solve_frame_pose(
                     &params.case.id,
                 )
             };
+            if let Some(cell) = forced_pred_cell {
+                state
+                    .visited_cells
+                    .entry(cell)
+                    .or_insert_with(|| params.case.id.clone());
+            }
             (acq.best, adm)
         } else {
             state.active_tracks = ActiveTrackSet::empty();

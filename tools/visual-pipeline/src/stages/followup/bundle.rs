@@ -167,6 +167,17 @@ fn collect_npz_inlier_cells(
         };
         let pts = pts_arr.to_f64();
         let pix = pix_arr.to_f64();
+        let target_eye = ordered[cam_idx].1.0;
+        let eye_npz = map
+            .get("eye")
+            .map(|a| a.to_f64())
+            .filter(|v| v.len() >= 3)
+            .map_or(target_eye, |v| [v[0], v[1], v[2]]);
+        let shift = [
+            target_eye[0] - eye_npz[0],
+            target_eye[1] - eye_npz[1],
+            target_eye[2] - eye_npz[2],
+        ];
         let inliers: Vec<bool> = map
             .get("inliers")
             .map(|a| a.to_f64().into_iter().map(|v| v > 0.5).collect())
@@ -179,14 +190,19 @@ fn collect_npz_inlier_cells(
             if !inliers[i] {
                 continue;
             }
-            let w = [pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]];
+            let w_raw = [pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]];
             let p = [pix[2 * i], pix[2 * i + 1]];
-            if !w.iter().all(|v| v.is_finite())
+            if !w_raw.iter().all(|v| v.is_finite())
                 || !(0.0..w_lim).contains(&p[0])
                 || !(0.0..h_lim).contains(&p[1])
             {
                 continue;
             }
+            let w = [
+                w_raw[0] + shift[0],
+                w_raw[1] + shift[1],
+                w_raw[2] + shift[2],
+            ];
             let gx = (w[0] / VOXEL_CELL_M).round() as i64;
             let gy = (w[1] / VOXEL_CELL_M).round() as i64;
             let center = [(gx as f64) * VOXEL_CELL_M, (gy as f64) * VOXEL_CELL_M];

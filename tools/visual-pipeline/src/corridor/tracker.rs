@@ -6,11 +6,10 @@ use super::{
         apply_case_overrides, estimate_lookahead_enu, prior_odometry_hint, write_corridor_report,
     },
     anchor::multitier::load_search_tier_matcher,
-    anchor_worker::{AnchorArrival, AnchorContext, BackgroundAnchor},
+    anchor_worker::{AnchorArrival, BackgroundAnchor},
     latency::StageLatencies,
     masking::{AmortizedMasker, MaskFrameTelemetry},
     motion::{TrackState, advance_unsolved_prepared, record_odometry_step, update_motion_state},
-    tile_builder::{BackgroundTileBuilder, TileBuilderContext, TileSynthParams},
 };
 
 mod lookahead;
@@ -23,15 +22,14 @@ use crate::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator, load_case_mask,
         load_case_rgb, load_profile_cases, scale_k,
     },
-    surface::gpu::GpuQueueRole,
-    surface::{Surface, SurfaceGpuRenderer},
+    surface::Surface,
     util::write_json,
     xfeat_runtime::LoadedXFeat,
 };
 use image::imageops::{FilterType, colorops::grayscale};
 use lookahead::{
     advance_case_timing_and_continuity, ensure_lookahead_tiles, init_tracker_session,
-    pace_if_realtime, should_wait_cold_anchor,
+    pace_if_realtime, poll_anchor_before_frame, spawn_corridor_workers,
 };
 use navigate_match::{
     CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery, SparseFeatures,
@@ -40,11 +38,7 @@ use navigate_visual::LocalFrame;
 use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
 use serde_json::{Value, json};
 use solve::{FrameSolveParams, solve_frame_pose, tracking_render_size};
-use std::{
-    fs,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{fs, sync::Arc, time::Instant};
 
 /// Localize and track sequential frames against a [`CorridorTileStore`] (`corridor-track`).
 ///
@@ -108,61 +102,21 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
     let projector = HadamardProjector::new(store.seed);
     let cases = load_profile_cases(&opts.profile_path)?;
-    let init_k = nalgebra::Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
-    let t_warmup = Instant::now();
-    let _ = xfeat.warmup(lighterglue.as_ref())?;
-    let sync_gpu = (!opts.background_refresh && opts.polish_anchors)
-        .then(|| {
-            SurfaceGpuRenderer::try_new_with_role(
-                &surface,
-                &init_k,
-                [800, 600],
-                GpuQueueRole::ForegroundTracking,
-            )
-        })
-        .flatten();
-    let sync_gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(sync_gpu);
-    let tile_params = TileSynthParams {
-        tile_m: f64::from(store.tile_size_m.max(10.0)),
-        agl_m: 480.0,
-        max_per_tile: 4096,
-        stride: 4,
-        include_obliques: !cfg!(debug_assertions),
-    };
-    let need_live_tiles = cases.iter().any(|c| {
-        estimate_lookahead_enu(&surface, &TrackState::new(), &apply_case_overrides(c, opts))
-            .is_some_and(|la| !store.has_tile(store.tile_key_at(la[0], la[1])))
-    });
-    let mut background_anchor = opts
-        .background_refresh
-        .then(|| {
-            BackgroundAnchor::spawn(AnchorContext {
-                surface: Arc::clone(&surface),
-                store: Arc::clone(&store),
-                projector,
-                xfeat: xfeat.clone(),
-                lighterglue: lighterglue.clone(),
-                search_tier_matcher: search_tier_matcher.clone(),
-                opts: opts.clone(),
-            })
-        })
-        .transpose()?;
-    let mut tile_builder = opts
-        .background_refresh
-        .then(|| {
-            BackgroundTileBuilder::spawn(
-                TileBuilderContext {
-                    surface: Arc::clone(&surface),
-                    store: Arc::clone(&store),
-                    projector,
-                    xfeat: xfeat.clone(),
-                    params: tile_params,
-                },
-                need_live_tiles,
-            )
-        })
-        .transpose()?;
-    let shader_warmup_ms = t_warmup.elapsed().as_secs_f64() * 1000.0;
+    let workers = spawn_corridor_workers(
+        &surface,
+        &store,
+        projector,
+        &xfeat,
+        lighterglue.as_ref(),
+        search_tier_matcher.as_ref(),
+        &cases,
+        opts,
+    )?;
+    let sync_gpu_renderer = workers.sync_gpu_renderer;
+    let tile_params = workers.tile_params;
+    let mut background_anchor = workers.background_anchor;
+    let mut tile_builder = workers.tile_builder;
+    let shader_warmup_ms = workers.shader_warmup_ms;
 
     let mut latencies = StageLatencies::default();
     let mut tile_build_ms = Vec::new();
@@ -181,6 +135,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         (0_usize, 0_usize, 0_usize);
     let mut telemetry = Vec::new();
     let mut pace_origin: Option<(f64, Instant)> = None;
+    let mut vo_accum_dt_s = 0.0_f64;
 
     for raw_case in &cases {
         if let Some(allow) = &opts.only_cases
@@ -190,14 +145,14 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         }
         evaluated += 1;
         pace_if_realtime(opts.pace_realtime, raw_case, &mut pace_origin);
-        let cold_blocked_outcome =
-            if should_wait_cold_anchor(opts.pace_realtime, evaluated, raw_case, &state)
-                && let Some(worker) = background_anchor.as_mut()
-            {
-                worker.wait_for_shutdown()?
-            } else {
-                None
-            };
+        let polled_outcome = poll_anchor_before_frame(
+            &mut background_anchor,
+            &mut focal_estimator,
+            opts.pace_realtime,
+            evaluated,
+            raw_case,
+            &state,
+        )?;
         let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
 
@@ -249,21 +204,41 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 Ok(None) => {}
                 Err(e) => tracing::warn!("frame 1 fast Segformer pass failed: {e}"),
             }
+            if opts.pace_realtime
+                && let Some((_, ref mut wall0)) = pace_origin
+            {
+                *wall0 = Instant::now();
+            }
         }
+        let anchor_busy = polled_outcome.is_none()
+            && background_anchor
+                .as_ref()
+                .is_some_and(BackgroundAnchor::is_in_flight);
+        let allow_seg =
+            !(state.active_tracks.is_empty() && masker.has_usable_key(render_size) && anchor_busy);
         let qry_gray = grayscale(&qry_small);
-        let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker.mask_frame_with_luma(
-            &qry_small,
-            &qry_gray,
-            fallback_small.as_ref(),
-            est_rot_for_mask.as_ref(),
-            &k_render,
-        )?;
+        let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker
+            .mask_frame_with_luma_controlled(
+                &qry_small,
+                &qry_gray,
+                fallback_small.as_ref(),
+                est_rot_for_mask.as_ref(),
+                &k_render,
+                allow_seg,
+            )?;
         seg_refreshes += usize::from(mask_tel.segformer_refreshed);
         latencies.seg_refresh_ms.extend(mask_tel.segformer_ms);
-        let qry_kp_cap = if mask_tel.valid_fraction > 0.0 {
-            kp_limit
-        } else {
+        let cold_paced_vo = opts.pace_realtime
+            && anchor_busy
+            && state.active_tracks.is_empty()
+            && state.prev_prepared.is_some();
+        let skip_cold_xfeat = cold_paced_vo && !evaluated.is_multiple_of(6);
+        let qry_kp_cap = if mask_tel.valid_fraction <= 0.0 || skip_cold_xfeat {
             0
+        } else if cold_paced_vo {
+            kp_limit.min(256)
+        } else {
+            kp_limit
         };
         let (qry_feat, query_xfeat_ms) = if qry_kp_cap > 0 {
             let t_xfeat = Instant::now();
@@ -281,30 +256,31 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             &case,
             &opts.dynamics_profile,
         );
+        if discontinuous {
+            vo_accum_dt_s = 0.0;
+        }
         state
             .observe_frame(obs_time_s, dt_s, &case.image_sha256, &case.id)
             .map_err(PipelineError::Invalid)?;
 
-        let (prior_rot_hint, nominal_agl_m) =
-            prior_odometry_hint(&surface, &case, &masker, &k_render);
-        record_odometry_step(
-            &mut state,
-            &prepared,
-            &k_render,
-            prior_rot_hint,
-            nominal_agl_m,
-            dt_s,
-            &opts.dynamics_profile,
-        );
+        let (prior_rot_hint, mut nominal_agl_m) =
+            prior_odometry_hint(&surface, &state, &case, &masker, &k_render);
+        if skip_cold_xfeat {
+            vo_accum_dt_s += dt_s.max(0.0);
+            state.record_skipped_odometry_step(dt_s);
+        } else {
+            let vo_dt_s = dt_s + std::mem::take(&mut vo_accum_dt_s);
+            record_odometry_step(
+                &mut state,
+                &prepared,
+                &k_render,
+                prior_rot_hint,
+                nominal_agl_m,
+                vo_dt_s,
+                &opts.dynamics_profile,
+            );
+        }
 
-        let polled_outcome = match cold_blocked_outcome {
-            Some(done) => Some(done),
-            None => background_anchor
-                .as_mut()
-                .map(BackgroundAnchor::poll)
-                .transpose()?
-                .flatten(),
-        };
         let arrived_anchor = polled_outcome.and_then(|outcome| {
             let target_id = (!discontinuous).then_some(case.id.as_str());
             let arr = AnchorArrival::apply_outcome(
@@ -313,7 +289,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
                 &mut latencies,
                 &mut anchor_results,
                 &surface.catalog_sha256,
-                cell_m,
+                (cell_m, dt_s),
                 local_frame,
                 &mut focal_estimator,
                 opts.dynamics_profile,
@@ -329,6 +305,10 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let had_arrived_anchor = arrived_anchor.is_some();
         let k_after_arrival = estimate_intrinsics_with_estimator(&case, &focal_estimator);
         let k_render_after_arrival = scale_k(&k_after_arrival, sx, sy);
+        if had_arrived_anchor {
+            (_, nominal_agl_m) =
+                prior_odometry_hint(&surface, &state, &case, &masker, &k_render_after_arrival);
+        }
 
         let solve_params = FrameSolveParams {
             surface: &surface,
@@ -384,7 +364,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             } else {
                 update_motion_state(&mut state, cand, prepared, dt_s, &opts.dynamics_profile);
             }
-        } else {
+        } else if !skip_cold_xfeat {
             advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
         }
         let filter_snap = state.filter_snapshot(local_frame);
@@ -431,13 +411,14 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
     if let Some(mut worker) = background_anchor.take() {
         if let Some(outcome) = worker.wait_for_shutdown()? {
+            let default_dt = 1.0_f64 / 30.0;
             let _ = AnchorArrival::apply_outcome(
                 &mut state,
                 &mut independent_fixes,
                 &mut latencies,
                 &mut anchor_results,
                 &surface.catalog_sha256,
-                cell_m,
+                (cell_m, default_dt),
                 local_frame,
                 &mut focal_estimator,
                 opts.dynamics_profile,

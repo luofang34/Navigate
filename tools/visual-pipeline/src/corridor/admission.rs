@@ -123,22 +123,29 @@ pub(super) fn estimate_lookahead_enu(
 
 pub(super) fn prior_odometry_hint(
     surface: &Surface,
+    state: &TrackState,
     case: &PhotoCase,
     masker: &AmortizedMasker,
     k_render: &Matrix3<f64>,
 ) -> (Option<Matrix3<f64>>, f64) {
+    let solved_agl = state.prev_eye.map(|eye| {
+        let geo = surface.geodetic(eye);
+        let dem = surface.sample_dem(geo[0], geo[1]).unwrap_or(0.0);
+        (geo[2] - dem).clamp(20.0, 6_000.0)
+    });
     let Some(claims) = case.prior.as_ref() else {
-        return (None, 480.0);
+        return (None, solved_agl.unwrap_or(480.0));
     };
     let Some(pos) = claims.position.as_ref() else {
-        return (None, 480.0);
+        return (None, solved_agl.unwrap_or(480.0));
     };
     let dem = surface
         .sample_dem(pos.latitude, pos.longitude)
         .unwrap_or(0.0);
-    let agl = pos
-        .altitude_m
-        .map_or(480.0, |alt| (alt - dem).clamp(25.0, 6_000.0));
+    let agl = solved_agl.unwrap_or_else(|| {
+        pos.altitude_m
+            .map_or(480.0, |alt| (alt - dem).clamp(25.0, 6_000.0))
+    });
     let (down_deg, roll_deg) = masker.horizon_attitude(k_render).unwrap_or((55.0, 0.0));
     let rot = claims
         .direction_deg
@@ -253,31 +260,29 @@ pub(super) fn top_up_tracks_with_bank(
 ) {
     top_up_tracks(tracks, surface, prepared, qry_feat, cand, render_size);
     let sin_down = -cand.rotation[(2, 2)];
-    let is_nadir = sin_down > 0.95;
+    let steep_nadir = sin_down > 0.85;
     let intrinsics = [
         cand.k[(0, 0)],
         cand.k[(1, 1)],
         cand.k[(0, 2)],
         cand.k[(1, 2)],
     ];
-    if let Ok(virt) = store.project_virtual_view(
-        &VirtualViewCamera {
-            eye_enu: cand.eye,
-            world_to_cam: rot_to_row_major(&cand.rotation),
-            intrinsics,
-            image_size: render_size,
-            max_landmarks: 512,
-            min_cos_incidence: if is_nadir {
-                0.45
-            } else if sin_down < 0.25 {
-                0.72
-            } else {
-                0.84
-            },
-            min_cos_orientation: if is_nadir { 0.94 } else { 0.80 },
+    let _ = projector;
+    if let Ok(virt) = store.project_virtual_kashin(&VirtualViewCamera {
+        eye_enu: cand.eye,
+        world_to_cam: rot_to_row_major(&cand.rotation),
+        intrinsics,
+        image_size: render_size,
+        max_landmarks: 512,
+        min_cos_incidence: if steep_nadir {
+            0.45
+        } else if sin_down < 0.25 {
+            0.72
+        } else {
+            0.84
         },
-        projector,
-    ) && !virt.world_points_enu.is_empty()
+        min_cos_orientation: if sin_down > 0.95 { 0.94 } else { 0.80 },
+    }) && !virt.world_points_enu.is_empty()
     {
         let bank_fresh = ActiveTrackSet {
             world_points_enu: virt.world_points_enu,

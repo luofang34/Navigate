@@ -29,7 +29,7 @@ fn cheirality_and_fisher_rejections() {
         Err(PlausibilityError::IllConditionedFisher { .. })
     ));
     assert!(matches!(
-        verify_physical_plausibility(600.0, 500.0, 0.99, 1e-4, 5.0, &cfg),
+        verify_physical_plausibility(600.0, 500.0, 0.99, 1e-4, 5.5, &cfg),
         Err(PlausibilityError::ExcessiveReprojectionError { .. })
     ));
 }
@@ -86,8 +86,12 @@ impl CorridorTerrain for FlatDemTerrain {
     }
 }
 
-fn build_synthetic_candidate(inlier_err_px: f64, flip_inlier_depth: bool) -> PoseCandidate {
-    let eye = [0.0, 0.0, 160.0];
+fn build_synthetic_candidate_at_depth(
+    depth_base: f64,
+    inlier_err_px: f64,
+    flip_inlier_depth: bool,
+) -> PoseCandidate {
+    let eye = [0.0, 0.0, 500.0];
     let rot = local_camera_rotation(0.0, 35.0, 0.0);
     let rot_inv = rot.transpose();
     let k = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
@@ -106,7 +110,7 @@ fn build_synthetic_candidate(inlier_err_px: f64, flip_inlier_depth: bool) -> Pos
             let depth = if flip_inlier_depth && idx < 2 {
                 -80.0
             } else {
-                180.0 + ((idx % 5) as f64) * 35.0
+                depth_base + ((idx % 5) as f64) * 35.0
             };
             let p_cam = Vector3::new(
                 ((u - k[(0, 2)]) / k[(0, 0)]) * depth,
@@ -170,7 +174,7 @@ fn verify_candidate_plausibility_ignores_putative_outliers_and_checks_inliers() 
     let cfg = PhysicalPlausibilityConfig::default();
     let terrain = FlatDemTerrain { dem_m: 40.0 };
 
-    let valid = build_synthetic_candidate(1.5, false);
+    let valid = build_synthetic_candidate_at_depth(500.0, 1.5, false);
     let holdout_rmse = compute_holdout_rmse_px(&valid);
     assert!(
         (holdout_rmse - 1.5).abs() < 0.25,
@@ -182,19 +186,30 @@ fn verify_candidate_plausibility_ignores_putative_outliers_and_checks_inliers() 
     );
     assert!(is_sane_seed_candidate(&valid, &terrain, 5.0));
 
-    let scaled_800px = build_synthetic_candidate(4.5, false);
+    let scaled_800px = build_synthetic_candidate_at_depth(500.0, 5.5, false);
     assert_eq!(
         verify_candidate_plausibility(&scaled_800px, &terrain, &cfg),
         Ok(())
     );
 
-    let noisy_inliers = build_synthetic_candidate(6.5, false);
+    let noisy_inliers = build_synthetic_candidate_at_depth(500.0, 7.5, false);
     assert!(matches!(
         verify_candidate_plausibility(&noisy_inliers, &terrain, &cfg),
         Err(PlausibilityError::ExcessiveReprojectionError { .. })
     ));
 
-    let behind_camera_inliers = build_synthetic_candidate(1.5, true);
+    let low_agl_relief = build_synthetic_candidate_at_depth(180.0, 8.5, false);
+    assert_eq!(
+        verify_candidate_plausibility(&low_agl_relief, &terrain, &cfg),
+        Ok(())
+    );
+    let low_agl_excessive = build_synthetic_candidate_at_depth(180.0, 13.0, false);
+    assert!(matches!(
+        verify_candidate_plausibility(&low_agl_excessive, &terrain, &cfg),
+        Err(PlausibilityError::ExcessiveReprojectionError { .. })
+    ));
+
+    let behind_camera_inliers = build_synthetic_candidate_at_depth(500.0, 1.5, true);
     assert!(matches!(
         verify_candidate_plausibility(&behind_camera_inliers, &terrain, &cfg),
         Err(PlausibilityError::LowCheiralityFraction { .. })

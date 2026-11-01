@@ -138,4 +138,35 @@ impl CorridorTracker {
             session.dead_reckoner.clear_filter_solution();
         }
     }
+
+    /// Snap tracker pose on an anchor-arrival frame without inferring velocity from the residual.
+    pub fn snap_pose_preserving_velocity(
+        &mut self,
+        cand: &PoseCandidate,
+        prepared: navigate_match::PreparedKashinQuery,
+    ) {
+        self.prev_eye = Some(cand.eye);
+        self.prev_rot = Some(cand.rotation);
+        self.vo_rot = Some(cand.rotation);
+        self.prev_prepared = Some(prepared);
+        self.time_since_accepted_pose_s = 0.0;
+        let fisher_pos = crate::corridor::plausibility::compute_fisher_geometry_covariance(cand)
+            .fixed_view::<3, 3>(0, 0)
+            .into_owned();
+        let tightened_cov = fisher_pos + nalgebra::Matrix3::identity() * 2.25;
+        if let Some(kin) = self.kinematic.as_mut() {
+            kin.eye_enu = cand.eye;
+            kin.rot_world_to_cam = cand.rotation;
+            kin.pos_cov_enu_m2 = tightened_cov;
+            kin.att_sigma_rad = 0.01;
+        } else {
+            let mut kin = crate::corridor::kinematics::KinematicState::new(cand.eye, cand.rotation);
+            kin.pos_cov_enu_m2 = tightened_cov;
+            self.kinematic = Some(kin);
+        }
+        if let (Some(session), Some(kin)) = (self.corridor_session.as_mut(), self.kinematic.clone())
+        {
+            session.dead_reckoner.kinematic = kin;
+        }
+    }
 }

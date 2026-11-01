@@ -11,7 +11,8 @@ pub use l1_gnc::{
     fit_pose_hybrid, fit_pose_l1_gnc, point_jacobian, refine_seed_eye_2pt, reproj_error,
 };
 use two_point::{
-    dlt_pnp, select_refined_ransac_candidate, solve_2pt_gravity_pose, solve_2pt_rot_at_eye,
+    dlt_pnp, sample_six, select_refined_ransac_candidate, solve_2pt_gravity_pose,
+    solve_2pt_rot_at_eye,
 };
 
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
@@ -294,7 +295,9 @@ pub(crate) fn score_pose_candidate(
     size: [u32; 2],
     inlier_px: f64,
 ) -> PoseCandidate {
+    let base_inlier_px = scaled_inlier_px(size);
     let eff_inlier_px = low_agl_relief_inlier_px(inlier_px, world_points, eye, k);
+    let relief_ratio = (eff_inlier_px / base_inlier_px.max(1.0)).max(1.0);
     let hold_count = held.iter().filter(|&&h| h).count();
     let mut inliers = vec![false; world_points.len()];
     let (mut pos_depth, mut train_sq_sum, mut train_inliers, mut hold_inliers) = (0, 0.0, 0, 0);
@@ -340,7 +343,14 @@ pub(crate) fn score_pose_candidate(
     let pos_frac = (pos_depth as f64) / (world_points.len() as f64);
     let support_frac = (cells.len() as f64) / f64::from(GRID_DIM * GRID_DIM);
     let total_inliers = train_inliers + hold_inliers;
-    let min_hold = 8.min((hold_count * 2 / 5).max(2));
+    let min_total_inliers = (26.0 * relief_ratio.sqrt()).ceil() as usize;
+    let base_min_hold = 8.min((hold_count * 2 / 5).max(2));
+    let min_hold = if relief_ratio > 1.5 {
+        base_min_hold.max(12)
+    } else {
+        base_min_hold
+    };
+    let min_cells = if relief_ratio > 1.5 { 10 } else { 6 };
     let min_train = 24.min(
         total_inliers
             .saturating_sub(hold_inliers.max(min_hold))
@@ -348,13 +358,13 @@ pub(crate) fn score_pose_candidate(
     );
     let min_hold_frac = if total_inliers >= 64 { 0.32 } else { 0.40 };
 
-    let geometry_accepted = total_inliers >= 26
+    let geometry_accepted = total_inliers >= min_total_inliers
         && train_inliers >= min_train
         && hold_inliers >= min_hold
         && hold_frac >= min_hold_frac
         && hold_median <= 1.5 * eff_inlier_px
         && pos_frac >= 0.98
-        && cells.len() >= 6;
+        && cells.len() >= min_cells;
 
     let score = PoseScore {
         focal_px: k[(0, 0)],
@@ -391,25 +401,6 @@ pub fn candidate_priority(score: &PoseScore) -> (bool, usize, i64, i64) {
         (score.holdout_inlier_fraction * 1_000_000.0).round() as i64,
         -(score.holdout_median_px * 1_000.0).round() as i64,
     )
-}
-
-fn sample_six(indices: &[usize], seed: u64) -> [usize; 6] {
-    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
-    let mut picked = [indices[0]; 6];
-    let mut count = 0usize;
-    let mut guard = 0usize;
-    while count < 6 && guard < 128 {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        let idx = indices[(state.wrapping_mul(0x2545_F491_4F6C_DD1D) as usize) % indices.len()];
-        if !picked[..count].contains(&idx) || indices.len() < 6 {
-            picked[count] = idx;
-            count += 1;
-        }
-        guard += 1;
-    }
-    picked
 }
 
 pub(crate) fn refine_pose_lm(

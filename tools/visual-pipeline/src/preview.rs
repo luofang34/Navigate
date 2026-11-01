@@ -105,6 +105,11 @@ pub fn export_preview(
 
     let mut items = BTreeMap::new();
     for run_dir in run_dirs {
+        let same_cat = read_json::<Value>(&run_dir.join("run.json"))
+            .ok()
+            .and_then(|r| r["catalog_sha256"].as_str().map(str::to_owned))
+            .as_deref()
+            == Some(surface.catalog_sha256.as_str());
         let Ok(entries) = fs::read_dir(run_dir) else {
             continue;
         };
@@ -132,8 +137,18 @@ pub fn export_preview(
             });
             if status == "candidate_requires_review"
                 && npz.is_file()
-                && let Ok((eye, rot, k, sz)) = load_candidate_pose(&npz)
+                && let Ok((mut eye, rot, k, sz)) = load_candidate_pose(&npz)
             {
+                if !same_cat
+                    && let Some(c) = doc.get("candidate")
+                    && let (Some(lat), Some(lon), Some(alt)) = (
+                        c["latitude"].as_f64(),
+                        c["longitude"].as_f64(),
+                        c["altitude_m"].as_f64(),
+                    )
+                {
+                    eye = surface.local(lat, lon, alt);
+                }
                 item["globe_view"] = globe_view(&surface, eye, &rot);
                 item["corners"] = json!(map_corners(&surface, eye, &rot, &k, sz));
             }

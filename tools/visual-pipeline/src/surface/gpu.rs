@@ -420,12 +420,23 @@ impl SurfaceGpuRenderer {
         let subatlas_changed =
             self.template
                 .update_subatlas_at(surface, focus_lat, focus_lon, max_tex_dim);
-        if key != self.active_key || subatlas_changed {
+        if subatlas_changed {
             self.rebind_renderer(camera, key)?;
+        } else if key != self.active_key {
+            let limits = default_limits(&camera);
+            self.renderer.set_camera(camera, limits)?;
+            self.limits = limits;
+            self.active_key = key;
         }
         let pose = surface_pose_to_gpu(surface, self.template.frame, eye_enu, world_to_cam)?;
         let view = match self.renderer.render_blocking(pose) {
             Ok(v) => v,
+            Err(
+                e @ (navigate_visual_render::RenderError::Invalid(_)
+                | navigate_visual_render::RenderError::Geometry(_)),
+            ) => {
+                return Err(PipelineError::Render(e));
+            }
             Err(e) => {
                 if let Ok(new_renderer) = pollster::block_on(GpuRenderer::new(
                     self.template.to_render_scene(),

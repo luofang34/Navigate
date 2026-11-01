@@ -46,6 +46,7 @@ fn outcome(seq: usize, case_id: &str, eye: [f64; 3], accepted: bool) -> AnchorOu
         case_id: case_id.into(),
         k_render: k_test(),
         render_size: [800, 600],
+        agl_m: 120.0,
         best: Some(candidate(eye)),
         seeded: accepted.then(ActiveTrackSet::empty),
         locked_focal_px: None,
@@ -69,6 +70,7 @@ fn arrivals_count_fixes_for_the_sent_frame_and_keep_tracks_on_rejection() {
         results: &mut results,
         catalog_sha256: "catalog",
         cell_m: 500.0,
+        nominal_dt_s: 1.0 / 30.0,
         local_frame: None,
         focal_estimator: None,
         dynamics_profile: VehicleDynamicsProfile::rotary_survey(),
@@ -117,11 +119,17 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         frame_seq: 2,
         rot_step: Matrix3::identity(),
         eye_delta: [6.0, 0.0, 0.0],
+        derotated_flow_px: None,
+        dt_s: 1.0 / 30.0,
+        has_world_pose: false,
     });
     state.pose_steps.push_back(OdometryStep {
         frame_seq: 3,
         rot_step: Matrix3::identity(),
         eye_delta: [4.0, 0.0, 0.0],
+        derotated_flow_px: None,
+        dt_s: 1.0 / 30.0,
+        has_world_pose: false,
     });
 
     // Camera looks along +Z in world (identity world_to_cam).
@@ -136,6 +144,7 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         case_id: "f-0001".into(),
         k_render: k_test(),
         render_size: [800, 600],
+        agl_m: 120.0,
         best: Some(candidate([0.0, 0.0, 0.0])),
         seeded: Some(tracks),
         locked_focal_px: None,
@@ -153,6 +162,7 @@ fn delayed_anchor_arrival_propagates_odometry_and_prunes_frustum_tracks() {
         results: &mut results,
         catalog_sha256: "catalog",
         cell_m: 500.0,
+        nominal_dt_s: 1.0 / 30.0,
         local_frame: None,
         focal_estimator: None,
         dynamics_profile: VehicleDynamicsProfile::rotary_survey(),
@@ -213,6 +223,7 @@ fn sequential_anchor_arrivals_with_5m_snap_keep_velocity_bounded() {
             results: &mut results,
             catalog_sha256: "catalog",
             cell_m: 500.0,
+            nominal_dt_s: 1.0 / 30.0,
             local_frame: None,
             focal_estimator: None,
             dynamics_profile: profile,
@@ -239,6 +250,7 @@ fn sequential_anchor_arrivals_with_5m_snap_keep_velocity_bounded() {
             results: &mut results,
             catalog_sha256: "catalog",
             cell_m: 500.0,
+            nominal_dt_s: 1.0 / 30.0,
             local_frame: None,
             focal_estimator: None,
             dynamics_profile: profile,
@@ -272,4 +284,95 @@ fn sequential_anchor_arrivals_with_5m_snap_keep_velocity_bounded() {
         state.kinematic.as_ref().expect("kinematic").vel_enu_mps,
         [12.0, 0.0, 0.0]
     );
+}
+
+#[test]
+fn delayed_cold_arrival_inflates_covariance_for_handoff_and_healthy_foreground_merges_tracks() {
+    use crate::corridor::kinematics::{
+        CHI2_GATE_3DOF_99, TrackingSearchStrategy, project_track_strategy,
+    };
+
+    // 1. Cold arrival after 43 frames (1.43 s) of open-loop VO drift (~35 m).
+    let mut state = TrackState::new();
+    let mut fixes = 0;
+    let mut latencies = StageLatencies::default();
+    let mut results = Vec::new();
+    let profile = VehicleDynamicsProfile::fixed_wing();
+    state.frame_seq = 44;
+    let cold_tracks = ActiveTrackSet {
+        world_points_enu: vec![[0.0, 0.0, 600.0]],
+        sign_bits: vec![7],
+        kashin_i8: vec![[3_u8; 64]],
+    };
+    let mut cold_out = outcome(1, "f-0001", [0.0, 0.0, 0.0], true);
+    cold_out.seeded = Some(cold_tracks);
+    let arr = AnchorArrival {
+        state: &mut state,
+        independent_fixes: &mut fixes,
+        latencies: &mut latencies,
+        results: &mut results,
+        catalog_sha256: "catalog",
+        cell_m: 500.0,
+        nominal_dt_s: 1.0 / 30.0,
+        local_frame: None,
+        focal_estimator: None,
+        dynamics_profile: profile,
+    }
+    .apply(cold_out, Some("f-0044"))
+    .expect("cold arrival must return ArrivedAnchor");
+
+    let kin = state.kinematic.as_ref().expect("kinematic initialized");
+    // 35 m true landmark innovation against VO-drifted prop_eye must pass Mahalanobis gate!
+    let fisher_cov = Matrix3::identity() * 4.0;
+    assert!(
+        kin.mahalanobis_innovation_gate([35.0, 0.0, 0.0], fisher_cov, CHI2_GATE_3DOF_99),
+        "inflated arrival covariance must admit 35 m VO-drift handoff"
+    );
+    let strat = project_track_strategy(
+        Some(kin),
+        Some(arr.pose),
+        &state.active_tracks,
+        &k_test(),
+        480.0,
+    );
+    assert_eq!(strat, TrackingSearchStrategy::GlobalFrustumMatch);
+
+    // Snapping onto solved warm-track pose tightens covariance back down.
+    let proj = HadamardProjector::new(0xBEEF);
+    let empty_q = PreparedKashinQuery::from_features(&proj, &SparseFeatures::empty()).expect("q");
+    state.snap_pose_preserving_velocity(&candidate([35.0, 0.0, 0.0]), empty_q);
+    assert!(state.kinematic.as_ref().expect("kin").pos_cov_enu_m2[(0, 0)] < 25.0);
+
+    // 2. Healthy foreground warm tracking + propagated_frames > 4 must merge tracks without overwriting prev_eye.
+    state.prev_eye = Some([42.0, 10.0, 0.0]);
+    state.prev_rot = Some(Matrix3::identity());
+    state.prev_vel = [55.0, 0.0, 0.0];
+    state.time_since_accepted_pose_s = 0.033;
+    state.frame_seq = 60;
+    let refresh_tracks = ActiveTrackSet {
+        world_points_enu: vec![[42.0, 10.0, 500.0]],
+        sign_bits: vec![9],
+        kashin_i8: vec![[5_u8; 64]],
+    };
+    let mut refresh_out = outcome(50, "f-0050", [600.0, 0.0, 0.0], true);
+    refresh_out.seeded = Some(refresh_tracks);
+    let refresh_arr = AnchorArrival {
+        state: &mut state,
+        independent_fixes: &mut fixes,
+        latencies: &mut latencies,
+        results: &mut results,
+        catalog_sha256: "catalog",
+        cell_m: 500.0,
+        nominal_dt_s: 1.0 / 30.0,
+        local_frame: None,
+        focal_estimator: None,
+        dynamics_profile: profile,
+    }
+    .apply(refresh_out, Some("f-0060"));
+    assert!(
+        refresh_arr.is_none(),
+        "healthy foreground tracking must not be overwritten by delayed background prop_eye"
+    );
+    assert_eq!(state.prev_eye, Some([42.0, 10.0, 0.0]));
+    assert_eq!(state.active_tracks.len(), 2);
 }
