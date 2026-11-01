@@ -3,8 +3,12 @@
 //! This module computes time-parameterized motion predictions, covariance growth,
 //! and correspondence search gates in a local East-North-Up (`ENU`) frame.
 
+mod kashin_match;
+
+pub use kashin_match::{approx_dot, match_tracks_kashin, match_virtual_kashin};
+
 use nalgebra::{Matrix3, Vector3};
-use navigate_match::{ActiveTrackSet, PreparedKashinQuery, VirtualCorridorView};
+use navigate_match::ActiveTrackSet;
 use navigate_visual_session::MapCell;
 use std::collections::BTreeMap;
 
@@ -230,10 +234,10 @@ impl KinematicState {
         dt_s: f64,
         profile: &VehicleDynamicsProfile,
     ) {
-        self.update_from_pose_gated(new_eye, new_rot, dt_s, profile, true);
+        self.update_from_pose_gated(new_eye, new_rot, dt_s, profile, true, None);
     }
 
-    /// Update kinematic state from an accepted camera pose with vertical gating.
+    /// Update kinematic state from an accepted camera pose with vertical gating and Fisher covariance.
     pub fn update_from_pose_gated(
         &mut self,
         new_eye: [f64; 3],
@@ -241,8 +245,10 @@ impl KinematicState {
         dt_s: f64,
         profile: &VehicleDynamicsProfile,
         allow_vertical: bool,
+        meas_pos_cov: Option<Matrix3<f64>>,
     ) {
         let dt = dt_s.clamp(MIN_DELTA_T_S, MAX_DELTA_T_S);
+        let alpha = (dt / (dt + 0.20)).clamp(0.12, 0.50);
         let de = Vector3::new(
             new_eye[0] - self.eye_enu[0],
             new_eye[1] - self.eye_enu[1],
@@ -250,32 +256,59 @@ impl KinematicState {
         );
         let v_cand = de / dt;
         if v_cand.norm() <= profile.max_speed_mps * 1.5 {
-            let vz = if allow_vertical {
-                v_cand.z
+            let vx_raw = (1.0 - alpha) * self.vel_enu_mps[0] + alpha * v_cand.x;
+            let vy_raw = (1.0 - alpha) * self.vel_enu_mps[1] + alpha * v_cand.y;
+            let max_speed = profile.max_speed_mps.max(0.0);
+            if allow_vertical {
+                let max_vz = profile.max_vertical_speed_mps.max(0.0);
+                let vz_raw =
+                    ((1.0 - alpha) * self.vel_enu_mps[2] + alpha * v_cand.z).clamp(-max_vz, max_vz);
+                let mut v_vec = Vector3::new(vx_raw, vy_raw, vz_raw);
+                let norm = v_vec.norm();
+                if norm > max_speed && norm > 0.0 {
+                    v_vec *= max_speed / norm;
+                }
+                self.vel_enu_mps = [v_vec.x, v_vec.y, v_vec.z];
             } else {
-                self.vel_enu_mps[2]
-            };
-            self.vel_enu_mps = [v_cand.x, v_cand.y, vz];
+                let vz = self.vel_enu_mps[2];
+                let max_h = (max_speed * max_speed - vz * vz).max(0.0).sqrt();
+                let h_norm = vx_raw.hypot(vy_raw);
+                let scale = if h_norm > max_h && h_norm > 0.0 {
+                    max_h / h_norm
+                } else {
+                    1.0
+                };
+                self.vel_enu_mps = [vx_raw * scale, vy_raw * scale, vz];
+            }
         }
 
         let r_delta = new_rot * self.rot_world_to_cam.transpose();
         let cos_theta = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
         let theta = cos_theta.acos();
-        if theta > 1e-5 && theta.sin().abs() > 1e-6 {
+        let omega_cand = if theta > 1e-5 && theta.sin().abs() > 1e-6 {
             let axis = Vector3::new(
                 r_delta[(2, 1)] - r_delta[(1, 2)],
                 r_delta[(0, 2)] - r_delta[(2, 0)],
                 r_delta[(1, 0)] - r_delta[(0, 1)],
             ) / (2.0 * theta.sin());
-            let omega = axis * (theta / dt);
-            if omega.norm() <= profile.max_angular_rate_rad_s * 1.5 {
-                self.omega_cam_rad_s = [omega.x, omega.y, omega.z];
+            axis * (theta / dt)
+        } else {
+            Vector3::zeros()
+        };
+        if omega_cand.norm() <= profile.max_angular_rate_rad_s * 1.5 {
+            let mut w = Vector3::from(self.omega_cam_rad_s) * (1.0 - alpha) + omega_cand * alpha;
+            let max_w = profile.max_angular_rate_rad_s.max(0.0);
+            let w_norm = w.norm();
+            if w_norm > max_w && w_norm > 0.0 {
+                w *= max_w / w_norm;
             }
+            self.omega_cam_rad_s = [w.x, w.y, w.z];
         }
 
         self.eye_enu = new_eye;
         self.rot_world_to_cam = new_rot;
-        self.pos_cov_enu_m2 = Matrix3::identity() * 1.0;
+        let base_cov = meas_pos_cov.unwrap_or_else(|| Matrix3::identity() * 4.0);
+        self.pos_cov_enu_m2 = base_cov + Matrix3::identity() * 2.25;
         self.att_sigma_rad = 0.01;
     }
 }
@@ -388,90 +421,6 @@ pub fn orthonormalize_so3(m: &Matrix3<f64>) -> Matrix3<f64> {
     } else {
         Matrix3::identity()
     }
-}
-
-/// Compute the approximate cosine similarity between a Kashin `i8` code and a rotated query.
-#[must_use]
-pub fn approx_dot(code: &[u8; 64], rot: &[f32; 64]) -> f32 {
-    let mut dot = 0.0_f32;
-    let mut norm_sq = 0_i32;
-    for (&raw, &q) in code.iter().zip(rot) {
-        let v = raw as i8;
-        let vi = i32::from(v);
-        norm_sq += vi * vi;
-        dot += f32::from(v) * q;
-    }
-    if norm_sq <= 0 {
-        return 0.0;
-    }
-    (dot / (norm_sq as f32).sqrt()).clamp(-1.0, 1.0)
-}
-
-/// Match active 3D landmarks against a query frame without a pixel radius limit.
-#[must_use]
-pub fn match_tracks_kashin(
-    tracks: &ActiveTrackSet,
-    query: &PreparedKashinQuery,
-    cap: usize,
-) -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
-    let n_r = tracks.len().min(cap);
-    let q_valid = query.valid_indices();
-    let n_q = q_valid.len().min(cap);
-    if n_r == 0 || n_q == 0 {
-        return (Vec::new(), Vec::new());
-    }
-    let q_signs = query.sign_bits();
-    let q_rots = query.rotated();
-    let q_px = query.pixels();
-    let mut fwd = vec![(usize::MAX, -2.0_f32, -2.0_f32); n_r];
-    let mut rev = vec![(usize::MAX, -2.0_f32); n_q];
-
-    for (r, fwd_slot) in fwd.iter_mut().enumerate() {
-        let rs = tracks.sign_bits[r];
-        let rc = &tracks.kashin_i8[r];
-        for q in 0..n_q {
-            if (rs ^ q_signs[q]).count_ones() > 24 {
-                continue;
-            }
-            let dot = approx_dot(rc, &q_rots[q]);
-            if dot > fwd_slot.1 {
-                *fwd_slot = (q, dot, fwd_slot.1);
-            } else if dot > fwd_slot.2 {
-                fwd_slot.2 = dot;
-            }
-            if dot > rev[q].1 {
-                rev[q] = (r, dot);
-            }
-        }
-    }
-    let mut world = Vec::new();
-    let mut px = Vec::new();
-    for (r, &(q, b1, b2)) in fwd.iter().enumerate() {
-        if q < n_q
-            && rev[q].0 == r
-            && b1 >= 0.62
-            && (b2 <= -1.5 || (1.0 - b1).max(0.0) <= 0.85 * (1.0 - b2).max(0.0))
-        {
-            world.push(tracks.world_points_enu[r]);
-            px.push(q_px[q_valid[q]]);
-        }
-    }
-    (world, px)
-}
-
-/// Match virtual corridor landmarks against a query frame.
-#[must_use]
-pub fn match_virtual_kashin(
-    virt: &VirtualCorridorView,
-    query: &PreparedKashinQuery,
-    cap: usize,
-) -> (Vec<[f64; 3]>, Vec<[f64; 2]>) {
-    let probe = ActiveTrackSet {
-        world_points_enu: virt.world_points_enu.iter().take(cap).copied().collect(),
-        sign_bits: virt.sign_bits.iter().take(cap).copied().collect(),
-        kashin_i8: virt.kashin_i8.iter().take(cap).copied().collect(),
-    };
-    match_tracks_kashin(&probe, query, cap)
 }
 
 #[cfg(test)]

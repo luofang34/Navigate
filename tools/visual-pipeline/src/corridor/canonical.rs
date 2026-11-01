@@ -59,12 +59,13 @@ pub(crate) fn canonical_tile_poses(
     out
 }
 
-/// Selects corridor tiles by intersecting camera frustum rays with the DEM surface out to 12 km.
+/// Selects corridor tiles by isotropic radius plus a forward frustum sector and horizon rays.
 pub(crate) fn select_corridor_tiles(
     surface: &Surface,
     cases: &[PhotoCase],
     tile_m: f64,
     radius_m: f64,
+    nominal_agl_m: f64,
 ) -> Vec<(i32, i32)> {
     let sw = surface.local(surface.bbox[1], surface.bbox[0], 0.0);
     let ne = surface.local(surface.bbox[3], surface.bbox[2], 0.0);
@@ -75,6 +76,7 @@ pub(crate) fn select_corridor_tiles(
 
     let mut selected = BTreeSet::new();
     let r = radius_m.max(0.0);
+    let sector_dist_m = (nominal_agl_m * 6.0).clamp(2_500.0, 6_000.0);
     for case in cases {
         if let Some(pos) = case.prior.as_ref().and_then(|p| p.position.as_ref()) {
             let p = surface.local(pos.latitude, pos.longitude, 0.0);
@@ -88,17 +90,38 @@ pub(crate) fn select_corridor_tiles(
                 }
             }
 
-            // Raycast frustum ground rays out to 12 km (or horizon distance at high AGL)
             if let Some(hdg_deg) = case.prior.as_ref().and_then(|p| p.direction_deg) {
+                let hdg_rad = hdg_deg.to_radians();
+                let fwd_e = hdg_rad.sin();
+                let fwd_n = hdg_rad.cos();
+                let sx0 = (((p[0] - sector_dist_m) / tile_m).floor() as i32).max(cat_min_x);
+                let sx1 = (((p[0] + sector_dist_m) / tile_m).floor() as i32).min(cat_max_x);
+                let sy0 = (((p[1] - sector_dist_m) / tile_m).floor() as i32).max(cat_min_y);
+                let sy1 = (((p[1] + sector_dist_m) / tile_m).floor() as i32).min(cat_max_y);
+                let cos_half_sector = std::f64::consts::FRAC_1_SQRT_2;
+                for ty in sy0..=sy1 {
+                    let dy = (f64::from(ty) + 0.5) * tile_m - p[1];
+                    for tx in sx0..=sx1 {
+                        let dx = (f64::from(tx) + 0.5) * tile_m - p[0];
+                        let dist = dx.hypot(dy);
+                        if dist <= sector_dist_m
+                            && (dist <= 1.0e-6
+                                || (dx * fwd_e + dy * fwd_n) >= dist * cos_half_sector)
+                        {
+                            selected.insert((tx, ty));
+                        }
+                    }
+                }
+
+                // Raycast frustum ground rays out to 12 km (or horizon distance at high AGL)
                 let dem = surface
                     .sample_dem(pos.latitude, pos.longitude)
                     .unwrap_or(0.0);
-                let alt = pos.altitude_m.unwrap_or(dem + 500.0);
+                let alt = pos.altitude_m.unwrap_or(dem + nominal_agl_m.max(500.0));
                 let agl_m = (alt - dem).max(10.0);
                 let horizon_dist_m = (2.0 * 6_371_000.0 * agl_m).sqrt();
                 let max_ray_dist_m = 12_000.0_f64.min(horizon_dist_m).max(4_000.0);
 
-                let hdg_rad = hdg_deg.to_radians();
                 // Raycast in 3 directions across horizontal field-of-view (+/- 30 deg)
                 for fov_offset in [
                     -std::f64::consts::FRAC_PI_6,
@@ -129,4 +152,53 @@ pub(crate) fn select_corridor_tiles(
         }
     }
     selected.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+    use serde_json::json;
+
+    #[test]
+    fn select_corridor_tiles_fills_forward_frustum_sector_without_backward_bloat() {
+        let img = RgbImage::from_pixel(256, 256, Rgb([100, 110, 95]));
+        let mut surface = Surface::synthetic(41.0, -75.0, 100.0, img);
+        surface.bbox = [-75.15, 40.90, -74.85, 41.10];
+        let case: PhotoCase = serde_json::from_value(json!({
+            "id": "oblique-east",
+            "image": "img.png",
+            "image_sha256": "0".repeat(64),
+            "size": [800, 600],
+            "valid_mask": "",
+            "mask_sha256": "",
+            "mask_status": "full_image_unmasked",
+            "prior": {
+                "position": {
+                    "latitude": 41.0,
+                    "longitude": -75.0,
+                    "altitude_m": 700.0,
+                    "unsigned_altitude_m": 700.0,
+                    "altitude_datum": "msl"
+                },
+                "direction_deg": 90.0
+            }
+        }))
+        .expect("valid PhotoCase JSON");
+        let tiles = select_corridor_tiles(&surface, &[case], 500.0, 500.0, 600.0);
+        // Nominal AGL 600 m -> sector reaches 3,600 m East along 90 deg +/- 45 deg.
+        // Tile (4, 3) has center (2250 m E, 1750 m N), dist = 2850 m <= 3600 m, angle = 37.9 deg.
+        assert!(
+            tiles.contains(&(4, 3)),
+            "forward frustum sector must cover +37.9 deg off-ray oblique tiles within +/- 45 deg"
+        );
+        assert!(
+            tiles.contains(&(5, -4)),
+            "southern half of forward sector (-32.5 deg off East) must be covered"
+        );
+        assert!(
+            !tiles.contains(&(-5, 0)),
+            "tiles 2.5 km behind camera outside corridor_radius_m must not be selected"
+        );
+    }
 }

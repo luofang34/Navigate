@@ -132,8 +132,27 @@ fn test_is_plausible_anchor_candidate_validation() {
         },
     };
     assert!(super::is_plausible_anchor_candidate(&cand, &surface));
+    assert!(
+        !super::sweep::is_early_exit_focal_zero(&cand, &surface),
+        "8 inliers must not trigger early focal lock"
+    );
+
+    cand.score.inliers = 48;
+    cand.score.holdout_inlier_fraction = 0.40;
+    assert!(
+        super::sweep::is_early_exit_focal_zero(&cand, &surface),
+        "48 plausible inliers with 0.40 holdout fraction must trigger early focal lock"
+    );
+
+    cand.score.holdout_inlier_fraction = 0.39;
+    assert!(
+        !super::sweep::is_early_exit_focal_zero(&cand, &surface),
+        "holdout fraction below 0.40 must not trigger early focal lock"
+    );
+    cand.score.holdout_inlier_fraction = 1.0;
 
     // Underground candidate must be rejected
     cand.eye = [0.0, 0.0, -500.0];
     assert!(!super::is_plausible_anchor_candidate(&cand, &surface));
+    assert!(!super::sweep::is_early_exit_focal_zero(&cand, &surface));
 }

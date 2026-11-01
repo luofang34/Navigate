@@ -276,24 +276,38 @@ pub(super) fn has_nearby_pixel(
 }
 
 pub(super) fn tile_overlaps_frustum(tile: &CorridorTileEntry, cam: &VirtualViewCamera) -> bool {
+    aabb_overlaps_frustum(
+        tile.anchor_enu,
+        tile.bounds_min_rel,
+        tile.bounds_max_rel,
+        cam,
+    )
+}
+
+pub(super) fn aabb_overlaps_frustum(
+    anchor_enu: [f64; 3],
+    bounds_min_rel: [f32; 3],
+    bounds_max_rel: [f32; 3],
+    cam: &VirtualViewCamera,
+) -> bool {
     let [fx, fy, cx, cy] = cam.intrinsics;
     let s_left = -cx / fx;
     let s_right = (f64::from(cam.image_size[0]) - cx) / fx;
     let s_top = -cy / fy;
     let s_bottom = (f64::from(cam.image_size[1]) - cy) / fy;
 
-    let xs = [tile.bounds_min_rel[0], tile.bounds_max_rel[0]];
-    let ys = [tile.bounds_min_rel[1], tile.bounds_max_rel[1]];
-    let zs = [tile.bounds_min_rel[2], tile.bounds_max_rel[2]];
+    let xs = [bounds_min_rel[0], bounds_max_rel[0]];
+    let ys = [bounds_min_rel[1], bounds_max_rel[1]];
+    let zs = [bounds_min_rel[2], bounds_max_rel[2]];
     let mut corners = [[0.0_f64; 3]; 8];
     let mut idx = 0_usize;
     for &dx in &xs {
         for &dy in &ys {
             for &dz in &zs {
                 let rel_eye = [
-                    tile.anchor_enu[0] + f64::from(dx) - cam.eye_enu[0],
-                    tile.anchor_enu[1] + f64::from(dy) - cam.eye_enu[1],
-                    tile.anchor_enu[2] + f64::from(dz) - cam.eye_enu[2],
+                    anchor_enu[0] + f64::from(dx) - cam.eye_enu[0],
+                    anchor_enu[1] + f64::from(dy) - cam.eye_enu[1],
+                    anchor_enu[2] + f64::from(dz) - cam.eye_enu[2],
                 ];
                 corners[idx] = mat3_mul(&cam.world_to_cam, rel_eye);
                 idx += 1;

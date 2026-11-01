@@ -29,13 +29,23 @@ pub(super) fn record_odometry_step(
     );
 }
 
-pub(super) fn propagate_pose_from(
+pub(super) fn propagate_pose_from_calibrated(
     state: &TrackState,
     sent_frame_seq: usize,
     init_eye: [f64; 3],
     init_rot: Matrix3<f64>,
+    k_render: &Matrix3<f64>,
+    agl_m: f64,
+    profile: &VehicleDynamicsProfile,
 ) -> ([f64; 3], Matrix3<f64>) {
-    state.propagate_pose_from(sent_frame_seq, init_eye, init_rot)
+    state.propagate_pose_from_calibrated(
+        sent_frame_seq,
+        init_eye,
+        init_rot,
+        k_render,
+        agl_m,
+        profile,
+    )
 }
 
 pub(super) fn update_motion_state(

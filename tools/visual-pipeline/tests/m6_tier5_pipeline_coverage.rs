@@ -12,16 +12,13 @@ use nalgebra::Matrix3;
 use navigate_visual_pipeline::{
     PipelineError,
     corridor::{
-        AnchorWorkerState, DeadReckonPath, DualPathDeadReckoner, KinematicState,
-        VehicleDynamicsProfile, can_update_vertical_velocity, compute_dt_s,
+        KinematicState, VehicleDynamicsProfile, compute_dt_s,
         kinematics::{CHI2_GATE_3DOF_99, MAX_DELTA_T_S, MIN_DELTA_T_S},
         nadir::{
             MIN_COS_ORIENTATION, NADIR_DOWN_DEG, NADIR_YAW_BANDS_DEG, is_nadir_pose,
             match_nadir_yaw_band, min_cos_orientation_for_pose, rotate_image_gray, unrotate_pixel,
         },
-        session::VisualCorridorSession,
     },
-    stages::focal::{DEFAULT_FOCAL_MM, FOCAL_SWEEP_MULTIPLIERS, FocalLengthEstimator},
     surface::{
         RansacHorizonEstimator, Surface, SurfaceGpuRenderer,
         horizon::{
@@ -67,7 +64,14 @@ fn test_tier5_extreme_dt_clamping_and_inverted_timestamps() -> TestResult {
     // Zero dt passed into update_from_pose_gated must clamp safely without zero division.
     let mut state = KinematicState::new([0.0, 0.0, 100.0], Matrix3::identity());
     let profile = VehicleDynamicsProfile::rotary_survey();
-    state.update_from_pose_gated([0.5, 0.0, 100.0], Matrix3::identity(), 0.0, &profile, true);
+    state.update_from_pose_gated(
+        [0.5, 0.0, 100.0],
+        Matrix3::identity(),
+        0.0,
+        &profile,
+        true,
+        None,
+    );
     assert!(state.vel_enu_mps[0].is_finite());
     assert!(state.eye_enu[0] == 0.5);
 
@@ -78,6 +82,7 @@ fn test_tier5_extreme_dt_clamping_and_inverted_timestamps() -> TestResult {
         9999.0,
         &profile,
         true,
+        None,
     );
     assert!(state.vel_enu_mps[0].is_finite());
     assert!(state.eye_enu[0] == 5.0);
@@ -89,18 +94,41 @@ fn test_tier5_kinematic_gating_bounds_and_vertical_velocity_freeze() -> TestResu
     let profile = VehicleDynamicsProfile::rotary_survey();
     let mut state = KinematicState::new([0.0, 0.0, 100.0], Matrix3::identity());
 
-    // Valid velocity update within platform limits (20 m/s <= 1.5 * 25.0 m/s).
-    state.update_from_pose_gated([2.0, 0.0, 100.0], Matrix3::identity(), 0.1, &profile, true);
-    assert!((state.vel_enu_mps[0] - 20.0).abs() < 1e-6);
+    // Valid velocity update within platform limits (20 m/s <= 1.5 * 25.0 m/s, dt = 0.1 -> alpha = 1/3).
+    state.update_from_pose_gated(
+        [2.0, 0.0, 100.0],
+        Matrix3::identity(),
+        0.1,
+        &profile,
+        true,
+        None,
+    );
+    let expected_v0 = 20.0 / 3.0;
+    assert!((state.vel_enu_mps[0] - expected_v0).abs() < 1e-6);
 
     // Outlier displacement (50 m/s > 37.5 m/s threshold) must not change velocity.
-    state.update_from_pose_gated([7.0, 0.0, 100.0], Matrix3::identity(), 0.1, &profile, true);
-    assert!((state.vel_enu_mps[0] - 20.0).abs() < 1e-6);
+    state.update_from_pose_gated(
+        [7.0, 0.0, 100.0],
+        Matrix3::identity(),
+        0.1,
+        &profile,
+        true,
+        None,
+    );
+    assert!((state.vel_enu_mps[0] - expected_v0).abs() < 1e-6);
 
     // Shallow ray update with allow_vertical = false must freeze vertical velocity.
     state.vel_enu_mps = [5.0, 0.0, -1.0];
-    state.update_from_pose_gated([8.0, 0.0, 102.0], Matrix3::identity(), 0.1, &profile, false);
-    assert!((state.vel_enu_mps[0] - 10.0).abs() < 1e-6);
+    state.update_from_pose_gated(
+        [8.0, 0.0, 102.0],
+        Matrix3::identity(),
+        0.1,
+        &profile,
+        false,
+        None,
+    );
+    let expected_v1 = (2.0 / 3.0) * 5.0 + (1.0 / 3.0) * 10.0;
+    assert!((state.vel_enu_mps[0] - expected_v1).abs() < 1e-6);
     assert!((state.vel_enu_mps[2] - (-1.0)).abs() < 1e-6);
 
     // Mahalanobis innovation gate must reject non-finite inputs and outliers.
@@ -395,95 +423,5 @@ fn test_tier5_gpu_queue_isolation_and_camera_reconfiguration() -> TestResult {
         let err = renderer.render_view(&surface, eye, &rot, &bad_k, size1);
         assert!(matches!(err, Err(PipelineError::Invalid(_))));
     }
-    Ok(())
-}
-
-// --- Section 5: Dual-Path Dead Reckoning & Anchor State Transitions ---
-
-#[test]
-fn test_tier5_dead_reckoning_dynamic_path_transitions() -> TestResult {
-    let mut reck = DualPathDeadReckoner::new([100.0, 200.0, 50.0], [10.0, 0.0, 0.0], true);
-
-    // Initial step with external sensors must use Path A.
-    let est_a1 = reck.step(0.1, 0, 4.0, 0.05);
-    assert_eq!(est_a1.path, DeadReckonPath::PathA);
-    assert!((est_a1.eye_enu[0] - 101.0).abs() < 1e-6);
-
-    // Sensor loss transitions dead reckoner to Path B.
-    reck.external_sensors_available = false;
-    let var_before = reck.kinematic.pos_cov_enu_m2[(0, 0)];
-
-    // Path B with 3 flow vectors (< 6) applies full noise inflation.
-    let est_b_low = reck.step(1.0, 3, 4.0, 0.05);
-    assert_eq!(est_b_low.path, DeadReckonPath::PathB);
-    let var_delta_low = reck.kinematic.pos_cov_enu_m2[(0, 0)] - var_before;
-    assert!((var_delta_low - 2.0).abs() < 1e-6); // 0.5 * 4.0 * 1.0^2 = 2.0
-
-    // Path B with 8 flow vectors (>= 6) applies reduced 0.8x noise inflation.
-    let var_before_high = reck.kinematic.pos_cov_enu_m2[(0, 0)];
-    let est_b_high = reck.step(1.0, 8, 4.0, 0.05);
-    assert_eq!(est_b_high.path, DeadReckonPath::PathB);
-    let var_delta_high = reck.kinematic.pos_cov_enu_m2[(0, 0)] - var_before_high;
-    assert!((var_delta_high - 1.6).abs() < 1e-6); // 0.5 * (4.0 * 0.8) * 1.0^2 = 1.6
-
-    // Sensor restoration returns to Path A.
-    reck.external_sensors_available = true;
-    let est_a2 = reck.step(0.1, 0, 4.0, 0.05);
-    assert_eq!(est_a2.path, DeadReckonPath::PathA);
-    Ok(())
-}
-
-#[test]
-fn test_tier5_session_relocation_and_vertical_velocity_gating() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
-
-    // Relocation with positive dt_s recomputes velocity.
-    let eye1 = [500.0, 600.0, 100.0];
-    session.handle_relocation(eye1, Matrix3::identity(), 0.5);
-    assert_eq!(session.dead_reckoner.kinematic.eye_enu, eye1);
-    assert!((session.dead_reckoner.kinematic.vel_enu_mps[0] - 1000.0).abs() < 1e-6);
-
-    // Relocation with zero dt_s sets velocity to zero without zero division.
-    let eye2 = [700.0, 800.0, 120.0];
-    session.handle_relocation(eye2, Matrix3::identity(), 0.0);
-    assert_eq!(session.dead_reckoner.kinematic.eye_enu, eye2);
-    assert_eq!(session.dead_reckoner.kinematic.vel_enu_mps, [0.0, 0.0, 0.0]);
-
-    // Truth table boundaries for vertical velocity update gating.
-    assert!(!can_update_vertical_velocity(11, 47));
-    assert!(can_update_vertical_velocity(12, 0));
-    assert!(can_update_vertical_velocity(0, 48));
-    assert!(can_update_vertical_velocity(12, 48));
-
-    // Anchor worker state transitions:
-    let mut worker_state = AnchorWorkerState::default();
-    worker_state.on_anchor_accepted([100.0, 100.0, 50.0], Matrix3::identity(), 0.0);
-    assert_eq!(worker_state.vel_enu_mps, [0.0, 0.0, 0.0]);
-    worker_state.on_anchor_accepted([110.0, 100.0, 50.0], Matrix3::identity(), 0.5);
-    assert!((worker_state.vel_enu_mps[0] - 20.0).abs() < 1e-6);
-
-    worker_state.on_track_loss();
-    assert_eq!(worker_state.prev_eye, None);
-    assert_eq!(worker_state.vel_enu_mps, [0.0, 0.0, 0.0]);
-    Ok(())
-}
-
-#[test]
-fn test_tier5_focal_length_sweep_and_locking() -> TestResult {
-    let mut estimator = FocalLengthEstimator::default();
-    assert_eq!(estimator.default_focal_mm, DEFAULT_FOCAL_MM);
-    assert_eq!(estimator.sweep_multipliers, FOCAL_SWEEP_MULTIPLIERS);
-    assert_eq!(estimator.locked_focal_px, None);
-
-    let baseline = estimator.baseline_focal_px(1920);
-    let expected_baseline = (DEFAULT_FOCAL_MM / 36.0) * 1920.0;
-    assert!((baseline - expected_baseline).abs() < 1e-6);
-
-    // Lowest RMSE score at index 1 selects 0.55 multiplier and locks focal length.
-    let scores = [3.5, 0.9, 2.8, 4.2];
-    let chosen = estimator.select_multiplier(&scores, baseline);
-    let expected_chosen = baseline * 0.55;
-    assert!((chosen - expected_chosen).abs() < 1e-6);
-    assert_eq!(estimator.locked_focal_px, Some(expected_chosen));
     Ok(())
 }

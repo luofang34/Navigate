@@ -441,17 +441,17 @@ fn test_non_finite_coordinates_rejection_without_panic() -> TestResult {
 fn test_holdout_reprojection_rmse_gating_and_fallback() -> TestResult {
     let cfg = PhysicalPlausibilityConfig::default();
 
-    // Exactly 4.0 px passes
-    assert!(verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 4.0, &cfg).is_ok());
+    // Exactly 5.25 px passes
+    assert!(verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 5.25, &cfg).is_ok());
 
-    // Epsilon below (3.9999 px) passes
-    assert!(verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 3.9999, &cfg).is_ok());
+    // Epsilon below (5.2499 px) passes
+    assert!(verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 5.2499, &cfg).is_ok());
 
-    // Epsilon above (4.0001 px) fails with ExcessiveReprojectionError
-    let res_above = verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 4.0001, &cfg);
+    // Epsilon above (5.2501 px) fails with ExcessiveReprojectionError
+    let res_above = verify_physical_plausibility(500.0, 0.0, 0.99, 1e-4, 5.2501, &cfg);
     assert!(
-        matches!(res_above, Err(PlausibilityError::ExcessiveReprojectionError { rmse_px }) if (rmse_px - 4.0001).abs() < 1e-6),
-        "RMSE = 4.0001 px must fail with ExcessiveReprojectionError"
+        matches!(res_above, Err(PlausibilityError::ExcessiveReprojectionError { rmse_px }) if (rmse_px - 5.2501).abs() < 1e-6),
+        "RMSE = 5.2501 px must fail with ExcessiveReprojectionError"
     );
 
     // Empirical compute_holdout_rmse_px fallback when no holdout points exist

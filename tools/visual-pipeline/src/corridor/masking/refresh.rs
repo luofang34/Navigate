@@ -101,13 +101,14 @@ impl Refresher {
         rgb: &RgbImage,
         cur_rot: Option<&Matrix3<f64>>,
         interval: usize,
+        allow_submit: bool,
     ) -> Result<RefreshStep, PipelineError> {
         key.role = KeyRole::Earlier;
         let dims = [rgb.width(), rgb.height()];
         let mut step = RefreshStep::default();
         match self {
             Self::Inline(engine) => {
-                if !key.usable(dims) || key.frames_since_refresh >= interval {
+                if !key.usable(dims) || (allow_submit && key.frames_since_refresh >= interval) {
                     let layers = engine.refresh(rgb)?;
                     step = installed(key, layers, cur_rot.copied(), 1);
                     key.role = KeyRole::Current;
@@ -141,7 +142,8 @@ impl Refresher {
                     if !step.refreshed {
                         key.frames_since_refresh += 1;
                     }
-                    if pending.is_none()
+                    if allow_submit
+                        && pending.is_none()
                         && key.role != KeyRole::Current
                         && key.frames_since_refresh >= interval
                     {

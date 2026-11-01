@@ -7,7 +7,16 @@ use crate::{
 };
 use nalgebra::Matrix3;
 use serde_json::{Value, json};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
+
+const REFERENCE_FETCH_THREADS: usize = 16;
 
 /// Primary detail surface backed by a regional context surface for distant horizon rays.
 #[derive(Clone, Debug)]
@@ -133,7 +142,7 @@ pub fn build_reference_catalog_zoom(
         source,
     })?;
 
-    let mut tiles = Vec::new();
+    let mut work_items: Vec<(&str, u32, u32, u32, String, PathBuf, String)> = Vec::new();
     for (kind, zoom, tmpl, ext) in [
         ("imagery", imagery_zoom, imagery_url_template, "jpg"),
         ("dem", dem_zoom, dem_url_template, "png"),
@@ -148,19 +157,79 @@ pub fn build_reference_catalog_zoom(
                     .replace("{z}", &zoom.to_string())
                     .replace("{x}", &x.to_string())
                     .replace("{y}", &y.to_string());
-                fetch_tile(&url, &dst, cache_dir, &rel)?;
-                let bytes =
-                    fs::read(&dst).map_err(|source| PipelineError::Io { path: dst, source })?;
-                tiles.push(CatalogTile {
-                    kind: kind.into(),
-                    xyz: [zoom, x, y],
-                    path: rel,
-                    sha256: bytes_sha256(&bytes),
-                    bytes: bytes.len(),
-                    url,
-                });
+                work_items.push((kind, zoom, x, y, rel, dst, url));
             }
         }
+    }
+
+    let total_items = work_items.len();
+    let worker_count = total_items.clamp(1, REFERENCE_FETCH_THREADS);
+    let next_idx = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let results: Mutex<Vec<Option<CatalogTile>>> = Mutex::new(vec![None; total_items]);
+    let first_err: Mutex<Option<PipelineError>> = Mutex::new(None);
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| {
+                loop {
+                    if failed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                    if idx >= total_items {
+                        break;
+                    }
+                    let (kind, zoom, x, y, rel, dst, url) = &work_items[idx];
+                    let outcome = fetch_tile(url, dst, cache_dir, rel).and_then(|()| {
+                        let bytes = fs::read(dst).map_err(|source| PipelineError::Io {
+                            path: dst.clone(),
+                            source,
+                        })?;
+                        Ok(CatalogTile {
+                            kind: (*kind).into(),
+                            xyz: [*zoom, *x, *y],
+                            path: rel.clone(),
+                            sha256: bytes_sha256(&bytes),
+                            bytes: bytes.len(),
+                            url: url.clone(),
+                        })
+                    });
+                    match outcome {
+                        Ok(tile) => {
+                            if let Ok(mut guard) = results.lock() {
+                                guard[idx] = Some(tile);
+                            }
+                        }
+                        Err(err) => {
+                            failed.store(true, Ordering::Relaxed);
+                            if let Ok(mut guard) = first_err.lock()
+                                && guard.is_none()
+                            {
+                                *guard = Some(err);
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(err) = first_err
+        .into_inner()
+        .map_err(|_| PipelineError::Invalid("tile worker error mutex poisoned".into()))?
+    {
+        return Err(err);
+    }
+    let slots = results
+        .into_inner()
+        .map_err(|_| PipelineError::Invalid("tile worker results mutex poisoned".into()))?;
+    let mut tiles = Vec::with_capacity(total_items);
+    for slot in slots {
+        let tile =
+            slot.ok_or_else(|| PipelineError::Invalid("incomplete tile worker result".into()))?;
+        tiles.push(tile);
     }
     let catalog = json!({
         "format": "photo-reference-catalog",

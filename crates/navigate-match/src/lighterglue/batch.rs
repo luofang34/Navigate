@@ -15,6 +15,7 @@ use navigate_visual::PixelMatch;
 
 const MIN_EARLY_EXIT_MATCHES: usize = 16;
 const PAD_LOGIT_MASK: f32 = -1.0e9;
+const TOKEN_ALIGN: usize = if cfg!(debug_assertions) { 32 } else { 256 };
 
 struct BatchRefSlot<'a> {
     out_idx: usize,
@@ -58,13 +59,23 @@ impl LighterGlue {
         if references.is_empty() {
             return Ok(Vec::new());
         }
-        if let [single] = references {
+        if let [single] = references
+            && (config.prune_after_layer.is_some() || config.exit_check_layers != 0)
+        {
             return Ok(vec![
                 self.match_features_indexed_fast(single, query, config)
                     .await?,
             ]);
         }
+        self.match_batch_padded(references, query, config).await
+    }
 
+    pub(super) async fn match_batch_padded(
+        &self,
+        references: &[&SparseFeatures],
+        query: &SparseFeatures,
+        config: &FastMatchConfig,
+    ) -> Result<Vec<(Vec<IndexedMatch>, FastMatchStats)>, MatchError> {
         let (kp_q, desc_q, idx_q) = select_input(query, config.max_keypoints)?;
         let m = idx_q.len();
         let mut out: Vec<Option<(Vec<IndexedMatch>, FastMatchStats)>> =
@@ -102,33 +113,45 @@ impl LighterGlue {
             return Ok(out.into_iter().flatten().collect());
         }
 
-        let mut kp_batch = vec![0.0_f32; batch * max_n * 2];
-        let mut desc_batch = vec![0.0_f32; batch * max_n * INPUT_DIM];
-        let mut mask_vals = vec![0.0_f32; batch * max_n];
-        let mut has_padding = false;
+        let pad_n = max_n.div_ceil(TOKEN_ALIGN).max(1) * TOKEN_ALIGN;
+        let pad_m = m.div_ceil(TOKEN_ALIGN).max(1) * TOKEN_ALIGN;
+
+        let mut kp_batch = vec![0.0_f32; batch * pad_n * 2];
+        let mut desc_batch = vec![0.0_f32; batch * pad_n * INPUT_DIM];
+        let mut mask_a_vals = vec![0.0_f32; batch * pad_n];
 
         for (b, ((kp_r, desc_r), slot)) in selected_refs.into_iter().zip(&slots).enumerate() {
             let n = slot.indices.len();
-            kp_batch[b * max_n * 2..b * max_n * 2 + n * 2].copy_from_slice(&kp_r);
-            desc_batch[b * max_n * INPUT_DIM..b * max_n * INPUT_DIM + n * INPUT_DIM]
+            kp_batch[b * pad_n * 2..b * pad_n * 2 + n * 2].copy_from_slice(&kp_r);
+            desc_batch[b * pad_n * INPUT_DIM..b * pad_n * INPUT_DIM + n * INPUT_DIM]
                 .copy_from_slice(&desc_r);
-            if n < max_n {
-                has_padding = true;
-                mask_vals[b * max_n + n..(b + 1) * max_n].fill(PAD_LOGIT_MASK);
+            if n < pad_n {
+                mask_a_vals[b * pad_n + n..(b + 1) * pad_n].fill(PAD_LOGIT_MASK);
             }
         }
 
-        let key_mask = has_padding.then(|| upload(mask_vals, [batch, 1, max_n], &self.device));
+        let mut kp_q_pad = vec![0.0_f32; pad_m * 2];
+        let mut desc_q_pad = vec![0.0_f32; pad_m * INPUT_DIM];
+        let mut mask_b_vals = vec![0.0_f32; pad_m];
+        kp_q_pad[..m * 2].copy_from_slice(&kp_q);
+        desc_q_pad[..m * INPUT_DIM].copy_from_slice(&desc_q);
+        if m < pad_m {
+            mask_b_vals[m..pad_m].fill(PAD_LOGIT_MASK);
+        }
+
+        let a_key_mask = Some(upload(mask_a_vals, [batch, 1, pad_n], &self.device));
+        let b_key_mask =
+            Some(upload(mask_b_vals, [1, 1, pad_m], &self.device).repeat_dim(0, batch));
         let mut a =
             self.input_proj
-                .forward(upload(desc_batch, [batch, max_n, INPUT_DIM], &self.device));
+                .forward(upload(desc_batch, [batch, pad_n, INPUT_DIM], &self.device));
         let (cos_a, sin_a) =
-            self.encoding(upload(kp_batch, [batch, max_n, 2], &self.device), max_n);
+            self.encoding(upload(kp_batch, [batch, pad_n, 2], &self.device), pad_n);
 
         let b0 = self
             .input_proj
-            .forward(upload(desc_q, [1, m, INPUT_DIM], &self.device));
-        let (cos_b0, sin_b0) = self.encoding(upload(kp_q, [1, m, 2], &self.device), m);
+            .forward(upload(desc_q_pad, [1, pad_m, INPUT_DIM], &self.device));
+        let (cos_b0, sin_b0) = self.encoding(upload(kp_q_pad, [1, pad_m, 2], &self.device), pad_m);
         let mut b_tok = b0.repeat_dim(0, batch);
         let cos_b = cos_b0.repeat_dim(0, batch);
         let sin_b = sin_b0.repeat_dim(0, batch);
@@ -136,9 +159,14 @@ impl LighterGlue {
         for (idx, layer) in self.layers.iter().take(config.max_layers).enumerate() {
             a = layer
                 .self_attn
-                .forward(a, &cos_a, &sin_a, key_mask.as_ref());
-            b_tok = layer.self_attn.forward(b_tok, &cos_b, &sin_b, None);
-            (a, b_tok) = layer.cross_attn.forward(a, b_tok, key_mask.as_ref());
+                .forward(a, &cos_a, &sin_a, a_key_mask.as_ref());
+            b_tok = layer
+                .self_attn
+                .forward(b_tok, &cos_b, &sin_b, b_key_mask.as_ref());
+            (a, b_tok) =
+                layer
+                    .cross_attn
+                    .forward(a, b_tok, a_key_mask.as_ref(), b_key_mask.as_ref());
 
             let done = idx + 1;
             let check_exit = done >= config.min_layers
@@ -149,10 +177,11 @@ impl LighterGlue {
                     .eval_batch_head(
                         &a,
                         &b_tok,
-                        key_mask.as_ref(),
+                        a_key_mask.as_ref(),
+                        b_key_mask.as_ref(),
                         &slots,
                         (&idx_q, &query.pixels),
-                        (max_n, m),
+                        (pad_n, pad_m, m),
                         config.score_threshold,
                     )
                     .await?;
@@ -188,10 +217,11 @@ impl LighterGlue {
             .eval_batch_head(
                 &a,
                 &b_tok,
-                key_mask.as_ref(),
+                a_key_mask.as_ref(),
+                b_key_mask.as_ref(),
                 &slots,
                 (&idx_q, &query.pixels),
-                (max_n, m),
+                (pad_n, pad_m, m),
                 config.score_threshold,
             )
             .await?;
@@ -218,20 +248,22 @@ impl LighterGlue {
         &self,
         a: &Tensor<3>,
         b: &Tensor<3>,
-        key_mask: Option<&Tensor<3>>,
+        a_key_mask: Option<&Tensor<3>>,
+        b_key_mask: Option<&Tensor<3>>,
         slots: &[BatchRefSlot<'_>],
         (idx_q, qry_pixels): (&[usize], &[[f64; 2]]),
-        (max_n, m): (usize, usize),
+        (pad_n, pad_m, m): (usize, usize, usize),
         threshold: f32,
     ) -> Result<Vec<Vec<IndexedMatch>>, MatchError> {
         let batch = slots.len();
-        let (scores, _, _) = self.assignment_with_logits(a.clone(), b.clone(), key_mask);
+        let (scores, _, _) =
+            self.assignment_with_logits(a.clone(), b.clone(), a_key_mask, b_key_mask);
         let (row_max, row_argmax) = scores.clone().max_dim_with_indices(2);
         let (_, col_argmax) = scores.max_dim_with_indices(1);
         let data = Transaction::default()
-            .register(row_max.reshape([batch * max_n]))
-            .register(row_argmax.reshape([batch * max_n]))
-            .register(col_argmax.reshape([batch * m]))
+            .register(row_max.reshape([batch * pad_n]))
+            .register(row_argmax.reshape([batch * pad_n]))
+            .register(col_argmax.reshape([batch * pad_m]))
             .execute_async()
             .await
             .map_err(|error| MatchError::Device {
@@ -247,8 +279,8 @@ impl LighterGlue {
         let mut results = Vec::with_capacity(batch);
         for (item, slot) in slots.iter().enumerate() {
             let n = slot.indices.len();
-            let r_off = item * max_n;
-            let c_off = item * m;
+            let r_off = item * pad_n;
+            let c_off = item * pad_m;
             results.push(decode_mutual(
                 &all_row_scores[r_off..r_off + n],
                 &all_row_indices[r_off..r_off + n],

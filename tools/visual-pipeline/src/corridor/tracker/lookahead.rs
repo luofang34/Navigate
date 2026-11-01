@@ -2,26 +2,188 @@
 
 use super::super::{
     CorridorTrackOptions,
-    admission::apply_case_overrides,
+    admission::{apply_case_overrides, estimate_lookahead_enu},
+    anchor::multitier::SearchTierMatcher,
+    anchor_worker::{AnchorContext, AnchorOutcome, BackgroundAnchor},
     kinematics::{VehicleDynamicsProfile, compute_dt_s},
     motion::TrackState,
-    tile_builder::{BackgroundTileBuilder, TileSynthParams, synthesize_corridor_tiles},
+    tile_builder::{
+        BackgroundTileBuilder, TileBuilderContext, TileSynthParams, synthesize_corridor_tiles,
+    },
 };
 use super::solve::tracking_render_size;
 use crate::{
     PipelineError,
+    realtime::helpers::rot_to_row_major,
     stages::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator,
         has_calibrated_focal_prior, scale_k,
     },
+    surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     util::parse_iso8601_ms,
     xfeat_runtime::LoadedXFeat,
 };
-use navigate_match::{CorridorTileStore, HadamardProjector};
+use navigate_match::{CorridorTileStore, HadamardProjector, LighterGlue, VirtualViewCamera};
 use navigate_visual::CameraModel;
-use std::{sync::Mutex, time::Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
+pub(super) struct CorridorRuntimeWorkers {
+    pub sync_gpu_renderer: Mutex<Option<SurfaceGpuRenderer>>,
+    pub tile_params: TileSynthParams,
+    pub background_anchor: Option<BackgroundAnchor>,
+    pub tile_builder: Option<BackgroundTileBuilder>,
+    pub shader_warmup_ms: f64,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "worker startup binds GPU renderer, neural models, tile store, and corridor options"
+)]
+pub(super) fn spawn_corridor_workers(
+    surface: &Arc<Surface>,
+    store: &Arc<CorridorTileStore>,
+    projector: HadamardProjector,
+    xfeat: &LoadedXFeat,
+    lighterglue: Option<&LighterGlue>,
+    search_tier_matcher: Option<&Arc<SearchTierMatcher>>,
+    cases: &[PhotoCase],
+    opts: &CorridorTrackOptions,
+) -> Result<CorridorRuntimeWorkers, PipelineError> {
+    let first_eff = cases.first().map(|c| apply_case_overrides(c, opts));
+    let init_rs = first_eff
+        .as_ref()
+        .map_or([800, 600], |c| tracking_render_size(c.size));
+    let init_k = first_eff.as_ref().map_or_else(
+        || nalgebra::Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0),
+        |c| {
+            let kf = estimate_intrinsics_with_estimator(c, &FocalLengthEstimator::default());
+            let sx = f64::from(init_rs[0]) / f64::from(c.size[0].max(1));
+            let sy = f64::from(init_rs[1]) / f64::from(c.size[1].max(1));
+            scale_k(&kf, sx, sy)
+        },
+    );
+    let init_prior_pose = first_eff
+        .as_ref()
+        .and_then(|c| c.prior.as_ref())
+        .and_then(|p| {
+            let pos = p.position.as_ref()?;
+            let dem = surface
+                .sample_dem(pos.latitude, pos.longitude)
+                .unwrap_or(0.0);
+            let alt = pos.altitude_m.unwrap_or(dem + 120.0).max(dem + 25.0);
+            let hdg = p.direction_deg.filter(|d| d.is_finite()).unwrap_or(0.0);
+            let pitch = if alt - dem <= 250.0 { 88.0 } else { 15.0 };
+            Some((
+                surface.local(pos.latitude, pos.longitude, alt),
+                surface.camera_rotation(pos.latitude, pos.longitude, hdg, pitch, 0.0),
+            ))
+        });
+    let t_warmup = Instant::now();
+    let _ = xfeat.warmup(lighterglue)?;
+    if let Some((eye, rot)) = init_prior_pose {
+        store
+            .project_virtual_kashin(&VirtualViewCamera {
+                eye_enu: eye,
+                world_to_cam: rot_to_row_major(&rot),
+                intrinsics: [
+                    init_k[(0, 0)],
+                    init_k[(1, 1)],
+                    init_k[(0, 2)],
+                    init_k[(1, 2)],
+                ],
+                image_size: init_rs,
+                max_landmarks: 256,
+                min_cos_incidence: 0.45,
+                min_cos_orientation: -1.0,
+            })
+            .ok();
+    }
+    let sync_gpu = (!opts.background_refresh && opts.polish_anchors)
+        .then(|| {
+            let mut g = SurfaceGpuRenderer::try_new_with_role(
+                surface,
+                &init_k,
+                init_rs,
+                GpuQueueRole::ForegroundTracking,
+            )?;
+            if let Some((eye, ref rot)) = init_prior_pose {
+                g.render_view(surface, eye, rot, &init_k, init_rs).ok();
+            }
+            Some(g)
+        })
+        .flatten();
+    let sync_gpu_renderer = Mutex::new(sync_gpu);
+    let tile_params = TileSynthParams {
+        tile_m: f64::from(store.tile_size_m.max(10.0)),
+        agl_m: 480.0,
+        max_per_tile: 4096,
+        stride: 4,
+        include_obliques: !cfg!(debug_assertions),
+    };
+    let need_live_tiles = cases.iter().any(|c| {
+        estimate_lookahead_enu(surface, &TrackState::new(), &apply_case_overrides(c, opts))
+            .is_some_and(|la| !store.has_tile(store.tile_key_at(la[0], la[1])))
+    });
+    let background_anchor = opts
+        .background_refresh
+        .then(|| {
+            let init_gpu = opts
+                .polish_anchors
+                .then(|| {
+                    let mut g = SurfaceGpuRenderer::try_new_with_role(
+                        surface,
+                        &init_k,
+                        init_rs,
+                        GpuQueueRole::BackgroundAnchor,
+                    )?;
+                    if let Some((eye, ref rot)) = init_prior_pose {
+                        g.render_view(surface, eye, rot, &init_k, init_rs).ok();
+                    }
+                    Some(g)
+                })
+                .flatten();
+            BackgroundAnchor::spawn(
+                AnchorContext {
+                    surface: Arc::clone(surface),
+                    store: Arc::clone(store),
+                    projector,
+                    xfeat: xfeat.clone(),
+                    lighterglue: lighterglue.cloned(),
+                    search_tier_matcher: search_tier_matcher.cloned(),
+                    opts: opts.clone(),
+                },
+                init_gpu,
+            )
+        })
+        .transpose()?;
+    let tile_builder = opts
+        .background_refresh
+        .then(|| {
+            BackgroundTileBuilder::spawn(
+                TileBuilderContext {
+                    surface: Arc::clone(surface),
+                    store: Arc::clone(store),
+                    projector,
+                    xfeat: xfeat.clone(),
+                    params: tile_params,
+                },
+                need_live_tiles,
+            )
+        })
+        .transpose()?;
+    Ok(CorridorRuntimeWorkers {
+        sync_gpu_renderer,
+        tile_params,
+        background_anchor,
+        tile_builder,
+        shader_warmup_ms: t_warmup.elapsed().as_secs_f64() * 1000.0,
+    })
+}
 
 /// Initialize session camera calibration and map cell size from the first case.
 pub(super) fn init_tracker_session(
@@ -90,6 +252,32 @@ pub(super) fn should_wait_cold_anchor(
         .zip(state.prev_time_s)
         .is_some_and(|(cur, prev)| cur >= prev && (cur - prev) <= 1.0);
     continuous_video && (evaluated <= 16 || evaluated.is_multiple_of(15))
+}
+
+/// Poll or wait on `background_anchor` before frame feature extraction and lock focal length early.
+pub(super) fn poll_anchor_before_frame(
+    background_anchor: &mut Option<BackgroundAnchor>,
+    focal_estimator: &mut FocalLengthEstimator,
+    pace_realtime: bool,
+    evaluated: usize,
+    raw_case: &PhotoCase,
+    state: &TrackState,
+) -> Result<Option<AnchorOutcome>, PipelineError> {
+    let outcome = if should_wait_cold_anchor(pace_realtime, evaluated, raw_case, state)
+        && let Some(worker) = background_anchor.as_mut()
+    {
+        worker.wait_for_shutdown()?
+    } else if let Some(worker) = background_anchor.as_mut() {
+        worker.poll()?
+    } else {
+        None
+    };
+    if let Some(ref done) = outcome
+        && let Some(locked) = done.locked_focal_px
+    {
+        focal_estimator.locked_focal_px = Some(locked);
+    }
+    Ok(outcome)
 }
 
 /// Resolve capture time in seconds from `time_s` or ISO-8601 `prior.capture_time`.

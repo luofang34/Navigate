@@ -8,6 +8,26 @@ use nalgebra::{Matrix3, Matrix4, Rotation3, Vector3, Vector4};
 const MIN_DEPTH_M: f64 = 4.5;
 const MIN_PIXEL_SEP_PX: f64 = 24.0;
 
+/// Deterministically draw six indices from `indices` using xorshift64*.
+pub(super) fn sample_six(indices: &[usize], seed: u64) -> [usize; 6] {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
+    let mut picked = [indices[0]; 6];
+    let mut count = 0usize;
+    let mut guard = 0usize;
+    while count < 6 && guard < 128 {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let idx = indices[(state.wrapping_mul(0x2545_F491_4F6C_DD1D) as usize) % indices.len()];
+        if !picked[..count].contains(&idx) || indices.len() < 6 {
+            picked[count] = idx;
+            count += 1;
+        }
+        guard += 1;
+    }
+    picked
+}
+
 /// Compute a world-to-camera rotation matrix aligning two world rays to two unit camera rays.
 #[must_use]
 pub(super) fn triad_rotation(

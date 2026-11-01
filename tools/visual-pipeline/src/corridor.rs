@@ -177,7 +177,8 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         .transpose()?
         .unwrap_or_default();
 
-    let mut tile_keys = select_corridor_tiles(&surface, &cases, tile_m, opts.corridor_radius_m);
+    let mut tile_keys =
+        select_corridor_tiles(&surface, &cases, tile_m, opts.corridor_radius_m, agl_m);
     tile_keys.sort_by_key(|&(tx, ty)| ((tx.div_euclid(16), ty.div_euclid(16)), tx, ty));
     let prior_points_enu: Vec<[f64; 2]> = cases
         .iter()
@@ -217,7 +218,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
             || prior_points_enu
                 .iter()
                 .any(|p| (ce - p[0]).powi(2) + (cn - p[1]).powi(2) <= nadir_rot_radius_sq);
-        let want_rotated_nadir = !opts.include_obliques || near_prior;
+        let want_rotated_nadir = !opts.include_obliques;
         let dense_nadir = !opts.include_obliques && near_prior;
 
         let views = canonical_tile_poses(

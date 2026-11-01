@@ -137,17 +137,18 @@ fn test_high_speed_and_acceleration_dynamics_profiles() -> TestResult {
     assert!(filter_gate >= clamp_gate);
     assert!((5.0..=1000.0).contains(&clamp_gate));
 
-    // Velocity update gating under high performance envelope
+    // Velocity update gating and exponential smoothing (dt = 0.1 -> alpha = 0.1 / 0.3 = 1/3)
     let mut state = KinematicState::new([0.0, 0.0, 100.0], Matrix3::identity());
     let reasonable_new_eye = [700.0 * 0.1, 0.0, 100.0];
     state.update_from_pose(reasonable_new_eye, Matrix3::identity(), 0.1, &hp);
-    assert!((state.vel_enu_mps[0] - 700.0).abs() < 1e-6);
+    let expected_v0 = 700.0 / 3.0;
+    assert!((state.vel_enu_mps[0] - expected_v0).abs() < 1e-6);
 
     // Extreme teleportation (> 1.5 * max_speed) is filtered from velocity absorption
     let teleport_eye = [reasonable_new_eye[0] + 5000.0, 0.0, 100.0];
     state.update_from_pose(teleport_eye, Matrix3::identity(), 0.1, &hp);
-    // Velocity remains 700 m/s because 50,000 m/s candidate was filtered
-    assert!((state.vel_enu_mps[0] - 700.0).abs() < 1e-6);
+    // Velocity remains unchanged because 50,000 m/s candidate was filtered
+    assert!((state.vel_enu_mps[0] - expected_v0).abs() < 1e-6);
 
     Ok(())
 }

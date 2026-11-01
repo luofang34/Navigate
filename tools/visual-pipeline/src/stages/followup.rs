@@ -6,6 +6,7 @@ pub use bundle::run_terrain_bundle_stage;
 
 use super::{
     AnchorPoseMap, MatchStageOptions, PipelinePass, collect_parent_anchors, estimate_intrinsics,
+    gpu_match::{AnchorDepthBuffer, StageTerrainRenderer, TerrainMatchQuery},
     load_case_mask, load_case_rgb, load_profile_cases, mask_allows, run_match_stage, scale_k,
     scaled_size, write_case_report,
 };
@@ -17,7 +18,7 @@ use crate::{
     testset::{FlightGroup, PhotoCase},
     util::{parse_iso8601_ms, read_json, write_json},
 };
-use image::{RgbImage, imageops::FilterType};
+use image::{DynamicImage, GrayImage, imageops::FilterType};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -25,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-type CachedAnchorRender = (RgbImage, Vec<f32>, Vec<[f64; 3]>, [u32; 2]);
+type CachedAnchorRender = (GrayImage, AnchorDepthBuffer);
 
 pub(super) fn load_flight_group_map(dataset_dir: &Path) -> HashMap<String, usize> {
     let mut map = HashMap::new();
@@ -142,6 +143,7 @@ pub fn run_track_stage(
         primary,
         context: None,
     };
+    let mut terrain_renderer = StageTerrainRenderer::new(&surface);
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
         source,
@@ -175,6 +177,7 @@ pub fn run_track_stage(
         let qx_s = f64::from(q_sz[0]) / f64::from(case.size[0].max(1));
         let qy_s = f64::from(q_sz[1]) / f64::from(case.size[1].max(1));
         let q_small = image::imageops::resize(&qry_rgb, q_sz[0], q_sz[1], FilterType::Triangle);
+        let q_small_gray = DynamicImage::ImageRgb8(q_small).into_luma8();
 
         let ranked_anchors =
             rank_neighbor_anchors(case, &cases_by_id, &group_map, &anchors, &surface.primary);
@@ -189,34 +192,35 @@ pub fn run_track_stage(
                 let render_sz = scaled_size(*a_size, 640);
                 let sx = f64::from(render_sz[0]) / f64::from(a_size[0].max(1));
                 let sy = f64::from(render_sz[1]) / f64::from(a_size[1].max(1));
-                let (_, a_depth, a_pts) =
-                    surface.render(*a_eye, a_rot, &scale_k(a_k, sx, sy), render_sz);
+                let a_depth = terrain_renderer.render_anchor_depth(
+                    &surface,
+                    *a_eye,
+                    a_rot,
+                    &scale_k(a_k, sx, sy),
+                    render_sz,
+                );
                 let a_small = image::imageops::resize(
                     &anchor_rgb,
                     render_sz[0],
                     render_sz[1],
                     FilterType::Triangle,
                 );
-                anchor_cache.insert(anchor_id.clone(), (a_small, a_depth, a_pts, render_sz));
+                let a_small_gray = DynamicImage::ImageRgb8(a_small).into_luma8();
+                anchor_cache.insert(anchor_id.clone(), (a_small_gray, a_depth));
             }
-            let (a_small, a_depth, a_pts, render_sz) = &anchor_cache[anchor_id.as_str()];
+            let (a_small_gray, a_depth) = &anchor_cache[anchor_id.as_str()];
 
-            let matches = matcher.match_rgb(a_small, &q_small)?;
+            let matches = matcher.match_gray(a_small_gray, &q_small_gray)?;
             let mut world_pts = Vec::new();
             let mut img_px = Vec::new();
             for m in &matches {
-                let rx =
-                    (m.reference.x.round() as i64).clamp(0, i64::from(render_sz[0]) - 1) as u32;
-                let ry =
-                    (m.reference.y.round() as i64).clamp(0, i64::from(render_sz[1]) - 1) as u32;
-                let idx = (ry * render_sz[0] + rx) as usize;
-                if a_depth[idx] <= 0.5 {
-                    continue;
-                }
                 let qx = m.query.x / qx_s;
                 let qy = m.query.y / qy_s;
-                if mask_allows(&valid_mask, case.size, qx, qy) {
-                    world_pts.push(a_pts[idx]);
+                if mask_allows(&valid_mask, case.size, qx, qy)
+                    && let Some(w) =
+                        a_depth.unproject(&surface.primary, m.reference.x, m.reference.y)
+                {
+                    world_pts.push(w);
                     img_px.push([qx, qy]);
                 }
             }
@@ -272,6 +276,7 @@ pub fn run_refine_stage(
         primary,
         context: None,
     };
+    let mut terrain_renderer = StageTerrainRenderer::new(&surface);
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
         source,
@@ -295,35 +300,36 @@ pub fn run_refine_stage(
         };
         let qry_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
         let valid_mask = load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size)?;
+        let rsz = scaled_size(case.size, 800);
+        let k_sx = f64::from(rsz[0]) / f64::from(a_size[0].max(1));
+        let k_sy = f64::from(rsz[1]) / f64::from(a_size[1].max(1));
+        let k_rsz = scale_k(&a_k, k_sx, k_sy);
+        let q_sx = f64::from(rsz[0]) / f64::from(case.size[0].max(1));
+        let q_sy = f64::from(rsz[1]) / f64::from(case.size[1].max(1));
+        let q_small = image::imageops::resize(&qry_rgb, rsz[0], rsz[1], FilterType::Triangle);
+        let q_small_gray = DynamicImage::ImageRgb8(q_small.clone()).into_luma8();
         let mut best: Option<(usize, usize, PoseCandidate)> = None;
         let mut attempts_log = Vec::new();
         for step in 0..opts.steps.max(2) {
-            let rsz = scaled_size(case.size, 800);
-            let k_sx = f64::from(rsz[0]) / f64::from(a_size[0].max(1));
-            let k_sy = f64::from(rsz[1]) / f64::from(a_size[1].max(1));
-            let k_rsz = scale_k(&a_k, k_sx, k_sy);
-            let q_sx = f64::from(rsz[0]) / f64::from(case.size[0].max(1));
-            let q_sy = f64::from(rsz[1]) / f64::from(case.size[1].max(1));
-            let (ref_rgb, ref_depth, ref_pts) = surface.render(eye, &rot, &k_rsz, rsz);
-            let q_small = image::imageops::resize(&qry_rgb, rsz[0], rsz[1], FilterType::Triangle);
-            let matches = matcher.match_rgb(&ref_rgb, &q_small)?;
-            let mut wpts = Vec::new();
-            let mut ipx = Vec::new();
-            for m in &matches {
-                let rx = (m.reference.x.round() as i64).clamp(0, i64::from(rsz[0]) - 1) as u32;
-                let ry = (m.reference.y.round() as i64).clamp(0, i64::from(rsz[1]) - 1) as u32;
-                let idx = (ry * rsz[0] + rx) as usize;
-                let qx_full = m.query.x / q_sx;
-                let qy_full = m.query.y / q_sy;
-                if ref_depth[idx] > 0.5 && mask_allows(&valid_mask, case.size, qx_full, qy_full) {
-                    wpts.push(ref_pts[idx]);
-                    ipx.push([m.query.x, m.query.y]);
-                }
-            }
+            let (raw_pairs, wpts, ipx) = terrain_renderer.match_view(
+                &surface,
+                &TerrainMatchQuery {
+                    eye,
+                    rot: &rot,
+                    k_render: &k_rsz,
+                    render_size: rsz,
+                    qry_small_rgb: &q_small,
+                    qry_small_gray: &q_small_gray,
+                    valid_mask: &valid_mask,
+                    full_size: case.size,
+                    q_scale: [q_sx, q_sy],
+                },
+                matcher,
+            )?;
             let Some(cand) = fit_pose_ransac(&wpts, &ipx, &k_rsz, rsz, Some((eye, rot))) else {
                 attempts_log.push(json!({
                     "step": step,
-                    "raw_pairs": matches.len(),
+                    "raw_pairs": raw_pairs,
                     "pairs": wpts.len(),
                     "inliers": 0,
                     "geometry_accepted": false,

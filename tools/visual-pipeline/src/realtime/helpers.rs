@@ -30,7 +30,10 @@ pub(crate) fn polish_pose_sparse(
     k_render: &Matrix3<f64>,
     render_size: [u32; 2],
 ) -> Result<Option<(PoseCandidate, usize, usize)>, PipelineError> {
-    let kp_cap = qry_feat.len().clamp(1536, 4096);
+    if !pose.0.iter().all(|v| v.is_finite()) || pose.0[0].hypot(pose.0[1]) > 95_000.0 {
+        return Ok(None);
+    }
+    let kp_cap = qry_feat.len().clamp(1024, 1536);
     let mut gpu_view_opt = None;
     if let Some(lock) = gpu_renderer
         && let Ok(mut guard) = lock.lock()
@@ -69,8 +72,12 @@ pub(crate) fn polish_pose_sparse(
     };
     let (matches, layers) = if let Some(lg) = lighterglue {
         let cfg = FastMatchConfig {
-            max_keypoints: kp_cap,
-            ..FastMatchConfig::balanced_search()
+            max_keypoints: kp_cap.min(1024),
+            min_layers: 6,
+            max_layers: 6,
+            exit_check_layers: 0,
+            prune_after_layer: None,
+            ..FastMatchConfig::default()
         };
         let (m, stats) = pollster::block_on(lg.match_features_fast(&ref_feat, qry_feat, &cfg))?;
         (m, stats.layers_executed)

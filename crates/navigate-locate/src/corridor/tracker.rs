@@ -16,10 +16,10 @@ use nalgebra::{Matrix3, Vector3};
 use navigate_match::{ActiveTrackSet, MatchError, PreparedKashinQuery, TrackMatchConfig};
 use navigate_visual::holdout_pnp::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc};
 use navigate_visual_session::MapCell;
-use odometry::{estimate_ground_vo_delta, match_interframe_top};
+use odometry::{estimate_derotated_pixel_flow, estimate_ground_vo_delta, match_interframe_top};
 use std::collections::{BTreeMap, VecDeque};
 
-const MAX_ODOMETRY_STEPS: usize = 256;
+pub(super) const MAX_ODOMETRY_STEPS: usize = 256;
 
 /// One inter-frame odometry step stored for background anchor arrival propagation.
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +30,12 @@ pub struct OdometryStep {
     pub rot_step: Matrix3<f64>,
     /// Translational position delta `[east, north, up]` in meters.
     pub eye_delta: [f64; 3],
+    /// Median derotated inter-frame pixel flow `[du, dv]` in render-space pixels.
+    pub derotated_flow_px: Option<[f64; 2]>,
+    /// Elapsed step interval in seconds.
+    pub dt_s: f64,
+    /// True when `eye_delta` came from a solved 3D world pose rather than cold ground `VO`.
+    pub has_world_pose: bool,
 }
 
 /// Diagnostic summary of one warm 3D landmark solve attempt.
@@ -187,6 +193,8 @@ impl CorridorTracker {
             [0.0; 3]
         };
 
+        let derotated_flow_px =
+            estimate_derotated_pixel_flow(&matched_pairs.0, &matched_pairs.1, &rot_step, k_render);
         self.vo_rot = base_rot.map(|r| orthonormalize_so3(&(rot_step * r)));
         self.prev_rot_step = rot_step;
         if self.pose_steps.len() >= MAX_ODOMETRY_STEPS {
@@ -196,6 +204,9 @@ impl CorridorTracker {
             frame_seq: self.frame_seq,
             rot_step,
             eye_delta,
+            derotated_flow_px,
+            dt_s: dt_s.max(0.0),
+            has_world_pose: self.prev_eye.is_some(),
         });
     }
 
@@ -239,13 +250,6 @@ impl CorridorTracker {
             let max_disp = profile.max_displacement(dt_s);
             if dv.norm() <= (max_disp * 1.5).max(10.0) {
                 exact_delta = [dv.x, dv.y, dv.z];
-                let v_mps = dv / dt_s;
-                let vz = if allow_vert {
-                    v_mps.z
-                } else {
-                    self.prev_vel[2]
-                };
-                self.prev_vel = [v_mps.x, v_mps.y, vz];
             }
         }
         let mut exact_rot = self.prev_rot_step;
@@ -260,10 +264,23 @@ impl CorridorTracker {
             last.eye_delta = exact_delta;
             last.rot_step = exact_rot;
         }
+        let fisher_pos = super::plausibility::compute_fisher_geometry_covariance(cand)
+            .fixed_view::<3, 3>(0, 0)
+            .into_owned();
         if let Some(kin) = self.kinematic.as_mut() {
-            kin.update_from_pose_gated(cand.eye, cand.rotation, dt_s, profile, allow_vert);
+            kin.update_from_pose_gated(
+                cand.eye,
+                cand.rotation,
+                dt_s,
+                profile,
+                allow_vert,
+                Some(fisher_pos),
+            );
+            self.prev_vel = kin.vel_enu_mps;
         } else {
-            self.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
+            let mut kin = KinematicState::new(cand.eye, cand.rotation);
+            kin.pos_cov_enu_m2 = fisher_pos + Matrix3::identity() * 2.25;
+            self.kinematic = Some(kin);
         }
         if let (Some(session), Some(kin)) = (self.corridor_session.as_mut(), self.kinematic.clone())
         {
@@ -274,29 +291,6 @@ impl CorridorTracker {
         self.vo_rot = Some(cand.rotation);
         self.prev_prepared = Some(prepared);
         self.time_since_accepted_pose_s = 0.0;
-    }
-
-    /// Snap tracker pose on an anchor-arrival frame without inferring velocity from the same-frame residual.
-    pub fn snap_pose_preserving_velocity(
-        &mut self,
-        cand: &PoseCandidate,
-        prepared: PreparedKashinQuery,
-    ) {
-        self.prev_eye = Some(cand.eye);
-        self.prev_rot = Some(cand.rotation);
-        self.vo_rot = Some(cand.rotation);
-        self.prev_prepared = Some(prepared);
-        self.time_since_accepted_pose_s = 0.0;
-        if let Some(kin) = self.kinematic.as_mut() {
-            kin.eye_enu = cand.eye;
-            kin.rot_world_to_cam = cand.rotation;
-        } else {
-            self.kinematic = Some(KinematicState::new(cand.eye, cand.rotation));
-        }
-        if let (Some(session), Some(kin)) = (self.corridor_session.as_mut(), self.kinematic.clone())
-        {
-            session.dead_reckoner.kinematic = kin;
-        }
     }
 
     /// Coast tracker state across an unsolved frame via [`DualPathDeadReckoner`](super::session::DualPathDeadReckoner).

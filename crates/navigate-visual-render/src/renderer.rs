@@ -41,7 +41,10 @@ pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    bind_layout: wgpu::BindGroupLayout,
     bindings: wgpu::BindGroup,
+    image_texture: wgpu::Texture,
+    height_texture: wgpu::Texture,
     parameters: wgpu::Buffer,
     output: wgpu::Buffer,
     readback: wgpu::Buffer,
@@ -93,6 +96,49 @@ impl GpuRenderer {
         let bytes = validate(&scene, camera, limits)?;
         let identity = format!("wgpu-terrain-v1/{}", adapter_label.into());
         device::upload(scene, camera, limits, bytes, device, queue, identity).await
+    }
+
+    /// Update camera intrinsics and resource limits without re-uploading resident textures.
+    ///
+    /// Reallocates output and readback buffers only when `(camera.width, camera.height)` changes.
+    ///
+    /// # Errors
+    /// Rejects invalid intrinsics, out-of-range limits, or dimensions exceeding `device` limits.
+    pub fn set_camera(
+        &mut self,
+        camera: CameraModel,
+        limits: RenderLimits,
+    ) -> Result<(), RenderError> {
+        validate_camera_and_limits(camera, limits, self.resident_texture_bytes)?;
+        let output_bytes = u64::from(camera.width)
+            .checked_mul(u64::from(camera.height))
+            .and_then(|n| n.checked_mul(8))
+            .ok_or(RenderError::Invalid("output byte count overflow"))?;
+        let maximum = self.device.limits();
+        if output_bytes > maximum.max_storage_buffer_binding_size
+            || camera.width.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
+            || camera.height.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
+        {
+            return Err(RenderError::Invalid("scene exceeds selected GPU limits"));
+        }
+        if (camera.width, camera.height) != (self.camera.width, self.camera.height) {
+            let (output, readback) = device::output_buffers(&self.device, output_bytes);
+            self.bindings = device::bindings(
+                &self.device,
+                &self.bind_layout,
+                &self.parameters,
+                &output,
+                &self.image_texture,
+                &self.height_texture,
+            );
+            self.output = output;
+            self.readback = readback;
+        }
+        self.camera = camera;
+        self.limits = limits;
+        self.style_sha256 =
+            device::compute_style_sha256(self.frame, self.imagery, self.terrain, camera, limits);
+        Ok(())
     }
 
     /// Borrow the underlying `wgpu::Device` so another pipeline can share it.
@@ -170,7 +216,6 @@ fn validate(
     camera: CameraModel,
     limits: RenderLimits,
 ) -> Result<usize, RenderError> {
-    camera.validate()?;
     let [lat, lon] = scene.frame.anchor();
     scene.frame.local([lat, lon, 0.0])?;
     let image = scene.imagery.validate()?;
@@ -178,7 +223,29 @@ fn validate(
     let bytes = image
         .saturating_mul(2)
         .saturating_add(terrain.saturating_mul(4));
-    if bytes > limits.scene_bytes
+    if scene.map.release_id.is_empty()
+        || scene.map.manifest_sha256.len() != 64
+        || !scene
+            .map
+            .manifest_sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(RenderError::Invalid(
+            "scene, map identity, or resource limits",
+        ));
+    }
+    validate_camera_and_limits(camera, limits, bytes)?;
+    Ok(bytes)
+}
+
+fn validate_camera_and_limits(
+    camera: CameraModel,
+    limits: RenderLimits,
+    resident_bytes: usize,
+) -> Result<(), RenderError> {
+    camera.validate()?;
+    if resident_bytes > limits.scene_bytes
         || limits.scene_bytes == 0
         || limits.pixels == 0
         || limits.pixels > 16_777_216
@@ -187,13 +254,6 @@ fn validate(
         || !(20.0..=100_000.0).contains(&limits.far_m)
         || !(16..=256).contains(&limits.steps)
         || !(8..=24).contains(&limits.refinements)
-        || scene.map.release_id.is_empty()
-        || scene.map.manifest_sha256.len() != 64
-        || !scene
-            .map
-            .manifest_sha256
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
         return Err(RenderError::Invalid(
             "scene, map identity, or resource limits",
@@ -213,7 +273,7 @@ fn validate(
             }
         }
     }
-    Ok(bytes)
+    Ok(())
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

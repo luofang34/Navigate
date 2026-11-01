@@ -6,10 +6,13 @@
 //! tiles synthesized asynchronously by a background worker.
 
 mod disk;
+mod window;
 
 use super::{
     CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, MAX_TILES, VirtualCorridorView,
-    VirtualViewCamera, codec::ensure, project::project_tiles_virtual_view,
+    VirtualViewCamera,
+    codec::{ensure, tile_overlaps_frustum},
+    project::{project_tiles_virtual_kashin, project_tiles_virtual_view},
 };
 use crate::{HadamardProjector, MatchError};
 pub use disk::hilbert_tile_code;
@@ -19,6 +22,10 @@ use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     sync::{Arc, RwLock},
 };
+use window::{
+    cache_window_bytes, estimated_key_overlaps_frustum, promote_key, record_bounds_map,
+    record_store_bounds, select_window_keys_inner, tile_bytes, touch_lru,
+};
 
 /// Eight-byte magic header of a sharded tile store index (`manifest.nvktidx`).
 pub const CORRIDOR_STORE_INDEX_MAGIC: &[u8; 8] = b"NVKTIDX1";
@@ -26,8 +33,10 @@ pub const CORRIDOR_STORE_INDEX_MAGIC: &[u8; 8] = b"NVKTIDX1";
 pub const CORRIDOR_SHARD_MAGIC: &[u8; 8] = b"NVKTSHD1";
 /// Default maximum number of active tiles retained in RAM (`5 x 5` neighborhood).
 pub const DEFAULT_WINDOW_TILES: usize = 25;
-/// Hard byte ceiling (`8 MiB`) on the resident in-memory LRU tile window (`< 10 MiB`).
-const MAX_RESIDENT_WINDOW_BYTES: usize = 8 * 1024 * 1024;
+/// Hard byte ceiling (`9 MiB`) on the resident in-memory LRU tile window (`< 10 MiB`).
+const MAX_RESIDENT_WINDOW_BYTES: usize = 9 * 1024 * 1024;
+
+type TileAabb = ([f64; 3], [f32; 3], [f32; 3]);
 
 #[derive(Debug)]
 enum BackingSource {
@@ -39,6 +48,8 @@ enum BackingSource {
 #[derive(Debug)]
 struct StoreInner {
     indexed_keys: BTreeSet<CorridorTileKey>,
+    known_bounds: HashMap<CorridorTileKey, TileAabb>,
+    z_span: Option<[f32; 2]>,
     cache_order: VecDeque<CorridorTileKey>,
     cache_entries: HashMap<CorridorTileKey, Arc<CorridorTileEntry>>,
     backing: BackingSource,
@@ -85,6 +96,8 @@ impl CorridorTileStore {
             max_cached_tiles: cap,
             inner: RwLock::new(StoreInner {
                 indexed_keys: BTreeSet::new(),
+                known_bounds: HashMap::new(),
+                z_span: None,
                 cache_order: VecDeque::with_capacity(cap),
                 cache_entries: HashMap::with_capacity(cap),
                 backing: BackingSource::InMemory(HashMap::new()),
@@ -97,12 +110,15 @@ impl CorridorTileStore {
     pub fn from_bank(bank: CorridorLandmarkBank, max_cached_tiles: usize) -> Self {
         let cap = max_cached_tiles.clamp(1, MAX_TILES);
         let mut indexed_keys = BTreeSet::new();
+        let mut known_bounds = HashMap::with_capacity(bank.tiles.len());
+        let mut z_span = None;
         let mut all = HashMap::with_capacity(bank.tiles.len());
         for tile in bank.tiles {
             let key = CorridorTileKey {
                 tile_x: tile.tile_x,
                 tile_y: tile.tile_y,
             };
+            record_bounds_map(&mut known_bounds, &mut z_span, key, &tile);
             indexed_keys.insert(key);
             all.insert(key, Arc::new(tile));
         }
@@ -114,6 +130,8 @@ impl CorridorTileStore {
             max_cached_tiles: cap,
             inner: RwLock::new(StoreInner {
                 indexed_keys,
+                known_bounds,
+                z_span,
                 cache_order: VecDeque::with_capacity(cap),
                 cache_entries: HashMap::with_capacity(cap),
                 backing: BackingSource::InMemory(all),
@@ -135,12 +153,15 @@ impl CorridorTileStore {
         bank.check()?;
         std::fs::create_dir_all(dir).map_err(|e| io_err("corridor store mkdir", e))?;
         let mut keys = BTreeSet::new();
+        let mut known_bounds = HashMap::with_capacity(bank.tiles.len());
+        let mut z_span = None;
         for tile in &bank.tiles {
             let key = CorridorTileKey {
                 tile_x: tile.tile_x,
                 tile_y: tile.tile_y,
             };
             write_shard_file(dir, key, tile)?;
+            record_bounds_map(&mut known_bounds, &mut z_span, key, tile);
             keys.insert(key);
         }
         write_index_file(
@@ -151,7 +172,12 @@ impl CorridorTileStore {
             bank.tile_size_m,
             &keys,
         )?;
-        Self::open_dir(dir, max_cached_tiles)
+        let store = Self::open_dir(dir, max_cached_tiles)?;
+        if let Ok(mut guard) = store.inner.write() {
+            guard.known_bounds = known_bounds;
+            guard.z_span = z_span;
+        }
+        Ok(store)
     }
 
     /// Create an empty sharded directory store at `dir`.
@@ -215,6 +241,8 @@ impl CorridorTileStore {
             max_cached_tiles: cap,
             inner: RwLock::new(StoreInner {
                 indexed_keys,
+                known_bounds: HashMap::new(),
+                z_span: None,
                 cache_order: VecDeque::with_capacity(cap),
                 cache_entries: HashMap::with_capacity(cap),
                 backing: BackingSource::Directory(dir.to_path_buf()),
@@ -307,6 +335,7 @@ impl CorridorTileStore {
                 }
             }
         }
+        record_store_bounds(&mut guard, key, &tile_arc);
         touch_lru(&mut guard, key, tile_arc, self.max_cached_tiles);
         Ok(())
     }
@@ -321,16 +350,64 @@ impl CorridorTileStore {
         cam: &VirtualViewCamera,
         projector: &HadamardProjector,
     ) -> Result<VirtualCorridorView, MatchError> {
+        let active_tiles = self.resolve_window_tiles(cam)?;
+        Ok(project_tiles_virtual_view(
+            active_tiles.iter().map(Arc::as_ref),
+            cam,
+            projector,
+        ))
+    }
+
+    /// Load the active spatial window around `cam` and project Kashin sketches without `f32` descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatchError`] when reading a required shard from disk fails.
+    pub fn project_virtual_kashin(
+        &self,
+        cam: &VirtualViewCamera,
+    ) -> Result<VirtualCorridorView, MatchError> {
+        let active_tiles = self.resolve_window_tiles(cam)?;
+        Ok(project_tiles_virtual_kashin(
+            active_tiles.iter().map(Arc::as_ref),
+            cam,
+        ))
+    }
+
+    fn resolve_window_tiles(
+        &self,
+        cam: &VirtualViewCamera,
+    ) -> Result<Vec<Arc<CorridorTileEntry>>, MatchError> {
         let candidates = self.select_window_keys(cam);
         let mut active_tiles = Vec::with_capacity(candidates.len());
+        let s = f64::from(self.tile_size_m.max(10.0));
+        let mut pinned_bytes = 0_usize;
+        let mut pinned_count = 0_usize;
         let mut guard = self.inner.write().map_err(|_| MatchError::Device {
             stage: "corridor store cache lock",
             message: "poisoned".into(),
         })?;
         for key in candidates {
             if let Some(cached) = guard.cache_entries.get(&key).cloned() {
-                promote_key(&mut guard.cache_order, key);
+                if !tile_overlaps_frustum(&cached, cam) {
+                    continue;
+                }
+                let tb = tile_bytes(&cached);
+                if pinned_count == 0
+                    || (pinned_count < self.max_cached_tiles
+                        && pinned_bytes + tb <= MAX_RESIDENT_WINDOW_BYTES)
+                {
+                    promote_key(&mut guard.cache_order, key);
+                    pinned_bytes += tb;
+                    pinned_count += 1;
+                }
                 active_tiles.push(cached);
+                continue;
+            }
+            if !guard.known_bounds.contains_key(&key)
+                && let Some([z_min, z_max]) = guard.z_span
+                && !estimated_key_overlaps_frustum(key, s, [z_min, z_max], cam)
+            {
                 continue;
             }
             let loaded = match &guard.backing {
@@ -339,108 +416,31 @@ impl CorridorTileStore {
                 BackingSource::Directory(dir) => read_shard_file(dir, key)?.map(Arc::new),
             };
             if let Some(tile) = loaded {
-                touch_lru(&mut guard, key, Arc::clone(&tile), self.max_cached_tiles);
+                record_store_bounds(&mut guard, key, &tile);
+                if !tile_overlaps_frustum(&tile, cam) {
+                    continue;
+                }
+                let tb = tile_bytes(&tile);
+                if pinned_count == 0
+                    || (pinned_count < self.max_cached_tiles
+                        && pinned_bytes + tb <= MAX_RESIDENT_WINDOW_BYTES)
+                {
+                    touch_lru(&mut guard, key, Arc::clone(&tile), self.max_cached_tiles);
+                    pinned_bytes += tb;
+                    pinned_count += 1;
+                }
                 active_tiles.push(tile);
             }
         }
         drop(guard);
-        Ok(project_tiles_virtual_view(
-            active_tiles.iter().map(Arc::as_ref),
-            cam,
-            projector,
-        ))
+        active_tiles.sort_by_key(|t| (t.tile_y, t.tile_x));
+        Ok(active_tiles)
     }
 
     fn select_window_keys(&self, cam: &VirtualViewCamera) -> Vec<CorridorTileKey> {
         let Ok(guard) = self.inner.read() else {
             return Vec::new();
         };
-        let s = f64::from(self.tile_size_m.max(10.0));
-        let fwd = [cam.world_to_cam[6], cam.world_to_cam[7]];
-        let fwd_z = cam.world_to_cam[8];
-        let fwd_h = (fwd[0] * fwd[0] + fwd[1] * fwd[1]).sqrt();
-        let upward_horizon = fwd_h > 0.25 && -fwd_z < 0.05;
-        let shallow_horizon = fwd_h > 0.25 && -fwd_z < 0.25;
-        let look_dist = if upward_horizon {
-            (cam.eye_enu[2].abs() * 8.5).clamp(5_500.0, 13_000.0)
-        } else if shallow_horizon {
-            (cam.eye_enu[2].abs() * 5.5).clamp(3_500.0, 7_500.0)
-        } else if fwd_h > 0.25 {
-            (cam.eye_enu[2].abs() * 2.5).clamp(0.0, 3_000.0)
-        } else {
-            0.0
-        };
-        let ux = if fwd_h > 1e-6 { fwd[0] / fwd_h } else { 0.0 };
-        let uy = if fwd_h > 1e-6 { fwd[1] / fwd_h } else { 0.0 };
-        let focus_e = cam.eye_enu[0] + ux * look_dist;
-        let focus_n = cam.eye_enu[1] + uy * look_dist;
-        let max_range_sq = if upward_horizon {
-            (22_000.0_f64 + s).powi(2)
-        } else if shallow_horizon {
-            (14_000.0_f64 + s).powi(2)
-        } else {
-            (6_800.0_f64 + s).powi(2)
-        };
-
-        let mut ranked: Vec<(f64, CorridorTileKey)> = guard
-            .indexed_keys
-            .iter()
-            .filter_map(|&key| {
-                let cx = (f64::from(key.tile_x) + 0.5) * s;
-                let cy = (f64::from(key.tile_y) + 0.5) * s;
-                let de_eye = cx - cam.eye_enu[0];
-                let dn_eye = cy - cam.eye_enu[1];
-                if de_eye * de_eye + dn_eye * dn_eye > max_range_sq {
-                    return None;
-                }
-                if fwd_h > 0.5 && (de_eye * ux + dn_eye * uy) < -s * 1.25 {
-                    return None;
-                }
-                let de_foc = cx - focus_e;
-                let dn_foc = cy - focus_n;
-                Some((de_foc * de_foc + dn_foc * dn_foc, key))
-            })
-            .collect();
-        ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut selected: Vec<CorridorTileKey> = ranked
-            .into_iter()
-            .take(self.max_cached_tiles)
-            .map(|(_, k)| k)
-            .collect();
-        selected.sort_by_key(|k| (k.tile_y, k.tile_x));
-        selected
-    }
-}
-
-fn promote_key(order: &mut VecDeque<CorridorTileKey>, key: CorridorTileKey) {
-    if let Some(pos) = order.iter().position(|&k| k == key) {
-        let _ = order.remove(pos);
-    }
-    order.push_back(key);
-}
-
-fn cache_window_bytes(inner: &StoreInner) -> usize {
-    inner
-        .cache_entries
-        .values()
-        .map(|t| size_of::<CorridorTileEntry>() + t.len() * 93)
-        .sum()
-}
-
-fn touch_lru(
-    inner: &mut StoreInner,
-    key: CorridorTileKey,
-    tile: Arc<CorridorTileEntry>,
-    cap: usize,
-) {
-    promote_key(&mut inner.cache_order, key);
-    let _ = inner.cache_entries.insert(key, tile);
-    while inner.cache_entries.len() > cap
-        || (inner.cache_entries.len() > 1 && cache_window_bytes(inner) > MAX_RESIDENT_WINDOW_BYTES)
-    {
-        let Some(evicted) = inner.cache_order.pop_front() else {
-            break;
-        };
-        let _ = inner.cache_entries.remove(&evicted);
+        select_window_keys_inner(&guard, self.tile_size_m, self.max_cached_tiles, cam)
     }
 }

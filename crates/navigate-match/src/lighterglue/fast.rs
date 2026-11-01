@@ -84,38 +84,32 @@ impl FastMatchConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<(), MatchError> {
-        if self.max_keypoints == 0 {
-            return Err(MatchError::Output(
-                "FastMatchConfig max_keypoints must be at least 1",
-            ));
-        }
-        if self.min_layers == 0
-            || self.min_layers > LAYER_COUNT
-            || self.max_layers < self.min_layers
-            || self.max_layers > LAYER_COUNT
-        {
-            return Err(MatchError::Output(
-                "FastMatchConfig layer bounds must satisfy 1 <= min_layers <= max_layers <= 6",
-            ));
-        }
-        if !self.early_exit_mutual_fraction.is_finite() || self.early_exit_mutual_fraction < 0.0 {
-            return Err(MatchError::Output(
-                "FastMatchConfig early_exit_mutual_fraction must be finite and non-negative",
-            ));
-        }
-        if let Some(layer) = self.prune_after_layer
-            && (layer == 0 || layer > LAYER_COUNT)
-        {
-            return Err(MatchError::Output(
+        let chk = |ok: bool, msg: &'static str| ok.then_some(()).ok_or(MatchError::Output(msg));
+        chk(
+            self.max_keypoints > 0,
+            "FastMatchConfig max_keypoints must be at least 1",
+        )?;
+        chk(
+            self.min_layers >= 1
+                && self.min_layers <= LAYER_COUNT
+                && self.max_layers >= self.min_layers
+                && self.max_layers <= LAYER_COUNT,
+            "FastMatchConfig layer bounds must satisfy 1 <= min_layers <= max_layers <= 6",
+        )?;
+        chk(
+            self.early_exit_mutual_fraction.is_finite() && self.early_exit_mutual_fraction >= 0.0,
+            "FastMatchConfig early_exit_mutual_fraction must be finite and non-negative",
+        )?;
+        if let Some(layer) = self.prune_after_layer {
+            chk(
+                (1..=LAYER_COUNT).contains(&layer),
                 "FastMatchConfig prune_after_layer must be 1 through 6",
-            ));
+            )?;
         }
-        if !self.min_matchability_logit.is_finite() || !self.score_threshold.is_finite() {
-            return Err(MatchError::Output(
-                "FastMatchConfig thresholds must be finite",
-            ));
-        }
-        Ok(())
+        chk(
+            self.min_matchability_logit.is_finite() && self.score_threshold.is_finite(),
+            "FastMatchConfig thresholds must be finite",
+        )
     }
 }
 
@@ -200,6 +194,13 @@ impl LighterGlue {
         config: &FastMatchConfig,
     ) -> Result<(Vec<IndexedMatch>, FastMatchStats), MatchError> {
         config.validate()?;
+        if config.prune_after_layer.is_none() && config.exit_check_layers == 0 {
+            return self
+                .match_batch_padded(&[reference], query, config)
+                .await?
+                .pop()
+                .ok_or(MatchError::Output("empty single-pair batch result"));
+        }
         let (kp0, desc0, idx_a) = select_input(reference, config.max_keypoints)?;
         let (kp1, desc1, idx_b) = select_input(query, config.max_keypoints)?;
         let (n0, m0) = (idx_a.len(), idx_b.len());
@@ -228,7 +229,7 @@ impl LighterGlue {
             (ref_side.tokens, qry_side.tokens) =
                 layer
                     .cross_attn
-                    .forward(ref_side.tokens, qry_side.tokens, None);
+                    .forward(ref_side.tokens, qry_side.tokens, None, None);
             let done = idx + 1;
             let check_exit = done >= config.min_layers
                 && done < config.max_layers
@@ -303,8 +304,12 @@ impl LighterGlue {
         with_logits: bool,
     ) -> Result<(Vec<IndexedMatch>, Vec<f32>, Vec<f32>), MatchError> {
         let (n, m) = (ref_side.len(), qry_side.len());
-        let (scores, ma, mb) =
-            self.assignment_with_logits(ref_side.tokens.clone(), qry_side.tokens.clone(), None);
+        let (scores, ma, mb) = self.assignment_with_logits(
+            ref_side.tokens.clone(),
+            qry_side.tokens.clone(),
+            None,
+            None,
+        );
         let (row_max, row_argmax) = scores.clone().max_dim_with_indices(2);
         let (_, col_argmax) = scores.max_dim_with_indices(1);
         let mut tx = Transaction::default()
@@ -322,16 +327,13 @@ impl LighterGlue {
                 message: format!("{error:?}"),
             })?;
         let (logits_a, logits_b) = if with_logits {
-            let mb_data = data
+            let mb_d = data
                 .pop()
                 .ok_or(MatchError::Output("lighterglue read-back count"))?;
-            let ma_data = data
+            let ma_d = data
                 .pop()
                 .ok_or(MatchError::Output("lighterglue read-back count"))?;
-            (
-                ma_data.iter::<f32>().collect(),
-                mb_data.iter::<f32>().collect(),
-            )
+            (ma_d.iter::<f32>().collect(), mb_d.iter::<f32>().collect())
         } else {
             (Vec::new(), Vec::new())
         };

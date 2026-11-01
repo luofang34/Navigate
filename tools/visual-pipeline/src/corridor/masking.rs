@@ -104,6 +104,23 @@ impl AmortizedMasker {
         cur_rot: Option<&Matrix3<f64>>,
         k: &Matrix3<f64>,
     ) -> Result<(GrayImage, MaskFrameTelemetry), PipelineError> {
+        self.mask_frame_with_luma_controlled(rgb, luma, fallback_mask, cur_rot, k, true)
+    }
+
+    /// Compute the binary valid-terrain mask while optionally pausing new `Segformer` submissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] when `Segformer` inference or mask post-processing fails.
+    pub fn mask_frame_with_luma_controlled(
+        &mut self,
+        rgb: &RgbImage,
+        luma: &GrayImage,
+        fallback_mask: Option<&GrayImage>,
+        cur_rot: Option<&Matrix3<f64>>,
+        k: &Matrix3<f64>,
+        allow_refresh: bool,
+    ) -> Result<(GrayImage, MaskFrameTelemetry), PipelineError> {
         let t0 = Instant::now();
         let (w, h) = rgb.dimensions();
         let total = (w as usize).saturating_mul(h as usize);
@@ -126,7 +143,13 @@ impl AmortizedMasker {
         let mut step = refresh::RefreshStep::default();
 
         if let Some(seg) = &mut self.seg {
-            step = seg.step(&mut self.key, rgb, cur_rot, self.refresh_interval)?;
+            step = seg.step(
+                &mut self.key,
+                rgb,
+                cur_rot,
+                self.refresh_interval,
+                allow_refresh,
+            )?;
         }
         let (raw_mask, valid_count) = if self.key.usable([w, h]) {
             compose_amortized_u8(
