@@ -118,4 +118,24 @@ impl CorridorTracker {
         };
         session.refresh_filter_snapshot(t_ns, local_frame)
     }
+
+    /// Clear inter-frame pose, landmark tracks, and kinematic state across a flight or time jump.
+    pub fn reset_discontinuous_track(&mut self) {
+        self.active_tracks = navigate_match::ActiveTrackSet::empty();
+        self.prev_eye = None;
+        self.prev_rot = None;
+        self.prev_vel = [0.0; 3];
+        self.prev_rot_step = nalgebra::Matrix3::identity();
+        self.prev_prepared = None;
+        self.vo_rot = None;
+        self.pose_steps.clear();
+        self.frames_since_anchor = 0;
+        self.time_since_anchor_s = 0.0;
+        self.time_since_accepted_pose_s = f64::INFINITY;
+        self.kinematic = None;
+        if let Some(session) = self.corridor_session.as_mut() {
+            session.advance_epoch();
+            session.dead_reckoner.clear_filter_solution();
+        }
+    }
 }

@@ -1,28 +1,131 @@
 //! Neighbor tracking, refinement, bundle adjustment, and recipe execution (`photo_stages`).
 
+mod bundle;
+
+pub use bundle::run_terrain_bundle_stage;
+
 use super::{
-    MatchStageOptions, PipelinePass, collect_parent_anchors, estimate_intrinsics, load_case_mask,
-    load_case_rgb, load_profile_cases, mask_allows, run_match_stage, scale_k, scaled_size,
-    write_case_report,
+    AnchorPoseMap, MatchStageOptions, PipelinePass, collect_parent_anchors, estimate_intrinsics,
+    load_case_mask, load_case_rgb, load_profile_cases, mask_allows, run_match_stage, scale_k,
+    scaled_size, write_case_report,
 };
 use crate::{
     PipelineError,
     matcher_client::PipelineMatcher,
-    pose::{PoseCandidate, candidate_priority, fit_pose_ransac},
+    pose::{LoadedPose, PoseCandidate, candidate_priority, fit_pose_ransac},
     surface::{ContextSurface, Surface},
-    util::{file_sha256, read_json, write_json},
+    testset::{FlightGroup, PhotoCase},
+    util::{parse_iso8601_ms, read_json, write_json},
 };
-use image::imageops::FilterType;
-use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector2, Vector3};
-use navigate_visual::{
-    CameraModel, LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose,
-    ScenePointObservation, ScenePointPrior, refine_regularized_local_scene,
-};
+use image::{RgbImage, imageops::FilterType};
 use serde_json::{Value, json};
 use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
 };
+
+type CachedAnchorRender = (RgbImage, Vec<f32>, Vec<[f64; 3]>, [u32; 2]);
+
+pub(super) fn load_flight_group_map(dataset_dir: &Path) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    let Ok(doc) = read_json::<Value>(&dataset_dir.join("manifest.json")) else {
+        return map;
+    };
+    let groups_val = doc
+        .get("capture_groups")
+        .or_else(|| doc.get("flights"))
+        .cloned();
+    let Some(groups) = groups_val.and_then(|v| serde_json::from_value::<Vec<FlightGroup>>(v).ok())
+    else {
+        return map;
+    };
+    for (g_idx, grp) in groups.into_iter().enumerate() {
+        for photo_id in grp.photos {
+            map.insert(photo_id, g_idx);
+        }
+    }
+    map
+}
+
+fn capture_date_prefix(case: &PhotoCase) -> Option<&str> {
+    let s = case.prior.as_ref()?.capture_time.as_deref()?.trim();
+    if s.len() >= 10
+        && matches!(s.as_bytes()[4], b'-' | b':')
+        && matches!(s.as_bytes()[7], b'-' | b':')
+    {
+        Some(&s[..10])
+    } else {
+        None
+    }
+}
+
+fn capture_time_ms(case: &PhotoCase) -> Option<i64> {
+    case.prior
+        .as_ref()?
+        .capture_time
+        .as_deref()
+        .and_then(parse_iso8601_ms)
+}
+
+pub(super) fn rank_neighbor_anchors<'a>(
+    query: &PhotoCase,
+    cases_by_id: &BTreeMap<&str, &'a PhotoCase>,
+    group_map: &HashMap<String, usize>,
+    anchors: &'a AnchorPoseMap,
+    surface: &Surface,
+) -> Vec<(&'a String, &'a LoadedPose, &'a PhotoCase)> {
+    let q_group = group_map.get(&query.id).copied();
+    let q_date = capture_date_prefix(query);
+    let q_ms = capture_time_ms(query);
+    let q_enu = query
+        .prior
+        .as_ref()
+        .and_then(|p| p.position.as_ref())
+        .map(|pos| surface.local(pos.latitude, pos.longitude, 0.0));
+
+    let mut ranked = Vec::with_capacity(anchors.len());
+    for (anchor_id, pose) in anchors {
+        if anchor_id == &query.id {
+            continue;
+        }
+        let Some(&anchor_case) = cases_by_id.get(anchor_id.as_str()) else {
+            continue;
+        };
+        let same_grp = q_group.is_some() && q_group == group_map.get(anchor_id.as_str()).copied();
+        let same_day = match (q_date, capture_date_prefix(anchor_case)) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        };
+        let same_flight_date = same_grp || same_day;
+        let abs_dt_s = match (q_ms, capture_time_ms(anchor_case)) {
+            (Some(t0), Some(t1)) => (t0 - t1).unsigned_abs() as f64 / 1_000.0,
+            _ => f64::INFINITY,
+        };
+        let horiz_dist_m = match q_enu {
+            Some(qe) => (qe[0] - pose.0[0]).hypot(qe[1] - pose.0[1]),
+            None => f64::INFINITY,
+        };
+        ranked.push((
+            !same_flight_date,
+            abs_dt_s,
+            horiz_dist_m,
+            anchor_id,
+            pose,
+            anchor_case,
+        ));
+    }
+    ranked.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.total_cmp(&b.1))
+            .then_with(|| a.2.total_cmp(&b.2))
+            .then_with(|| a.3.cmp(b.3))
+    });
+    ranked
+        .into_iter()
+        .map(|(_, _, _, id, pose, ac)| (id, pose, ac))
+        .collect()
+}
 
 /// Propagate poses from solved anchors in `parent_dirs` to unresolved photos (`photo_tracking`).
 ///
@@ -49,7 +152,11 @@ pub fn run_track_stage(
     )?;
 
     let cases = load_profile_cases(&opts.profile_path)?;
+    let cases_by_id: BTreeMap<&str, &PhotoCase> =
+        cases.iter().map(|c| (c.id.as_str(), c)).collect();
+    let group_map = load_flight_group_map(&opts.dataset_dir);
     let anchors = collect_parent_anchors(parent_dirs, &surface.primary)?;
+    let mut anchor_cache: HashMap<String, CachedAnchorRender> = HashMap::new();
     let mut accepted_count = 0usize;
 
     for case in &cases {
@@ -64,33 +171,37 @@ pub fn run_track_stage(
         let qry_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
         let valid_mask = load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size)?;
         let k_qry = estimate_intrinsics(case);
+        let q_sz = scaled_size(case.size, 640);
+        let qx_s = f64::from(q_sz[0]) / f64::from(case.size[0].max(1));
+        let qy_s = f64::from(q_sz[1]) / f64::from(case.size[1].max(1));
+        let q_small = image::imageops::resize(&qry_rgb, q_sz[0], q_sz[1], FilterType::Triangle);
+
+        let ranked_anchors =
+            rank_neighbor_anchors(case, &cases_by_id, &group_map, &anchors, &surface.primary);
         let mut best: Option<(usize, usize, PoseCandidate)> = None;
         let mut attempts_log = Vec::new();
 
-        for (a_idx, (anchor_id, (a_eye, a_rot, a_k, a_size))) in anchors.iter().take(6).enumerate()
+        for (a_idx, (anchor_id, (a_eye, a_rot, a_k, a_size), anchor_case)) in
+            ranked_anchors.into_iter().take(6).enumerate()
         {
-            let Some(anchor_case) = cases.iter().find(|c| &c.id == anchor_id) else {
-                continue;
-            };
-            let anchor_rgb = load_case_rgb(&opts.dataset_dir, &anchor_case.image)?;
-            let render_sz = scaled_size(*a_size, 640);
-            let sx = f64::from(render_sz[0]) / f64::from(a_size[0].max(1));
-            let sy = f64::from(render_sz[1]) / f64::from(a_size[1].max(1));
-            let (_, a_depth, a_pts) =
-                surface.render(*a_eye, a_rot, &scale_k(a_k, sx, sy), render_sz);
+            if !anchor_cache.contains_key(anchor_id.as_str()) {
+                let anchor_rgb = load_case_rgb(&opts.dataset_dir, &anchor_case.image)?;
+                let render_sz = scaled_size(*a_size, 640);
+                let sx = f64::from(render_sz[0]) / f64::from(a_size[0].max(1));
+                let sy = f64::from(render_sz[1]) / f64::from(a_size[1].max(1));
+                let (_, a_depth, a_pts) =
+                    surface.render(*a_eye, a_rot, &scale_k(a_k, sx, sy), render_sz);
+                let a_small = image::imageops::resize(
+                    &anchor_rgb,
+                    render_sz[0],
+                    render_sz[1],
+                    FilterType::Triangle,
+                );
+                anchor_cache.insert(anchor_id.clone(), (a_small, a_depth, a_pts, render_sz));
+            }
+            let (a_small, a_depth, a_pts, render_sz) = &anchor_cache[anchor_id.as_str()];
 
-            let a_small = image::imageops::resize(
-                &anchor_rgb,
-                render_sz[0],
-                render_sz[1],
-                FilterType::Triangle,
-            );
-            let q_sz = scaled_size(case.size, 640);
-            let qx_s = f64::from(q_sz[0]) / f64::from(case.size[0].max(1));
-            let qy_s = f64::from(q_sz[1]) / f64::from(case.size[1].max(1));
-            let q_small = image::imageops::resize(&qry_rgb, q_sz[0], q_sz[1], FilterType::Triangle);
-
-            let matches = matcher.match_rgb(&a_small, &q_small)?;
+            let matches = matcher.match_rgb(a_small, &q_small)?;
             let mut world_pts = Vec::new();
             let mut img_px = Vec::new();
             for m in &matches {
@@ -174,6 +285,11 @@ pub fn run_refine_stage(
     let mut accepted_count = 0usize;
 
     for case in &cases {
+        if let Some(allow) = &opts.only_cases
+            && !allow.contains(&case.id)
+        {
+            continue;
+        }
         let Some(&(mut eye, mut rot, a_k, a_size)) = anchors.get(&case.id) else {
             continue;
         };
@@ -247,84 +363,55 @@ pub fn run_refine_stage(
     Ok(json!({ "accepted": accepted_count, "output": opts.output_dir.display().to_string() }))
 }
 
-/// Multi-view DEM-regularized bundle adjustment via [`refine_regularized_local_scene`].
-///
-/// # Errors
-///
-/// Returns [`PipelineError`] when scene construction or writing fails.
-pub fn run_terrain_bundle_stage(
+pub(super) fn resolve_unresolved_allowlist(
+    dataset_dir: &Path,
+    profile_path: &Path,
+    unresolved_from: &[String],
+) -> Result<Option<BTreeSet<String>>, PipelineError> {
+    if unresolved_from.is_empty() {
+        return Ok(None);
+    }
+    let cases = load_profile_cases(profile_path)?;
+    let mut allow = BTreeSet::new();
+    for case in &cases {
+        let resolved = unresolved_from.iter().any(|u_id| {
+            let p = dataset_dir
+                .join("runs")
+                .join(u_id)
+                .join(format!("{}.json", case.id));
+            read_json::<Value>(&p).ok().is_some_and(|doc| {
+                doc.get("status").and_then(Value::as_str) == Some("candidate_requires_review")
+                    || doc.get("accepted").and_then(Value::as_bool) == Some(true)
+            })
+        });
+        if !resolved {
+            allow.insert(case.id.clone());
+        }
+    }
+    Ok(Some(allow))
+}
+
+pub(super) fn build_pass_match_options(
+    dataset_dir: &Path,
+    profile_path: &Path,
     catalog_path: &Path,
-    parent_dirs: &[PathBuf],
     output_dir: &Path,
-) -> Result<Value, PipelineError> {
-    let surface = Surface::from_catalog(catalog_path)?;
-    fs::create_dir_all(output_dir).map_err(|source| PipelineError::Io {
-        path: output_dir.to_path_buf(),
-        source,
-    })?;
-    let anchors = collect_parent_anchors(parent_dirs, &surface)?;
-    if anchors.len() < 2 {
-        return Ok(json!({ "refined_cameras": 0 }));
-    }
-    let flip = Matrix3::from_diagonal(&Vector3::new(1.0, -1.0, -1.0));
-    let mut calibrations = Vec::new();
-    let mut cameras = Vec::new();
-    for (idx, (_id, (eye, rot, k, sz))) in anchors.iter().enumerate() {
-        calibrations.push(CameraModel {
-            width: sz[0],
-            height: sz[1],
-            fx: k[(0, 0)],
-            fy: k[(1, 1)],
-            cx: k[(0, 2)],
-            cy: k[(1, 2)],
-        });
-        let eye_to_scene = rot.transpose() * flip;
-        let q =
-            UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(eye_to_scene));
-        let mut sha = file_sha256(catalog_path)?;
-        sha.replace_range(0..4, &format!("{idx:04x}"));
-        cameras.push(LocalSceneCamera {
-            observation_sha256: sha,
-            pose: LocalScenePose {
-                position: Vector3::from(*eye),
-                orientation: q,
-            },
-            fixed: idx < 2,
-        });
-    }
-    let pt_pos = Vector3::new(0.0, 0.0, surface.min_elev_m);
-    let points = vec![LocalScenePoint {
-        feature_id: 1,
-        position: pt_pos,
-        observations: vec![
-            ScenePointObservation {
-                camera_index: 0,
-                pixel: Vector2::new(calibrations[0].cx, calibrations[0].cy),
-            },
-            ScenePointObservation {
-                camera_index: 1,
-                pixel: Vector2::new(calibrations[1].cx, calibrations[1].cy),
-            },
-        ],
-    }];
-    let priors = vec![ScenePointPrior {
-        feature_id: 1,
-        position: pt_pos,
-        scale: 15.0,
-    }];
-    let mut scene = LocalScene { cameras, points };
-    let stats = refine_regularized_local_scene(&calibrations, &mut scene, &priors, 15)
-        .ok()
-        .map(|r| {
-            json!({ "initial_cost": r.initial_cost, "final_cost": r.final_cost, "steps": r.steps })
-        });
-    let summary = json!({
-        "catalog_sha256": surface.catalog_sha256,
-        "cameras": anchors.len(),
-        "refinement": stats,
-    });
-    write_json(&output_dir.join("run.json"), &summary)?;
-    Ok(summary)
+    pass: &PipelinePass,
+) -> Result<MatchStageOptions, PipelineError> {
+    let only_cases =
+        resolve_unresolved_allowlist(dataset_dir, profile_path, &pass.unresolved_from)?;
+    Ok(MatchStageOptions {
+        dataset_dir: dataset_dir.to_path_buf(),
+        profile_path: profile_path.to_path_buf(),
+        catalog_path: catalog_path.to_path_buf(),
+        context_catalog: None,
+        output_dir: output_dir.to_path_buf(),
+        attempts: pass.attempts.unwrap_or(12),
+        steps: 2,
+        heading_step_deg: pass.heading_step.unwrap_or(0.0),
+        height_factors: pass.height_factors.clone().unwrap_or_else(|| vec![1.0]),
+        only_cases,
+    })
 }
 
 /// Execute a declarative multi-pass `pipeline.json` recipe (`photo_pipeline`).
@@ -368,18 +455,7 @@ pub fn run_pipeline_recipe(
             .iter()
             .map(|p| dataset_dir.join("runs").join(p))
             .collect();
-        let opts = MatchStageOptions {
-            dataset_dir: dataset_dir.clone(),
-            profile_path: profile_path.clone(),
-            catalog_path: cat.clone(),
-            context_catalog: None,
-            output_dir: out_dir.clone(),
-            attempts: pass.attempts.unwrap_or(12),
-            steps: 2,
-            heading_step_deg: pass.heading_step.unwrap_or(30.0),
-            height_factors: pass.height_factors.clone().unwrap_or_else(|| vec![1.0]),
-            only_cases: None,
-        };
+        let opts = build_pass_match_options(&dataset_dir, &profile_path, &cat, &out_dir, pass)?;
         let rep = match pass.kind.as_str() {
             "track" => run_track_stage(&opts, &parent_dirs, matcher)?,
             "refine" => run_refine_stage(&opts, &parent_dirs, matcher)?,
@@ -390,3 +466,6 @@ pub fn run_pipeline_recipe(
     }
     Ok(json!({ "passes": reports }))
 }
+
+#[cfg(test)]
+mod tests;

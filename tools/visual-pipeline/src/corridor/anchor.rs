@@ -2,6 +2,7 @@
 
 mod eval;
 pub mod multitier;
+mod nadir_screen;
 pub mod plausibility;
 
 use super::CorridorTrackOptions;
@@ -17,8 +18,9 @@ use crate::{
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use eval::{eval_seed_batch, maybe_screen_low_agl_nadir_seeds, polish_anchor_seed_pool};
+use eval::{eval_global_fallback_seeds, eval_seed_batch, polish_anchor_seed_pool};
 use image::GrayImage;
+use nadir_screen::{closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds};
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::{
     CorridorTileStore, HadamardProjector, LighterGlue, PreparedKashinQuery, SparseFeatures,
@@ -127,13 +129,20 @@ pub(super) fn acquire_corridor_anchor(
         )?;
         total_lg += acq.lg_layers;
         total_rays += acq.polish_rays;
+        let mut early_locked = false;
         if let Some((_, _, ref cand)) = acq.best
             && cand.score.geometry_accepted
             && is_plausible_anchor_candidate(cand, surface)
         {
-            scores[idx] = compute_holdout_rmse_px(cand);
+            let ang_rmse = compute_holdout_rmse_px(cand) / mult.max(0.25);
+            scores[idx] = ang_rmse / (cand.score.inliers.max(1) as f64).sqrt();
+            early_locked =
+                idx == 0 && cand.score.inliers >= 140 && cand.score.holdout_inlier_fraction >= 0.45;
         }
         outcomes.push(Some(acq));
+        if early_locked {
+            break;
+        }
     }
 
     if scores.iter().any(|s| s.is_finite()) {
@@ -222,7 +231,10 @@ fn acquire_corridor_anchor_single(
     } else {
         None
     };
-    let seeds = screened.unwrap_or_else(|| {
+    let closest_nadir = screened
+        .as_ref()
+        .and_then(|s| closest_prior_nadir_seed(surface, case, s.first().copied()));
+    let seeds = screened.as_ref().cloned().unwrap_or_else(|| {
         build_anchor_seeds(
             surface,
             case,
@@ -261,7 +273,7 @@ fn acquire_corridor_anchor_single(
             (qry_feat, prepared),
             chunk,
             (intrinsics, k_render, render_size, max_lm),
-            (fast_exit, aux.pred_pose.is_none() || fast_exit),
+            (fast_exit, true),
         )?;
         let mut accepted_early = false;
         for (local_i, (cand_opt, virt, layers)) in evals.into_iter().enumerate() {
@@ -304,7 +316,7 @@ fn acquire_corridor_anchor_single(
                     (qry_feat, prepared),
                     &[(c_prev.eye, c_prev.rotation)],
                     (intrinsics, k_render, render_size, max_lm),
-                    (false, aux.pred_pose.is_none()),
+                    (false, true),
                 )?;
                 let (re_cand, re_virt, re_layers) =
                     single.pop().unwrap_or((None, cur_virt.clone(), 0));
@@ -381,45 +393,19 @@ fn acquire_corridor_anchor_single(
             attitude,
         ) && !fb_seeds.is_empty()
         {
-            for ch in fb_seeds.chunks(ANCHOR_BATCH_SIZE) {
-                let fb_evals = eval_seed_batch(
-                    (surface, store, projector),
-                    gpu_renderer,
-                    (xfeat, lighterglue),
-                    (qry_feat, prepared),
-                    ch,
-                    (intrinsics, k_render, render_size, max_lm),
-                    (false, true),
-                )?;
-                let mut accepted_fb = false;
-                for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
-                    lg_layers += layers;
-                    if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
-                        let seed_idx = base_idx + local_i;
-                        let is_acc =
-                            c.score.geometry_accepted && is_plausible_anchor_candidate(&c, surface);
-                        let take = best.as_ref().is_none_or(|(_, _, prev)| {
-                            let prev_acc = prev.score.geometry_accepted
-                                && is_plausible_anchor_candidate(prev, surface);
-                            (is_acc, candidate_priority(&c.score))
-                                > (prev_acc, candidate_priority(&prev.score))
-                        });
-                        seed_pool.push((seed_idx, c.clone()));
-                        if take {
-                            best = Some((seed_idx, 0, c.clone()));
-                            best_view = Some(virt);
-                        }
-                        if is_acc {
-                            accepted_fb = true;
-                            break;
-                        }
-                    }
-                }
-                base_idx += ch.len();
-                if accepted_fb {
-                    break;
-                }
-            }
+            eval_global_fallback_seeds(
+                (surface, store, projector),
+                gpu_renderer,
+                (xfeat, lighterglue),
+                (qry_feat, prepared),
+                &fb_seeds,
+                (intrinsics, k_render, render_size, max_lm),
+                &mut base_idx,
+                &mut lg_layers,
+                &mut seed_pool,
+                &mut best,
+                &mut best_view,
+            )?;
         }
     }
 
@@ -435,6 +421,8 @@ fn acquire_corridor_anchor_single(
             render_size,
             focal_mult,
             seed_pool,
+            screened.as_deref(),
+            closest_nadir,
             &mut best,
             attempts_log,
         )?;

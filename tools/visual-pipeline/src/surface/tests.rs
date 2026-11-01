@@ -229,3 +229,26 @@ fn render_adaptive_agrees_with_full_render_and_cuts_rays_over_fourfold() {
         "expected visible high-gradient shoreline"
     );
 }
+
+#[test]
+fn from_catalog_rejects_missing_imagery_tiles_when_catalog_is_nonempty() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cat_path = tmp.path().join("catalog.json");
+    let doc = serde_json::json!({
+        "origin": { "latitude": 40.5, "longitude": -75.1 },
+        "bbox": [-75.2, 40.4, -75.0, 40.6],
+        "imagery": { "zoom": 15 },
+        "dem": { "zoom": 14 },
+        "tiles": [
+            { "kind": "imagery", "xyz": [15, 9548, 12310], "path": "missing_tile.png" }
+        ]
+    });
+    std::fs::write(&cat_path, serde_json::to_vec(&doc).expect("json")).expect("write catalog");
+    let Err(err) = Surface::from_catalog(&cat_path) else {
+        panic!("missing imagery tiles must fail closed");
+    };
+    assert!(
+        matches!(err, PipelineError::Invalid(_)),
+        "unexpected error: {err:?}"
+    );
+}

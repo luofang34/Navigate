@@ -1,19 +1,15 @@
 //! Seed-batch virtual-view projection, Kashin matching, and LighterGlue refinement.
 
-use super::{is_plausible_anchor_candidate, is_sane_anchor_seed};
+use super::{is_plausible_anchor_candidate, is_sane_anchor_seed, nadir_screen::SeedPose};
 use crate::{
     PipelineError,
-    corridor::{
-        kinematics::{approx_dot, match_virtual_kashin},
-        nadir::DENSE_NADIR_YAW_BANDS_DEG,
-    },
-    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
+    corridor::kinematics::match_virtual_kashin,
+    pose::{PoseCandidate, PoseScore, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
     realtime::helpers::{polish_pose_sparse, rot_to_row_major},
     surface::{Surface, SurfaceGpuRenderer},
-    testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Vector3};
 use navigate_match::{
     CorridorTileStore, FastMatchConfig, HadamardProjector, IndexedMatch, LighterGlue,
     PreparedKashinQuery, SparseFeatures, VirtualCorridorView, VirtualViewCamera,
@@ -173,7 +169,105 @@ pub(super) fn eval_seed_batch(
     Ok(results)
 }
 
-#[allow(clippy::too_many_arguments)]
+fn seed_only_candidate(
+    eye: [f64; 3],
+    rotation: Matrix3<f64>,
+    k_render: &Matrix3<f64>,
+    render_size: [u32; 2],
+) -> PoseCandidate {
+    PoseCandidate {
+        eye,
+        rotation,
+        k: *k_render,
+        size: render_size,
+        points: Vec::new(),
+        pixels: Vec::new(),
+        inliers: Vec::new(),
+        score: PoseScore {
+            focal_px: k_render[(0, 0)],
+            geometry_accepted: false,
+            holdout_count: 0,
+            holdout_inlier_fraction: 0.0,
+            holdout_median_px: 1e6,
+            image_support_fraction: 0.0,
+            inliers: 0,
+            pairs: 0,
+            positive_depth_fraction: 0.0,
+            train_inliers: 0,
+            train_rms_px: 1e6,
+        },
+    }
+}
+
+fn same_seed_neighborhood(a: &PoseCandidate, b_eye: [f64; 3], b_rot: &Matrix3<f64>) -> bool {
+    let dist = (Vector3::from(a.eye) - Vector3::from(b_eye)).norm();
+    let cos_ang = (((a.rotation * b_rot.transpose()).trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
+    dist <= 20.0 && cos_ang >= 0.96
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "global fallback batch evaluation shares terrain, tile store, models, query features, and best-candidate state"
+)]
+pub(super) fn eval_global_fallback_seeds(
+    (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
+    gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
+    (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
+    (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
+    fb_seeds: &[SeedPose],
+    (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
+    base_idx: &mut usize,
+    lg_layers: &mut usize,
+    seed_pool: &mut Vec<(usize, PoseCandidate)>,
+    best: &mut Option<(usize, usize, PoseCandidate)>,
+    best_view: &mut Option<VirtualCorridorView>,
+) -> Result<(), PipelineError> {
+    for ch in fb_seeds.chunks(super::ANCHOR_BATCH_SIZE) {
+        let fb_evals = eval_seed_batch(
+            (surface, store, projector),
+            gpu_renderer,
+            (xfeat, lighterglue),
+            (qry_feat, prepared),
+            ch,
+            (intrinsics, k_render, render_size, max_lm),
+            (false, true),
+        )?;
+        let mut accepted_fb = false;
+        for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
+            *lg_layers += layers;
+            if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
+                let seed_idx = *base_idx + local_i;
+                let is_acc =
+                    c.score.geometry_accepted && is_plausible_anchor_candidate(&c, surface);
+                let take = best.as_ref().is_none_or(|(_, _, prev)| {
+                    let prev_acc = prev.score.geometry_accepted
+                        && is_plausible_anchor_candidate(prev, surface);
+                    (is_acc, candidate_priority(&c.score))
+                        > (prev_acc, candidate_priority(&prev.score))
+                });
+                seed_pool.push((seed_idx, c.clone()));
+                if take {
+                    *best = Some((seed_idx, 0, c));
+                    *best_view = Some(virt);
+                }
+                if is_acc {
+                    accepted_fb = true;
+                    break;
+                }
+            }
+        }
+        *base_idx += ch.len();
+        if accepted_fb {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "anchor polish loop shares surface, GPU renderer, feature models, intrinsics, and best-candidate state"
+)]
 pub(super) fn polish_anchor_seed_pool(
     surface: &Surface,
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
@@ -184,6 +278,8 @@ pub(super) fn polish_anchor_seed_pool(
     render_size: [u32; 2],
     focal_mult: f64,
     mut seed_pool: Vec<(usize, PoseCandidate)>,
+    screened_seeds: Option<&[SeedPose]>,
+    closest_nadir: Option<SeedPose>,
     best: &mut Option<(usize, usize, PoseCandidate)>,
     attempts_log: &mut Vec<serde_json::Value>,
 ) -> Result<(usize, usize), PipelineError> {
@@ -199,21 +295,54 @@ pub(super) fn polish_anchor_seed_pool(
                 a.1.score.pairs,
             ))
     });
-    let polish_cap = if seed_pool
-        .first()
-        .is_some_and(|(_, c)| c.score.inliers >= 12)
-    {
-        1
+    let best_accepted = best.as_ref().is_some_and(|(_, _, c)| {
+        c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
+    });
+    let mut selected: Vec<(usize, PoseCandidate)> = if best_accepted {
+        seed_pool.into_iter().take(1).collect()
+    } else if let Some(scr) = screened_seeds {
+        for (idx, &(s_eye, s_rot)) in scr.iter().take(4).enumerate() {
+            if !seed_pool
+                .iter()
+                .any(|(_, c)| same_seed_neighborhood(c, s_eye, &s_rot))
+            {
+                seed_pool.push((
+                    idx,
+                    seed_only_candidate(s_eye, s_rot, k_render, render_size),
+                ));
+            }
+        }
+        let mut top: Vec<(usize, PoseCandidate)> = seed_pool.into_iter().take(4).collect();
+        if let Some((n_eye, n_rot)) = closest_nadir
+            && !top
+                .iter()
+                .any(|(_, c)| same_seed_neighborhood(c, n_eye, &n_rot))
+        {
+            top.insert(
+                0,
+                (0, seed_only_candidate(n_eye, n_rot, k_render, render_size)),
+            );
+        }
+        top
     } else {
-        2
+        let polish_cap = if seed_pool
+            .first()
+            .is_some_and(|(_, c)| c.score.inliers >= 12)
+        {
+            1
+        } else {
+            2
+        };
+        seed_pool.into_iter().take(polish_cap).collect()
     };
+    let unaccepted_steps = if screened_seeds.is_some() { 3 } else { 2 };
     let mut polish_rays = 0_usize;
     let mut lg_layers = 0_usize;
-    for (seed_idx, mut cur_cand) in seed_pool.into_iter().take(polish_cap) {
+    for (seed_idx, mut cur_cand) in selected.drain(..) {
         let steps = if cur_cand.score.geometry_accepted {
             1
         } else {
-            3
+            unaccepted_steps
         };
         for p_step in 1..=steps {
             let Some((polished, rays, layers)) = polish_pose_sparse(
@@ -281,143 +410,4 @@ fn collect_virtual_indexed(
         }
     }
     (w, p)
-}
-
-type SeedPose = ([f64; 3], Matrix3<f64>);
-type RankedSeedPose = ((bool, i64), SeedPose);
-
-pub(super) fn maybe_screen_low_agl_nadir_seeds(
-    (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
-    case: &PhotoCase,
-    prepared: &PreparedKashinQuery,
-    intrinsics: [f64; 4],
-    render_size: [u32; 2],
-    limit: usize,
-) -> Result<Option<Vec<SeedPose>>, PipelineError> {
-    let Some(pos) = case.prior.as_ref().and_then(|p| p.position.as_ref()) else {
-        return Ok(None);
-    };
-    let Some(alt_m) = pos.altitude_m else {
-        return Ok(None);
-    };
-    let Some(dem_h) = surface.sample_dem(pos.latitude, pos.longitude) else {
-        return Ok(None);
-    };
-    let agl = (alt_m - dem_h).max(0.0);
-    if agl > 250.0 {
-        return Ok(None);
-    }
-    let center = surface.local(pos.latitude, pos.longitude, 0.0);
-    let agl_center = (agl * 1.50).clamp(130.0, 175.0);
-    let center_eye = surface.local(pos.latitude, pos.longitude, dem_h + agl_center);
-    let cap = limit.max(28);
-    let mut out: Vec<SeedPose> = Vec::with_capacity(cap);
-    for &hdg in &DENSE_NADIR_YAW_BANDS_DEG {
-        out.push((
-            center_eye,
-            surface.camera_rotation(pos.latitude, pos.longitude, hdg, 88.0, 0.0),
-        ));
-    }
-
-    let step_xy = (agl * 0.70).clamp(58.0, 85.0);
-    let agl_ring = (agl * 1.32).clamp(115.0, 155.0);
-    let ring_offsets = [
-        (1_i32, 0_i32),
-        (-1, 0),
-        (0, 1),
-        (0, -1),
-        (1, 1),
-        (1, -1),
-        (-1, 1),
-        (-1, -1),
-    ];
-    let mut ring_scored: Vec<RankedSeedPose> = Vec::with_capacity(16);
-    for (gx, gy) in ring_offsets {
-        let [glat, glon, _] = surface.geodetic([
-            center[0] + f64::from(gx) * step_xy,
-            center[1] + f64::from(gy) * step_xy,
-            0.0,
-        ]);
-        let Some(gdem) = surface.sample_dem(glat, glon) else {
-            continue;
-        };
-        let geye = surface.local(glat, glon, gdem + agl_ring);
-        let mut cell_yaws: Vec<RankedSeedPose> = Vec::with_capacity(12);
-        for &hdg in &DENSE_NADIR_YAW_BANDS_DEG {
-            let grot = surface.camera_rotation(glat, glon, hdg, 88.0, 0.0);
-            let virt = store.project_virtual_view(
-                &VirtualViewCamera {
-                    eye_enu: geye,
-                    world_to_cam: rot_to_row_major(&grot),
-                    intrinsics,
-                    image_size: render_size,
-                    max_landmarks: 512,
-                    min_cos_incidence: 0.45,
-                    min_cos_orientation: 0.94,
-                },
-                projector,
-            )?;
-            if virt.world_points_enu.len() < 16 {
-                continue;
-            }
-            let strict_cnt = match_virtual_kashin(&virt, prepared, 512).0.len();
-            let smooth = kashin_mutual_top_sum(&virt, prepared, 512, 32);
-            let rank = (
-                strict_cnt >= 8,
-                (smooth * 1_000.0).round() as i64 + (strict_cnt as i64) * 150,
-            );
-            cell_yaws.push((rank, (geye, grot)));
-        }
-        cell_yaws.sort_by_key(|a| std::cmp::Reverse(a.0));
-        ring_scored.extend(cell_yaws.into_iter().take(2));
-    }
-    ring_scored.sort_by_key(|a| std::cmp::Reverse(a.0));
-    out.extend(
-        ring_scored
-            .into_iter()
-            .take(cap.saturating_sub(out.len()))
-            .map(|(_, pose)| pose),
-    );
-    out.truncate(cap);
-    Ok(Some(out))
-}
-
-fn kashin_mutual_top_sum(
-    virt: &VirtualCorridorView,
-    query: &PreparedKashinQuery,
-    cap: usize,
-    top_k: usize,
-) -> f64 {
-    let n_r = virt.sign_bits.len().min(cap);
-    let n_q = query.valid_indices().len().min(cap);
-    if n_r == 0 || n_q == 0 {
-        return 0.0;
-    }
-    let q_signs = query.sign_bits();
-    let q_rots = query.rotated();
-    let mut fwd = vec![(usize::MAX, -2.0_f32); n_r];
-    let mut rev = vec![(usize::MAX, -2.0_f32); n_q];
-    for (r, slot) in fwd.iter_mut().enumerate() {
-        let rs = virt.sign_bits[r];
-        let rc = &virt.kashin_i8[r];
-        for q in 0..n_q {
-            if (rs ^ q_signs[q]).count_ones() > 26 {
-                continue;
-            }
-            let dot = approx_dot(rc, &q_rots[q]);
-            if dot > slot.1 {
-                *slot = (q, dot);
-            }
-            if dot > rev[q].1 {
-                rev[q] = (r, dot);
-            }
-        }
-    }
-    let mut dots: Vec<f32> = fwd
-        .into_iter()
-        .enumerate()
-        .filter_map(|(r, (q, d))| (q < n_q && rev[q].0 == r && d >= 0.42).then_some(d))
-        .collect();
-    dots.sort_by(|a, b| b.total_cmp(a));
-    dots.into_iter().take(top_k).map(f64::from).sum()
 }

@@ -28,9 +28,10 @@ use std::{
     path::Path,
 };
 
-const TOP_UP_FRUSTUM_MARGIN_PX: f64 = 48.0;
+pub(super) const TOP_UP_FRUSTUM_MARGIN_PX: f64 = 48.0;
 const TOP_UP_DEDUP_METRES: f64 = 1.5;
 
+#[derive(Clone, Debug)]
 pub(super) struct FusionAdmission {
     pub tracking_mode: &'static str,
     pub evidence_kind: &'static str,
@@ -273,7 +274,7 @@ pub(super) fn top_up_tracks_with_bank(
             } else {
                 0.84
             },
-            min_cos_orientation: 0.80,
+            min_cos_orientation: if is_nadir { 0.94 } else { 0.80 },
         },
         projector,
     ) && !virt.world_points_enu.is_empty()
