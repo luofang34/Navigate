@@ -11,6 +11,7 @@ mod latency;
 pub mod masking;
 mod motion;
 pub mod nadir;
+pub mod serve;
 pub mod session;
 mod tile_builder;
 mod tracker;
@@ -22,6 +23,7 @@ pub use kinematics::{
     KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile, can_update_vertical_velocity,
     compute_dt_s,
 };
+pub use serve::{CorridorServeOptions, CorridorServeSession, run_corridor_serve};
 pub use session::{
     DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner, FilterIntegritySnapshot,
     SessionAnchorReport, VisualCorridorSession,
@@ -31,7 +33,7 @@ pub use tracker::run_corridor_track;
 use crate::{
     PipelineError,
     realtime::helpers::{hex, raw_file_sha256},
-    stages::{load_profile_cases, scale_k},
+    stages::load_profile_cases,
     surface::{Surface, SurfaceGpuRenderer},
     xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };
@@ -194,8 +196,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         .max(agl_m * 3.0)
         .powi(2);
     let render_size = [800_u32, 600_u32];
-    let k_base = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
-    let k_render = scale_k(&k_base, 1.0, 1.0);
+    let k_render = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
     let mut gpu_renderer = SurfaceGpuRenderer::try_new(&surface, &k_render, render_size);
     if gpu_renderer.is_none() {
         tracing::warn!(

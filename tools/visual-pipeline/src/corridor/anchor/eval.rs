@@ -24,14 +24,43 @@ pub(super) type SeedEvalTuple = (Option<PoseCandidate>, VirtualCorridorView, usi
 
 #[derive(Clone, Copy)]
 pub(super) struct SeedBatchFlags {
-    pub fast_exit: bool,
+    pub priority_lead: bool,
     pub coarse_screen: bool,
     pub allow_horizon_gpu: bool,
+    pub pace_realtime: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::corridor::anchor) struct SeedChunkOpts {
+    pub priority_lead: bool,
+    pub coarse_screen: bool,
+    pub allow_horizon_gpu: bool,
+    pub pace_realtime: bool,
+    pub focal_mult: f64,
+}
+
+impl SeedChunkOpts {
+    pub(in crate::corridor::anchor) fn new(
+        priority_lead: bool,
+        coarse_screen: bool,
+        allow_horizon_gpu: bool,
+        pace_realtime: bool,
+        focal_mult: f64,
+    ) -> Self {
+        Self {
+            priority_lead,
+            coarse_screen,
+            allow_horizon_gpu,
+            pace_realtime,
+            focal_mult,
+        }
+    }
 }
 
 const COARSE_LG_SEED_CAP: usize = 8;
-const COARSE_NADIR_LG_SEED_CAP: usize = 12;
+const COARSE_NADIR_OR_COREML_LG_SEED_CAP: usize = 16;
 const FULL_BATCH_LG_SEED_CAP: usize = 12;
+const STEEP_OR_COREML_LG_SEED_CAP: usize = 24;
 
 pub(super) fn eval_seed_batch(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
@@ -48,7 +77,9 @@ pub(super) fn eval_seed_batch(
     } else {
         virt_lm_cap
     };
-    let inline_gpu_cap = if flags.coarse_screen {
+    let inline_gpu_cap = if flags.pace_realtime {
+        1_usize
+    } else if flags.coarse_screen {
         2_usize
     } else {
         4_usize
@@ -95,8 +126,9 @@ pub(super) fn eval_seed_batch(
             )?;
         }
         if virt.world_points_enu.len() < 12 || (flags.allow_horizon_gpu && sin_down < 0.02) {
-            let can_inline_gpu =
-                inline_gpu_used < inline_gpu_cap && (!steep_nadir || poses.len() <= 4);
+            let can_inline_gpu = virt.visible_tiles > 0
+                && inline_gpu_used < inline_gpu_cap
+                && (!steep_nadir || poses.len() <= 4);
             if can_inline_gpu
                 && let Some(gpu_lock) = gpu_renderer
                 && let Some((mut polished, _, mut layers)) = polish_pose_sparse(
@@ -169,32 +201,40 @@ pub(super) fn eval_seed_batch(
         && !need_lg.is_empty()
     {
         let all_steep_nadir = poses.iter().all(|&(_, r)| -r[(2, 2)] > 0.85);
-        need_lg.sort_by_key(|&(i, k_inliers, k_matches, kashin_sim)| {
-            Reverse((
-                k_inliers,
-                k_matches,
-                (f64::from(kashin_sim) * 1_000.0).round() as i64,
-                Reverse(i),
-            ))
-        });
-        let lg_cap = if flags.coarse_screen {
-            if all_steep_nadir {
-                COARSE_NADIR_LG_SEED_CAP
+        let is_coreml = xfeat.runtime_name() == "coreml";
+        if !flags.priority_lead {
+            need_lg.sort_by_key(|&(i, k_inliers, k_matches, kashin_sim)| {
+                Reverse((
+                    k_inliers,
+                    k_matches,
+                    (f64::from(kashin_sim) * 1_000.0).round() as i64,
+                    Reverse(i),
+                ))
+            });
+            let lg_cap = if flags.coarse_screen {
+                if all_steep_nadir || is_coreml {
+                    COARSE_NADIR_OR_COREML_LG_SEED_CAP
+                } else {
+                    COARSE_LG_SEED_CAP
+                }
+            } else if all_steep_nadir || is_coreml {
+                STEEP_OR_COREML_LG_SEED_CAP
             } else {
-                COARSE_LG_SEED_CAP
-            }
-        } else {
-            FULL_BATCH_LG_SEED_CAP
-        };
-        need_lg.truncate(lg_cap);
+                FULL_BATCH_LG_SEED_CAP
+            };
+            need_lg.truncate(lg_cap);
+        }
 
-        let max_kp = if flags.fast_exit || flags.coarse_screen || poses.len() > 12 {
+        let max_kp = if flags.priority_lead {
+            max_lm.min(1024)
+        } else if flags.coarse_screen || poses.len() > 12 {
             max_lm.min(768)
         } else {
             max_lm.min(1024)
         };
-        let layers = if flags.coarse_screen
-            || flags.fast_exit
+        let layers = if flags.priority_lead {
+            6
+        } else if flags.coarse_screen
             || (poses.len() > super::ANCHOR_BATCH_SIZE && !all_steep_nadir)
         {
             4
@@ -284,13 +324,19 @@ pub(super) fn eval_seed_batch(
     clippy::too_many_arguments,
     reason = "global fallback batch evaluation shares terrain, tile store, models, query features, and best-candidate state"
 )]
-pub(super) fn eval_global_fallback_seeds(
+fn eval_global_fallback_seeds(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
     (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
     (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
     fb_seeds: &[SeedPose],
-    (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
+    (intrinsics, k_render, render_size, max_lm, pace_realtime): (
+        [f64; 4],
+        &Matrix3<f64>,
+        [u32; 2],
+        usize,
+        bool,
+    ),
     base_idx: &mut usize,
     lg_layers: &mut usize,
     seed_pool: &mut Vec<(usize, PoseCandidate)>,
@@ -308,9 +354,10 @@ pub(super) fn eval_global_fallback_seeds(
         fb_seeds,
         (intrinsics, k_render, render_size, max_lm),
         SeedBatchFlags {
-            fast_exit: false,
+            priority_lead: fb_seeds.len() <= super::ANCHOR_BATCH_SIZE,
             coarse_screen: false,
             allow_horizon_gpu: true,
+            pace_realtime,
         },
     )?;
     let evaluated_n = fb_evals.len();
@@ -383,7 +430,13 @@ pub(in crate::corridor::anchor) fn eval_global_fallback_if_needed(
                 (xfeat, lighterglue),
                 (qry_feat, prepared),
                 &fb_seeds,
-                (intrinsics, k_render, render_size, max_lm),
+                (
+                    intrinsics,
+                    k_render,
+                    render_size,
+                    max_lm,
+                    opts.pace_realtime,
+                ),
                 base_idx,
                 lg_layers,
                 seed_pool,

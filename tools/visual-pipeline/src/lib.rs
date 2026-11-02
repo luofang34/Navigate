@@ -22,7 +22,8 @@ pub use clock::{
     PriorTrack, capture_anchor, movie_duration_s, rotation_from_heading, seed_live_prior,
 };
 pub use corridor::{
-    CorridorBuildOptions, CorridorTrackOptions, build_corridor_bank, run_corridor_track,
+    CorridorBuildOptions, CorridorServeOptions, CorridorServeSession, CorridorTrackOptions,
+    build_corridor_bank, run_corridor_serve, run_corridor_track,
 };
 pub use error::PipelineError;
 pub use matcher_client::PipelineMatcher;

@@ -2,8 +2,8 @@
 
 use super::{
     AnchorAcquisition, AnchorQueryAux,
-    eval::eval_global_fallback_if_needed,
-    eval_seed_chunks, is_plausible_anchor_candidate,
+    eval::{SeedChunkOpts, eval_global_fallback_if_needed},
+    eval_seed_chunks, is_heading_known, is_plausible_anchor_candidate,
     nadir_screen::{SeedPose, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds},
     plausibility::compute_holdout_rmse_px,
     polish::polish_anchor_seed_pool,
@@ -166,6 +166,7 @@ pub(super) fn run_uncalibrated_focal_sweep(
         let mut best_view: Option<VirtualCorridorView> = None;
         let mut seed_pool: Vec<(usize, PoseCandidate)> = Vec::new();
         let mut lg_layers = 0_usize;
+        let lead = is_heading_known(case, opts) || aux.pred_pose.is_some();
         let max_pairs = eval_seed_chunks(
             (surface, store, projector),
             gpu_renderer,
@@ -173,7 +174,7 @@ pub(super) fn run_uncalibrated_focal_sweep(
             (qry_feat, prepared),
             &coarse_seeds,
             (intrinsics, &k_render_m, render_size, max_lm),
-            (aux.pred_pose.is_some(), true, idx == 0 || idx == 2, mult),
+            SeedChunkOpts::new(lead, true, idx == 0 || idx == 2, opts.pace_realtime, mult),
             (&mut base_idx, &mut lg_layers),
             (&mut seed_pool, &mut best, &mut best_view),
             attempts_log,
@@ -202,7 +203,7 @@ pub(super) fn run_uncalibrated_focal_sweep(
             idx == 0 || (idx == 2 && state.max_inliers() >= slot0_inl.saturating_mul(2));
         let mut coarse_early_done = if idx == 0 {
             state.has_strong_lock(surface, 48, 0.40)
-                || (low_agl_slot0 && state.has_strong_lock(surface, 26, 0.40))
+                || (low_agl_slot0 && state.has_strong_lock(surface, 40, 0.45))
         } else {
             idx == 2
                 && state.max_inliers() >= slot0_inl.saturating_mul(2)
@@ -434,7 +435,7 @@ fn finalize_coarse_multiplier(
                 (qry_feat, prepared),
                 &st.remaining_seeds,
                 (intrinsics, &st.k_render_m, render_size, max_lm),
-                (false, false, true, st.mult),
+                SeedChunkOpts::new(false, false, true, opts.pace_realtime, st.mult),
                 (&mut st.base_idx, &mut add_lg),
                 (&mut extra_pool, &mut st.best, &mut st.best_view),
                 attempts_log,
