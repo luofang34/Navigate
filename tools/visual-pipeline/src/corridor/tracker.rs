@@ -86,16 +86,13 @@ pub(super) fn run_corridor_track_resident(
             let mask_interval = opts
                 .mask_interval_s
                 .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
-            let mut m = AmortizedMasker::new(
+            let m = AmortizedMasker::new(
                 opts.seg_model_dir.as_deref(),
                 &opts.mask_policy,
                 6,
                 mask_interval.max(1),
                 &seg_device,
             )?;
-            if use_bg {
-                m = m.with_background_refresh()?;
-            }
             owned_masker.insert(m)
         }
     };
@@ -203,31 +200,12 @@ pub(super) fn run_corridor_track_resident(
             .prev_rot
             .or(state.vo_rot)
             .map(|r| state.prev_rot_step * r);
-        let mut did_initial_fast_seg = false;
-        if evaluated == 1 && state.active_tracks.is_empty() && masker.has_segformer() {
-            match masker.fast_initial_pass(&qry_small, est_rot_for_mask.as_ref()) {
-                Ok(Some(ms)) => {
-                    did_initial_fast_seg = true;
-                    seg_refreshes += 1;
-                    latencies.seg_refresh_ms.push(ms);
-                }
-                Ok(None) => {}
-                Err(e) => tracing::warn!("frame 1 fast Segformer pass failed: {e}"),
-            }
-            if opts.pace_realtime
-                && let Some((_, ref mut wall0)) = pace_origin
-            {
-                *wall0 = Instant::now();
-            }
-        }
         let anchor_busy = polled_outcome.is_none()
             && background_anchor
                 .as_ref()
                 .is_some_and(BackgroundAnchor::is_in_flight);
-        let allow_seg = !(did_initial_fast_seg && (!use_bg || effective_cases <= 1))
-            && !(state.active_tracks.is_empty()
-                && masker.has_usable_key(render_size)
-                && anchor_busy);
+        let allow_seg =
+            !(state.active_tracks.is_empty() && masker.has_usable_key(render_size) && anchor_busy);
         let qry_gray = grayscale(&qry_small);
         let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker
             .mask_frame_with_luma_controlled(
@@ -240,6 +218,13 @@ pub(super) fn run_corridor_track_resident(
             )?;
         seg_refreshes += usize::from(mask_tel.segformer_refreshed);
         latencies.seg_refresh_ms.extend(mask_tel.segformer_ms);
+        if evaluated == 1
+            && opts.pace_realtime
+            && mask_tel.segformer_refreshed
+            && let Some((_, ref mut wall0)) = pace_origin
+        {
+            *wall0 = Instant::now();
+        }
         let cold_paced_vo = opts.pace_realtime
             && anchor_busy
             && state.active_tracks.is_empty()
@@ -378,6 +363,9 @@ pub(super) fn run_corridor_track_resident(
             }
         } else if !skip_cold_xfeat {
             advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
+        }
+        if use_bg && evaluated == 1 {
+            masker.enable_background_refresh()?;
         }
         let filter_snap = state.filter_snapshot(local_frame);
 

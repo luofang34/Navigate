@@ -67,12 +67,22 @@ impl AmortizedMasker {
     ///
     /// Returns [`PipelineError`] when the worker thread cannot start.
     pub fn with_background_refresh(mut self) -> Result<Self, PipelineError> {
+        self.enable_background_refresh()?;
+        Ok(self)
+    }
+
+    /// Move `Segformer` refreshes to a named background worker thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] when the worker thread cannot start.
+    pub fn enable_background_refresh(&mut self) -> Result<(), PipelineError> {
         self.seg = self
             .seg
             .take()
             .map(Refresher::into_background)
             .transpose()?;
-        Ok(self)
+        Ok(())
     }
 
     /// Clear cached frame masks and propeller history before a new session.

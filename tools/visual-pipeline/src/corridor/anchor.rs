@@ -17,7 +17,9 @@ use crate::{
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use eval::{SeedBatchFlags, SeedChunkOpts, eval_global_fallback_if_needed, eval_seed_batch};
+use eval::{
+    SeedBatchFlags, SeedChunkOpts, eval_global_fallback_if_needed, eval_seed_batch, lead_seed_count,
+};
 use image::GrayImage;
 use nadir_screen::{
     SeedPose, build_anchor_seeds, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds,
@@ -209,7 +211,7 @@ fn acquire_corridor_anchor_single(
         &seeds,
         (intrinsics, k_render, render_size, max_lm),
         SeedChunkOpts::new(
-            is_heading_known(case, opts) || aux.pred_pose.is_some(),
+            lead_seed_count(case, opts, aux.pred_pose.is_some()),
             false,
             true,
             opts.pace_realtime,
@@ -291,8 +293,8 @@ fn eval_seed_chunks(
     if seeds.is_empty() {
         return Ok(0);
     }
-    let lead_n = if chunk_opts.priority_lead && *base_idx == 0 {
-        ANCHOR_BATCH_SIZE.min(seeds.len())
+    let lead_n = if *base_idx == 0 {
+        chunk_opts.lead_count.min(seeds.len())
     } else {
         0_usize
     };

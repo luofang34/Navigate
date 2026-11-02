@@ -305,11 +305,24 @@ impl LoadedXFeat {
                         lg.match_features_batch_indexed_fast(&b4, &feat_wide, &cfg_768),
                     )?;
                 }
-                for lead in [&f512, &f768, &f1024] {
+                for lead in [&f256, &f512, &f768, &f1024] {
                     let b4 = [lead, &f512, &f256, &f256];
                     let _ = pollster::block_on(
                         lg.match_features_batch_indexed_fast(&b4, &feat_wide, &cfg_1024),
                     )?;
+                }
+                for qry_sub in [&f512, &f768] {
+                    for lead in [&f768, &f1024] {
+                        let _ = pollster::block_on(lg.match_features_batch_indexed_fast(
+                            &[lead],
+                            qry_sub,
+                            &cfg_1024,
+                        ))?;
+                        let b4 = [lead, &f512, &f256, &f256];
+                        let _ = pollster::block_on(
+                            lg.match_features_batch_indexed_fast(&b4, qry_sub, &cfg_1024),
+                        )?;
+                    }
                 }
             }
             Ok(t0.elapsed().as_secs_f64() * 1000.0)
