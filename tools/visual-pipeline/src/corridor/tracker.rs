@@ -5,11 +5,11 @@ use super::{
     admission::{
         apply_case_overrides, estimate_lookahead_enu, prior_odometry_hint, write_corridor_report,
     },
-    anchor::multitier::load_search_tier_matcher,
     anchor_worker::{AnchorArrival, BackgroundAnchor},
     latency::StageLatencies,
     masking::{AmortizedMasker, MaskFrameTelemetry},
     motion::{TrackState, advance_unsolved_prepared, record_odometry_step, update_motion_state},
+    serve::CorridorResidentResources,
 };
 
 mod lookahead;
@@ -17,63 +17,58 @@ mod reporting;
 mod solve;
 use crate::{
     PipelineError,
-    realtime::helpers::{check_encoder_contract, load_lighterglue_model, raw_file_sha256},
     stages::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator, load_case_mask,
         load_case_rgb, load_profile_cases, scale_k,
     },
-    surface::Surface,
+    surface::SurfaceGpuRenderer,
+    testset::PhotoCase,
     util::write_json,
-    xfeat_runtime::LoadedXFeat,
 };
 use image::imageops::{FilterType, colorops::grayscale};
 use lookahead::{
     advance_case_timing_and_continuity, ensure_lookahead_tiles, init_tracker_session,
     pace_if_realtime, poll_anchor_before_frame, spawn_corridor_workers,
 };
-use navigate_match::{
-    CorridorTileStore, DEFAULT_WINDOW_TILES, HadamardProjector, PreparedKashinQuery, SparseFeatures,
-};
-use navigate_visual::LocalFrame;
+use navigate_match::{PreparedKashinQuery, SparseFeatures};
 use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
 use serde_json::{Value, json};
 use solve::{FrameSolveParams, solve_frame_pose, tracking_render_size};
-use std::{fs, sync::Arc, time::Instant};
+use std::{fs, sync::Mutex, time::Instant};
 
-/// Localize and track sequential frames against a [`CorridorTileStore`] (`corridor-track`).
+/// Localize and track sequential frames against a [`CorridorTileStore`](navigate_match::CorridorTileStore) (`corridor-track`).
 ///
 /// # Errors
 ///
 /// Returns [`PipelineError`] when bank verification, masking, matching, or report writing fails.
 pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, PipelineError> {
-    let surface = Arc::new(Surface::from_catalog(&opts.catalog_path)?);
-    let local_frame = LocalFrame::wgs84_enu(surface.origin_lat, surface.origin_lon).ok();
-    let catalog_digest = raw_file_sha256(&opts.catalog_path)?;
-    let xfeat = LoadedXFeat::load(&opts.xfeat_weights_path, &opts.xfeat_runtime)?;
-    let lighterglue = opts
-        .lighterglue_weights_path
-        .as_deref()
-        .map(|p| load_lighterglue_model(p, xfeat.device()))
-        .transpose()?;
-    let store = Arc::new(CorridorTileStore::open(
-        &opts.corridor_bank_path,
-        DEFAULT_WINDOW_TILES,
-    )?);
-    if store.catalog_sha256 != catalog_digest {
-        return Err(PipelineError::Invalid(
-            "corridor bank catalog_sha256 does not match --catalog".into(),
-        ));
-    }
-    check_encoder_contract("corridor bank", &store.encoder_contract, &xfeat)?;
+    let res = CorridorResidentResources::open_for_track(opts, false)?;
+    run_corridor_track_resident(opts, None, &res, None, None)
+}
 
-    let search_tier_matcher = load_search_tier_matcher(
-        opts.dinov2_weights_path.as_deref(),
-        opts.place_index_path.as_deref(),
-        Arc::clone(&store),
-        xfeat.device(),
-    )?;
-
-    let cases = load_profile_cases(&opts.profile_path)?;
+pub(super) fn run_corridor_track_resident(
+    opts: &CorridorTrackOptions,
+    cases_override: Option<&[PhotoCase]>,
+    res: &CorridorResidentResources,
+    resident_gpu: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
+    resident_masker: Option<&mut AmortizedMasker>,
+) -> Result<Value, PipelineError> {
+    let (surface, local_frame, store, projector, xfeat, lighterglue, search_tier_matcher) = (
+        &res.surface,
+        res.local_frame,
+        &res.store,
+        res.projector,
+        &res.xfeat,
+        &res.lighterglue,
+        &res.search_tier_matcher,
+    );
+    let loaded_cases;
+    let cases: &[PhotoCase] = if let Some(explicit) = cases_override {
+        explicit
+    } else {
+        loaded_cases = load_profile_cases(&opts.profile_path)?;
+        &loaded_cases
+    };
     let effective_cases = cases
         .iter()
         .filter(|c| {
@@ -83,20 +78,27 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         })
         .count();
     let use_bg = opts.background_refresh && effective_cases > 1;
-    let seg_device = burn::tensor::Device::flex();
-    let mask_interval = opts
-        .mask_interval_s
-        .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
-    let mut masker = AmortizedMasker::new(
-        opts.seg_model_dir.as_deref(),
-        &opts.mask_policy,
-        6,
-        mask_interval.max(1),
-        &seg_device,
-    )?;
-    if use_bg {
-        masker = masker.with_background_refresh()?;
-    }
+    let mut owned_masker: Option<AmortizedMasker> = None;
+    let masker: &mut AmortizedMasker = match resident_masker {
+        Some(rm) if !use_bg => rm,
+        _ => {
+            let seg_device = burn::tensor::Device::flex();
+            let mask_interval = opts
+                .mask_interval_s
+                .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
+            let mut m = AmortizedMasker::new(
+                opts.seg_model_dir.as_deref(),
+                &opts.mask_policy,
+                6,
+                mask_interval.max(1),
+                &seg_device,
+            )?;
+            if use_bg {
+                m = m.with_background_refresh()?;
+            }
+            owned_masker.insert(m)
+        }
+    };
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
         path: opts.output_dir.clone(),
         source,
@@ -106,18 +108,19 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         &json!({ "catalog_sha256": surface.catalog_sha256 }),
     )?;
 
-    let projector = HadamardProjector::new(store.seed);
     let workers = spawn_corridor_workers(
-        &surface,
-        &store,
+        surface,
+        store,
         projector,
-        &xfeat,
+        xfeat,
         lighterglue.as_ref(),
         search_tier_matcher.as_ref(),
-        &cases,
+        cases,
         opts,
+        (res.prewarmed, resident_gpu.is_some()),
     )?;
-    let sync_gpu_renderer = workers.sync_gpu_renderer;
+    let worker_gpu = workers.sync_gpu_renderer;
+    let sync_gpu_ref = resident_gpu.unwrap_or(&worker_gpu);
     let tile_params = workers.tile_params;
     let mut background_anchor = workers.background_anchor;
     let mut tile_builder = workers.tile_builder;
@@ -133,7 +136,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     let min_trk_inliers = opts.min_track_inliers.max(24);
     let mut state = TrackState::new();
     let mut focal_estimator = FocalLengthEstimator::default();
-    init_tracker_session(&mut state, &cases, opts, &focal_estimator, cell_m)?;
+    init_tracker_session(&mut state, cases, opts, &focal_estimator, cell_m)?;
 
     let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
     let (mut warm_tracked_frames, mut independent_fixes, mut seg_refreshes) =
@@ -142,7 +145,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     let mut pace_origin: Option<(f64, Instant)> = None;
     let mut vo_accum_dt_s = 0.0_f64;
 
-    for raw_case in &cases {
+    for raw_case in cases {
         if let Some(allow) = &opts.only_cases
             && !allow.contains(&raw_case.id)
         {
@@ -161,13 +164,13 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
 
-        if let Some(lookahead) = estimate_lookahead_enu(&surface, &state, &case) {
+        if let Some(lookahead) = estimate_lookahead_enu(surface, &state, &case) {
             ensure_lookahead_tiles(
-                &surface,
-                &store,
+                surface,
+                store,
                 &mut tile_builder,
-                &sync_gpu_renderer,
-                &xfeat,
+                sync_gpu_ref,
+                xfeat,
                 &projector,
                 tile_params,
                 lookahead,
@@ -259,7 +262,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;
 
         let (obs_time_s, dt_s, discontinuous) = advance_case_timing_and_continuity(
-            &surface,
+            surface,
             &mut state,
             &mut focal_estimator,
             &case,
@@ -273,7 +276,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             .map_err(PipelineError::Invalid)?;
 
         let (prior_rot_hint, mut nominal_agl_m) =
-            prior_odometry_hint(&surface, &state, &case, &masker, &k_render);
+            prior_odometry_hint(surface, &state, &case, masker, &k_render);
         if skip_cold_xfeat {
             vo_accum_dt_s += dt_s.max(0.0);
             state.record_skipped_odometry_step(dt_s);
@@ -316,15 +319,15 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         let k_render_after_arrival = scale_k(&k_after_arrival, sx, sy);
         if had_arrived_anchor {
             (_, nominal_agl_m) =
-                prior_odometry_hint(&surface, &state, &case, &masker, &k_render_after_arrival);
+                prior_odometry_hint(surface, &state, &case, masker, &k_render_after_arrival);
         }
 
         let solve_params = FrameSolveParams {
-            surface: &surface,
-            store: &store,
+            surface,
+            store,
             projector: &projector,
-            sync_gpu_renderer: &sync_gpu_renderer,
-            xfeat: &xfeat,
+            sync_gpu_renderer: sync_gpu_ref,
+            xfeat,
             lighterglue: lighterglue.as_ref(),
             search_tier_matcher: search_tier_matcher.as_deref(),
             opts,
@@ -335,7 +338,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             k: k_after_arrival,
             k_render: k_render_after_arrival,
             render_size,
-            masker: &masker,
+            masker,
             local_frame,
             nominal_agl_m,
             dt_s,
@@ -408,7 +411,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
 
         write_corridor_report(
             &opts.output_dir,
-            &surface,
+            surface,
             &case.id,
             &admission,
             &filter_snap,
@@ -444,7 +447,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         tiles_built_live += tb.built_tiles();
         drop(tb);
     }
-    drop(masker);
+    drop(owned_masker);
 
     let summary = build_run_summary(RunSummaryParams {
         evaluated,

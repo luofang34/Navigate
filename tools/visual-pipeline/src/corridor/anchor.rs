@@ -17,7 +17,7 @@ use crate::{
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use eval::{SeedBatchFlags, eval_global_fallback_if_needed, eval_seed_batch};
+use eval::{SeedBatchFlags, SeedChunkOpts, eval_global_fallback_if_needed, eval_seed_batch};
 use image::GrayImage;
 use nadir_screen::{
     SeedPose, build_anchor_seeds, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds,
@@ -92,6 +92,15 @@ pub(super) fn stage_match_options(opts: &CorridorTrackOptions) -> MatchStageOpti
         },
         only_cases: None,
     }
+}
+
+pub(super) fn is_heading_known(case: &PhotoCase, opts: &CorridorTrackOptions) -> bool {
+    opts.heading_step_deg <= 0.0
+        && case
+            .prior
+            .as_ref()
+            .and_then(|p| p.direction_deg)
+            .is_some_and(f64::is_finite)
 }
 
 #[expect(
@@ -175,7 +184,7 @@ fn acquire_corridor_anchor_single(
     let closest_nadir = screened
         .as_ref()
         .and_then(|s| closest_prior_nadir_seed(surface, case, s.first().copied()));
-    let mut seeds = screened.as_ref().cloned().unwrap_or_else(|| {
+    let seeds = screened.as_ref().cloned().unwrap_or_else(|| {
         build_anchor_seeds(
             surface,
             case,
@@ -185,9 +194,6 @@ fn acquire_corridor_anchor_single(
             opts.anchor_attempts,
         )
     });
-    if opts.pace_realtime && screened.is_some() && seeds.len() > 24 {
-        seeds.truncate(24);
-    }
     let max_lm = opts.query_keypoints.clamp(256, 2048);
     let mut best: Option<(usize, usize, PoseCandidate)> = None;
     let mut best_view: Option<VirtualCorridorView> = None;
@@ -202,7 +208,13 @@ fn acquire_corridor_anchor_single(
         (qry_feat, prepared),
         &seeds,
         (intrinsics, k_render, render_size, max_lm),
-        (aux.pred_pose.is_some(), false, true, focal_mult),
+        SeedChunkOpts::new(
+            is_heading_known(case, opts) || aux.pred_pose.is_some(),
+            false,
+            true,
+            opts.pace_realtime,
+            focal_mult,
+        ),
         (&mut base_idx, &mut lg_layers),
         (&mut seed_pool, &mut best, &mut best_view),
         attempts_log,
@@ -264,14 +276,14 @@ pub(super) type SeedStateMut<'a> = (
     clippy::too_many_arguments,
     reason = "seed-chunk evaluation updates shared pool, best candidate, and telemetry counters"
 )]
-pub(super) fn eval_seed_chunks(
+fn eval_seed_chunks(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
     (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
     (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
     seeds: &[SeedPose],
     (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
-    (has_pred_lead, coarse_screen, allow_horizon_gpu, focal_mult): (bool, bool, bool, f64),
+    chunk_opts: SeedChunkOpts,
     (base_idx, lg_layers): (&mut usize, &mut usize),
     (seed_pool, best, best_view): SeedStateMut<'_>,
     attempts_log: &mut Vec<Value>,
@@ -279,23 +291,27 @@ pub(super) fn eval_seed_chunks(
     if seeds.is_empty() {
         return Ok(0);
     }
-    let (lead_count, rest_offset) = if has_pred_lead && *base_idx == 0 {
-        (1_usize, 1_usize)
+    let lead_n = if chunk_opts.priority_lead && *base_idx == 0 {
+        ANCHOR_BATCH_SIZE.min(seeds.len())
     } else {
-        (0_usize, 0_usize)
+        0_usize
     };
-    let mut slices: Vec<&[SeedPose]> = Vec::new();
-    if lead_count == 1 {
-        slices.push(&seeds[..1]);
+    let mut slices: Vec<(bool, &[SeedPose])> = Vec::with_capacity(2);
+    if lead_n > 0 {
+        slices.push((true, &seeds[..lead_n]));
     }
-    if rest_offset < seeds.len() {
-        slices.push(&seeds[rest_offset..]);
+    if lead_n < seeds.len() {
+        slices.push((false, &seeds[lead_n..]));
     }
 
-    let max_re_steps = if coarse_screen { 1_usize } else { 2_usize };
+    let max_re_steps = if chunk_opts.coarse_screen {
+        1_usize
+    } else {
+        2_usize
+    };
+    let focal_mult = chunk_opts.focal_mult;
     let mut max_pairs = 0_usize;
-    for chunk in slices {
-        let fast_exit = has_pred_lead && *base_idx == 0 && chunk.len() == 1;
+    for (is_lead_slice, chunk) in slices {
         let evals = eval_seed_batch(
             (surface, store, projector),
             gpu_renderer,
@@ -304,9 +320,10 @@ pub(super) fn eval_seed_chunks(
             chunk,
             (intrinsics, k_render, render_size, max_lm),
             SeedBatchFlags {
-                fast_exit,
-                coarse_screen,
-                allow_horizon_gpu,
+                priority_lead: is_lead_slice,
+                coarse_screen: chunk_opts.coarse_screen,
+                allow_horizon_gpu: chunk_opts.allow_horizon_gpu,
+                pace_realtime: chunk_opts.pace_realtime,
             },
         )?;
         let mut accepted_in_slice = false;
@@ -336,7 +353,7 @@ pub(super) fn eval_seed_chunks(
             if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
                 let plausible = is_plausible_anchor_candidate(&c, surface);
                 let is_acc = c.score.geometry_accepted && plausible;
-                let strong_coarse = coarse_screen
+                let strong_coarse = chunk_opts.coarse_screen
                     && c.score.inliers >= 28
                     && c.score.holdout_inlier_fraction >= 0.50
                     && plausible;
@@ -389,9 +406,10 @@ pub(super) fn eval_seed_chunks(
                         &[(cur_cand.eye, cur_cand.rotation)],
                         (intrinsics, k_render, render_size, max_lm),
                         SeedBatchFlags {
-                            fast_exit: false,
+                            priority_lead: true,
                             coarse_screen: false,
-                            allow_horizon_gpu,
+                            allow_horizon_gpu: chunk_opts.allow_horizon_gpu,
+                            pace_realtime: chunk_opts.pace_realtime,
                         },
                     )?;
                     let (re_cand, re_virt, re_layers) =
@@ -422,7 +440,7 @@ pub(super) fn eval_seed_chunks(
                 if improved_any {
                     let plausible = is_plausible_anchor_candidate(&cur_cand, surface);
                     let is_acc = cur_cand.score.geometry_accepted && plausible;
-                    let strong_coarse = coarse_screen
+                    let strong_coarse = chunk_opts.coarse_screen
                         && cur_cand.score.inliers >= 28
                         && cur_cand.score.holdout_inlier_fraction >= 0.50
                         && plausible;
@@ -445,7 +463,7 @@ pub(super) fn eval_seed_chunks(
             }
         }
 
-        if !accepted_in_slice && !coarse_screen && chunk.len() >= 12 {
+        if !accepted_in_slice && !chunk_opts.coarse_screen && (is_lead_slice || chunk.len() >= 12) {
             accepted_in_slice = polish_stage_top_seed(
                 surface,
                 gpu_renderer,

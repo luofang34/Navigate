@@ -106,7 +106,11 @@ pub(crate) fn score_pose_candidate(
     let support_frac = (cells.len() as f64) / f64::from(GRID_DIM * GRID_DIM);
     let total_inliers = train_inliers + hold_inliers;
 
-    let base_min_hold = 8.min((hold_count * 2 / 5).max(2)).min(hold_count);
+    let min_sparse_inliers = if hold_count <= 6 { 30 } else { 26 };
+    let base_hold_floor = if hold_count >= 5 { 4 } else { 2 };
+    let base_min_hold = 8
+        .min((hold_count * 2 / 5).max(base_hold_floor))
+        .min(hold_count);
     let tight_total = tight_train_inliers + tight_hold_inliers;
     let tight_hold_frac = (tight_hold_inliers as f64) / (hold_count.max(1) as f64);
     let tight_min_train = 24.min(
@@ -115,7 +119,7 @@ pub(crate) fn score_pose_candidate(
             .max(12),
     );
     let tight_min_hold_frac = if tight_total >= 64 { 0.32 } else { 0.40 };
-    let tight_accepted = tight_total >= 26
+    let tight_accepted = tight_total >= min_sparse_inliers
         && tight_train_inliers >= tight_min_train
         && tight_hold_inliers >= base_min_hold
         && tight_hold_frac >= tight_min_hold_frac
@@ -133,16 +137,20 @@ pub(crate) fn score_pose_candidate(
         || (hold_frac >= 0.75 && hold_inliers >= 10);
     let min_total_inliers = if relief_ratio > 1.5 {
         if strong_sparse_relief {
-            26
+            min_sparse_inliers
         } else if hold_frac >= 0.60 {
             32
         } else {
             scaled_min_inliers.max(33)
         }
     } else {
-        scaled_min_inliers.max(26)
+        scaled_min_inliers.max(min_sparse_inliers)
     };
-    let min_hold_floor = if hold_count <= 6 { 3 } else { 5 };
+    let min_hold_floor = if hold_count <= 6 {
+        base_min_hold.max(3)
+    } else {
+        5
+    };
     let min_hold = if relief_ratio > 1.5 && !strong_sparse_relief {
         12.min((hold_count * 3 / 5).max(min_hold_floor))
             .min(hold_count)

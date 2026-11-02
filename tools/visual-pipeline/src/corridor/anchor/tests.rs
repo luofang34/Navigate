@@ -63,11 +63,11 @@ fn canonical_tile_poses_includes_nadir_view_with_obliques() -> Result<(), Box<dy
     let poses = canonical_tile_poses(&surface, (0.0, 0.0, 100.0), 600.0, 480.0, true);
     assert_eq!(
         poses.len(),
-        25,
-        "expected 24 oblique poses plus 1 nadir pose"
+        31,
+        "expected 30 oblique poses (12 at 12 deg, 12 at 28 deg, 6 at 48 deg) plus 1 nadir pose"
     );
     let &(band, _, nadir_rot) = poses.last().ok_or("missing nadir pose")?;
-    assert_eq!(band, 24);
+    assert_eq!(band, 30);
     assert!(
         -nadir_rot[(2, 2)] > 0.999,
         "final canonical pose must be 89 deg nadir"
@@ -155,4 +155,63 @@ fn test_is_plausible_anchor_candidate_validation() {
     cand.eye = [0.0, 0.0, -500.0];
     assert!(!super::is_plausible_anchor_candidate(&cand, &surface));
     assert!(!super::sweep::is_early_exit_focal_zero(&cand, &surface));
+}
+
+#[test]
+fn veto_unverified_virtual_best_clears_fragile_virtual_anchor_only() {
+    let eye = [10.0, 20.0, 220.0];
+    let rot = Matrix3::identity();
+    let k = Matrix3::new(600.0, 0.0, 400.0, 0.0, 600.0, 300.0, 0.0, 0.0, 1.0);
+    let make_cand = |inliers: usize, holdout_count: usize| crate::pose::PoseCandidate {
+        eye,
+        rotation: rot,
+        k,
+        size: [800, 450],
+        points: Vec::new(),
+        pixels: Vec::new(),
+        inliers: Vec::new(),
+        score: crate::pose::PoseScore {
+            focal_px: 600.0,
+            geometry_accepted: true,
+            holdout_count,
+            holdout_inlier_fraction: 0.67,
+            holdout_median_px: 4.5,
+            image_support_fraction: 0.25,
+            inliers,
+            pairs: inliers + 6,
+            positive_depth_fraction: 1.0,
+            train_inliers: inliers.saturating_sub(holdout_count),
+            train_rms_px: 4.2,
+        },
+    };
+
+    // Fragile virtual-view match (step 0, inliers=26, holdout_count=6) must be cleared when polish fails.
+    let mut fragile_best = Some((5_usize, 0_usize, make_cand(26, 6)));
+    super::polish::veto_unverified_virtual_best(&mut fragile_best, 5, eye, &rot);
+    assert!(
+        !fragile_best
+            .as_ref()
+            .is_some_and(|(_, _, c)| c.score.geometry_accepted),
+        "unverified sparse virtual-view anchor must have geometry_accepted cleared"
+    );
+
+    // Strong virtual-view match (inliers=48, holdout_count=12) must remain accepted.
+    let mut strong_best = Some((5_usize, 0_usize, make_cand(48, 12)));
+    super::polish::veto_unverified_virtual_best(&mut strong_best, 5, eye, &rot);
+    assert!(
+        strong_best
+            .as_ref()
+            .is_some_and(|(_, _, c)| c.score.geometry_accepted),
+        "strong >=40-inlier / >=10-holdout anchor must not be vetoed"
+    );
+
+    // Already orthophoto-polished candidate (step >= 2) must remain accepted.
+    let mut polished_best = Some((5_usize, 2_usize, make_cand(32, 8)));
+    super::polish::veto_unverified_virtual_best(&mut polished_best, 5, eye, &rot);
+    assert!(
+        polished_best
+            .as_ref()
+            .is_some_and(|(_, _, c)| c.score.geometry_accepted),
+        "orthophoto-polished candidate (step >= 2) must not be vetoed"
+    );
 }

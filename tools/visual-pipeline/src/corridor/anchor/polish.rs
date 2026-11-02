@@ -56,6 +56,29 @@ fn same_pose_neighborhood(
     horiz <= 25.0 && cos_ang >= 0.94
 }
 
+/// Check if a virtual-view candidate has sparse support.
+/// A sparse virtual-view candidate requires polish confirmation on the orthophoto.
+pub(super) fn is_fragile_virtual_anchor(score: &PoseScore) -> bool {
+    score.pairs > 0 && (score.inliers < 40 || score.holdout_count < 10)
+}
+
+/// Set `geometry_accepted` to `false` when `best` holds an unconfirmed sparse virtual-view match.
+pub(super) fn veto_unverified_virtual_best(
+    best: &mut Option<(usize, usize, PoseCandidate)>,
+    seed_idx: usize,
+    orig_eye: [f64; 3],
+    orig_rot: &Matrix3<f64>,
+) {
+    if let Some((b_seed, b_step, ref mut b_cand)) = *best
+        && b_step <= 1
+        && is_fragile_virtual_anchor(&b_cand.score)
+        && (b_seed == seed_idx
+            || same_pose_neighborhood(b_cand.eye, &b_cand.rotation, orig_eye, orig_rot))
+    {
+        b_cand.score.geometry_accepted = false;
+    }
+}
+
 /// Rank intermediate seed candidates for reproject and GPU polish by holdout coherence first.
 pub(super) fn seed_refinement_priority(
     score: &PoseScore,
@@ -93,11 +116,13 @@ pub(super) fn polish_anchor_seed_pool(
     attempts_log: &mut Vec<serde_json::Value>,
 ) -> Result<(usize, usize), PipelineError> {
     seed_pool.sort_by_key(|a| std::cmp::Reverse(seed_refinement_priority(&a.1.score)));
-    let best_accepted = best.as_ref().is_some_and(|(_, _, c)| {
-        c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
+    let best_strong_accepted = best.as_ref().is_some_and(|(_, _, c)| {
+        c.score.geometry_accepted
+            && is_plausible_anchor_candidate(c, surface)
+            && !is_fragile_virtual_anchor(&c.score)
     });
     let mut selected: Vec<(usize, PoseCandidate)> =
-        if best_accepted {
+        if best_strong_accepted {
             seed_pool.into_iter().take(1).collect()
         } else if let Some(scr) = screened_seeds {
             let mut top: Vec<(usize, PoseCandidate)> = Vec::with_capacity(3);
@@ -157,7 +182,11 @@ pub(super) fn polish_anchor_seed_pool(
         {
             continue;
         }
-        visited.push((cur_cand.eye, cur_cand.rotation));
+        let orig_eye = cur_cand.eye;
+        let orig_rot = cur_cand.rotation;
+        let fragile_virtual = is_fragile_virtual_anchor(&cur_cand.score);
+        let mut max_polished_inliers = 0_usize;
+        visited.push((orig_eye, orig_rot));
         let steps = if cur_cand.score.geometry_accepted {
             1
         } else {
@@ -193,6 +222,7 @@ pub(super) fn polish_anchor_seed_pool(
                 && is_plausible_anchor_candidate(&polished, surface);
             let mut improved_cur = false;
             if is_sane_anchor_seed(&polished, surface) {
+                max_polished_inliers = max_polished_inliers.max(polished_inliers);
                 let beat_cur = candidate_priority(&polished.score)
                     > candidate_priority(&cur_cand.score)
                     || (p_step == 1 && cur_cand.score.inliers < 12 && polished_inliers >= 8);
@@ -216,6 +246,9 @@ pub(super) fn polish_anchor_seed_pool(
             {
                 break;
             }
+        }
+        if fragile_virtual && max_polished_inliers < 16 {
+            veto_unverified_virtual_best(best, seed_idx, orig_eye, &orig_rot);
         }
         visited.push((cur_cand.eye, cur_cand.rotation));
         if best.as_ref().is_some_and(|(_, _, c)| {

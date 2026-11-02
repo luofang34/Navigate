@@ -75,6 +75,12 @@ impl AmortizedMasker {
         Ok(self)
     }
 
+    /// Clear cached frame masks and propeller history before a new session.
+    pub fn reset_session(&mut self) {
+        self.propeller = PropellerDetector::default();
+        self.key = KeyLayers::default();
+    }
+
     /// Compute the binary valid-terrain mask (`255` = keep, `0` = occluded) for one frame.
     ///
     /// # Errors

@@ -31,6 +31,9 @@ fn main() -> Result<(), PipelineError> {
     let (sub, args) = matches
         .subcommand()
         .ok_or_else(|| PipelineError::Invalid("missing subcommand".into()))?;
+    if sub == "corridor-serve" {
+        return corridor_cli::run_serve_cli(args);
+    }
     let summary = dispatch::dispatch(sub, args)?;
     let line = serde_json::to_string_pretty(&summary).map_err(|source| PipelineError::Json {
         context: "CLI summary".into(),

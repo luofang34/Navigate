@@ -1,12 +1,13 @@
-//! CLI command definitions and dispatch for `corridor-build` and `corridor-track`.
+//! CLI command definitions and dispatch for `corridor-build`, `corridor-track`, and `corridor-serve`.
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use navigate_visual_pipeline::{
-    CorridorBuildOptions, CorridorTrackOptions, PipelineError, XFeatRuntime, XFeatRuntimeConfig,
-    build_corridor_bank, corridor::VehicleDynamicsProfile, run_corridor_track,
+    CorridorBuildOptions, CorridorServeOptions, CorridorTrackOptions, PipelineError, XFeatRuntime,
+    XFeatRuntimeConfig, build_corridor_bank, corridor::VehicleDynamicsProfile, run_corridor_serve,
+    run_corridor_track,
 };
 use serde_json::Value;
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{collections::BTreeSet, io, path::PathBuf};
 
 fn path_arg(name: &'static str, required: bool) -> Arg {
     Arg::new(name)
@@ -56,7 +57,7 @@ fn req<T: Clone + Send + Sync + 'static>(
         .ok_or_else(|| PipelineError::Invalid(format!("missing --{name}")))
 }
 
-pub(crate) fn commands() -> [Command; 2] {
+pub(crate) fn commands() -> [Command; 3] {
     [
         xfeat_runtime_args(
             Command::new("corridor-build")
@@ -184,7 +185,62 @@ pub(crate) fn commands() -> [Command; 2] {
                 .arg(float_arg("focal-35mm", None))
                 .arg(Arg::new("only").long("only").action(ArgAction::Append)),
         ),
+        xfeat_runtime_args(
+            Command::new("corridor-serve")
+                .about("Run a resident JSON-Lines corridor localization worker over stdin and stdout")
+                .arg(path_arg("catalog", true))
+                .arg(path_arg("corridor-bank", true))
+                .arg(path_arg("model", true))
+                .arg(path_arg("lighterglue", false))
+                .arg(path_arg("seg-model", false))
+                .arg(path_arg("dinov2-weights", false))
+                .arg(path_arg("place-index", false))
+                .arg(
+                    Arg::new("mask-policy")
+                        .long("mask-policy")
+                        .default_value("airframe-occlusions"),
+                )
+                .arg(
+                    Arg::new("dynamics-profile")
+                        .long("dynamics-profile")
+                        .default_value("rotary-survey"),
+                )
+                .arg(
+                    Arg::new("query-keypoints")
+                        .long("query-keypoints")
+                        .default_value("2048")
+                        .value_parser(value_parser!(usize)),
+                )
+                .arg(Arg::new("polish").long("polish").action(ArgAction::SetTrue)),
+        ),
     ]
+}
+
+pub(crate) fn run_serve_cli(args: &ArgMatches) -> Result<(), PipelineError> {
+    let xfeat_runtime = parse_xfeat_runtime(args)?;
+    let profile_name = args
+        .get_one::<String>("dynamics-profile")
+        .map_or("rotary-survey", String::as_str);
+    let dynamics_profile = VehicleDynamicsProfile::from_name(profile_name)
+        .unwrap_or_else(VehicleDynamicsProfile::rotary_survey);
+    let opts = CorridorServeOptions {
+        catalog_path: req(args, "catalog")?,
+        corridor_bank_path: req(args, "corridor-bank")?,
+        xfeat_weights_path: req(args, "model")?,
+        lighterglue_weights_path: args.get_one::<PathBuf>("lighterglue").cloned(),
+        seg_model_dir: args.get_one::<PathBuf>("seg-model").cloned(),
+        dinov2_weights_path: args.get_one::<PathBuf>("dinov2-weights").cloned(),
+        place_index_path: args.get_one::<PathBuf>("place-index").cloned(),
+        mask_policy: req(args, "mask-policy")?,
+        dynamics_profile,
+        query_keypoints: req(args, "query-keypoints")?,
+        polish_anchors: args.get_flag("polish"),
+        xfeat_runtime,
+    };
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let _ = run_corridor_serve(&opts, stdin.lock(), stdout.lock())?;
+    Ok(())
 }
 
 pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<Value, PipelineError> {

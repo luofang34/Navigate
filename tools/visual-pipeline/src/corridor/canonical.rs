@@ -4,7 +4,7 @@ use crate::{surface::Surface, testset::PhotoCase};
 use nalgebra::Matrix3;
 use std::collections::BTreeSet;
 
-/// Computes canonical poses across shallow oblique, mid-oblique, and nadir viewing bands.
+/// Compute canonical camera poses across shallow, mid, steep oblique, and nadir view bands.
 pub(crate) fn canonical_tile_poses(
     surface: &Surface,
     (ce, cn, ground_msl): (f64, f64, f64),
@@ -37,11 +37,15 @@ pub(crate) fn canonical_tile_poses(
 
     let min_clear_m = agl_m.clamp(25.0, 140.0);
     let mut band = 0_u8;
-    let mut out = Vec::with_capacity(25);
-    for down_deg in [12.0_f64, 28.0_f64] {
+    let mut out = Vec::with_capacity(31);
+    for (down_deg, heading_count, heading_step_deg) in [
+        (12.0_f64, 12_u32, 30.0_f64),
+        (28.0_f64, 12_u32, 30.0_f64),
+        (48.0_f64, 6_u32, 60.0_f64),
+    ] {
         let horiz_back = agl_m / down_deg.to_radians().tan();
-        for step in 0..12_u32 {
-            let heading_deg = f64::from(step) * 30.0;
+        for step in 0..heading_count {
+            let heading_deg = f64::from(step) * heading_step_deg;
             let h = heading_deg.to_radians();
             let eye_e = ce - h.sin() * horiz_back;
             let eye_n = cn - h.cos() * horiz_back;
@@ -198,10 +202,10 @@ mod tests {
     }
 
     #[test]
-    fn canonical_tile_poses_uses_25_full_azimuth_oblique_and_nadir_views() {
+    fn canonical_tile_poses_uses_31_full_azimuth_oblique_and_nadir_views() {
         let img = RgbImage::from_pixel(256, 256, Rgb([100, 110, 95]));
         let surface = Surface::synthetic(41.0, -75.0, 100.0, img);
         let views = canonical_tile_poses(&surface, (500.0, 200.0, 100.0), 500.0, 600.0, true);
-        assert_eq!(views.len(), 25);
+        assert_eq!(views.len(), 31);
     }
 }

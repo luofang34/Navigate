@@ -53,6 +53,7 @@ pub(super) fn spawn_corridor_workers(
     search_tier_matcher: Option<&Arc<SearchTierMatcher>>,
     cases: &[PhotoCase],
     opts: &CorridorTrackOptions,
+    (prewarmed, has_resident_gpu): (bool, bool),
 ) -> Result<CorridorRuntimeWorkers, PipelineError> {
     let effective_cases = cases
         .iter()
@@ -100,11 +101,18 @@ pub(super) fn spawn_corridor_workers(
             ))
         });
     let t_warmup = Instant::now();
-    if opts.pace_realtime && effective_cases > 2 {
-        let _ = xfeat.warmup(lighterglue)?;
-    } else if effective_cases > 2 {
-        let _ = xfeat.warmup_xfeat_only(init_rs, opts.query_keypoints.clamp(16, 4096))?;
+    if !prewarmed {
+        if opts.pace_realtime && effective_cases > 2 {
+            let _ = xfeat.warmup(lighterglue)?;
+        } else if effective_cases > 2 {
+            let _ = xfeat.warmup_xfeat_only(init_rs, opts.query_keypoints.clamp(16, 4096))?;
+        }
     }
+    let shader_warmup_ms = if prewarmed {
+        0.0
+    } else {
+        t_warmup.elapsed().as_secs_f64() * 1000.0
+    };
     if let Some((eye, rot)) = init_prior_pose {
         store
             .project_virtual_kashin(&VirtualViewCamera {
@@ -124,7 +132,7 @@ pub(super) fn spawn_corridor_workers(
             .ok();
     }
     let use_bg = opts.background_refresh && effective_cases > 1;
-    let sync_gpu = (!use_bg && opts.polish_anchors)
+    let sync_gpu = (!use_bg && opts.polish_anchors && !has_resident_gpu)
         .then(|| {
             let mut g = SurfaceGpuRenderer::try_new_with_role(
                 surface,
@@ -208,7 +216,7 @@ pub(super) fn spawn_corridor_workers(
         tile_params,
         background_anchor,
         tile_builder,
-        shader_warmup_ms: t_warmup.elapsed().as_secs_f64() * 1000.0,
+        shader_warmup_ms,
     })
 }
 
