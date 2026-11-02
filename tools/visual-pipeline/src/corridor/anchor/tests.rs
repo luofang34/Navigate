@@ -215,3 +215,75 @@ fn veto_unverified_virtual_best_clears_fragile_virtual_anchor_only() {
         "orthophoto-polished candidate (step >= 2) must not be vetoed"
     );
 }
+
+#[test]
+fn lead_seed_count_distinguishes_known_heading_reanchor_and_cold_sweep() {
+    let mut case: PhotoCase = serde_json::from_value(serde_json::json!({
+        "id": "lead-check",
+        "image": "img.png",
+        "image_sha256": "0".repeat(64),
+        "size": [800, 450],
+        "prior": {
+            "direction_deg": 90.0
+        }
+    }))
+    .expect("valid PhotoCase JSON");
+    let mut opts = crate::corridor::CorridorTrackOptions {
+        dataset_dir: PathBuf::new(),
+        profile_path: PathBuf::new(),
+        catalog_path: PathBuf::new(),
+        corridor_bank_path: PathBuf::new(),
+        xfeat_weights_path: PathBuf::new(),
+        lighterglue_weights_path: None,
+        seg_model_dir: None,
+        dinov2_weights_path: None,
+        place_index_path: None,
+        dynamics_profile: crate::corridor::VehicleDynamicsProfile::fixed_wing(),
+        mask_policy: "airframe-occlusions".into(),
+        mask_interval: 10,
+        mask_interval_s: None,
+        output_dir: PathBuf::new(),
+        anchor_interval: 30,
+        anchor_interval_s: None,
+        anchor_uncertainty_m: None,
+        anchor_on_cell_boundary: false,
+        min_track_inliers: 32,
+        map_cell_m: 500.0,
+        anchor_attempts: 28,
+        heading_step_deg: 0.0,
+        height_factors: vec![1.0],
+        query_keypoints: 1024,
+        polish_anchors: true,
+        prior_override: None,
+        focal_35mm_override: None,
+        only_cases: None,
+        background_refresh: true,
+        pace_realtime: true,
+        xfeat_runtime: crate::xfeat_runtime::XFeatRuntimeConfig::default(),
+    };
+
+    assert_eq!(
+        super::eval::lead_seed_count(&case, &opts, false),
+        super::ANCHOR_BATCH_SIZE,
+        "known heading must evaluate a 4-seed lead batch"
+    );
+
+    opts.heading_step_deg = 30.0;
+    assert_eq!(
+        super::eval::lead_seed_count(&case, &opts, false),
+        0,
+        "compass-free cold sweep must rank all seeds together"
+    );
+    assert_eq!(
+        super::eval::lead_seed_count(&case, &opts, true),
+        1,
+        "compass-free re-anchor must evaluate only predicted pose before ranking compass seeds"
+    );
+
+    opts.heading_step_deg = 0.0;
+    if let Some(ref mut p) = case.prior {
+        p.direction_deg = None;
+    }
+    assert_eq!(super::eval::lead_seed_count(&case, &opts, false), 0);
+    assert_eq!(super::eval::lead_seed_count(&case, &opts, true), 1);
+}

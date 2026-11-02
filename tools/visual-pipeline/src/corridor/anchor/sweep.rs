@@ -2,8 +2,8 @@
 
 use super::{
     AnchorAcquisition, AnchorQueryAux,
-    eval::{SeedChunkOpts, eval_global_fallback_if_needed},
-    eval_seed_chunks, is_heading_known, is_plausible_anchor_candidate,
+    eval::{SeedChunkOpts, eval_global_fallback_if_needed, lead_seed_count},
+    eval_seed_chunks, is_plausible_anchor_candidate,
     nadir_screen::{SeedPose, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds},
     plausibility::compute_holdout_rmse_px,
     polish::polish_anchor_seed_pool,
@@ -166,7 +166,7 @@ pub(super) fn run_uncalibrated_focal_sweep(
         let mut best_view: Option<VirtualCorridorView> = None;
         let mut seed_pool: Vec<(usize, PoseCandidate)> = Vec::new();
         let mut lg_layers = 0_usize;
-        let lead = is_heading_known(case, opts) || aux.pred_pose.is_some();
+        let lead = lead_seed_count(case, opts, aux.pred_pose.is_some());
         let max_pairs = eval_seed_chunks(
             (surface, store, projector),
             gpu_renderer,
@@ -435,7 +435,7 @@ fn finalize_coarse_multiplier(
                 (qry_feat, prepared),
                 &st.remaining_seeds,
                 (intrinsics, &st.k_render_m, render_size, max_lm),
-                SeedChunkOpts::new(false, false, true, opts.pace_realtime, st.mult),
+                SeedChunkOpts::new(0, false, true, opts.pace_realtime, st.mult),
                 (&mut st.base_idx, &mut add_lg),
                 (&mut extra_pool, &mut st.best, &mut st.best_view),
                 attempts_log,

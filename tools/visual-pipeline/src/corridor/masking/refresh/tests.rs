@@ -184,5 +184,19 @@ fn four_class_ground_pixels_remain_valid_while_airframe_and_propeller_occlude()
         refreshed.sky_keep.iter().all(|&v| v == 255),
         "GROUND must not become sky"
     );
+
+    let mut key = KeyLayers::default();
+    let mut refresher = Refresher::Inline(Box::new(engine));
+    let first = refresher.step(&mut key, &rgb, None, 2, true)?;
+    assert!(first.refreshed && !first.submitted);
+    assert!(key.usable([16, 12]));
+    refresher.note_solved_rotation(&mut key, rotation(0.25));
+    assert_eq!(key.rot, Some(rotation(0.25)));
+
+    refresher = refresher.into_background()?;
+    let second = refresher.step(&mut key, &rgb, Some(&rotation(0.30)), 2, false)?;
+    assert!(!second.refreshed && !second.submitted);
+    assert!(key.usable([16, 12]));
+    assert_eq!(key.rot, Some(rotation(0.25)));
     Ok(())
 }

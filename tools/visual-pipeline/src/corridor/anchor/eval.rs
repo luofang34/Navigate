@@ -32,7 +32,7 @@ pub(super) struct SeedBatchFlags {
 
 #[derive(Clone, Copy)]
 pub(in crate::corridor::anchor) struct SeedChunkOpts {
-    pub priority_lead: bool,
+    pub lead_count: usize,
     pub coarse_screen: bool,
     pub allow_horizon_gpu: bool,
     pub pace_realtime: bool,
@@ -41,14 +41,14 @@ pub(in crate::corridor::anchor) struct SeedChunkOpts {
 
 impl SeedChunkOpts {
     pub(in crate::corridor::anchor) fn new(
-        priority_lead: bool,
+        lead_count: usize,
         coarse_screen: bool,
         allow_horizon_gpu: bool,
         pace_realtime: bool,
         focal_mult: f64,
     ) -> Self {
         Self {
-            priority_lead,
+            lead_count,
             coarse_screen,
             allow_horizon_gpu,
             pace_realtime,
@@ -57,10 +57,21 @@ impl SeedChunkOpts {
     }
 }
 
-const COARSE_LG_SEED_CAP: usize = 8;
+pub(in crate::corridor::anchor) fn lead_seed_count(
+    case: &PhotoCase,
+    opts: &CorridorTrackOptions,
+    has_pred: bool,
+) -> usize {
+    if super::is_heading_known(case, opts) {
+        super::ANCHOR_BATCH_SIZE
+    } else {
+        usize::from(has_pred)
+    }
+}
+
+const COARSE_LG_SEED_CAP: usize = 12;
 const COARSE_NADIR_OR_COREML_LG_SEED_CAP: usize = 16;
-const FULL_BATCH_LG_SEED_CAP: usize = 12;
-const STEEP_OR_COREML_LG_SEED_CAP: usize = 24;
+const FULL_BATCH_LG_SEED_CAP: usize = 24;
 
 pub(super) fn eval_seed_batch(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
@@ -217,26 +228,18 @@ pub(super) fn eval_seed_batch(
                 } else {
                     COARSE_LG_SEED_CAP
                 }
-            } else if all_steep_nadir || is_coreml {
-                STEEP_OR_COREML_LG_SEED_CAP
             } else {
                 FULL_BATCH_LG_SEED_CAP
             };
             need_lg.truncate(lg_cap);
         }
 
-        let max_kp = if flags.priority_lead {
-            max_lm.min(1024)
-        } else if flags.coarse_screen || poses.len() > 12 {
+        let max_kp = if flags.coarse_screen {
             max_lm.min(768)
         } else {
             max_lm.min(1024)
         };
-        let layers = if flags.priority_lead {
-            6
-        } else if flags.coarse_screen
-            || (poses.len() > super::ANCHOR_BATCH_SIZE && !all_steep_nadir)
-        {
+        let layers = if flags.coarse_screen && !all_steep_nadir {
             4
         } else {
             6
