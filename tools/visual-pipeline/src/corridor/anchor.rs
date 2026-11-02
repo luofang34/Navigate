@@ -4,6 +4,7 @@ mod eval;
 pub mod multitier;
 mod nadir_screen;
 pub mod plausibility;
+mod polish;
 mod sweep;
 
 use super::CorridorTrackOptions;
@@ -16,7 +17,7 @@ use crate::{
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use eval::{SeedBatchFlags, eval_global_fallback_seeds, eval_seed_batch, polish_anchor_seed_pool};
+use eval::{SeedBatchFlags, eval_global_fallback_if_needed, eval_seed_batch};
 use image::GrayImage;
 use nadir_screen::{
     SeedPose, build_anchor_seeds, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds,
@@ -27,10 +28,12 @@ use navigate_match::{
     VirtualCorridorView,
 };
 use plausibility::{PhysicalPlausibilityConfig, is_plausible_candidate, is_sane_seed_candidate};
+use polish::{polish_anchor_seed_pool, polish_stage_top_seed, seed_refinement_priority};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::Mutex};
+use std::{cmp::Reverse, path::PathBuf, sync::Mutex};
 
 const ANCHOR_BATCH_SIZE: usize = 4;
+const MAX_REPROJECT_SEEDS: usize = 3;
 
 pub(super) struct AnchorAcquisition {
     pub best: Option<(usize, usize, PoseCandidate)>,
@@ -172,7 +175,7 @@ fn acquire_corridor_anchor_single(
     let closest_nadir = screened
         .as_ref()
         .and_then(|s| closest_prior_nadir_seed(surface, case, s.first().copied()));
-    let seeds = screened.as_ref().cloned().unwrap_or_else(|| {
+    let mut seeds = screened.as_ref().cloned().unwrap_or_else(|| {
         build_anchor_seeds(
             surface,
             case,
@@ -182,6 +185,9 @@ fn acquire_corridor_anchor_single(
             opts.anchor_attempts,
         )
     });
+    if opts.pace_realtime && screened.is_some() && seeds.len() > 24 {
+        seeds.truncate(24);
+    }
     let max_lm = opts.query_keypoints.clamp(256, 2048);
     let mut best: Option<(usize, usize, PoseCandidate)> = None;
     let mut best_view: Option<VirtualCorridorView> = None;
@@ -227,8 +233,7 @@ fn acquire_corridor_anchor_single(
             render_size,
             focal_mult,
             seed_pool,
-            screened.as_deref(),
-            closest_nadir,
+            (screened.as_deref(), closest_nadir),
             &mut best,
             attempts_log,
         )?;
@@ -249,7 +254,7 @@ fn acquire_corridor_anchor_single(
     })
 }
 
-type SeedStateMut<'a> = (
+pub(super) type SeedStateMut<'a> = (
     &'a mut Vec<(usize, PoseCandidate)>,
     &'a mut Option<(usize, usize, PoseCandidate)>,
     &'a mut Option<VirtualCorridorView>,
@@ -279,17 +284,17 @@ pub(super) fn eval_seed_chunks(
     } else {
         (0_usize, 0_usize)
     };
-    let mut chunks: Vec<&[SeedPose]> = Vec::new();
+    let mut slices: Vec<&[SeedPose]> = Vec::new();
     if lead_count == 1 {
-        chunks.push(&seeds[..1]);
+        slices.push(&seeds[..1]);
     }
-    for ch in seeds[rest_offset..].chunks(ANCHOR_BATCH_SIZE) {
-        chunks.push(ch);
+    if rest_offset < seeds.len() {
+        slices.push(&seeds[rest_offset..]);
     }
 
     let max_re_steps = if coarse_screen { 1_usize } else { 2_usize };
     let mut max_pairs = 0_usize;
-    for chunk in chunks {
+    for chunk in slices {
         let fast_exit = has_pred_lead && *base_idx == 0 && chunk.len() == 1;
         let evals = eval_seed_batch(
             (surface, store, projector),
@@ -304,7 +309,10 @@ pub(super) fn eval_seed_chunks(
                 allow_horizon_gpu,
             },
         )?;
-        let mut accepted_early = false;
+        let mut accepted_in_slice = false;
+        let mut reproject_queue: Vec<(usize, [f64; 3], PoseCandidate, VirtualCorridorView)> =
+            Vec::new();
+
         for (local_i, (cand_opt, virt, layers)) in evals.into_iter().enumerate() {
             let seed_idx = *base_idx + local_i;
             *lg_layers += layers;
@@ -325,61 +333,7 @@ pub(super) fn eval_seed_chunks(
                 last.insert("focal_multiplier".into(), json!(focal_mult));
             }
 
-            let hyp_eye = chunk[local_i].0;
-            let mut cur_cand = cand_opt.filter(|c| is_sane_anchor_seed(c, surface));
-            let mut cur_virt = virt;
-            let mut prev_eye = hyp_eye;
-            for re_step in 1..=max_re_steps {
-                let Some(ref c_prev) = cur_cand else {
-                    break;
-                };
-                let shift_m = (Vector3::from(c_prev.eye) - Vector3::from(prev_eye)).norm();
-                let prev_plausible = c_prev.score.geometry_accepted
-                    && is_plausible_anchor_candidate(c_prev, surface);
-                let weak_seven = c_prev.score.inliers < 8 && c_prev.score.train_rms_px > 7.0;
-                if c_prev.score.inliers < 7 || weak_seven || (prev_plausible && shift_m <= 120.0) {
-                    break;
-                }
-                prev_eye = c_prev.eye;
-                let mut single = eval_seed_batch(
-                    (surface, store, projector),
-                    gpu_renderer,
-                    (xfeat, lighterglue),
-                    (qry_feat, prepared),
-                    &[(c_prev.eye, c_prev.rotation)],
-                    (intrinsics, k_render, render_size, max_lm),
-                    SeedBatchFlags {
-                        fast_exit: false,
-                        coarse_screen: false,
-                        allow_horizon_gpu,
-                    },
-                )?;
-                let (re_cand, re_virt, re_layers) =
-                    single.pop().unwrap_or((None, cur_virt.clone(), 0));
-                *lg_layers += re_layers;
-                let re_cand = re_cand.filter(|c| is_sane_anchor_seed(c, surface));
-                let re_pairs = re_cand.as_ref().map_or(0, |c| c.score.pairs);
-                max_pairs = max_pairs.max(re_pairs);
-                log_attempt(
-                    attempts_log,
-                    "corridor-virtual-reproject+l1-gnc",
-                    seed_idx,
-                    re_step,
-                    focal_mult as f32,
-                    re_pairs,
-                    re_cand.as_ref(),
-                );
-                if let Some(rc) = re_cand
-                    && candidate_priority(&rc.score) > candidate_priority(&c_prev.score)
-                {
-                    cur_cand = Some(rc);
-                    cur_virt = re_virt;
-                } else {
-                    break;
-                }
-            }
-
-            if let Some(c) = cur_cand {
+            if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
                 let plausible = is_plausible_anchor_candidate(&c, surface);
                 let is_acc = c.score.geometry_accepted && plausible;
                 let strong_coarse = coarse_screen
@@ -394,81 +348,123 @@ pub(super) fn eval_seed_chunks(
                 });
                 seed_pool.push((seed_idx, c.clone()));
                 if take {
-                    *best = Some((seed_idx, 0, c));
-                    *best_view = Some(cur_virt);
+                    *best = Some((seed_idx, 0, c.clone()));
+                    *best_view = Some(virt.clone());
                 }
                 if is_acc || strong_coarse {
-                    accepted_early = true;
-                    break;
+                    accepted_in_slice = true;
+                } else {
+                    let can_reproject = c.score.inliers >= 7
+                        && !(c.score.inliers < 8 && c.score.train_rms_px > 7.0);
+                    if can_reproject {
+                        reproject_queue.push((seed_idx, chunk[local_i].0, c, virt));
+                    }
                 }
             }
         }
+
+        if !accepted_in_slice && !reproject_queue.is_empty() {
+            reproject_queue.sort_by_key(|(_, _, c, _)| Reverse(seed_refinement_priority(&c.score)));
+            reproject_queue.truncate(MAX_REPROJECT_SEEDS);
+            for (seed_idx, mut prev_eye, mut cur_cand, mut cur_virt) in reproject_queue {
+                let mut improved_any = false;
+                for re_step in 1..=max_re_steps {
+                    let shift_m = (Vector3::from(cur_cand.eye) - Vector3::from(prev_eye)).norm();
+                    let prev_plausible = cur_cand.score.geometry_accepted
+                        && is_plausible_anchor_candidate(&cur_cand, surface);
+                    let weak_seven =
+                        cur_cand.score.inliers < 8 && cur_cand.score.train_rms_px > 7.0;
+                    if cur_cand.score.inliers < 7
+                        || weak_seven
+                        || (prev_plausible && shift_m <= 120.0)
+                    {
+                        break;
+                    }
+                    prev_eye = cur_cand.eye;
+                    let mut single = eval_seed_batch(
+                        (surface, store, projector),
+                        gpu_renderer,
+                        (xfeat, lighterglue),
+                        (qry_feat, prepared),
+                        &[(cur_cand.eye, cur_cand.rotation)],
+                        (intrinsics, k_render, render_size, max_lm),
+                        SeedBatchFlags {
+                            fast_exit: false,
+                            coarse_screen: false,
+                            allow_horizon_gpu,
+                        },
+                    )?;
+                    let (re_cand, re_virt, re_layers) =
+                        single.pop().unwrap_or((None, cur_virt.clone(), 0));
+                    *lg_layers += re_layers;
+                    let re_cand = re_cand.filter(|c| is_sane_anchor_seed(c, surface));
+                    let re_pairs = re_cand.as_ref().map_or(0, |c| c.score.pairs);
+                    max_pairs = max_pairs.max(re_pairs);
+                    log_attempt(
+                        attempts_log,
+                        "corridor-virtual-reproject+l1-gnc",
+                        seed_idx,
+                        re_step,
+                        focal_mult as f32,
+                        re_pairs,
+                        re_cand.as_ref(),
+                    );
+                    if let Some(rc) = re_cand
+                        && candidate_priority(&rc.score) > candidate_priority(&cur_cand.score)
+                    {
+                        cur_cand = rc;
+                        cur_virt = re_virt;
+                        improved_any = true;
+                    } else {
+                        break;
+                    }
+                }
+                if improved_any {
+                    let plausible = is_plausible_anchor_candidate(&cur_cand, surface);
+                    let is_acc = cur_cand.score.geometry_accepted && plausible;
+                    let strong_coarse = coarse_screen
+                        && cur_cand.score.inliers >= 28
+                        && cur_cand.score.holdout_inlier_fraction >= 0.50
+                        && plausible;
+                    let take = best.as_ref().is_none_or(|(_, _, prev)| {
+                        let prev_acc = prev.score.geometry_accepted
+                            && is_plausible_anchor_candidate(prev, surface);
+                        (is_acc, candidate_priority(&cur_cand.score))
+                            > (prev_acc, candidate_priority(&prev.score))
+                    });
+                    seed_pool.push((seed_idx, cur_cand.clone()));
+                    if take {
+                        *best = Some((seed_idx, 1, cur_cand));
+                        *best_view = Some(cur_virt);
+                    }
+                    if is_acc || strong_coarse {
+                        accepted_in_slice = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !accepted_in_slice && !coarse_screen && chunk.len() >= 12 {
+            accepted_in_slice = polish_stage_top_seed(
+                surface,
+                gpu_renderer,
+                (xfeat, lighterglue),
+                qry_feat,
+                (k_render, render_size, focal_mult),
+                seed_pool,
+                best,
+                lg_layers,
+                attempts_log,
+            )?;
+        }
+
         *base_idx += chunk.len();
-        if accepted_early {
+        if accepted_in_slice {
             break;
         }
     }
     Ok(max_pairs)
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "global retrieval fallback conditionally runs SearchTierMatcher when virtual-view search is unaccepted"
-)]
-pub(super) fn eval_global_fallback_if_needed(
-    (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
-    gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
-    (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
-    (case, opts): (&PhotoCase, &CorridorTrackOptions),
-    (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
-    (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
-    aux: &AnchorQueryAux<'_>,
-    attitude: Option<(f64, f64)>,
-    (base_idx, lg_layers): (&mut usize, &mut usize),
-    (seed_pool, best, best_view): SeedStateMut<'_>,
-) -> Result<(), PipelineError> {
-    if best.as_ref().is_none_or(|(_, _, c)| {
-        !(c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface))
-    }) && let Some(matcher) = aux.search_tier_matcher
-        && let Ok(rgb_img) = crate::stages::load_case_rgb(&opts.dataset_dir, &case.image)
-    {
-        let small_rgb = image::imageops::resize(
-            &rgb_img,
-            render_size[0],
-            render_size[1],
-            image::imageops::FilterType::Triangle,
-        );
-        let dyn_img = image::DynamicImage::ImageRgb8(small_rgb);
-        let mask_bools = aux.mask_small.map(multitier::gray_mask_to_bools);
-        let search_prior =
-            multitier::build_search_prior_from_hint(aux.pred_pose, opts.anchor_uncertainty_m);
-        if let Ok(fb_seeds) = multitier::resolve_global_fallback_seeds_with_mask(
-            matcher,
-            &search_prior,
-            &dyn_img,
-            mask_bools.as_deref(),
-            surface,
-            store,
-            480.0,
-            attitude,
-        ) && !fb_seeds.is_empty()
-        {
-            eval_global_fallback_seeds(
-                (surface, store, projector),
-                gpu_renderer,
-                (xfeat, lighterglue),
-                (qry_feat, prepared),
-                &fb_seeds,
-                (intrinsics, k_render, render_size, max_lm),
-                base_idx,
-                lg_layers,
-                seed_pool,
-                best,
-                best_view,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn is_sane_anchor_seed(cand: &PoseCandidate, surface: &Surface) -> bool {

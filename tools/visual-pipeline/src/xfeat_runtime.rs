@@ -198,6 +198,38 @@ impl LoadedXFeat {
         Ok(self.extractor.extract_batch_masked_blocking(items, limit)?)
     }
 
+    pub(crate) fn warmup_xfeat_only(
+        &self,
+        render_size: [u32; 2],
+        limit: usize,
+    ) -> Result<f64, PipelineError> {
+        #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
+        {
+            let t0 = std::time::Instant::now();
+            let (w, h, cap) = if cfg!(debug_assertions) {
+                (32_u32, 32_u32, 32_usize)
+            } else {
+                (
+                    render_size[0].max(32),
+                    render_size[1].max(32),
+                    limit.clamp(32, 2048),
+                )
+            };
+            let mut patch = GrayImage::new(w, h);
+            for (x, y, p) in patch.enumerate_pixels_mut() {
+                p.0[0] = ((x.wrapping_mul(37) ^ y.wrapping_mul(73)) & 0xff) as u8;
+            }
+            let mask = GrayImage::from_pixel(w, h, image::Luma([255]));
+            let _ = self.extract_masked(&patch, Some(&mask), cap)?;
+            Ok(t0.elapsed().as_secs_f64() * 1000.0)
+        }
+        #[cfg(not(any(feature = "wgpu", feature = "metal", feature = "cuda")))]
+        {
+            let _ = (render_size, limit);
+            Ok(0.0)
+        }
+    }
+
     pub(crate) fn warmup(&self, lighterglue: Option<&LighterGlue>) -> Result<f64, PipelineError> {
         #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
         {
@@ -260,7 +292,7 @@ impl LoadedXFeat {
                         &cfg_768,
                     ))?;
                 }
-                for single in [&f512, &f768, &f1024] {
+                for single in [&f256, &f512, &f768, &f1024] {
                     let _ = pollster::block_on(lg.match_features_batch_indexed_fast(
                         &[single],
                         &feat_wide,
@@ -273,10 +305,12 @@ impl LoadedXFeat {
                         lg.match_features_batch_indexed_fast(&b4, &feat_wide, &cfg_768),
                     )?;
                 }
-                let b4_1024 = [&f1024, &f512, &f768, &f256];
-                let _ = pollster::block_on(
-                    lg.match_features_batch_indexed_fast(&b4_1024, &feat_wide, &cfg_1024),
-                )?;
+                for lead in [&f512, &f768, &f1024] {
+                    let b4 = [lead, &f512, &f256, &f256];
+                    let _ = pollster::block_on(
+                        lg.match_features_batch_indexed_fast(&b4, &feat_wide, &cfg_1024),
+                    )?;
+                }
             }
             Ok(t0.elapsed().as_secs_f64() * 1000.0)
         }

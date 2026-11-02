@@ -184,7 +184,8 @@ pub(super) fn synthesize_corridor_tiles(
         let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
         insert_band(band, cam_x, &raw, &world_hits);
 
-        if is_nadir_pose(&rot)
+        if !params.include_obliques
+            && is_nadir_pose(&rot)
             && let Ok(rot_bands) =
                 synthesize_rotated_bands(&gray_img, surface, clat, clon, xfeat, 1536, false)
         {

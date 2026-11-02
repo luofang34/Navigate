@@ -79,7 +79,10 @@ pub(crate) fn polish_pose_sparse(
             prune_after_layer: None,
             ..FastMatchConfig::default()
         };
-        let (m, stats) = pollster::block_on(lg.match_features_fast(&ref_feat, qry_feat, &cfg))?;
+        let mut batched =
+            pollster::block_on(lg.match_features_batch_indexed_fast(&[&ref_feat], qry_feat, &cfg))?;
+        let (idx_m, stats) = batched.pop().unwrap_or_default();
+        let m = idx_m.into_iter().map(|im| im.pixel_match).collect();
         (m, stats.layers_executed)
     } else {
         (ref_feat.mutual_matches(qry_feat), 0)

@@ -4,7 +4,7 @@ use crate::{surface::Surface, testset::PhotoCase};
 use nalgebra::Matrix3;
 use std::collections::BTreeSet;
 
-/// Computes canonical poses across shallow oblique, oblique, and nadir viewing bands.
+/// Computes canonical poses across shallow oblique, mid-oblique, and nadir viewing bands.
 pub(crate) fn canonical_tile_poses(
     surface: &Surface,
     (ce, cn, ground_msl): (f64, f64, f64),
@@ -35,11 +35,10 @@ pub(crate) fn canonical_tile_poses(
         return vec![(0, nadir_eye, nadir_rot)];
     }
 
-    let mut out = Vec::with_capacity(37);
-    let mut band = 0_u8;
     let min_clear_m = agl_m.clamp(25.0, 140.0);
-    // Bands: 12.0 deg (shallow grazing), 26.0 deg (mid-oblique), 50.0 deg (steep oblique)
-    for down_deg in [12.0_f64, 26.0_f64, 50.0_f64] {
+    let mut band = 0_u8;
+    let mut out = Vec::with_capacity(25);
+    for down_deg in [12.0_f64, 28.0_f64] {
         let horiz_back = agl_m / down_deg.to_radians().tan();
         for step in 0..12_u32 {
             let heading_deg = f64::from(step) * 30.0;
@@ -113,7 +112,6 @@ pub(crate) fn select_corridor_tiles(
                     }
                 }
 
-                // Raycast frustum ground rays out to 12 km (or horizon distance at high AGL)
                 let dem = surface
                     .sample_dem(pos.latitude, pos.longitude)
                     .unwrap_or(0.0);
@@ -122,7 +120,6 @@ pub(crate) fn select_corridor_tiles(
                 let horizon_dist_m = (2.0 * 6_371_000.0 * agl_m).sqrt();
                 let max_ray_dist_m = 12_000.0_f64.min(horizon_dist_m).max(4_000.0);
 
-                // Raycast in 3 directions across horizontal field-of-view (+/- 30 deg)
                 for fov_offset in [
                     -std::f64::consts::FRAC_PI_6,
                     0.0,
@@ -186,8 +183,6 @@ mod tests {
         }))
         .expect("valid PhotoCase JSON");
         let tiles = select_corridor_tiles(&surface, &[case], 500.0, 500.0, 600.0);
-        // Nominal AGL 600 m -> sector reaches 3,600 m East along 90 deg +/- 45 deg.
-        // Tile (4, 3) has center (2250 m E, 1750 m N), dist = 2850 m <= 3600 m, angle = 37.9 deg.
         assert!(
             tiles.contains(&(4, 3)),
             "forward frustum sector must cover +37.9 deg off-ray oblique tiles within +/- 45 deg"
@@ -200,5 +195,13 @@ mod tests {
             !tiles.contains(&(-5, 0)),
             "tiles 2.5 km behind camera outside corridor_radius_m must not be selected"
         );
+    }
+
+    #[test]
+    fn canonical_tile_poses_uses_25_full_azimuth_oblique_and_nadir_views() {
+        let img = RgbImage::from_pixel(256, 256, Rgb([100, 110, 95]));
+        let surface = Surface::synthetic(41.0, -75.0, 100.0, img);
+        let views = canonical_tile_poses(&surface, (500.0, 200.0, 100.0), 500.0, 600.0, true);
+        assert_eq!(views.len(), 25);
     }
 }

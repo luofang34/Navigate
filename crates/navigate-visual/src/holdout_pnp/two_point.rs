@@ -418,10 +418,13 @@ pub(super) fn select_refined_ransac_candidate(
             inlier_px,
         );
         let axis_cos = best.rotation.row(2).dot(&rot_g.row(2));
+        let steep_nadir_init = initial_pose.is_some_and(|(_, r0)| -r0[(2, 2)] > 0.90);
+        let inlier_cap = if steep_nadir_init { 36 } else { 22 };
+        let slack = if steep_nadir_init { 4 } else { 2 };
         let planar_overfit = !best.score.geometry_accepted
-            && best.score.inliers < 22
+            && best.score.inliers < inlier_cap
             && axis_cos < 0.965
-            && cand_4dof.score.inliers + 2 >= best.score.inliers;
+            && cand_4dof.score.inliers + slack >= best.score.inliers;
         if planar_overfit || candidate_priority(&cand_4dof.score) > candidate_priority(&best.score)
         {
             best = cand_4dof;

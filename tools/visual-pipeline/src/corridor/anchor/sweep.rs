@@ -2,20 +2,20 @@
 
 use super::{
     AnchorAcquisition, AnchorQueryAux,
-    eval::polish_anchor_seed_pool,
-    eval_global_fallback_if_needed, eval_seed_chunks, is_plausible_anchor_candidate,
-    nadir_screen::{
-        SeedPose, build_anchor_seeds, closest_prior_nadir_seed, maybe_screen_low_agl_center_seeds,
-        screen_low_agl_ring_seeds,
-    },
+    eval::eval_global_fallback_if_needed,
+    eval_seed_chunks, is_plausible_anchor_candidate,
+    nadir_screen::{SeedPose, closest_prior_nadir_seed, maybe_screen_low_agl_nadir_seeds},
     plausibility::compute_holdout_rmse_px,
+    polish::polish_anchor_seed_pool,
     scale_focal_matrix, scale_horizon_attitude, stage_match_options,
 };
 use crate::{
     PipelineError,
     corridor::CorridorTrackOptions,
     pose::{PoseCandidate, candidate_priority},
-    stages::{focal::FocalLengthEstimator, load_horizon_attitude},
+    stages::{
+        focal::FocalLengthEstimator, load_horizon_attitude, seeds::build_stratified_coarse_seeds,
+    },
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
@@ -40,7 +40,6 @@ pub(super) fn is_early_exit_focal_zero(cand: &PoseCandidate, surface: &Surface) 
 struct CoarseMultiplierState {
     mult: f64,
     k_render_m: Matrix3<f64>,
-    intrinsics: [f64; 4],
     attitude: Option<(f64, f64)>,
     screened: Option<Vec<SeedPose>>,
     closest_nadir: Option<SeedPose>,
@@ -54,21 +53,32 @@ struct CoarseMultiplierState {
 }
 
 impl CoarseMultiplierState {
+    fn intrinsics(&self) -> [f64; 4] {
+        [
+            self.k_render_m[(0, 0)],
+            self.k_render_m[(1, 1)],
+            self.k_render_m[(0, 2)],
+            self.k_render_m[(1, 2)],
+        ]
+    }
+
     fn max_inliers(&self) -> usize {
         let best_inl = self.best.as_ref().map_or(0, |(_, _, c)| c.score.inliers);
-        let pool_inl = self
-            .seed_pool
-            .iter()
-            .map(|(_, c)| c.score.inliers)
-            .max()
-            .unwrap_or(0);
-        best_inl.max(pool_inl)
+        let pool_inl = self.seed_pool.iter().map(|(_, c)| c.score.inliers).max();
+        best_inl.max(pool_inl.unwrap_or(0))
     }
 
     fn is_accepted(&self, surface: &Surface) -> bool {
         self.best.as_ref().is_some_and(|(_, _, c)| {
             c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
         })
+    }
+
+    fn has_strong_lock(&self, surface: &Surface, min_inl: usize, min_hold: f64) -> bool {
+        self.is_accepted(surface)
+            && self.best.as_ref().is_some_and(|(_, _, c)| {
+                c.score.inliers >= min_inl && c.score.holdout_inlier_fraction >= min_hold
+            })
     }
 }
 
@@ -92,13 +102,23 @@ pub(super) fn run_uncalibrated_focal_sweep(
     let stage_opts = stage_match_options(opts);
     let max_lm = opts.query_keypoints.clamp(256, 2048);
 
-    const COARSE_PRIORITY: [usize; 4] = [0, 2, 1, 3];
+    let priority: &[usize] = if opts.pace_realtime {
+        &[0, 1, 2]
+    } else {
+        &[0, 2, 1, 3]
+    };
     let mut coarse: Vec<Option<CoarseMultiplierState>> =
         (0..multipliers.len()).map(|_| None).collect();
     let mut total_lg = 0_usize;
     let mut total_rays = 0_usize;
 
-    for &idx in COARSE_PRIORITY.iter().filter(|&&i| i < multipliers.len()) {
+    for &idx in priority.iter().filter(|&&i| i < multipliers.len()) {
+        if opts.pace_realtime
+            && idx == 2
+            && coarse[0].as_ref().is_some_and(|s| s.screened.is_some())
+        {
+            continue;
+        }
         let mult = multipliers[idx];
         let k_full_m = scale_focal_matrix(k_full, mult);
         let k_render_m = scale_focal_matrix(k_render, mult);
@@ -110,13 +130,24 @@ pub(super) fn run_uncalibrated_focal_sweep(
             k_render_m[(0, 2)],
             k_render_m[(1, 2)],
         ];
+        let cap = if idx != 0 && opts.pace_realtime {
+            8
+        } else {
+            COARSE_FOCAL_SEED_CAP
+        };
+        let screen_limit = if opts.pace_realtime {
+            cap
+        } else {
+            opts.anchor_attempts
+        };
         let screened = if aux.pred_pose.is_none() && attitude.is_none() {
-            maybe_screen_low_agl_center_seeds(
-                (surface, store),
+            maybe_screen_low_agl_nadir_seeds(
+                (surface, store, projector),
                 case,
                 prepared,
                 intrinsics,
                 render_size,
+                screen_limit,
             )?
         } else {
             None
@@ -124,37 +155,25 @@ pub(super) fn run_uncalibrated_focal_sweep(
         let closest_nadir = screened
             .as_ref()
             .and_then(|s| closest_prior_nadir_seed(surface, case, s.first().copied()));
-        let seeds = screened.as_ref().cloned().unwrap_or_else(|| {
-            build_anchor_seeds(
-                surface,
-                case,
-                &stage_opts,
-                attitude,
-                aux.pred_pose,
-                opts.anchor_attempts,
-            )
-        });
-        let coarse_n = seeds.len().min(COARSE_FOCAL_SEED_CAP);
-        let remaining_seeds = seeds[coarse_n..].to_vec();
+        let (coarse_seeds, remaining_seeds) = if let Some(ref scr) = screened {
+            let c_take = scr.len().min(cap);
+            (scr[..c_take].to_vec(), scr[c_take..].to_vec())
+        } else {
+            build_stratified_coarse_seeds(surface, case, &stage_opts, attitude, aux.pred_pose, cap)
+        };
         let mut base_idx = 0_usize;
         let mut best: Option<(usize, usize, PoseCandidate)> = None;
         let mut best_view: Option<VirtualCorridorView> = None;
         let mut seed_pool: Vec<(usize, PoseCandidate)> = Vec::new();
         let mut lg_layers = 0_usize;
-        let allow_coarse_horizon_gpu = idx == 0 || idx == 2;
         let max_pairs = eval_seed_chunks(
             (surface, store, projector),
             gpu_renderer,
             (xfeat, lighterglue),
             (qry_feat, prepared),
-            &seeds[..coarse_n],
+            &coarse_seeds,
             (intrinsics, &k_render_m, render_size, max_lm),
-            (
-                aux.pred_pose.is_some(),
-                true,
-                allow_coarse_horizon_gpu,
-                mult,
-            ),
+            (aux.pred_pose.is_some(), true, idx == 0 || idx == 2, mult),
             (&mut base_idx, &mut lg_layers),
             (&mut seed_pool, &mut best, &mut best_view),
             attempts_log,
@@ -164,7 +183,6 @@ pub(super) fn run_uncalibrated_focal_sweep(
         let mut state = CoarseMultiplierState {
             mult,
             k_render_m,
-            intrinsics,
             attitude,
             screened,
             closest_nadir,
@@ -179,23 +197,24 @@ pub(super) fn run_uncalibrated_focal_sweep(
         let slot0_inl = coarse[0]
             .as_ref()
             .map_or(0, CoarseMultiplierState::max_inliers);
+        let low_agl_slot0 = idx == 0 && state.screened.is_some();
         let can_early_polish =
             idx == 0 || (idx == 2 && state.max_inliers() >= slot0_inl.saturating_mul(2));
-        let mut coarse_early_done = state.best.as_ref().is_some_and(|(_, _, c)| {
-            if idx == 0 {
-                is_early_exit_focal_zero(c, surface)
-            } else {
-                idx == 2
-                    && state.max_inliers() >= slot0_inl.saturating_mul(2)
-                    && c.score.geometry_accepted
-                    && is_plausible_anchor_candidate(c, surface)
-                    && c.score.inliers >= 48
-                    && c.score.holdout_inlier_fraction >= 0.45
-            }
-        });
+        let mut coarse_early_done = if idx == 0 {
+            state.has_strong_lock(surface, 48, 0.40)
+                || (low_agl_slot0 && state.has_strong_lock(surface, 26, 0.40))
+        } else {
+            idx == 2
+                && state.max_inliers() >= slot0_inl.saturating_mul(2)
+                && state.has_strong_lock(surface, 48, 0.45)
+        };
         if coarse_early_done {
             state.polished_in_coarse = true;
-        } else if can_early_polish && opts.polish_anchors && state.max_inliers() >= 20 {
+        } else if can_early_polish
+            && opts.polish_anchors
+            && (state.max_inliers() >= 20
+                || (low_agl_slot0 && (state.max_inliers() >= 6 || opts.pace_realtime)))
+        {
             let (rays, p_layers) = polish_anchor_seed_pool(
                 surface,
                 gpu_renderer,
@@ -206,24 +225,19 @@ pub(super) fn run_uncalibrated_focal_sweep(
                 render_size,
                 state.mult,
                 std::mem::take(&mut state.seed_pool),
-                state.screened.as_deref(),
-                state.closest_nadir,
+                (state.screened.as_deref(), state.closest_nadir),
                 &mut state.best,
                 attempts_log,
             )?;
             total_rays += rays;
             total_lg += p_layers;
             state.polished_in_coarse = true;
-            coarse_early_done = state.best.as_ref().is_some_and(|(_, _, c)| {
-                if idx == 0 {
-                    is_early_exit_focal_zero(c, surface)
-                } else {
-                    c.score.geometry_accepted
-                        && is_plausible_anchor_candidate(c, surface)
-                        && c.score.inliers >= 48
-                        && c.score.holdout_inlier_fraction >= 0.45
-                }
-            });
+            coarse_early_done = if idx == 0 {
+                state.has_strong_lock(surface, 48, 0.40)
+                    || (low_agl_slot0 && state.has_strong_lock(surface, 26, 0.40))
+            } else {
+                state.has_strong_lock(surface, 48, 0.45)
+            };
         }
         coarse[idx] = Some(state);
         if coarse_early_done {
@@ -235,22 +249,12 @@ pub(super) fn run_uncalibrated_focal_sweep(
         .iter()
         .map(|s| s.as_ref().map_or(0, CoarseMultiplierState::max_inliers))
         .collect();
-    let mut order: Vec<usize> = coarse
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, s)| s.is_some().then_some(idx))
-        .collect();
+    let mut order: Vec<usize> = (0..coarse.len()).filter(|&i| coarse[i].is_some()).collect();
     order.sort_by_key(|&idx| {
-        let Some(st) = coarse[idx].as_ref() else {
-            return Reverse((false, 0, 0, false, Reverse(idx)));
-        };
-        Reverse((
-            st.is_accepted(surface),
-            st.max_inliers(),
-            st.max_pairs,
-            idx == 0,
-            Reverse(idx),
-        ))
+        let rank = coarse[idx].as_ref().map_or((false, 0, 0), |st| {
+            (st.is_accepted(surface), st.max_inliers(), st.max_pairs)
+        });
+        Reverse((rank, idx == 0, Reverse(idx)))
     });
     let mut winners: Vec<usize> = order.into_iter().take(2).collect();
     if winners.len() == 2
@@ -262,8 +266,15 @@ pub(super) fn run_uncalibrated_focal_sweep(
     {
         winners.swap(0, 1);
     }
+    if opts.pace_realtime
+        && winners.len() == 2
+        && !coarse[winners[1]]
+            .as_ref()
+            .is_some_and(|s| s.max_inliers() >= 14)
+    {
+        winners.truncate(1);
+    }
     let second_coarse_inl = winners.get(1).map_or(0, |&idx2| coarse_inliers[idx2]);
-
     let mut scores = [f64::INFINITY; 4];
     let mut outcomes: Vec<Option<AnchorAcquisition>> =
         (0..multipliers.len()).map(|_| None).collect();
@@ -294,12 +305,17 @@ pub(super) fn run_uncalibrated_focal_sweep(
             let mult = multipliers[w_idx];
             let ang_rmse = compute_holdout_rmse_px(cand) / mult.max(0.25);
             scores[w_idx] = ang_rmse / (cand.score.inliers.max(1) as f64).sqrt();
-            let dominant_first_winner = win_pos == 0
+            let dominant = win_pos == 0
                 && cand.score.inliers >= 48
                 && cand.score.holdout_inlier_fraction >= 0.45
                 && coarse_inliers[w_idx] >= second_coarse_inl.saturating_mul(2).max(16);
+            let paced_lock = opts.pace_realtime
+                && win_pos == 0
+                && cand.score.inliers >= 26
+                && cand.score.holdout_inlier_fraction >= 0.40;
             early_done = (w_idx == 0 && is_early_exit_focal_zero(cand, surface))
-                || dominant_first_winner
+                || dominant
+                || paced_lock
                 || (cand.score.inliers >= 80 && cand.score.holdout_inlier_fraction >= 0.45);
         }
         outcomes[w_idx] = Some(acq);
@@ -308,15 +324,14 @@ pub(super) fn run_uncalibrated_focal_sweep(
         }
     }
 
-    // Preserve unpolished coarse candidates on non-winning multipliers as last-resort fallback.
     for (idx, rem) in coarse.into_iter().enumerate() {
         if outcomes[idx].is_none()
             && let Some(mut st) = rem
         {
-            if let Some((_, _, ref mut cand)) = st.best
-                && !is_plausible_anchor_candidate(cand, surface)
+            if let Some((_, _, ref mut c)) = st.best
+                && !is_plausible_anchor_candidate(c, surface)
             {
-                cand.score.geometry_accepted = false;
+                c.score.geometry_accepted = false;
             }
             outcomes[idx] = Some(AnchorAcquisition {
                 best: st.best,
@@ -342,25 +357,22 @@ pub(super) fn run_uncalibrated_focal_sweep(
         }
     }
 
-    let mut fallback = AnchorAcquisition {
-        best: None,
+    let best_fb = outcomes
+        .into_iter()
+        .flatten()
+        .filter(|a| a.best.is_some())
+        .max_by_key(|a| {
+            a.best
+                .as_ref()
+                .map(|(_, _, c)| candidate_priority(&c.score))
+        });
+    Ok(AnchorAcquisition {
+        best: best_fb.as_ref().and_then(|a| a.best.clone()),
         lg_layers: total_lg,
         polish_rays: total_rays,
-        best_view: None,
+        best_view: best_fb.and_then(|a| a.best_view),
         locked_focal_px: None,
-    };
-    for acq in outcomes.into_iter().flatten() {
-        if let Some((_, _, ref cand)) = acq.best {
-            let take = fallback.best.as_ref().is_none_or(|(_, _, prev)| {
-                candidate_priority(&cand.score) > candidate_priority(&prev.score)
-            });
-            if take {
-                fallback.best = acq.best;
-                fallback.best_view = acq.best_view;
-            }
-        }
-    }
-    Ok(fallback)
+    })
 }
 
 #[expect(
@@ -392,8 +404,7 @@ fn finalize_coarse_multiplier(
             render_size,
             st.mult,
             std::mem::take(&mut st.seed_pool),
-            st.screened.as_deref(),
-            st.closest_nadir,
+            (st.screened.as_deref(), st.closest_nadir),
             &mut st.best,
             attempts_log,
         )?;
@@ -405,12 +416,14 @@ fn finalize_coarse_multiplier(
         c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
     });
     if !accepted_after_polish {
-        let ring_seeds = if st.screened.is_some() {
-            screen_low_agl_ring_seeds((surface, store), case, prepared, st.intrinsics, render_size)?
-        } else {
-            Vec::new()
-        };
-        st.remaining_seeds.extend(ring_seeds.iter().copied());
+        if opts.pace_realtime {
+            if st.screened.is_some() {
+                st.remaining_seeds.clear();
+            } else {
+                st.remaining_seeds.truncate(8);
+            }
+        }
+        let intrinsics = st.intrinsics();
         let mut extra_pool: Vec<(usize, PoseCandidate)> = Vec::new();
         if !st.remaining_seeds.is_empty() {
             let mut add_lg = 0_usize;
@@ -420,7 +433,7 @@ fn finalize_coarse_multiplier(
                 (xfeat, lighterglue),
                 (qry_feat, prepared),
                 &st.remaining_seeds,
-                (st.intrinsics, &st.k_render_m, render_size, max_lm),
+                (intrinsics, &st.k_render_m, render_size, max_lm),
                 (false, false, true, st.mult),
                 (&mut st.base_idx, &mut add_lg),
                 (&mut extra_pool, &mut st.best, &mut st.best_view),
@@ -434,14 +447,13 @@ fn finalize_coarse_multiplier(
             (xfeat, lighterglue),
             (case, opts),
             (qry_feat, prepared),
-            (st.intrinsics, &st.k_render_m, render_size, max_lm),
+            (intrinsics, &st.k_render_m, render_size, max_lm),
             aux,
             st.attitude,
             (&mut st.base_idx, &mut lg_layers),
             (&mut extra_pool, &mut st.best, &mut st.best_view),
         )?;
-        let ring_top = &ring_seeds[..ring_seeds.len().min(2)];
-        if opts.polish_anchors && (!extra_pool.is_empty() || !ring_top.is_empty()) {
+        if opts.polish_anchors && !extra_pool.is_empty() {
             let (rays, p_layers) = polish_anchor_seed_pool(
                 surface,
                 gpu_renderer,
@@ -452,8 +464,7 @@ fn finalize_coarse_multiplier(
                 render_size,
                 st.mult,
                 extra_pool,
-                (!ring_top.is_empty()).then_some(ring_top),
-                None,
+                (None, None),
                 &mut st.best,
                 attempts_log,
             )?;

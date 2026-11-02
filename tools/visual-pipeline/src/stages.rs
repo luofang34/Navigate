@@ -13,15 +13,13 @@ pub use seeds::generate_seeds;
 use crate::{
     PipelineError,
     matcher_client::PipelineMatcher,
-    pose::{
-        PoseCandidate, candidate_priority, fit_pose_ransac, load_candidate_pose, save_candidate_npz,
-    },
+    pose::{PoseCandidate, load_candidate_pose, save_candidate_npz},
     surface::{ContextSurface, Surface, horizon_attitude},
     testset::PhotoCase,
     util::{read_json, write_json},
 };
-use gpu_match::{StageTerrainRenderer, TerrainMatchQuery};
-use image::{DynamicImage, GrayImage, RgbImage, imageops::FilterType};
+use gpu_match::StageTerrainRenderer;
+use image::{GrayImage, RgbImage};
 use nalgebra::Matrix3;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -125,97 +123,15 @@ pub fn run_match_stage(
         evaluated_count += 1;
         let query_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
         let valid_mask = load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size)?;
-        let k = estimate_intrinsics(case);
-        let attitude = load_horizon_attitude(&opts.dataset_dir, case, &k);
-        let seeds = generate_seeds(&surface.primary, case, opts, attitude);
-        let render_size = scaled_size(case.size, 800);
-        let scale_x = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
-        let scale_y = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
-        let k_render = scale_k(&k, scale_x, scale_y);
-        let qry_small = image::imageops::resize(
+        let (attempts_log, best) = focal::match_case_with_focal_policy(
+            opts,
+            &surface,
+            &mut terrain_renderer,
+            matcher,
+            case,
             &query_rgb,
-            render_size[0],
-            render_size[1],
-            FilterType::Triangle,
-        );
-        let qry_small_gray = DynamicImage::ImageRgb8(qry_small.clone()).into_luma8();
-
-        let mut attempts_log = Vec::new();
-        let mut best: Option<(usize, usize, PoseCandidate)> = None;
-
-        for (seed_idx, (mut eye, mut rot)) in seeds.into_iter().enumerate() {
-            let max_steps = opts.steps.max(1);
-            for step_idx in 0..max_steps {
-                let (raw_count, world_pts, img_px) = terrain_renderer.match_view(
-                    &surface,
-                    &TerrainMatchQuery {
-                        eye,
-                        rot: &rot,
-                        k_render: &k_render,
-                        render_size,
-                        qry_small_rgb: &qry_small,
-                        qry_small_gray: &qry_small_gray,
-                        valid_mask: &valid_mask,
-                        full_size: case.size,
-                        q_scale: [scale_x, scale_y],
-                    },
-                    matcher,
-                )?;
-
-                let Some(cand) = fit_pose_ransac(
-                    &world_pts,
-                    &img_px,
-                    &k_render,
-                    render_size,
-                    Some((eye, rot)),
-                ) else {
-                    attempts_log.push(json!({
-                        "backend": matcher.identity(),
-                        "seed": seed_idx,
-                        "step": step_idx,
-                        "raw_pairs": raw_count,
-                        "pairs": world_pts.len(),
-                        "inliers": 0,
-                        "geometry_accepted": false,
-                        "prior_gate": false,
-                    }));
-                    break;
-                };
-                attempts_log.push(json!({
-                    "backend": matcher.identity(),
-                    "seed": seed_idx,
-                    "step": step_idx,
-                    "raw_pairs": raw_count,
-                    "pairs": cand.score.pairs,
-                    "inliers": cand.score.inliers,
-                    "train_inliers": cand.score.train_inliers,
-                    "train_rms_px": cand.score.train_rms_px,
-                    "holdout_count": cand.score.holdout_count,
-                    "holdout_inlier_fraction": cand.score.holdout_inlier_fraction,
-                    "holdout_median_px": cand.score.holdout_median_px,
-                    "image_support_fraction": cand.score.image_support_fraction,
-                    "positive_depth_fraction": cand.score.positive_depth_fraction,
-                    "focal_px": cand.score.focal_px,
-                    "geometry_accepted": cand.score.geometry_accepted,
-                    "prior_gate": true,
-                }));
-
-                eye = cand.eye;
-                rot = cand.rotation;
-                let replace = match &best {
-                    Some((_, _, prev)) => {
-                        candidate_priority(&cand.score) > candidate_priority(&prev.score)
-                    }
-                    None => true,
-                };
-                if replace {
-                    best = Some((seed_idx, step_idx, cand.clone()));
-                }
-                if cand.score.train_inliers < 12 {
-                    break;
-                }
-            }
-        }
+            &valid_mask,
+        )?;
 
         write_case_report(
             &opts.output_dir,

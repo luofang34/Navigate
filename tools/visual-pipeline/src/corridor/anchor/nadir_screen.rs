@@ -2,7 +2,7 @@
 
 use crate::{
     PipelineError,
-    corridor::{kinematics::approx_dot, nadir::DENSE_NADIR_YAW_BANDS_DEG},
+    corridor::nadir::DENSE_NADIR_YAW_BANDS_DEG,
     realtime::helpers::rot_to_row_major,
     stages::{MatchStageOptions, generate_seeds},
     surface::Surface,
@@ -16,6 +16,7 @@ use navigate_match::{
 
 pub(super) type SeedPose = ([f64; 3], Matrix3<f64>);
 type RankedSeedPose = ((bool, i64), SeedPose);
+type ScreenedCenterWithHeadings = Option<(Vec<SeedPose>, Vec<f64>)>;
 
 pub(super) fn build_anchor_seeds(
     surface: &Surface,
@@ -84,31 +85,79 @@ pub(super) fn maybe_screen_low_agl_nadir_seeds(
     render_size: [u32; 2],
     limit: usize,
 ) -> Result<Option<Vec<SeedPose>>, PipelineError> {
-    let Some(mut out) = maybe_screen_low_agl_center_seeds(
+    let center_only = limit <= 12;
+    let Some((center, top_headings)) = maybe_screen_low_agl_center_with_headings(
         (surface, store),
         case,
         prepared,
         intrinsics,
         render_size,
+        center_only,
     )?
     else {
         return Ok(None);
     };
+    if center_only {
+        let mut out = center;
+        out.truncate(limit.max(1));
+        return Ok(Some(out));
+    }
     let cap = limit.max(36);
-    let ring =
-        screen_low_agl_ring_seeds((surface, store), case, prepared, intrinsics, render_size)?;
-    out.extend(ring.into_iter().take(cap.saturating_sub(out.len())));
+    let ring = screen_low_agl_ring_seeds(
+        (surface, store),
+        case,
+        prepared,
+        intrinsics,
+        render_size,
+        &top_headings,
+    )?;
+    let c1 = center.len().min(12);
+    let r1 = ring.len().min(12);
+    let mut out = Vec::with_capacity((center.len() + ring.len()).min(cap));
+    out.extend_from_slice(&center[..c1]);
+    out.extend_from_slice(&ring[..r1]);
+    out.extend_from_slice(&center[c1..]);
+    out.extend_from_slice(&ring[r1..]);
     out.truncate(cap);
     Ok(Some(out))
 }
 
-pub(super) fn maybe_screen_low_agl_center_seeds(
+/// Select up to three spatially and angularly diverse nadir fallback seeds (`center[0]`, `ring[0]`, `center[1]`).
+pub(super) fn select_nadir_polish_fallbacks(
+    screened: &[SeedPose],
+    closest_nadir: Option<SeedPose>,
+) -> Vec<(usize, SeedPose)> {
+    let mut out = Vec::with_capacity(3);
+    let Some(first) = closest_nadir.or_else(|| screened.first().copied()) else {
+        return out;
+    };
+    out.push((0, first));
+    if let Some((idx, ring_pose)) = screened
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|&(_, (e, _))| (e[0] - first.0[0]).hypot(e[1] - first.0[1]) > 35.0)
+    {
+        out.push((idx, ring_pose));
+    }
+    if let Some((idx, pose2)) = screened.iter().copied().enumerate().find(|&(_, (e, r))| {
+        let near_center = (e[0] - first.0[0]).hypot(e[1] - first.0[1]) <= 35.0;
+        let cos_ang = (((r * first.1.transpose()).trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
+        near_center && cos_ang < 0.94
+    }) {
+        out.push((idx, pose2));
+    }
+    out
+}
+
+fn maybe_screen_low_agl_center_with_headings(
     (surface, store): (&Surface, &CorridorTileStore),
     case: &PhotoCase,
     prepared: &PreparedKashinQuery,
     intrinsics: [f64; 4],
     render_size: [u32; 2],
-) -> Result<Option<Vec<SeedPose>>, PipelineError> {
+    native_only: bool,
+) -> Result<ScreenedCenterWithHeadings, PipelineError> {
     let Some(pos) = case.prior.as_ref().and_then(|p| p.position.as_ref()) else {
         return Ok(None);
     };
@@ -134,14 +183,15 @@ pub(super) fn maybe_screen_low_agl_center_seeds(
     }
 
     let agl_native = agl.max(25.0);
-    let agl_center = (agl * 1.50).clamp(130.0, 175.0);
+    let agl_elev = (agl * 1.32).clamp(115.0, 155.0);
     let native_eye = surface.local(pos.latitude, pos.longitude, dem_h + agl_native);
-    let center_eye = surface.local(pos.latitude, pos.longitude, dem_h + agl_center);
-    let has_elevated = (agl_center - agl_native).abs() > 8.0;
+    let elev_eye = surface.local(pos.latitude, pos.longitude, dem_h + agl_elev);
+    let has_elevated = !native_only && (agl_elev - agl_native).abs() > 8.0;
     let mut out: Vec<SeedPose> = Vec::with_capacity(20);
 
-    let mut primary_yaws: Vec<RankedSeedPose> = Vec::with_capacity(ordered_yaws.len());
-    let mut secondary_yaws: Vec<RankedSeedPose> = Vec::with_capacity(ordered_yaws.len());
+    let mut native_yaws: Vec<((bool, i64), f64, SeedPose)> = Vec::with_capacity(ordered_yaws.len());
+    let mut elevated_yaws: Vec<((bool, i64), f64, SeedPose)> =
+        Vec::with_capacity(ordered_yaws.len());
     for &hdg in &ordered_yaws {
         let crot = surface.camera_rotation(pos.latitude, pos.longitude, hdg, 88.0, 0.0);
         let hdg_bonus = prior_hdg.map_or(0_i64, |ph| {
@@ -151,40 +201,42 @@ pub(super) fn maybe_screen_low_agl_center_seeds(
                 0
             }
         });
-        let native_ranked = score_nadir_yaw(
+        let nat_ranked = score_nadir_yaw(
             (store, prepared),
             (native_eye, crot),
             intrinsics,
             render_size,
             hdg_bonus,
         )?;
+        native_yaws.push((nat_ranked.0, hdg, nat_ranked.1));
         if has_elevated {
-            let elevated_ranked = score_nadir_yaw(
+            let elev_ranked = score_nadir_yaw(
                 (store, prepared),
-                (center_eye, crot),
+                (elev_eye, crot),
                 intrinsics,
                 render_size,
                 hdg_bonus,
             )?;
-            primary_yaws.push(elevated_ranked);
-            secondary_yaws.push(native_ranked);
-        } else {
-            primary_yaws.push(native_ranked);
+            elevated_yaws.push((elev_ranked.0, hdg, elev_ranked.1));
         }
     }
-    primary_yaws.sort_by_key(|a| std::cmp::Reverse(a.0));
-    secondary_yaws.sort_by_key(|a| std::cmp::Reverse(a.0));
-    out.extend(primary_yaws.into_iter().map(|(_, pose)| pose));
-    out.extend(secondary_yaws.into_iter().take(8).map(|(_, pose)| pose));
-    Ok(Some(out))
+    native_yaws.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let top_headings: Vec<f64> = native_yaws.iter().take(6).map(|&(_, h, _)| h).collect();
+    out.extend(native_yaws.into_iter().map(|(_, _, p)| p));
+    if has_elevated {
+        elevated_yaws.sort_by_key(|a| std::cmp::Reverse(a.0));
+        out.extend(elevated_yaws.into_iter().take(8).map(|(_, _, p)| p));
+    }
+    Ok(Some((out, top_headings)))
 }
 
-pub(super) fn screen_low_agl_ring_seeds(
+fn screen_low_agl_ring_seeds(
     (surface, store): (&Surface, &CorridorTileStore),
     case: &PhotoCase,
     prepared: &PreparedKashinQuery,
     intrinsics: [f64; 4],
     render_size: [u32; 2],
+    candidate_headings: &[f64],
 ) -> Result<Vec<SeedPose>, PipelineError> {
     let Some(pos) = case.prior.as_ref().and_then(|p| p.position.as_ref()) else {
         return Ok(Vec::new());
@@ -199,9 +251,14 @@ pub(super) fn screen_low_agl_ring_seeds(
     if agl > 250.0 {
         return Ok(Vec::new());
     }
+    let yaws: &[f64] = if candidate_headings.is_empty() {
+        &DENSE_NADIR_YAW_BANDS_DEG
+    } else {
+        candidate_headings
+    };
     let center = surface.local(pos.latitude, pos.longitude, 0.0);
-    let step_xy = (agl * 0.70).clamp(58.0, 85.0);
-    let agl_ring = (agl * 1.32).clamp(115.0, 155.0);
+    let step_xy = (agl * 0.58).clamp(45.0, 75.0);
+    let agl_ring = (agl * 1.08).clamp(45.0, 140.0);
     let ring_offsets = [
         (1_i32, 0_i32),
         (-1, 0),
@@ -223,23 +280,22 @@ pub(super) fn screen_low_agl_ring_seeds(
             continue;
         };
         let geye = surface.local(glat, glon, gdem + agl_ring);
-        let mut cell_yaws: Vec<RankedSeedPose> =
-            Vec::with_capacity(DENSE_NADIR_YAW_BANDS_DEG.len());
-        for &hdg in &DENSE_NADIR_YAW_BANDS_DEG {
+        let mut cell_yaws: Vec<RankedSeedPose> = Vec::with_capacity(yaws.len());
+        for &hdg in yaws {
             let grot = surface.camera_rotation(glat, glon, hdg, 88.0, 0.0);
             let virt = store.project_virtual_kashin(&VirtualViewCamera {
                 eye_enu: geye,
                 world_to_cam: rot_to_row_major(&grot),
                 intrinsics,
                 image_size: render_size,
-                max_landmarks: 512,
+                max_landmarks: 384,
                 min_cos_incidence: 0.45,
                 min_cos_orientation: 0.94,
             })?;
             if virt.world_points_enu.len() < 16 {
                 continue;
             }
-            let (strict_cnt, smooth) = kashin_screen_stats(&virt, prepared, 512, 32);
+            let (strict_cnt, smooth) = kashin_screen_stats(&virt, prepared, 384, 32);
             let rank = (
                 strict_cnt >= 8,
                 (smooth * 1_000.0).round() as i64 + (strict_cnt as i64) * 150,
@@ -265,16 +321,33 @@ fn score_nadir_yaw(
         world_to_cam: rot_to_row_major(&rot),
         intrinsics,
         image_size: render_size,
-        max_landmarks: 512,
+        max_landmarks: 384,
         min_cos_incidence: 0.45,
         min_cos_orientation: 0.94,
     })?;
-    let (strict_cnt, smooth) = kashin_screen_stats(&virt, prepared, 512, 32);
+    let (strict_cnt, smooth) = kashin_screen_stats(&virt, prepared, 384, 32);
     let rank = (
         strict_cnt >= 8 || hdg_bonus > 0,
         hdg_bonus + (smooth * 1_000.0).round() as i64 + (strict_cnt as i64) * 150,
     );
     Ok((rank, (eye, rot)))
+}
+
+fn decode_unit_kashin(code: &[u8; 64]) -> [f32; 64] {
+    let mut norm_sq = 0_i32;
+    for &raw in code {
+        let vi = i32::from(raw as i8);
+        norm_sq += vi * vi;
+    }
+    if norm_sq <= 0 {
+        return [0.0; 64];
+    }
+    let inv = 1.0 / (norm_sq as f32).sqrt();
+    let mut out = [0.0_f32; 64];
+    for (dst, &raw) in out.iter_mut().zip(code) {
+        *dst = f32::from(raw as i8) * inv;
+    }
+    out
 }
 
 fn kashin_screen_stats(
@@ -296,15 +369,15 @@ fn kashin_screen_stats(
     let mut strict_rev = vec![(usize::MAX, -2.0_f32); n_q];
     for r in 0..n_r {
         let rs = virt.sign_bits[r];
-        let rc = &virt.kashin_i8[r];
+        let ru = decode_unit_kashin(&virt.kashin_i8[r]);
         let s_slot = &mut smooth_fwd[r];
         let st_slot = &mut strict_fwd[r];
         for q in 0..n_q {
             let ham = (rs ^ q_signs[q]).count_ones();
-            if ham > 26 {
+            if ham > 25 {
                 continue;
             }
-            let dot = approx_dot(rc, &q_rots[q]);
+            let dot: f32 = ru.iter().zip(&q_rots[q]).map(|(&a, &b)| a * b).sum();
             if dot > s_slot.1 {
                 *s_slot = (q, dot);
             }

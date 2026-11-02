@@ -63,14 +63,14 @@ fn canonical_tile_poses_includes_nadir_view_with_obliques() -> Result<(), Box<dy
     let poses = canonical_tile_poses(&surface, (0.0, 0.0, 100.0), 600.0, 480.0, true);
     assert_eq!(
         poses.len(),
-        37,
-        "expected 36 oblique poses plus 1 nadir pose"
+        25,
+        "expected 24 oblique poses plus 1 nadir pose"
     );
     let &(band, _, nadir_rot) = poses.last().ok_or("missing nadir pose")?;
-    assert_eq!(band, 36);
+    assert_eq!(band, 24);
     assert!(
         -nadir_rot[(2, 2)] > 0.999,
-        "37th canonical pose must be 89 deg nadir"
+        "final canonical pose must be 89 deg nadir"
     );
     Ok(())
 }
