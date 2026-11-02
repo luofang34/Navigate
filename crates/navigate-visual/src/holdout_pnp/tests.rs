@@ -261,4 +261,127 @@ fn score_pose_candidate_adapts_to_sparse_holdout_and_low_agl_relief_parallax() {
         "60 low-AGL correspondences with >= 12 holdout inliers and >= 10 cells must pass: {:?}",
         c_real_60.score
     );
+
+    // 3. Sparse low-AGL views (< 60 pairs, hold_count < 12) must not hit an impossible min_hold = 12 gate:
+    //    (a) DJI_0029 f-00013 regime: 42 pairs, 33 inliers, hold_count = 7, hold_inliers = 6, hold_median ~ 9.3 px.
+    let mut dji29_world = Vec::with_capacity(42);
+    let mut dji29_pixels = Vec::with_capacity(42);
+    let mut dji29_held = vec![false; 42];
+    for idx in 0..42_u32 {
+        let u = 45.0 + f64::from(idx % 7) * 112.0;
+        let v = 35.0 + f64::from(idx / 7) * 70.0;
+        let x = (u - 400.0) * 98.0 / 577.0;
+        let y = -(v - 225.0) * 98.0 / 577.0;
+        dji29_world.push([x, y, 0.0]);
+        let is_inlier = idx < 33;
+        let err_px = if is_inlier {
+            if idx < 7 { 9.3 } else { 7.4 }
+        } else {
+            48.0
+        };
+        dji29_pixels.push([u + err_px, v]);
+    }
+    for &h_idx in &[0_usize, 1, 2, 3, 4, 5, 35] {
+        dji29_held[h_idx] = true;
+    }
+    let c_dji29 = score_pose_candidate(
+        &dji29_world,
+        &dji29_pixels,
+        &dji29_held,
+        (low_eye, rot),
+        &k,
+        size,
+        scaled_inlier_px(size),
+    );
+    assert_eq!(c_dji29.score.holdout_count, 7);
+    assert_eq!(c_dji29.score.inliers, 33);
+    assert!(
+        c_dji29.score.geometry_accepted,
+        "DJI_0029 sparse 42-pair / 7-holdout lock must pass: {:?}",
+        c_dji29.score
+    );
+
+    //    Also verify the same 42-pair / 33-inlier lock at 640x360 (base_inlier_px = 5.0, relief_ratio = 2.4).
+    let size_640 = [640, 360];
+    let k_640 = Matrix3::new(462.0, 0.0, 320.0, 0.0, 462.0, 180.0, 0.0, 0.0, 1.0);
+    let dji29_px_640: Vec<[f64; 2]> = dji29_pixels
+        .iter()
+        .map(|&[u, v]| [u * 0.8, v * 0.8])
+        .collect();
+    let c_dji29_640 = score_pose_candidate(
+        &dji29_world,
+        &dji29_px_640,
+        &dji29_held,
+        (low_eye, rot),
+        &k_640,
+        size_640,
+        scaled_inlier_px(size_640),
+    );
+    assert!(
+        c_dji29_640.score.geometry_accepted,
+        "DJI_0029 sparse 33-inlier lock must also pass at 640x360: {:?}",
+        c_dji29_640.score
+    );
+
+    //    (b) Tight low-AGL pose with 28 sub-pixel / <6.25 px inliers and hold_count = 6 passes via tight gate.
+    let mut tight_pixels = Vec::with_capacity(28);
+    for (u_pt, &[x, y, _]) in low_world.iter().take(28).enumerate() {
+        let u = 400.0 + x * 577.0 / 98.0;
+        let v = 225.0 - y * 577.0 / 98.0;
+        let jitter = if u_pt % 2 == 0 { 1.8 } else { -1.6 };
+        tight_pixels.push([u + jitter, v - jitter * 0.5]);
+    }
+    let held_28 = crate::holdout_pnp::spatial_holdout(&tight_pixels, size);
+    let c_tight_28 = score_pose_candidate(
+        &low_world[..28],
+        &tight_pixels,
+        &held_28,
+        (low_eye, rot),
+        &k,
+        size,
+        scaled_inlier_px(size),
+    );
+    assert!(
+        c_tight_28.score.geometry_accepted,
+        "28 tight low-AGL inliers must pass standard tight gate without 12-holdout penalty: {:?}",
+        c_tight_28.score
+    );
+
+    //    (c) DJI_0030 f-00001 regime: 34 pairs, 26 inliers, train_rms ~ 5.6 px, hold_count = 3, hold_inliers = 2.
+    let mut dji30_world = Vec::with_capacity(34);
+    let mut dji30_pixels = Vec::with_capacity(34);
+    let mut dji30_held = vec![false; 34];
+    for idx in 0..34_u32 {
+        let u = 55.0 + f64::from(idx % 6) * 130.0;
+        let v = 35.0 + f64::from(idx / 6) * 72.0;
+        let x = (u - 400.0) * 98.0 / 577.0;
+        let y = -(v - 225.0) * 98.0 / 577.0;
+        dji30_world.push([x, y, 0.0]);
+        let err_px = if idx < 2 {
+            9.1
+        } else if idx < 26 {
+            5.5
+        } else {
+            52.0
+        };
+        dji30_pixels.push([u + err_px, v]);
+    }
+    for &h_idx in &[0_usize, 1, 30] {
+        dji30_held[h_idx] = true;
+    }
+    let c_dji30 = score_pose_candidate(
+        &dji30_world,
+        &dji30_pixels,
+        &dji30_held,
+        (low_eye, rot),
+        &k,
+        size,
+        scaled_inlier_px(size),
+    );
+    assert_eq!(c_dji30.score.inliers, 26);
+    assert!(
+        c_dji30.score.geometry_accepted,
+        "DJI_0030 sparse 34-pair / 26-inlier relief lock with tight train RMS must pass: {:?}",
+        c_dji30.score
+    );
 }

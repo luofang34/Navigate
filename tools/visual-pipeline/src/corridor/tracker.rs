@@ -73,11 +73,17 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         xfeat.device(),
     )?;
 
-    let seg_device = if opts.background_refresh {
-        burn::tensor::Device::flex()
-    } else {
-        xfeat.device().clone()
-    };
+    let cases = load_profile_cases(&opts.profile_path)?;
+    let effective_cases = cases
+        .iter()
+        .filter(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .count();
+    let use_bg = opts.background_refresh && effective_cases > 1;
+    let seg_device = burn::tensor::Device::flex();
     let mask_interval = opts
         .mask_interval_s
         .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
@@ -88,7 +94,7 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
         mask_interval.max(1),
         &seg_device,
     )?;
-    if opts.background_refresh {
+    if use_bg {
         masker = masker.with_background_refresh()?;
     }
     fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
@@ -101,7 +107,6 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
     )?;
 
     let projector = HadamardProjector::new(store.seed);
-    let cases = load_profile_cases(&opts.profile_path)?;
     let workers = spawn_corridor_workers(
         &surface,
         &store,
@@ -195,9 +200,11 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             .prev_rot
             .or(state.vo_rot)
             .map(|r| state.prev_rot_step * r);
+        let mut did_initial_fast_seg = false;
         if evaluated == 1 && state.active_tracks.is_empty() && masker.has_segformer() {
             match masker.fast_initial_pass(&qry_small, est_rot_for_mask.as_ref()) {
                 Ok(Some(ms)) => {
+                    did_initial_fast_seg = true;
                     seg_refreshes += 1;
                     latencies.seg_refresh_ms.push(ms);
                 }
@@ -214,8 +221,10 @@ pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, Pipeline
             && background_anchor
                 .as_ref()
                 .is_some_and(BackgroundAnchor::is_in_flight);
-        let allow_seg =
-            !(state.active_tracks.is_empty() && masker.has_usable_key(render_size) && anchor_busy);
+        let allow_seg = !(did_initial_fast_seg && (!use_bg || effective_cases <= 1))
+            && !(state.active_tracks.is_empty()
+                && masker.has_usable_key(render_size)
+                && anchor_busy);
         let qry_gray = grayscale(&qry_small);
         let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker
             .mask_frame_with_luma_controlled(

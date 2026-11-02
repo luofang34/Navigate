@@ -188,7 +188,11 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
             [p[0], p[1]]
         })
         .collect();
-    let nadir_rot_radius_sq = (tile_m * 1.5).max(agl_m * 2.0).powi(2);
+    let dense_nadir_radius_sq = opts
+        .corridor_radius_m
+        .max(tile_m * 2.0)
+        .max(agl_m * 3.0)
+        .powi(2);
     let render_size = [800_u32, 600_u32];
     let k_base = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
     let k_render = scale_k(&k_base, 1.0, 1.0);
@@ -214,13 +218,10 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
         let Some(ground_msl) = surface.sample_dem(clat, clon) else {
             continue;
         };
-        let near_prior = prior_points_enu.is_empty()
+        let dense_nadir = prior_points_enu.is_empty()
             || prior_points_enu
                 .iter()
-                .any(|p| (ce - p[0]).powi(2) + (cn - p[1]).powi(2) <= nadir_rot_radius_sq);
-        let want_rotated_nadir = !opts.include_obliques;
-        let dense_nadir = !opts.include_obliques && near_prior;
-
+                .any(|p| (ce - p[0]).powi(2) + (cn - p[1]).powi(2) <= dense_nadir_radius_sq);
         let views = canonical_tile_poses(
             &surface,
             (ce, cn, ground_msl),
@@ -317,7 +318,7 @@ pub fn build_corridor_bank(opts: &CorridorBuildOptions) -> Result<Value, Pipelin
             let cam_x = [rot[(0, 0)] as f32, rot[(0, 1)] as f32, rot[(0, 2)] as f32];
             insert_band(band, cam_x, &raw, &world_hits);
 
-            if want_rotated_nadir
+            if !opts.include_obliques
                 && nadir::is_nadir_pose(&rot)
                 && let Ok(rot_bands) = nadir::synthesize_rotated_bands(
                     &gray_img,

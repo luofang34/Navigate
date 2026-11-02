@@ -1,20 +1,24 @@
-//! Seed-batch virtual-view projection, Kashin matching, and LighterGlue refinement.
+//! Seed-batch virtual-view projection, Kashin screening, and LighterGlue refinement.
 
-use super::{is_plausible_anchor_candidate, is_sane_anchor_seed, nadir_screen::SeedPose};
+use super::{
+    AnchorQueryAux, SeedStateMut, is_plausible_anchor_candidate, is_sane_anchor_seed, multitier,
+    nadir_screen::SeedPose,
+};
 use crate::{
     PipelineError,
-    corridor::kinematics::match_virtual_kashin,
-    pose::{PoseCandidate, PoseScore, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
+    corridor::{CorridorTrackOptions, kinematics::match_virtual_kashin_scored},
+    pose::{PoseCandidate, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
     realtime::helpers::{polish_pose_sparse, rot_to_row_major},
     surface::{Surface, SurfaceGpuRenderer},
+    testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,
 };
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::Matrix3;
 use navigate_match::{
     CorridorTileStore, FastMatchConfig, HadamardProjector, IndexedMatch, LighterGlue,
     PreparedKashinQuery, SparseFeatures, VirtualCorridorView, VirtualViewCamera,
 };
-use std::sync::Mutex;
+use std::{cmp::Reverse, sync::Mutex};
 
 pub(super) type SeedEvalTuple = (Option<PoseCandidate>, VirtualCorridorView, usize);
 
@@ -25,6 +29,10 @@ pub(super) struct SeedBatchFlags {
     pub allow_horizon_gpu: bool,
 }
 
+const COARSE_LG_SEED_CAP: usize = 8;
+const COARSE_NADIR_LG_SEED_CAP: usize = 12;
+const FULL_BATCH_LG_SEED_CAP: usize = 12;
+
 pub(super) fn eval_seed_batch(
     (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
@@ -34,18 +42,20 @@ pub(super) fn eval_seed_batch(
     (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
     flags: SeedBatchFlags,
 ) -> Result<Vec<SeedEvalTuple>, PipelineError> {
-    let virt_lm_cap = if flags.coarse_screen {
-        max_lm.min(1024)
-    } else {
-        max_lm
-    };
+    let virt_lm_cap = max_lm.min(1024);
     let k_cap = if lighterglue.is_some() {
         640
     } else {
         virt_lm_cap
     };
+    let inline_gpu_cap = if flags.coarse_screen {
+        2_usize
+    } else {
+        4_usize
+    };
+    let mut inline_gpu_used = 0_usize;
     let mut results: Vec<SeedEvalTuple> = Vec::with_capacity(poses.len());
-    let mut need_lg: Vec<usize> = Vec::new();
+    let mut need_lg: Vec<(usize, usize, usize, f32)> = Vec::new();
 
     for (i, &(hyp_eye, hyp_rot)) in poses.iter().enumerate() {
         let sin_down = -hyp_rot[(2, 2)];
@@ -85,7 +95,10 @@ pub(super) fn eval_seed_batch(
             )?;
         }
         if virt.world_points_enu.len() < 12 || (flags.allow_horizon_gpu && sin_down < 0.02) {
-            if let Some(gpu_lock) = gpu_renderer
+            let can_inline_gpu =
+                inline_gpu_used < inline_gpu_cap && (!steep_nadir || poses.len() <= 4);
+            if can_inline_gpu
+                && let Some(gpu_lock) = gpu_renderer
                 && let Some((mut polished, _, mut layers)) = polish_pose_sparse(
                     surface,
                     Some(gpu_lock),
@@ -98,6 +111,7 @@ pub(super) fn eval_seed_batch(
                 )?
                 && is_sane_anchor_seed(&polished, surface)
             {
+                inline_gpu_used += 1;
                 let mut acc_gpu = polished.score.geometry_accepted
                     && is_plausible_anchor_candidate(&polished, surface);
                 if !acc_gpu
@@ -131,7 +145,7 @@ pub(super) fn eval_seed_batch(
                 continue;
             }
         }
-        let (k_world, k_px) = match_virtual_kashin(&virt, prepared, k_cap);
+        let (k_world, k_px, kashin_sim) = match_virtual_kashin_scored(&virt, prepared, k_cap);
         let cand = fit_pose_hybrid(
             &k_world,
             &k_px,
@@ -143,28 +157,50 @@ pub(super) fn eval_seed_batch(
         let accepted = cand.as_ref().is_some_and(|c| {
             c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
         });
+        let k_inliers = cand.as_ref().map_or(0, |c| c.score.inliers);
         results.push((cand, virt, 0));
         if accepted {
             return Ok(results);
         }
-        need_lg.push(i);
+        need_lg.push((i, k_inliers, k_world.len(), kashin_sim));
     }
 
     if let Some(lg) = lighterglue
         && !need_lg.is_empty()
     {
-        let dense_coarse = flags.coarse_screen
-            && need_lg
-                .iter()
-                .all(|&idx| results[idx].1.features.len() >= 512);
-        let max_kp = if flags.fast_exit {
-            max_lm.min(512)
-        } else if dense_coarse {
+        let all_steep_nadir = poses.iter().all(|&(_, r)| -r[(2, 2)] > 0.85);
+        need_lg.sort_by_key(|&(i, k_inliers, k_matches, kashin_sim)| {
+            Reverse((
+                k_inliers,
+                k_matches,
+                (f64::from(kashin_sim) * 1_000.0).round() as i64,
+                Reverse(i),
+            ))
+        });
+        let lg_cap = if flags.coarse_screen {
+            if all_steep_nadir {
+                COARSE_NADIR_LG_SEED_CAP
+            } else {
+                COARSE_LG_SEED_CAP
+            }
+        } else {
+            FULL_BATCH_LG_SEED_CAP
+        };
+        need_lg.truncate(lg_cap);
+
+        let max_kp = if flags.fast_exit || flags.coarse_screen || poses.len() > 12 {
             max_lm.min(768)
         } else {
             max_lm.min(1024)
         };
-        let layers = if dense_coarse { 4 } else { 6 };
+        let layers = if flags.coarse_screen
+            || flags.fast_exit
+            || (poses.len() > super::ANCHOR_BATCH_SIZE && !all_steep_nadir)
+        {
+            4
+        } else {
+            6
+        };
         let cfg = FastMatchConfig {
             max_keypoints: max_kp,
             min_layers: layers,
@@ -173,83 +209,75 @@ pub(super) fn eval_seed_batch(
             prune_after_layer: None,
             ..FastMatchConfig::default()
         };
-        let ref_slices: Vec<&SparseFeatures> = need_lg
-            .iter()
-            .map(|&idx| &results[idx].1.features)
-            .collect();
-        let batched =
-            pollster::block_on(lg.match_features_batch_indexed_fast(&ref_slices, qry_feat, &cfg))?;
-        for (slot_pos, (idx_matches, stats)) in need_lg.into_iter().zip(batched) {
-            let (hyp_eye, hyp_rot) = poses[slot_pos];
-            let (ref mut cand, ref virt, ref mut layers) = results[slot_pos];
-            *layers = if slot_pos == 0 {
-                stats.layers_executed
-            } else {
-                0
-            };
-            let (w_pts, px) = collect_virtual_indexed(virt, &idx_matches);
-            let mut lg_best =
-                fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some((hyp_eye, hyp_rot)))
-                    .filter(|c| is_sane_anchor_seed(c, surface));
-            if !lg_best.as_ref().is_some_and(|c| {
-                c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
-            }) && let Some(tri_init) =
-                refine_seed_eye_2pt(&w_pts, &px, (hyp_eye, hyp_rot), k_render)
-                && let Some(tri_cand) =
-                    fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some(tri_init))
-                        .filter(|c| is_sane_anchor_seed(c, surface))
-                && lg_best.as_ref().is_none_or(|prev| {
-                    candidate_priority(&tri_cand.score) > candidate_priority(&prev.score)
-                })
+
+        for lg_chunk in need_lg.chunks(super::ANCHOR_BATCH_SIZE) {
+            let mut ref_slices: Vec<&SparseFeatures> = lg_chunk
+                .iter()
+                .map(|&(idx, _, _, _)| &results[idx].1.features)
+                .collect();
+            if (2..super::ANCHOR_BATCH_SIZE).contains(&ref_slices.len())
+                && let Some(&pad_ref) = ref_slices.iter().find(|r| !r.is_empty())
             {
-                lg_best = Some(tri_cand);
+                ref_slices.resize(super::ANCHOR_BATCH_SIZE, pad_ref);
             }
-            if let Some(lg_cand) = lg_best
-                && cand.as_ref().is_none_or(|prev| {
-                    candidate_priority(&lg_cand.score) > candidate_priority(&prev.score)
-                })
+            let batched = pollster::block_on(lg.match_features_batch_indexed_fast(
+                &ref_slices,
+                qry_feat,
+                &cfg,
+            ))?;
+            let mut batch_accepted = false;
+            for (chunk_pos, (&(slot_pos, _, _, _), (idx_matches, stats))) in
+                lg_chunk.iter().zip(batched).enumerate()
             {
-                *cand = Some(lg_cand);
+                let (hyp_eye, hyp_rot) = poses[slot_pos];
+                let (ref mut cand, ref virt, ref mut slot_layers) = results[slot_pos];
+                *slot_layers = if chunk_pos == 0 {
+                    stats.layers_executed
+                } else {
+                    0
+                };
+                let (w_pts, px) = collect_virtual_indexed(virt, &idx_matches);
+                let mut lg_best =
+                    fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some((hyp_eye, hyp_rot)))
+                        .filter(|c| is_sane_anchor_seed(c, surface));
+                if !lg_best.as_ref().is_some_and(|c| {
+                    c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
+                }) && let Some(tri_init) =
+                    refine_seed_eye_2pt(&w_pts, &px, (hyp_eye, hyp_rot), k_render)
+                    && let Some(tri_cand) =
+                        fit_pose_hybrid(&w_pts, &px, k_render, render_size, Some(tri_init))
+                            .filter(|c| is_sane_anchor_seed(c, surface))
+                    && lg_best.as_ref().is_none_or(|prev| {
+                        candidate_priority(&tri_cand.score) > candidate_priority(&prev.score)
+                    })
+                {
+                    lg_best = Some(tri_cand);
+                }
+                if let Some(lg_cand) = lg_best
+                    && cand.as_ref().is_none_or(|prev| {
+                        candidate_priority(&lg_cand.score) > candidate_priority(&prev.score)
+                    })
+                {
+                    *cand = Some(lg_cand);
+                }
+                if let Some(c) = cand.as_ref() {
+                    let plausible = is_plausible_anchor_candidate(c, surface);
+                    let is_acc = c.score.geometry_accepted && plausible;
+                    let strong_coarse = flags.coarse_screen
+                        && c.score.inliers >= 28
+                        && c.score.holdout_inlier_fraction >= 0.50
+                        && plausible;
+                    if is_acc || strong_coarse {
+                        batch_accepted = true;
+                    }
+                }
+            }
+            if batch_accepted {
+                break;
             }
         }
     }
     Ok(results)
-}
-
-fn seed_only_candidate(
-    eye: [f64; 3],
-    rotation: Matrix3<f64>,
-    k_render: &Matrix3<f64>,
-    render_size: [u32; 2],
-) -> PoseCandidate {
-    PoseCandidate {
-        eye,
-        rotation,
-        k: *k_render,
-        size: render_size,
-        points: Vec::new(),
-        pixels: Vec::new(),
-        inliers: Vec::new(),
-        score: PoseScore {
-            focal_px: k_render[(0, 0)],
-            geometry_accepted: false,
-            holdout_count: 0,
-            holdout_inlier_fraction: 0.0,
-            holdout_median_px: 1e6,
-            image_support_fraction: 0.0,
-            inliers: 0,
-            pairs: 0,
-            positive_depth_fraction: 0.0,
-            train_inliers: 0,
-            train_rms_px: 1e6,
-        },
-    }
-}
-
-fn same_seed_neighborhood(a: &PoseCandidate, b_eye: [f64; 3], b_rot: &Matrix3<f64>) -> bool {
-    let dist = (Vector3::from(a.eye) - Vector3::from(b_eye)).norm();
-    let cos_ang = (((a.rotation * b_rot.transpose()).trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
-    dist <= 20.0 && cos_ang >= 0.96
 }
 
 #[expect(
@@ -269,197 +297,102 @@ pub(super) fn eval_global_fallback_seeds(
     best: &mut Option<(usize, usize, PoseCandidate)>,
     best_view: &mut Option<VirtualCorridorView>,
 ) -> Result<(), PipelineError> {
-    for ch in fb_seeds.chunks(super::ANCHOR_BATCH_SIZE) {
-        let fb_evals = eval_seed_batch(
-            (surface, store, projector),
-            gpu_renderer,
-            (xfeat, lighterglue),
-            (qry_feat, prepared),
-            ch,
-            (intrinsics, k_render, render_size, max_lm),
-            SeedBatchFlags {
-                fast_exit: false,
-                coarse_screen: false,
-                allow_horizon_gpu: true,
-            },
-        )?;
-        let mut accepted_fb = false;
-        for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
-            *lg_layers += layers;
-            if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
-                let seed_idx = *base_idx + local_i;
-                let is_acc =
-                    c.score.geometry_accepted && is_plausible_anchor_candidate(&c, surface);
-                let take = best.as_ref().is_none_or(|(_, _, prev)| {
-                    let prev_acc = prev.score.geometry_accepted
-                        && is_plausible_anchor_candidate(prev, surface);
-                    (is_acc, candidate_priority(&c.score))
-                        > (prev_acc, candidate_priority(&prev.score))
-                });
-                seed_pool.push((seed_idx, c.clone()));
-                if take {
-                    *best = Some((seed_idx, 0, c));
-                    *best_view = Some(virt);
-                }
-                if is_acc {
-                    accepted_fb = true;
-                    break;
-                }
+    if fb_seeds.is_empty() {
+        return Ok(());
+    }
+    let fb_evals = eval_seed_batch(
+        (surface, store, projector),
+        gpu_renderer,
+        (xfeat, lighterglue),
+        (qry_feat, prepared),
+        fb_seeds,
+        (intrinsics, k_render, render_size, max_lm),
+        SeedBatchFlags {
+            fast_exit: false,
+            coarse_screen: false,
+            allow_horizon_gpu: true,
+        },
+    )?;
+    let evaluated_n = fb_evals.len();
+    for (local_i, (cand_opt, virt, layers)) in fb_evals.into_iter().enumerate() {
+        *lg_layers += layers;
+        if let Some(c) = cand_opt.filter(|c| is_sane_anchor_seed(c, surface)) {
+            let seed_idx = *base_idx + local_i;
+            let is_acc = c.score.geometry_accepted && is_plausible_anchor_candidate(&c, surface);
+            let take = best.as_ref().is_none_or(|(_, _, prev)| {
+                let prev_acc =
+                    prev.score.geometry_accepted && is_plausible_anchor_candidate(prev, surface);
+                (is_acc, candidate_priority(&c.score)) > (prev_acc, candidate_priority(&prev.score))
+            });
+            seed_pool.push((seed_idx, c.clone()));
+            if take {
+                *best = Some((seed_idx, 0, c));
+                *best_view = Some(virt);
             }
         }
-        *base_idx += ch.len();
-        if accepted_fb {
-            break;
-        }
     }
+    *base_idx += evaluated_n;
     Ok(())
 }
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "anchor polish loop shares surface, GPU renderer, feature models, intrinsics, and best-candidate state"
+    reason = "global retrieval fallback conditionally runs SearchTierMatcher when virtual-view search is unaccepted"
 )]
-pub(super) fn polish_anchor_seed_pool(
-    surface: &Surface,
+pub(in crate::corridor::anchor) fn eval_global_fallback_if_needed(
+    (surface, store, projector): (&Surface, &CorridorTileStore, &HadamardProjector),
     gpu_renderer: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
-    xfeat: &LoadedXFeat,
-    lighterglue: Option<&LighterGlue>,
-    qry_feat: &SparseFeatures,
-    k_render: &Matrix3<f64>,
-    render_size: [u32; 2],
-    focal_mult: f64,
-    mut seed_pool: Vec<(usize, PoseCandidate)>,
-    screened_seeds: Option<&[SeedPose]>,
-    closest_nadir: Option<SeedPose>,
-    best: &mut Option<(usize, usize, PoseCandidate)>,
-    attempts_log: &mut Vec<serde_json::Value>,
-) -> Result<(usize, usize), PipelineError> {
-    seed_pool.sort_by(|a, b| {
-        (
-            b.1.score.geometry_accepted,
-            b.1.score.inliers,
-            b.1.score.pairs,
-        )
-            .cmp(&(
-                a.1.score.geometry_accepted,
-                a.1.score.inliers,
-                a.1.score.pairs,
-            ))
-    });
-    let best_accepted = best.as_ref().is_some_and(|(_, _, c)| {
-        c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
-    });
-    let has_strong_seed = seed_pool
-        .first()
-        .is_some_and(|(_, c)| c.score.inliers >= 16);
-    let mut selected: Vec<(usize, PoseCandidate)> = if best_accepted {
-        seed_pool.into_iter().take(1).collect()
-    } else if has_strong_seed {
-        seed_pool.into_iter().take(2).collect()
-    } else if let Some(scr) = screened_seeds {
-        for (idx, &(s_eye, s_rot)) in scr.iter().take(2).enumerate() {
-            if !seed_pool
-                .iter()
-                .any(|(_, c)| same_seed_neighborhood(c, s_eye, &s_rot))
-            {
-                seed_pool.push((
-                    idx,
-                    seed_only_candidate(s_eye, s_rot, k_render, render_size),
-                ));
-            }
-        }
-        let mut top: Vec<(usize, PoseCandidate)> = seed_pool.into_iter().take(2).collect();
-        if top.first().is_none_or(|(_, c)| c.score.inliers < 8) {
-            if let Some((n_eye, n_rot)) = closest_nadir
-                && !top
-                    .iter()
-                    .any(|(_, c)| same_seed_neighborhood(c, n_eye, &n_rot))
-            {
-                top.insert(
-                    0,
-                    (0, seed_only_candidate(n_eye, n_rot, k_render, render_size)),
-                );
-            }
-            top.truncate(1);
-        }
-        top
-    } else {
-        let polish_cap = if seed_pool
-            .first()
-            .is_some_and(|(_, c)| c.score.geometry_accepted)
+    (xfeat, lighterglue): (&LoadedXFeat, Option<&LighterGlue>),
+    (case, opts): (&PhotoCase, &CorridorTrackOptions),
+    (qry_feat, prepared): (&SparseFeatures, &PreparedKashinQuery),
+    (intrinsics, k_render, render_size, max_lm): ([f64; 4], &Matrix3<f64>, [u32; 2], usize),
+    aux: &AnchorQueryAux<'_>,
+    attitude: Option<(f64, f64)>,
+    (base_idx, lg_layers): (&mut usize, &mut usize),
+    (seed_pool, best, best_view): SeedStateMut<'_>,
+) -> Result<(), PipelineError> {
+    if best.as_ref().is_none_or(|(_, _, c)| {
+        !(c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface))
+    }) && let Some(matcher) = aux.search_tier_matcher
+        && let Ok(rgb_img) = crate::stages::load_case_rgb(&opts.dataset_dir, &case.image)
+    {
+        let small_rgb = image::imageops::resize(
+            &rgb_img,
+            render_size[0],
+            render_size[1],
+            image::imageops::FilterType::Triangle,
+        );
+        let dyn_img = image::DynamicImage::ImageRgb8(small_rgb);
+        let mask_bools = aux.mask_small.map(multitier::gray_mask_to_bools);
+        let search_prior =
+            multitier::build_search_prior_from_hint(aux.pred_pose, opts.anchor_uncertainty_m);
+        if let Ok(fb_seeds) = multitier::resolve_global_fallback_seeds_with_mask(
+            matcher,
+            &search_prior,
+            &dyn_img,
+            mask_bools.as_deref(),
+            surface,
+            store,
+            480.0,
+            attitude,
+        ) && !fb_seeds.is_empty()
         {
-            1
-        } else {
-            3
-        };
-        seed_pool.into_iter().take(polish_cap).collect()
-    };
-    let mut polish_rays = 0_usize;
-    let mut lg_layers = 0_usize;
-    for (seed_idx, mut cur_cand) in selected.drain(..) {
-        let steps = if cur_cand.score.geometry_accepted {
-            1
-        } else {
-            3
-        };
-        for p_step in 1..=steps {
-            let Some((polished, rays, layers)) = polish_pose_sparse(
-                surface,
+            eval_global_fallback_seeds(
+                (surface, store, projector),
                 gpu_renderer,
-                xfeat,
-                lighterglue,
-                qry_feat,
-                (cur_cand.eye, cur_cand.rotation),
-                k_render,
-                render_size,
-            )?
-            else {
-                break;
-            };
-            polish_rays += rays;
-            lg_layers += layers;
-            crate::realtime::helpers::log_attempt(
-                attempts_log,
-                "corridor-polish-gpu-or-sparse+l1-gnc",
-                seed_idx,
-                p_step + 1,
-                focal_mult as f32,
-                polished.score.pairs,
-                Some(&polished),
-            );
-            let polished_inliers = polished.score.inliers;
-            let acc_now = polished.score.geometry_accepted
-                && is_plausible_anchor_candidate(&polished, surface);
-            let mut improved_cur = false;
-            if is_sane_anchor_seed(&polished, surface) {
-                if candidate_priority(&polished.score) > candidate_priority(&cur_cand.score) {
-                    cur_cand = polished.clone();
-                    improved_cur = true;
-                }
-                if best.as_ref().is_none_or(|(_, _, prev)| {
-                    let prev_acc = prev.score.geometry_accepted
-                        && is_plausible_anchor_candidate(prev, surface);
-                    (acc_now, candidate_priority(&polished.score))
-                        >= (prev_acc, candidate_priority(&prev.score))
-                }) {
-                    *best = Some((seed_idx, p_step + 1, polished));
-                }
-            }
-            if acc_now
-                || !improved_cur
-                || (p_step == 1 && polished_inliers < 8)
-                || (p_step == 2 && polished_inliers < 32)
-            {
-                break;
-            }
-        }
-        if best.as_ref().is_some_and(|(_, _, c)| {
-            c.score.geometry_accepted && is_plausible_anchor_candidate(c, surface)
-        }) {
-            break;
+                (xfeat, lighterglue),
+                (qry_feat, prepared),
+                &fb_seeds,
+                (intrinsics, k_render, render_size, max_lm),
+                base_idx,
+                lg_layers,
+                seed_pool,
+                best,
+                best_view,
+            )?;
         }
     }
-    Ok((polish_rays, lg_layers))
+    Ok(())
 }
 
 fn collect_virtual_indexed(

@@ -229,8 +229,19 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
     )?;
 
     let projector = HadamardProjector::new(bank.seed);
+    let cases = load_profile_cases(&opts.profile_path)?;
+    let effective_cases = cases
+        .iter()
+        .filter(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .count();
     let t_warmup = Instant::now();
-    let _ = xfeat.warmup(lighterglue.as_ref())?;
+    if effective_cases > 8 {
+        let _ = xfeat.warmup(lighterglue.as_ref())?;
+    }
     let init_gpu = opts
         .polish
         .then(|| {
@@ -241,7 +252,6 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         .flatten();
     let gpu_renderer: Mutex<Option<SurfaceGpuRenderer>> = Mutex::new(init_gpu);
     let shader_warmup_ms = t_warmup.elapsed().as_secs_f64() * 1000.0;
-    let cases = load_profile_cases(&opts.profile_path)?;
     let kp_limit = opts.query_keypoints.clamp(16, 4096);
     let top_k = opts.shortlist_k.max(1);
     let mut evaluated = 0usize;

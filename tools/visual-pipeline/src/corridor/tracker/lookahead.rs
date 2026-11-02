@@ -54,7 +54,23 @@ pub(super) fn spawn_corridor_workers(
     cases: &[PhotoCase],
     opts: &CorridorTrackOptions,
 ) -> Result<CorridorRuntimeWorkers, PipelineError> {
-    let first_eff = cases.first().map(|c| apply_case_overrides(c, opts));
+    let effective_cases = cases
+        .iter()
+        .filter(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .count();
+    let first_eff = cases
+        .iter()
+        .find(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .or_else(|| cases.first())
+        .map(|c| apply_case_overrides(c, opts));
     let init_rs = first_eff
         .as_ref()
         .map_or([800, 600], |c| tracking_render_size(c.size));
@@ -84,7 +100,11 @@ pub(super) fn spawn_corridor_workers(
             ))
         });
     let t_warmup = Instant::now();
-    let _ = xfeat.warmup(lighterglue)?;
+    if opts.pace_realtime && effective_cases > 2 {
+        let _ = xfeat.warmup(lighterglue)?;
+    } else if effective_cases > 2 {
+        let _ = xfeat.warmup_xfeat_only(init_rs, opts.query_keypoints.clamp(16, 4096))?;
+    }
     if let Some((eye, rot)) = init_prior_pose {
         store
             .project_virtual_kashin(&VirtualViewCamera {
@@ -103,7 +123,8 @@ pub(super) fn spawn_corridor_workers(
             })
             .ok();
     }
-    let sync_gpu = (!opts.background_refresh && opts.polish_anchors)
+    let use_bg = opts.background_refresh && effective_cases > 1;
+    let sync_gpu = (!use_bg && opts.polish_anchors)
         .then(|| {
             let mut g = SurfaceGpuRenderer::try_new_with_role(
                 surface,
@@ -125,12 +146,19 @@ pub(super) fn spawn_corridor_workers(
         stride: 4,
         include_obliques: !cfg!(debug_assertions),
     };
-    let need_live_tiles = cases.iter().any(|c| {
-        estimate_lookahead_enu(surface, &TrackState::new(), &apply_case_overrides(c, opts))
-            .is_some_and(|la| !store.has_tile(store.tile_key_at(la[0], la[1])))
-    });
-    let background_anchor = opts
-        .background_refresh
+    let need_live_tiles = use_bg
+        && cases
+            .iter()
+            .filter(|c| {
+                opts.only_cases
+                    .as_ref()
+                    .is_none_or(|allow| allow.contains(&c.id))
+            })
+            .any(|c| {
+                estimate_lookahead_enu(surface, &TrackState::new(), &apply_case_overrides(c, opts))
+                    .is_some_and(|la| !store.has_tile(store.tile_key_at(la[0], la[1])))
+            });
+    let background_anchor = use_bg
         .then(|| {
             let init_gpu = opts
                 .polish_anchors
@@ -161,8 +189,7 @@ pub(super) fn spawn_corridor_workers(
             )
         })
         .transpose()?;
-    let tile_builder = opts
-        .background_refresh
+    let tile_builder = use_bg
         .then(|| {
             BackgroundTileBuilder::spawn(
                 TileBuilderContext {
@@ -193,7 +220,15 @@ pub(super) fn init_tracker_session(
     focal_estimator: &FocalLengthEstimator,
     cell_m: f64,
 ) -> Result<(), PipelineError> {
-    if let Some(first_raw) = cases.first() {
+    if let Some(first_raw) = cases
+        .iter()
+        .find(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .or_else(|| cases.first())
+    {
         let first_case = apply_case_overrides(first_raw, opts);
         let rs = tracking_render_size(first_case.size);
         let kf = estimate_intrinsics_with_estimator(&first_case, focal_estimator);

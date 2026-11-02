@@ -63,6 +63,13 @@ fn project_tiles_virtual_view_opt<'a>(
         tile_refs.push(tile);
         visible_tiles += 1;
         for l_idx in 0..tile.len() {
+            let is_nadir = tile.obs_dirs_i8[l_idx][2] > 120;
+            if is_nadir
+                && cam.min_cos_orientation > 0.90
+                && unit_cosine_i8(tile.cam_x_i8[l_idx], live_cam_x) < cam.min_cos_orientation
+            {
+                continue;
+            }
             let rel = tile.rel_enu[l_idx];
             let world = [
                 tile.anchor_enu[0] + f64::from(rel[0]),
@@ -88,7 +95,6 @@ fn project_tiles_virtual_view_opt<'a>(
             if depth_f < min_depth[z_cell] {
                 min_depth[z_cell] = depth_f;
             }
-            let is_nadir = tile.obs_dirs_i8[l_idx][2] > 120;
             let min_cos_inc = if is_nadir {
                 cam.min_cos_incidence.min(0.45)
             } else {

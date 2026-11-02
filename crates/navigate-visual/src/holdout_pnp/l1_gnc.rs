@@ -238,15 +238,25 @@ pub fn fit_pose_hybrid(
     size: [u32; 2],
     initial_pose: Option<([f64; 3], Matrix3<f64>)>,
 ) -> Option<PoseCandidate> {
+    let steep_nadir_init = initial_pose.is_some_and(|(_, r0)| -r0[(2, 2)] > 0.90);
     let gnc =
         initial_pose.and_then(|init| fit_pose_l1_gnc(world_points, image_pixels, k, size, init));
-    if gnc.as_ref().is_some_and(|c| c.score.geometry_accepted) {
+    if gnc.as_ref().is_some_and(|c| {
+        c.score.geometry_accepted && (!steep_nadir_init || -c.rotation[(2, 2)] >= 0.85)
+    }) {
         return gnc;
     }
     let ransac = fit_pose_ransac(world_points, image_pixels, k, size, initial_pose);
     match (gnc, ransac) {
         (Some(g), Some(r)) => {
-            if super::candidate_priority(&g.score) >= super::candidate_priority(&r.score) {
+            let g_tilted_planar = steep_nadir_init
+                && !g.score.geometry_accepted
+                && -g.rotation[(2, 2)] < 0.94
+                && -r.rotation[(2, 2)] >= 0.95
+                && r.score.inliers + 5 >= g.score.inliers;
+            if !g_tilted_planar
+                && super::candidate_priority(&g.score) >= super::candidate_priority(&r.score)
+            {
                 Some(g)
             } else {
                 Some(r)

@@ -5,7 +5,10 @@
 
 mod kashin_match;
 
-pub use kashin_match::{approx_dot, match_tracks_kashin, match_virtual_kashin};
+pub use kashin_match::{
+    approx_dot, match_tracks_kashin, match_tracks_kashin_scored, match_virtual_kashin,
+    match_virtual_kashin_scored,
+};
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::ActiveTrackSet;
