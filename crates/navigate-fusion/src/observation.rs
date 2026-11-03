@@ -9,20 +9,22 @@
 //! A reserved variant becomes usable when its measurement model lands.
 
 use navigate_contract::{
-    AttitudeQuaternion, GeodeticPosition, NedVelocity, ObservationStamp, SourceComposition,
-    SymmetricCov3,
+    AttitudeQuaternion, FrameId, GeodeticPosition, NedVelocity, ObservationStamp,
+    SourceComposition, SymmetricCov3,
 };
 
 /// The measured value of one observation, with its covariance.
 ///
 /// Each variant is one measurement model (ADR-0003, ADR-0008). A new
-/// variant is a new model, never a change to an existing one.
+/// variant is a new model, never a change to an existing one. A geodetic
+/// position or an altitude in a value is on the reference ellipsoid of
+/// the filter (ADR-0013).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum ObservationValue {
     /// An absolute position fix.
     PositionFix {
-        /// Measured position, WGS84.
+        /// Measured position on the reference ellipsoid.
         position: GeodeticPosition,
         /// Measurement covariance in local NED meters².
         covariance: SymmetricCov3,
@@ -37,17 +39,17 @@ pub enum ObservationValue {
     /// Slant range to a transmitter at a known position, such as a DME
     /// (ADR-0008). Requires an initialized filter.
     Range {
-        /// Transmitter position, WGS84.
+        /// Transmitter position on the reference ellipsoid.
         station: GeodeticPosition,
         /// Measured slant range in meters.
         range_m: f64,
         /// Range variance in meters².
         variance_m2: f64,
     },
-    /// Height above the WGS84 ellipsoid, such as a corrected barometric
-    /// altitude (ADR-0012). Requires an initialized filter.
+    /// Height above the reference ellipsoid, such as a corrected
+    /// barometric altitude (ADR-0012). Requires an initialized filter.
     Altitude {
-        /// Height above the WGS84 ellipsoid in meters.
+        /// Height above the reference ellipsoid in meters.
         altitude_m: f64,
         /// Altitude variance in meters².
         variance_m2: f64,
@@ -63,7 +65,8 @@ pub enum ObservationValue {
         /// Map gradient in tesla per meter. The axes are the NED axes of
         /// the tangent plane at `linearization_point`.
         gradient_ned_t_per_m: [f64; 3],
-        /// The position where the adapter linearized the map, WGS84.
+        /// The position where the adapter linearized the map, on the
+        /// reference ellipsoid.
         linearization_point: GeodeticPosition,
         /// Radius around `linearization_point` in meters where the linear
         /// map model is valid.
@@ -85,7 +88,7 @@ pub enum ObservationValue {
     /// Camera position and attitude from a map reference.
     /// Reserved: refused until the filter carries attitude (ADR-0008).
     VisualPose {
-        /// Camera position, WGS84.
+        /// Camera position on the reference ellipsoid.
         position: GeodeticPosition,
         /// Position covariance in local NED meters².
         position_covariance: SymmetricCov3,
@@ -146,7 +149,7 @@ impl ObservationValue {
 }
 
 /// One observation offered to the filter: a stamped, covariance-bearing
-/// value with its declared provenance.
+/// value with its declared provenance and its declared frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Observation {
@@ -157,10 +160,15 @@ pub struct Observation {
     /// Declared provenance; empty or estimator-derived compositions are
     /// inadmissible (ADR-0003).
     pub composition: SourceComposition,
+    /// Declared body-fixed frame of the value (ADR-0013). The filter
+    /// refuses a frame that is not the frame of its ellipsoid. `None`
+    /// declares no frame. A filter with
+    /// [`crate::FusionConfig::require_explicit_frame`] refuses `None`.
+    pub frame: Option<FrameId>,
 }
 
 impl Observation {
-    /// Builds an observation from its parts.
+    /// Builds an observation from its parts without a declared frame.
     #[must_use]
     pub const fn new(
         stamp: ObservationStamp,
@@ -171,6 +179,25 @@ impl Observation {
             stamp,
             value,
             composition,
+            frame: None,
         }
+    }
+
+    /// Builds an observation from its parts with a declared frame.
+    #[must_use]
+    pub const fn in_frame(
+        stamp: ObservationStamp,
+        value: ObservationValue,
+        composition: SourceComposition,
+        frame: FrameId,
+    ) -> Self {
+        Self::new(stamp, value, composition).with_frame(frame)
+    }
+
+    /// This observation with `frame` declared.
+    #[must_use]
+    pub const fn with_frame(mut self, frame: FrameId) -> Self {
+        self.frame = Some(frame);
+        self
     }
 }

@@ -5,7 +5,7 @@ use navigate_contract::{
     ClockDomainId, GuidanceCommand, GuidanceSetpoint, LateralReference, MonotonicNanos,
     NavigationSolution, NedVelocity, Waypoint,
 };
-use navigate_geodesy::distance_m;
+use navigate_geodesy::distance_on_m;
 
 use crate::admission::admit_leg;
 use crate::config::VelocityGuidanceConfig;
@@ -69,6 +69,8 @@ mod tests;
 ///   solution's `solved_at`.
 /// - [`GuidanceRefusal::SolutionStale`] when the solution's age exceeds
 ///   `config.admission.max_solution_age`.
+/// - [`GuidanceRefusal::ImplausibleEllipsoid`] when the solution
+///   ellipsoid cannot define geodetic coordinates.
 /// - [`GuidanceRefusal::VerticalUncertaintyExceeded`] when `leg_to` has
 ///   an altitude constraint and `solution.integrity.vertical_1sigma_m`
 ///   exceeds `config.admission.max_vertical_1sigma_m`.
@@ -92,7 +94,7 @@ pub fn guide_velocity(
         now_clock,
         &config.admission,
     )?;
-    let remaining_m = distance_m(&solution.position, &leg_to.position);
+    let remaining_m = distance_on_m(&solution.position, &leg_to.position, &leg.ellipsoid);
     // A waypoint speed constraint bounds the leg toward it (NAV-VC-003);
     // plan validation refuses non-positive constraints and activation
     // refuses sub-floor ones, so a plain min is honest here.

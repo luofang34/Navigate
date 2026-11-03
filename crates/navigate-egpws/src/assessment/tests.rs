@@ -1,5 +1,5 @@
 use navigate_contract::{
-    ClockDomainId, DurationNanos, FaultDetection, GeodeticPosition, IntegrityAssessment,
+    ClockDomainId, DurationNanos, Ellipsoid, FaultDetection, GeodeticPosition, IntegrityAssessment,
     MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
     SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, WrappingSequence,
 };
@@ -273,4 +273,86 @@ fn below_terrain_is_a_warning_with_negative_height() {
     let assessment = result.unwrap_or_else(|e| panic!("expected assessment, got {e}"));
     assert_eq!(assessment.height_above_terrain_m, -50.0);
     assert_eq!(assessment.severity, Some(AlertSeverity::Warning));
+}
+
+/// Flat lunar terrain in the mean Earth / polar axis frame.
+struct LunarTerrain;
+
+impl TerrainDatabase for LunarTerrain {
+    fn elevation_m(&self, _position: &GeodeticPosition) -> Option<f64> {
+        Some(-1_200.0)
+    }
+
+    fn ellipsoid(&self) -> Ellipsoid {
+        Ellipsoid::MOON_ME
+    }
+}
+
+#[test]
+fn a_database_serves_wgs84_by_default() {
+    assert_eq!(
+        FlatTerrain { elevation_m: 0.0 }.ellipsoid(),
+        Ellipsoid::WGS84
+    );
+}
+
+#[test]
+fn a_lunar_solution_is_refused_by_an_earth_database() {
+    let db = FlatTerrain { elevation_m: 0.0 };
+    let own = solution(SolutionQuality::Good, 500.0, t0()).with_ellipsoid(Ellipsoid::MOON_ME);
+    let result = assess(&own, t0(), CLOCK, Some(&db), &EgpwsConfig::default());
+    assert_eq!(
+        result,
+        Err(EgpwsUnavailable::EllipsoidMismatch {
+            expected: Ellipsoid::WGS84,
+            got: Ellipsoid::MOON_ME,
+        })
+    );
+}
+
+#[test]
+fn ellipsoids_of_one_body_in_different_realizations_do_not_agree() {
+    let own = solution(SolutionQuality::Good, 500.0, t0()).with_ellipsoid(Ellipsoid::MOON_PA);
+    let result = assess(
+        &own,
+        t0(),
+        CLOCK,
+        Some(&LunarTerrain),
+        &EgpwsConfig::default(),
+    );
+    assert!(matches!(
+        result,
+        Err(EgpwsUnavailable::EllipsoidMismatch { .. })
+    ));
+    let grs80 = solution(SolutionQuality::Good, 500.0, t0()).with_ellipsoid(Ellipsoid::GRS80);
+    let db = FlatTerrain { elevation_m: 0.0 };
+    let result = assess(&grs80, t0(), CLOCK, Some(&db), &EgpwsConfig::default());
+    assert!(matches!(
+        result,
+        Err(EgpwsUnavailable::EllipsoidMismatch { .. })
+    ));
+}
+
+#[test]
+fn the_ellipsoid_is_judged_after_the_database_and_before_the_clock() {
+    let own = solution(SolutionQuality::Unusable, 500.0, t0()).with_ellipsoid(Ellipsoid::MOON_ME);
+    let foreign = ClockDomainId::new(9);
+    assert_eq!(
+        assess(&own, t0(), foreign, None, &EgpwsConfig::default()),
+        Err(EgpwsUnavailable::NoDatabase)
+    );
+    let db = FlatTerrain { elevation_m: 0.0 };
+    assert!(matches!(
+        assess(&own, t0(), foreign, Some(&db), &EgpwsConfig::default()),
+        Err(EgpwsUnavailable::EllipsoidMismatch { .. })
+    ));
+}
+
+#[test]
+fn a_lunar_database_assesses_a_lunar_solution() {
+    let own = solution(SolutionQuality::Good, -1_150.0, t0()).with_ellipsoid(Ellipsoid::MOON_ME);
+    let config = EgpwsConfig::default();
+    let assessment = assess(&own, t0(), CLOCK, Some(&LunarTerrain), &config).expect("assessed");
+    assert!((assessment.height_above_terrain_m - 50.0).abs() < 1e-9);
+    assert_eq!(assessment.severity.is_some(), 50.0 < config.caution_floor_m);
 }

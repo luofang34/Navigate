@@ -1,16 +1,19 @@
 //! Kinematic value types in canonical units: radians, meters, meters per
-//! second. Frames are explicit in the type names; nothing here converts —
-//! conversions live in `navigate-geodesy`.
+//! second. The type name or the carrier of a value names its frame.
+//! Nothing here converts. The conversions are in `navigate-geodesy`.
 
-/// A WGS84 geodetic position. Altitude is height above the ellipsoid.
+/// A geodetic position on a reference [`crate::Ellipsoid`]. The carrier
+/// of the position names the ellipsoid, for example
+/// [`crate::NavigationSolution::ellipsoid`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct GeodeticPosition {
-    /// Latitude in radians, positive north, in `[-π/2, π/2]`.
+    /// Planetographic latitude in radians, positive north, in
+    /// `[-π/2, π/2]`. The ellipsoidal normal defines it.
     pub latitude_rad: f64,
     /// Longitude in radians, positive east, in `[-π, π]`.
     pub longitude_rad: f64,
-    /// Height above the WGS84 ellipsoid in meters.
+    /// Height above the reference ellipsoid in meters.
     pub altitude_m: f64,
 }
 
@@ -35,6 +38,64 @@ impl GeodeticPosition {
             && self.altitude_m.is_finite()
             && self.latitude_rad.abs() <= core::f64::consts::FRAC_PI_2
             && self.longitude_rad.abs() <= core::f64::consts::PI
+    }
+}
+
+/// A position in a body-centered Cartesian frame. The carrier of the
+/// position names the frame, for example [`crate::CartesianSolution::frame`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct CartesianPosition {
+    /// X component in meters.
+    pub x_m: f64,
+    /// Y component in meters.
+    pub y_m: f64,
+    /// Z component in meters.
+    pub z_m: f64,
+}
+
+impl CartesianPosition {
+    /// Builds a position from its components.
+    #[must_use]
+    pub const fn new(x_m: f64, y_m: f64, z_m: f64) -> Self {
+        Self { x_m, y_m, z_m }
+    }
+
+    /// Whether all components are finite.
+    #[must_use]
+    pub fn is_finite(&self) -> bool {
+        self.x_m.is_finite() && self.y_m.is_finite() && self.z_m.is_finite()
+    }
+}
+
+/// A velocity in the axes of a body-centered Cartesian frame. The
+/// carrier of the velocity names the frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct CartesianVelocity {
+    /// X component in meters per second.
+    pub vx_mps: f64,
+    /// Y component in meters per second.
+    pub vy_mps: f64,
+    /// Z component in meters per second.
+    pub vz_mps: f64,
+}
+
+impl CartesianVelocity {
+    /// Builds a velocity from its components.
+    #[must_use]
+    pub const fn new(vx_mps: f64, vy_mps: f64, vz_mps: f64) -> Self {
+        Self {
+            vx_mps,
+            vy_mps,
+            vz_mps,
+        }
+    }
+
+    /// Whether all components are finite.
+    #[must_use]
+    pub fn is_finite(&self) -> bool {
+        self.vx_mps.is_finite() && self.vy_mps.is_finite() && self.vz_mps.is_finite()
     }
 }
 

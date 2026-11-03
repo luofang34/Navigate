@@ -57,7 +57,7 @@ impl MeasurementModel<3> for LinearBlock {
 
 /// Slant range to a transmitter at a known local NED position, such as a DME.
 ///
-/// `h(x) = |p − s|`. The local plane is a tangent plane of the WGS84
+/// `h(x) = |p − s|`. The local plane is a tangent plane of the reference
 /// ellipsoid, so the Euclidean distance in it is the slant range.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RangeModel {

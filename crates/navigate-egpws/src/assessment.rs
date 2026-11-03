@@ -1,7 +1,7 @@
 //! Terrain-clearance assessment with typed refusals.
 
 use navigate_contract::{
-    ClockDomainId, DurationNanos, MonotonicNanos, NavigationSolution, SolutionQuality,
+    ClockDomainId, DurationNanos, Ellipsoid, MonotonicNanos, NavigationSolution, SolutionQuality,
 };
 
 use crate::config::EgpwsConfig;
@@ -48,6 +48,20 @@ pub enum EgpwsUnavailable {
     /// terrain package.
     #[error("terrain assessment unavailable: no terrain database is bound")]
     NoDatabase,
+    /// The solution ellipsoid is not the ellipsoid of the bound terrain
+    /// database (ADR-0013). The same coordinates name different points
+    /// on different ellipsoids, so the database cannot give the terrain
+    /// below the solution.
+    #[error(
+        "terrain assessment unavailable: the database ellipsoid is {expected:?}, \
+         the solution ellipsoid is {got:?}"
+    )]
+    EllipsoidMismatch {
+        /// The ellipsoid of the bound database.
+        expected: Ellipsoid,
+        /// The ellipsoid of the refused solution.
+        got: Ellipsoid,
+    },
     /// `now` was read on a different clock domain than the solution's
     /// stamp, so the two readings are not comparable and solution age
     /// cannot be judged: readings from different domains are never
@@ -139,6 +153,8 @@ pub enum EgpwsUnavailable {
 /// Judged in this order:
 ///
 /// - [`EgpwsUnavailable::NoDatabase`] when `database` is `None`;
+/// - [`EgpwsUnavailable::EllipsoidMismatch`] when `solution.ellipsoid`
+///   is not [`TerrainDatabase::ellipsoid`];
 /// - [`EgpwsUnavailable::ClockDomainMismatch`] when `now_clock` differs
 ///   from the solution stamp's clock domain;
 /// - [`EgpwsUnavailable::ClockInversion`] when `now` is earlier than the
@@ -162,10 +178,17 @@ pub fn assess(
     let Some(database) = database else {
         return Err(EgpwsUnavailable::NoDatabase);
     };
-    let expected = solution.stamp.clock;
-    if now_clock != expected {
-        return Err(EgpwsUnavailable::ClockDomainMismatch {
+    let expected = database.ellipsoid();
+    if solution.ellipsoid != expected {
+        return Err(EgpwsUnavailable::EllipsoidMismatch {
             expected,
+            got: solution.ellipsoid,
+        });
+    }
+    let solution_clock = solution.stamp.clock;
+    if now_clock != solution_clock {
+        return Err(EgpwsUnavailable::ClockDomainMismatch {
+            expected: solution_clock,
             got: now_clock,
         });
     }

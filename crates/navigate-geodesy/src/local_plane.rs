@@ -1,11 +1,13 @@
 //! Local tangent plane: North-East-Down offsets relative to a geodetic
-//! origin, converted through ECEF with an exact rotation — no
-//! small-angle approximations, so accuracy degrades only with the
-//! (real) curvature divergence between the plane and the ellipsoid.
+//! origin, converted through the body-fixed frame with an exact
+//! rotation — no small-angle approximations, so accuracy degrades only
+//! with the (real) curvature divergence between the plane and the
+//! ellipsoid.
 
 use navigate_contract::GeodeticPosition;
 
-use crate::ecef::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
+use crate::ecef::{BodyFixedPosition, body_fixed_to_geodetic, geodetic_to_body_fixed};
+use crate::ellipsoid::BodyEllipsoid;
 use crate::error::GeodesyError;
 
 /// An offset in a local North-East-Down frame. Down is positive toward
@@ -32,13 +34,15 @@ impl NedOffset {
     }
 }
 
-/// A local tangent plane anchored at a geodetic origin. Precomputes the
-/// origin's ECEF position and the ECEF→NED rotation so conversions are
-/// pure arithmetic.
+/// A local tangent plane anchored at a geodetic origin on one
+/// [`BodyEllipsoid`]. Precomputes the origin's body-fixed position and
+/// the body-fixed→NED rotation so conversions are pure arithmetic. The
+/// plane reads and returns geodetic positions on its own ellipsoid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LocalTangentPlane {
+    ellipsoid: BodyEllipsoid,
     origin: GeodeticPosition,
-    origin_ecef: EcefPosition,
+    origin_ecef: BodyFixedPosition,
     sin_lat: f64,
     cos_lat: f64,
     sin_lon: f64,
@@ -46,9 +50,28 @@ pub struct LocalTangentPlane {
 }
 
 impl LocalTangentPlane {
-    /// Anchors a plane at `origin`. Rejecting an implausible origin here
-    /// keeps [`Self::to_ned`] and [`Self::from_ned`] total.
+    /// Anchors a plane at `origin` on [`BodyEllipsoid::WGS84`].
+    ///
+    /// # Errors
+    ///
+    /// [`GeodesyError::ImplausibleOrigin`] when `origin` fails the
+    /// geodetic plausibility screen.
     pub fn new(origin: GeodeticPosition) -> Result<Self, GeodesyError> {
+        Self::with_ellipsoid(origin, BodyEllipsoid::WGS84)
+    }
+
+    /// Anchors a plane at `origin` on `ellipsoid`. Rejecting an
+    /// implausible origin here keeps [`Self::to_ned`] and
+    /// [`Self::from_ned`] total.
+    ///
+    /// # Errors
+    ///
+    /// [`GeodesyError::ImplausibleOrigin`] when `origin` fails the
+    /// geodetic plausibility screen.
+    pub fn with_ellipsoid(
+        origin: GeodeticPosition,
+        ellipsoid: BodyEllipsoid,
+    ) -> Result<Self, GeodesyError> {
         if !origin.is_plausible() {
             return Err(GeodesyError::ImplausibleOrigin {
                 latitude_rad: origin.latitude_rad,
@@ -59,8 +82,9 @@ impl LocalTangentPlane {
         let (sin_lat, cos_lat) = origin.latitude_rad.sin_cos();
         let (sin_lon, cos_lon) = origin.longitude_rad.sin_cos();
         Ok(Self {
+            ellipsoid,
             origin,
-            origin_ecef: geodetic_to_ecef(&origin),
+            origin_ecef: geodetic_to_body_fixed(&origin, &ellipsoid),
             sin_lat,
             cos_lat,
             sin_lon,
@@ -74,15 +98,21 @@ impl LocalTangentPlane {
         self.origin
     }
 
-    /// Expresses `position` as a NED offset from the origin: ECEF delta
-    /// rotated into the origin's tangent frame.
+    /// The ellipsoid of the origin and of every converted position.
+    #[must_use]
+    pub const fn ellipsoid(&self) -> BodyEllipsoid {
+        self.ellipsoid
+    }
+
+    /// Expresses `position` as a NED offset from the origin: the
+    /// body-fixed delta rotated into the origin's tangent frame.
     #[must_use]
     pub fn to_ned(&self, position: &GeodeticPosition) -> NedOffset {
-        let ecef = geodetic_to_ecef(position);
+        let ecef = geodetic_to_body_fixed(position, &self.ellipsoid);
         let dx = ecef.x_m - self.origin_ecef.x_m;
         let dy = ecef.y_m - self.origin_ecef.y_m;
         let dz = ecef.z_m - self.origin_ecef.z_m;
-        // Rows of the ECEF→NED rotation for the origin's latitude and
+        // Rows of the body-fixed→NED rotation for the origin's latitude and
         // longitude.
         NedOffset {
             north_m: -self.sin_lat * self.cos_lon * dx - self.sin_lat * self.sin_lon * dy
@@ -95,13 +125,14 @@ impl LocalTangentPlane {
     }
 
     /// Resolves a NED offset back to a geodetic position: the transpose
-    /// rotation into ECEF, then [`ecef_to_geodetic`].
+    /// rotation into the body-fixed frame, then
+    /// [`body_fixed_to_geodetic`].
     #[must_use]
     pub fn from_ned(&self, offset: &NedOffset) -> GeodeticPosition {
         let n = offset.north_m;
         let e = offset.east_m;
         let d = offset.down_m;
-        let ecef = EcefPosition {
+        let ecef = BodyFixedPosition {
             x_m: self.origin_ecef.x_m
                 - self.sin_lat * self.cos_lon * n
                 - self.sin_lon * e
@@ -110,7 +141,7 @@ impl LocalTangentPlane {
                 - self.cos_lat * self.sin_lon * d,
             z_m: self.origin_ecef.z_m + self.cos_lat * n - self.sin_lat * d,
         };
-        ecef_to_geodetic(&ecef)
+        body_fixed_to_geodetic(&ecef, &self.ellipsoid)
     }
 
     /// Computes the exact 3x3 rotation matrix that maps a North-East-Down
@@ -146,115 +177,4 @@ impl LocalTangentPlane {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn plane_at_47n_8e() -> LocalTangentPlane {
-        let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-        LocalTangentPlane::new(origin).expect("plausible origin")
-    }
-
-    #[test]
-    fn implausible_origin_is_rejected() {
-        let origin = GeodeticPosition::new(2.0, 0.0, 0.0);
-        assert!(matches!(
-            LocalTangentPlane::new(origin),
-            Err(GeodesyError::ImplausibleOrigin { .. })
-        ));
-    }
-
-    #[test]
-    fn origin_maps_to_zero_offset() {
-        let plane = plane_at_47n_8e();
-        let ned = plane.to_ned(&plane.origin());
-        assert!(ned.north_m.abs() < 1e-9);
-        assert!(ned.east_m.abs() < 1e-9);
-        assert!(ned.down_m.abs() < 1e-9);
-    }
-
-    #[test]
-    fn point_above_origin_is_pure_negative_down() {
-        let plane = plane_at_47n_8e();
-        let above = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 600.0);
-        let ned = plane.to_ned(&above);
-        assert!(ned.north_m.abs() < 1e-6);
-        assert!(ned.east_m.abs() < 1e-6);
-        assert!((ned.down_m + 100.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn small_northward_step_matches_the_meridian_arc() {
-        let plane = plane_at_47n_8e();
-        let north = GeodeticPosition::new(47.01_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-        let ned = plane.to_ned(&north);
-        // Meridian arc for 0.01° at 47°N is ≈ 1111.7 m; the plane drops
-        // below the ellipsoid ahead, so down is small and positive.
-        assert!((ned.north_m - 1_111.7).abs() < 1.0);
-        assert!(ned.east_m.abs() < 1e-6);
-        assert!(ned.down_m > 0.0 && ned.down_m < 0.2);
-    }
-
-    #[test]
-    fn geodetic_round_trip_within_100_km_stays_below_a_micrometer() {
-        let plane = plane_at_47n_8e();
-        let candidates = [
-            GeodeticPosition::new(47.5_f64.to_radians(), 8.0_f64.to_radians(), 10_500.0),
-            GeodeticPosition::new(46.4_f64.to_radians(), 9.0_f64.to_radians(), 0.0),
-            GeodeticPosition::new(47.0_f64.to_radians(), 6.9_f64.to_radians(), 3_000.0),
-        ];
-        for original in candidates {
-            let ned = plane.to_ned(&original);
-            let round_tripped = plane.from_ned(&ned);
-            let error_m = geodetic_to_ecef(&original).distance_m(&geodetic_to_ecef(&round_tripped));
-            assert!(error_m < 1e-6, "round trip error {error_m} m");
-        }
-    }
-
-    #[test]
-    fn ned_round_trip_within_100_km_stays_below_a_micrometer() {
-        let plane = plane_at_47n_8e();
-        let offsets = [
-            NedOffset::new(100_000.0, 0.0, 0.0),
-            NedOffset::new(-30_000.0, 70_000.0, -9_500.0),
-            NedOffset::new(0.0, -100_000.0, 2_000.0),
-        ];
-        for original in offsets {
-            let geodetic = plane.from_ned(&original);
-            let round_tripped = plane.to_ned(&geodetic);
-            let dn = round_tripped.north_m - original.north_m;
-            let de = round_tripped.east_m - original.east_m;
-            let dd = round_tripped.down_m - original.down_m;
-            let error_m = (dn * dn + de * de + dd * dd).sqrt();
-            assert!(error_m < 1e-6, "round trip error {error_m} m");
-        }
-    }
-
-    #[test]
-    fn ned_rotation_between_planes_matches_ecef_transport() {
-        let a = plane_at_47n_8e();
-        let b = LocalTangentPlane::new(GeodeticPosition::new(
-            48.5_f64.to_radians(),
-            10.2_f64.to_radians(),
-            800.0,
-        ))
-        .expect("plausible origin");
-        let r = a.ned_rotation_to(&b);
-        let target = GeodeticPosition::new(48.0_f64.to_radians(), 9.0_f64.to_radians(), 1_200.0);
-        let delta_a = a.to_ned(&target);
-        let origin_b_in_a = a.to_ned(&b.origin());
-        let rel_a = [
-            delta_a.north_m - origin_b_in_a.north_m,
-            delta_a.east_m - origin_b_in_a.east_m,
-            delta_a.down_m - origin_b_in_a.down_m,
-        ];
-        let rotated = [
-            r[0][0] * rel_a[0] + r[0][1] * rel_a[1] + r[0][2] * rel_a[2],
-            r[1][0] * rel_a[0] + r[1][1] * rel_a[1] + r[1][2] * rel_a[2],
-            r[2][0] * rel_a[0] + r[2][1] * rel_a[1] + r[2][2] * rel_a[2],
-        ];
-        let direct_b = b.to_ned(&target);
-        assert!((rotated[0] - direct_b.north_m).abs() < 1e-8);
-        assert!((rotated[1] - direct_b.east_m).abs() < 1e-8);
-        assert!((rotated[2] - direct_b.down_m).abs() < 1e-8);
-    }
-}
+mod tests;

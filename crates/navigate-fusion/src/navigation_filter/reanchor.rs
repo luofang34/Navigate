@@ -3,7 +3,8 @@
 //! When the vehicle moves beyond `config.reanchor_distance_m` from the active
 //! tangent-plane origin, this module moves the origin to the current position
 //! estimate and rotates the velocity state and state covariance into the new
-//! North-East-Down frame.
+//! North-East-Down frame. Every plane in this module is on the ellipsoid
+//! of the active plane (ADR-0013).
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::GeodeticPosition;
@@ -19,7 +20,7 @@ pub(super) fn vehicle_to_plane(
     v: Vector3<f64>,
     r: Matrix3<f64>,
 ) -> (Vector3<f64>, Matrix3<f64>) {
-    let Ok(local) = LocalTangentPlane::new(vehicle) else {
+    let Ok(local) = LocalTangentPlane::with_ellipsoid(vehicle, plane.ellipsoid()) else {
         return (v, r);
     };
     if local.origin() == plane.origin() {
@@ -37,7 +38,7 @@ pub(super) fn plane_to_vehicle(
     pos_cov: Matrix3<f64>,
     vel_cov: Matrix3<f64>,
 ) -> (Vector3<f64>, Matrix3<f64>, Matrix3<f64>) {
-    let Ok(local) = LocalTangentPlane::new(vehicle) else {
+    let Ok(local) = LocalTangentPlane::with_ellipsoid(vehicle, plane.ellipsoid()) else {
         return (v, pos_cov, vel_cov);
     };
     if local.origin() == plane.origin() {
@@ -64,7 +65,7 @@ pub(super) fn reanchor_if_needed(core: &mut Core, config: &FusionConfig) {
         return;
     }
     let current = core.plane.from_ned(&NedOffset::new(x[0], x[1], x[2]));
-    let Ok(new_plane) = LocalTangentPlane::new(current) else {
+    let Ok(new_plane) = LocalTangentPlane::with_ellipsoid(current, core.plane.ellipsoid()) else {
         return;
     };
     let r = rotation_between(&core.plane, &new_plane);

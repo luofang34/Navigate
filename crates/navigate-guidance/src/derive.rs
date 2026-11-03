@@ -26,7 +26,8 @@ use crate::vertical;
 /// construction and the course is the live bearing to the waypoint. A
 /// course-to-fix leg measures against the published course line through
 /// `leg_to` and reports the published course. `lateral_m` is positive
-/// right of course, matching [`navigate_geodesy::cross_track_m`].
+/// right of course, matching [`navigate_geodesy::cross_track_on_m`] on
+/// the solution ellipsoid.
 ///
 /// Vertical: deviation from `leg_to`'s altitude constraint, positive
 /// above the target profile; the `OrAbove`/`OrBelow` forms report `0.0`
@@ -44,6 +45,8 @@ use crate::vertical;
 ///   solution's `solved_at`.
 /// - [`GuidanceRefusal::SolutionStale`] when the solution's age exceeds
 ///   `config.max_solution_age`.
+/// - [`GuidanceRefusal::ImplausibleEllipsoid`] when the solution
+///   ellipsoid cannot define geodetic coordinates.
 /// - [`GuidanceRefusal::VerticalUncertaintyExceeded`] when `leg_to` has
 ///   an altitude constraint and `solution.integrity.vertical_1sigma_m`
 ///   exceeds `config.max_vertical_1sigma_m`.

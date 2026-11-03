@@ -20,3 +20,4 @@ lifecycle rules.
 | [0010](0010-reference-views-come-from-a-navigate-owned-renderer-port.md) | Reference views come from a renderer port that Navigate owns | Proposed |
 | [0011](0011-matchers-and-the-locate-pipeline-have-an-asynchronous-form.md) | Matchers and the locate pipeline have an asynchronous form | Proposed |
 | [0012](0012-scalar-map-models-and-bounded-state-history.md) | Scalar map models and a bounded state history extend the filter core | Proposed |
+| [0013](0013-body-frames-and-ellipsoids-are-explicit.md) | Body frames and reference ellipsoids are explicit | Proposed |

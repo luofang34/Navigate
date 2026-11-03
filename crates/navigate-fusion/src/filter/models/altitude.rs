@@ -1,4 +1,5 @@
-//! Height above the WGS84 ellipsoid (ADR-0012).
+//! Height above the reference ellipsoid of the tangent plane (ADR-0012,
+//! ADR-0013).
 //!
 //! The model converts the state position to geodetic coordinates before
 //! it reads the altitude. Thus the model has no flat-plane curvature
@@ -41,7 +42,8 @@ impl MeasurementModel<1> for AltitudeModel {
     /// The local up direction at the state position, in plane axes. The
     /// altitude changes along this direction only.
     fn jacobian(&self, x: &Vec6) -> Option<SMatrix<f64, 1, 6>> {
-        let local = LocalTangentPlane::new(self.geodetic(x)).ok()?;
+        let local =
+            LocalTangentPlane::with_ellipsoid(self.geodetic(x), self.plane.ellipsoid()).ok()?;
         let up_plane = rotation_between(&local, &self.plane) * Vector3::new(0.0, 0.0, -1.0);
         Some(SMatrix::<f64, 1, 6>::new(
             up_plane.x, up_plane.y, up_plane.z, 0.0, 0.0, 0.0,

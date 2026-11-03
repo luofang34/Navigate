@@ -2,7 +2,7 @@
 
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use navigate_contract::{
-    ClockDomainId, DurationNanos, MonotonicNanos, NavigationSolution, SymmetricCov3,
+    ClockDomainId, DurationNanos, Ellipsoid, MonotonicNanos, NavigationSolution, SymmetricCov3,
 };
 use navigate_visual::{CameraPose, LocalFrame, SearchPrior};
 
@@ -45,9 +45,14 @@ pub struct PropagationBudget {
 /// an admission bound. The input position must refer to the camera centre, or
 /// its error budget must cover the camera lever arm and reference datum.
 ///
+/// The solution must be on [`Ellipsoid::WGS84`], because every
+/// [`LocalFrame`] is an Earth frame on WGS84 (ADR-0013).
+///
 /// # Errors
-/// Refuses foreign clocks, excessive age, absent process error, and invalid
-/// positions, velocities, or covariance matrices.
+/// Refuses foreign clocks, a solution on another ellipsoid with
+/// [`VisualFusionError::FrameDatumMismatch`], excessive age, absent
+/// process error, and invalid positions, velocities, or covariance
+/// matrices.
 pub fn search_prior(
     solution: &NavigationSolution,
     frame: LocalFrame,
@@ -56,6 +61,9 @@ pub fn search_prior(
 ) -> Result<SearchPrior, VisualFusionError> {
     if capture.clock != solution.stamp.clock {
         return Err(VisualFusionError::ClockDomainMismatch);
+    }
+    if solution.ellipsoid != Ellipsoid::WGS84 {
+        return Err(VisualFusionError::FrameDatumMismatch);
     }
     let (age, timing, acceleration) = projection_limits(solution, capture, budget)?;
     let dt = signed_seconds(capture.at, solution.stamp.solved_at);

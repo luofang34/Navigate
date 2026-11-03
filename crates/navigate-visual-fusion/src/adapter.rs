@@ -2,7 +2,7 @@
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
-    ClockDomainId, GeodeticPosition, MonotonicNanos, ObservationStamp, SensorClass,
+    ClockDomainId, FrameId, GeodeticPosition, MonotonicNanos, ObservationStamp, SensorClass,
     SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{Observation, ObservationValue};
@@ -119,6 +119,9 @@ impl VisualFixSource {
 
     /// Convert one accepted visual estimate into a fusion position fix.
     ///
+    /// The fix declares [`FrameId::EARTH_ITRF93`], the frame of the WGS84
+    /// position that the visual frame gives (ADR-0013).
+    ///
     /// # Errors
     /// Refuses unknown correlation, repeated frame evidence, frames out of capture order,
     /// positions outside geodetic range, and unusable covariances. A refusal
@@ -162,7 +165,8 @@ impl VisualFixSource {
                 covariance,
             },
             SourceComposition::of(SensorClass::VisualLandmark),
-        );
+        )
+        .with_frame(FrameId::EARTH_ITRF93);
         self.last = Some(estimate.stamp.capture_time_ns);
         self.record_digest(estimate.observation_sha256.clone());
         Ok(VisualFix {

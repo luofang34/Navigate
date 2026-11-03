@@ -1,16 +1,19 @@
 //! WGS84 ellipsoid constants.
 //!
 //! The two defining parameters are the semi-major axis and the
-//! flattening; everything else is derived from them at compile time so
-//! the values can never drift apart.
+//! flattening. They come from [`Ellipsoid::WGS84`]. Everything else is
+//! derived from them at compile time so the values can never drift
+//! apart.
+
+use navigate_contract::Ellipsoid;
 
 /// Semi-major (equatorial) axis of the WGS84 ellipsoid in meters.
 /// Defining parameter.
-pub const SEMI_MAJOR_AXIS_M: f64 = 6_378_137.0;
+pub const SEMI_MAJOR_AXIS_M: f64 = Ellipsoid::WGS84.semi_major_axis_m;
 
 /// Flattening of the WGS84 ellipsoid, dimensionless. Defining parameter
 /// (the reciprocal 298.257223563 is the published form).
-pub const FLATTENING: f64 = 1.0 / 298.257_223_563;
+pub const FLATTENING: f64 = Ellipsoid::WGS84.flattening;
 
 /// Semi-minor (polar) axis in meters: `a·(1 − f)`.
 pub const SEMI_MINOR_AXIS_M: f64 = SEMI_MAJOR_AXIS_M * (1.0 - FLATTENING);

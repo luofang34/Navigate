@@ -46,7 +46,8 @@ impl MagneticAnomalyModel {
         measured_t: f64,
         variance_t2: f64,
     ) -> Option<Self> {
-        let local_lin = LocalTangentPlane::new(map.linearization_point).ok()?;
+        let local_lin =
+            LocalTangentPlane::with_ellipsoid(map.linearization_point, plane.ellipsoid()).ok()?;
         let offset = plane.to_ned(&map.linearization_point);
         let [g_n, g_e, g_d] = map.gradient_ned_t_per_m;
         Some(Self {

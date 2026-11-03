@@ -5,7 +5,7 @@
 //! innovation gate, process noise, initial uncertainty, and the quality
 //! horizons (ADR-0003, ADR-0004). The scalar map-model limits and the
 //! depth of the delayed-measurement history are also configuration
-//! (ADR-0012).
+//! (ADR-0012). The frame discipline is configuration (ADR-0013).
 
 use navigate_contract::DurationNanos;
 
@@ -75,6 +75,11 @@ pub struct FusionConfig {
     /// keeps. A value of 0 disables delayed-measurement replay.
     /// Default: 64.
     pub history_capacity: usize,
+    /// Whether every observation must declare its frame (ADR-0013). When
+    /// it is `true`, the filter refuses an observation without a frame
+    /// with `RejectionReason::MissingFrame`. Default: `false`.
+    /// [`crate::NavigationFilter::new_for_ellipsoid`] sets it to `true`.
+    pub require_explicit_frame: bool,
 }
 
 impl Default for FusionConfig {
@@ -96,6 +101,7 @@ impl Default for FusionConfig {
             linearization_sigma_multiplier: 2.0,
             min_information_ratio: 1e-3,
             history_capacity: 64,
+            require_explicit_frame: false,
         }
     }
 }
@@ -131,5 +137,6 @@ mod tests {
         assert!((config.linearization_sigma_multiplier - 2.0).abs() < 1e-12);
         assert!((config.min_information_ratio - 1e-3).abs() < 1e-15);
         assert_eq!(config.history_capacity, 64);
+        assert!(!config.require_explicit_frame);
     }
 }

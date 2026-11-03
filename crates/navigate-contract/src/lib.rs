@@ -2,16 +2,17 @@
 //!
 //! This crate is the contract external consumers pin (ADR-0005): pure
 //! types with no I/O, no behavioral traits, and no math dependencies.
-//! It defines navigation solutions, integrity assessments, stamps and
-//! source compositions, flight plans, guidance setpoints, and a DRAFT
-//! aiding-observation module whose schema is owed to a joint RFC with
-//! the flight-controller side.
+//! It defines navigation solutions, reference frames and ellipsoids,
+//! integrity assessments, stamps and source compositions, flight plans,
+//! guidance setpoints, and a DRAFT aiding-observation module whose
+//! schema is owed to a joint RFC with the flight-controller side.
 //!
 //! Canonical units throughout: radians for angles, meters for distance,
 //! meters per second for speed, nanoseconds for monotonic time.
 
 pub mod aiding;
 pub mod composition;
+pub mod frame;
 pub mod guidance;
 pub mod integrity;
 pub mod kinematics;
@@ -21,16 +22,20 @@ pub mod stamp;
 pub mod time;
 
 pub use composition::{SensorClass, SourceComposition};
+pub use frame::{Ellipsoid, FrameId};
 pub use guidance::{GuidanceCommand, GuidanceSetpoint, LateralReference};
 pub use integrity::{
     FaultDetection, IntegrityAssessment, ProtectionLevels, Redundancy, SolutionQuality,
 };
-pub use kinematics::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
+pub use kinematics::{
+    AttitudeQuaternion, CartesianPosition, CartesianVelocity, GeodeticPosition, NedVelocity,
+    SymmetricCov3,
+};
 pub use plan::{
     AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, LegPath, PlanRole,
     PlanValidationError, TurnType, Waypoint,
 };
-pub use solution::NavigationSolution;
+pub use solution::{CartesianSolution, NavigationSolution};
 pub use stamp::{ObservationStamp, SolutionStamp, SourceEpoch, SourceId, WrappingSequence};
 pub use time::{ClockDomainId, DurationNanos, MonotonicNanos};
 
