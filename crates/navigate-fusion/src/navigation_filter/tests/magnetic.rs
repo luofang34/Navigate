@@ -259,7 +259,7 @@ fn flat_cell_magnetics_never_refresh_silence_or_add_redundancy() {
             RejectionReason::UninformativeGradient { .. }
         ));
         offered = offered.wrapping_add(1);
-        assert_eq!(f.last_admitted_at, Some(t(0)));
+        assert_eq!(f.ledger.last_admitted_at, Some(t(0)));
         let solution = f.tick(t(at_ms)).expect("initialized");
         assert_ne!(
             solution.integrity.redundancy,
@@ -294,4 +294,42 @@ fn flat_cell_magnetics_never_refresh_silence_or_add_redundancy() {
         solution.integrity.redundancy,
         Redundancy::IndependentClasses
     );
+}
+
+#[test]
+fn the_unmodeled_bias_budget_widens_the_magnetic_variance() {
+    let offset_t = 4.0 * VARIANCE_T2.sqrt();
+    let run = |budget_t2: f64| {
+        let config = FusionConfig {
+            unmodeled_magnetic_bias_variance_t2: budget_t2,
+            ..FusionConfig::default()
+        };
+        let mut f = NavigationFilter::new(config, CLOCK);
+        assert_accepted(f.ingest(&fix_with_variance(1, 0, origin(), 25.0), t(0)));
+        let obs = magnetic(
+            1,
+            0,
+            MAP_T + offset_t,
+            [SURVEY_GRADIENT_T_PER_M, 0.0, 0.0],
+            origin(),
+        );
+        (f.ingest(&obs, t(0)), f)
+    };
+    // Without a budget the 4-sigma offset fails the gate.
+    let (outcome, _) = run(0.0);
+    assert!(matches!(
+        rejection(outcome),
+        RejectionReason::InnovationGate { .. }
+    ));
+    // A budget of three times the sensor variance halves the statistic.
+    let (outcome, f) = run(3.0 * VARIANCE_T2);
+    assert_accepted(outcome);
+    let stats = f
+        .innovation_stats(MeasurementKind::MagneticAnomaly)
+        .expect("recorded");
+    assert!(stats.last_nis < 5.0, "{}", stats.last_nis);
+    for budget in [-1e-18, f64::NAN, f64::INFINITY] {
+        let (outcome, _) = run(budget);
+        assert_eq!(rejection(outcome), RejectionReason::ImplausibleCovariance);
+    }
 }

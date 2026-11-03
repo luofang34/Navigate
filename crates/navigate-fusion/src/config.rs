@@ -5,7 +5,9 @@
 //! innovation gate, process noise, initial uncertainty, and the quality
 //! horizons (ADR-0003, ADR-0004). The scalar map-model limits and the
 //! depth of the delayed-measurement history are also configuration
-//! (ADR-0012). The frame discipline is configuration (ADR-0013).
+//! (ADR-0012). The frame discipline is configuration (ADR-0013). The
+//! pose gate and the error budget of an unmodeled magnetic map bias are
+//! configuration (ADR-0014).
 
 use navigate_contract::DurationNanos;
 
@@ -80,6 +82,16 @@ pub struct FusionConfig {
     /// with `RejectionReason::MissingFrame`. Default: `false`.
     /// [`crate::NavigationFilter::new_for_ellipsoid`] sets it to `true`.
     pub require_explicit_frame: bool,
+    /// Variance in tesla² that [`crate::NavigationFilter`] adds to each
+    /// magnetic anomaly variance. It is the error budget of a map bias
+    /// that the six-state filter does not estimate. A negative or
+    /// non-finite value makes every magnetic anomaly observation fail
+    /// with `RejectionReason::ImplausibleCovariance`. Default: 0.0.
+    pub unmodeled_magnetic_bias_variance_t2: f64,
+    /// Innovation gate threshold on the chi-square statistic with 6
+    /// degrees of freedom. The inertial filter applies it to a visual
+    /// pose. Default: 22.46, the 99.9% point.
+    pub pose_gate_chi2: f64,
 }
 
 impl Default for FusionConfig {
@@ -102,6 +114,8 @@ impl Default for FusionConfig {
             min_information_ratio: 1e-3,
             history_capacity: 64,
             require_explicit_frame: false,
+            unmodeled_magnetic_bias_variance_t2: 0.0,
+            pose_gate_chi2: 22.46,
         }
     }
 }
@@ -138,5 +152,7 @@ mod tests {
         assert!((config.min_information_ratio - 1e-3).abs() < 1e-15);
         assert_eq!(config.history_capacity, 64);
         assert!(!config.require_explicit_frame);
+        assert_eq!(config.unmodeled_magnetic_bias_variance_t2, 0.0);
+        assert!((config.pose_gate_chi2 - 22.46).abs() < 1e-12);
     }
 }

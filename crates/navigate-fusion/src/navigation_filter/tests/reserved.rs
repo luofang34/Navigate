@@ -54,3 +54,52 @@ fn reserved_measurements_are_refused_by_name_and_counted() {
         [MeasurementKind::Pseudorange, MeasurementKind::VisualPose]
     );
 }
+
+#[test]
+fn inertial_values_are_refused_by_the_six_state_filter() {
+    use navigate_contract::{CartesianPosition, CartesianVelocity};
+
+    let mut f = filter();
+    assert_accepted(f.ingest(&gnss_fix(1, 1, 1000, origin()), t(1000)));
+    let covariance = SymmetricCov3::from_diagonal(1.0, 1.0, 1.0);
+    let values = [
+        ObservationValue::TerrainClearance {
+            clearance_m: 300.0,
+            terrain_height_m: 200.0,
+            terrain_slope_north_east: [0.0, 0.0],
+            beam_body_unit: [0.0, 0.0, 1.0],
+            variance_m2: 4.0,
+        },
+        ObservationValue::AttitudeFix {
+            attitude: AttitudeQuaternion::new(1.0, 0.0, 0.0, 0.0),
+            covariance,
+        },
+        ObservationValue::CartesianPositionFix {
+            position: CartesianPosition::new(1.0, 2.0, 3.0),
+            covariance,
+        },
+        ObservationValue::CartesianVelocityFix {
+            velocity: CartesianVelocity::new(1.0, 2.0, 3.0),
+            covariance,
+        },
+        ObservationValue::CartesianRange {
+            beacon: CartesianPosition::new(1.0, 2.0, 3.0),
+            range_m: 10.0,
+            variance_m2: 1.0,
+        },
+    ];
+    for (index, value) in values.into_iter().enumerate() {
+        assert!(!value.is_supported());
+        let sequence = u32::try_from(index).expect("small index") + 1;
+        let obs = Observation::new(
+            stamp(9, 1, sequence, 1000),
+            value,
+            SourceComposition::of(SensorClass::Gnss),
+        );
+        assert_eq!(
+            f.ingest(&obs, t(1000)),
+            IngestOutcome::Rejected(RejectionReason::UnsupportedMeasurement { kind: value.kind() })
+        );
+    }
+    assert_eq!(f.rejections().unsupported_measurement, 5);
+}

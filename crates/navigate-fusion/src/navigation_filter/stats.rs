@@ -29,21 +29,21 @@ pub struct InnovationStats {
 
 /// The statistics of every measurement kind that has data.
 #[derive(Debug, Clone, Default)]
-pub(super) struct StatsTable {
+pub(crate) struct StatsTable {
     by_kind: HashMap<MeasurementKind, InnovationStats>,
 }
 
 impl StatsTable {
-    pub(super) fn get(&self, kind: MeasurementKind) -> Option<InnovationStats> {
+    pub(crate) fn get(&self, kind: MeasurementKind) -> Option<InnovationStats> {
         self.by_kind.get(&kind).copied()
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.by_kind.clear();
     }
 
     /// Adds one admitted update with the statistic `nis`.
-    pub(super) fn record_admitted(&mut self, kind: MeasurementKind, nis: f64) {
+    pub(crate) fn record_admitted(&mut self, kind: MeasurementKind, nis: f64) {
         let stats = self.by_kind.entry(kind).or_default();
         stats.admitted_count = stats.admitted_count.wrapping_add(1);
         // A wrapped count restarts the mean at the new sample.
@@ -54,7 +54,7 @@ impl StatsTable {
     }
 
     /// Adds one innovation-gate refusal.
-    pub(super) fn record_gate_rejection(&mut self, kind: MeasurementKind) {
+    pub(crate) fn record_gate_rejection(&mut self, kind: MeasurementKind) {
         let stats = self.by_kind.entry(kind).or_default();
         stats.consecutive_gate_rejections = stats.consecutive_gate_rejections.wrapping_add(1);
     }

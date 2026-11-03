@@ -7,7 +7,7 @@
 //! axes at the linearization point. The model rotates it into the plane
 //! axes, because the two sets of axes differ away from the plane origin.
 
-use nalgebra::{SMatrix, SVector, Vector3};
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use navigate_contract::GeodeticPosition;
 use navigate_geodesy::LocalTangentPlane;
 
@@ -60,60 +60,90 @@ impl MagneticAnomalyModel {
         })
     }
 
+    /// The gradient in the plane axes, in tesla per meter.
+    pub(crate) const fn g_plane(&self) -> Vector3<f64> {
+        self.g_plane
+    }
+
+    /// The linearization point in the plane axes.
+    pub(crate) const fn p_lin_plane(&self) -> Vector3<f64> {
+        self.p_lin_plane
+    }
+
+    /// The map value at the linearization point in tesla.
+    pub(crate) const fn map_t_at_lin(&self) -> f64 {
+        self.map_t_at_lin
+    }
+
+    /// The radius of the valid region in meters.
+    pub(crate) const fn valid_radius_m(&self) -> f64 {
+        self.valid_radius_m
+    }
+
     fn offset_from_lin(&self, x: &Vec6) -> Vector3<f64> {
         Vector3::new(x[0], x[1], x[2]) - self.p_lin_plane
     }
+}
 
-    /// Refuses a state that can be outside the valid radius. The margin
-    /// is `linearization_sigma_multiplier` horizontal 1-sigma values. A
-    /// negative or non-finite multiplier gives an infinite margin, so the
-    /// check fails closed.
-    fn check_region(
-        &self,
-        x: &Vec6,
-        p: &Mat6,
-        config: &FusionConfig,
-    ) -> Result<(), RejectionReason> {
-        let k = config.linearization_sigma_multiplier;
-        let margin_m = if k.is_finite() && k >= 0.0 {
-            k * horizontal_1sigma_m(p)
-        } else {
-            f64::INFINITY
-        };
-        let distance_plus_ksigma_m = self.offset_from_lin(x).norm() + margin_m;
-        if distance_plus_ksigma_m.is_finite() && distance_plus_ksigma_m <= self.valid_radius_m {
-            return Ok(());
-        }
-        Err(RejectionReason::LinearizationRegionExceeded {
-            distance_plus_ksigma_m,
-            valid_radius_m: self.valid_radius_m,
-        })
+/// Refuses a state that can be outside the valid radius. The margin is
+/// `linearization_sigma_multiplier` horizontal 1-sigma values. A
+/// negative or non-finite multiplier gives an infinite margin, so the
+/// check fails closed.
+pub(crate) fn check_linearization_region(
+    offset_m: f64,
+    horizontal_1sigma_m: f64,
+    valid_radius_m: f64,
+    config: &FusionConfig,
+) -> Result<(), RejectionReason> {
+    let k = config.linearization_sigma_multiplier;
+    let margin_m = if k.is_finite() && k >= 0.0 {
+        k * horizontal_1sigma_m
+    } else {
+        f64::INFINITY
+    };
+    let distance_plus_ksigma_m = offset_m + margin_m;
+    if distance_plus_ksigma_m.is_finite() && distance_plus_ksigma_m <= valid_radius_m {
+        return Ok(());
     }
+    Err(RejectionReason::LinearizationRegionExceeded {
+        distance_plus_ksigma_m,
+        valid_radius_m,
+    })
+}
 
-    /// Refuses a gradient that gives too little information. The ratio
-    /// `η = gᵀ P_pos g / R` compares the predicted signal variance with
-    /// the noise variance. It has no unit, so it does not depend on the
-    /// magnetic scale. A negative or non-finite floor fails closed.
-    fn check_information(&self, p: &Mat6, config: &FusionConfig) -> Result<(), RejectionReason> {
-        let p_pos = p.fixed_view::<3, 3>(0, 0);
-        let information_ratio = self.g_plane.dot(&(p_pos * self.g_plane)) / self.variance_t2;
-        let floor = config.min_information_ratio;
-        let floor_valid = floor.is_finite() && floor >= 0.0;
-        if floor_valid && information_ratio.is_finite() && information_ratio >= floor {
-            return Ok(());
-        }
-        Err(RejectionReason::UninformativeGradient {
-            information_ratio,
-            floor,
-        })
+/// Refuses a gradient that gives too little information. The ratio
+/// `η = gᵀ P_pos g / R` compares the predicted signal variance with the
+/// noise variance. It has no unit, so it does not depend on the magnetic
+/// scale. A negative or non-finite floor fails closed.
+pub(crate) fn check_gradient_information(
+    g_plane: &Vector3<f64>,
+    p_pos: &Matrix3<f64>,
+    variance_t2: f64,
+    config: &FusionConfig,
+) -> Result<(), RejectionReason> {
+    let information_ratio = g_plane.dot(&(p_pos * g_plane)) / variance_t2;
+    let floor = config.min_information_ratio;
+    let floor_valid = floor.is_finite() && floor >= 0.0;
+    if floor_valid && information_ratio.is_finite() && information_ratio >= floor {
+        return Ok(());
     }
+    Err(RejectionReason::UninformativeGradient {
+        information_ratio,
+        floor,
+    })
 }
 
 impl MeasurementModel<1> for MagneticAnomalyModel {
     /// Checks the linearization region first, then the information ratio.
     fn admissible(&self, x: &Vec6, p: &Mat6, config: &FusionConfig) -> Result<(), RejectionReason> {
-        self.check_region(x, p, config)?;
-        self.check_information(p, config)
+        check_linearization_region(
+            self.offset_from_lin(x).norm(),
+            horizontal_1sigma_m(p),
+            self.valid_radius_m,
+            config,
+        )?;
+        let p_pos = p.fixed_view::<3, 3>(0, 0).into_owned();
+        check_gradient_information(&self.g_plane, &p_pos, self.variance_t2, config)
     }
 
     fn innovation(&self, x: &Vec6) -> SVector<f64, 1> {

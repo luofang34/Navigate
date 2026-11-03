@@ -8,7 +8,9 @@ mod altitude;
 mod magnetic;
 
 pub(crate) use altitude::AltitudeModel;
-pub(crate) use magnetic::{MagneticAnomalyModel, MapLinearization};
+pub(crate) use magnetic::{
+    MagneticAnomalyModel, MapLinearization, check_gradient_information, check_linearization_region,
+};
 
 /// Range below which the range Jacobian direction is undefined, in meters.
 const MIN_RANGE_M: f64 = 1.0;
