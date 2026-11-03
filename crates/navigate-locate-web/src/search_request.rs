@@ -2,7 +2,7 @@
 use image::{RgbImage, imageops::FilterType};
 use navigate_locate::SearchOutcome;
 use navigate_locate::messages::search::{SearchRegion, SearchRequest, SearchResponse};
-use navigate_place::{
+use navigate_locate::place::{
     Fallback, HeadingPrior, HeightPrior, PitchPrior, Region, SearchRequest as Plan,
 };
 use navigate_visual::CameraModel;

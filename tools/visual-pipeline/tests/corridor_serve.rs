@@ -5,7 +5,7 @@ use nalgebra::Matrix3;
 use navigate_match::{WeightTensor, Weights};
 use navigate_visual_pipeline::{
     CorridorBuildOptions, CorridorServeOptions, Surface, XFeatRuntimeConfig, build_corridor_bank,
-    corridor::VehicleDynamicsProfile, run_corridor_serve, util::write_json,
+    corridor::VehicleDynamicsProfile, json_file::write_json, run_corridor_serve,
 };
 use serde_json::{Value, json};
 use std::{error::Error, fs, io::Cursor, path::Path, path::PathBuf};

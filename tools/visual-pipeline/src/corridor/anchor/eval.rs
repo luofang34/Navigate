@@ -8,7 +8,7 @@ use crate::{
     PipelineError,
     corridor::{CorridorTrackOptions, kinematics::match_virtual_kashin_scored},
     pose::{PoseCandidate, candidate_priority, fit_pose_hybrid, refine_seed_eye_2pt},
-    realtime::helpers::{polish_pose_sparse, rot_to_row_major},
+    realtime::bank_match::{polish_pose_sparse, rot_to_row_major},
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
     xfeat_runtime::LoadedXFeat,

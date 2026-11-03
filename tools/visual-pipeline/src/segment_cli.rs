@@ -1,13 +1,11 @@
 //! Semantic mask generation, video propeller masking, label composition, and pure-Rust training.
 
 use crate::{
-    PipelineError,
-    matcher_client::default_burn_device,
-    testset::PhotoCase,
-    util::{bytes_sha256, file_sha256, read_json, write_json},
+    PipelineError, digest::bytes_sha256, digest::file_sha256, json_file::read_json,
+    json_file::write_json, matcher_client::default_burn_device, testset::PhotoCase,
 };
 use image::{GrayImage, Luma};
-use navigate_segment::{
+use navigate_match::segment::{
     ColorMode, MaskPolicy, PropellerDetector, Segformer, TrainPolicy, compose_labels,
     contact_sheet, finetune, finetune::discover_split, frame_masks, surface_mask,
 };

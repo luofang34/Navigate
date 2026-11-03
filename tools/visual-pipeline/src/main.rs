@@ -4,7 +4,7 @@ mod corridor_cli;
 mod dispatch;
 
 use clap::{Arg, ArgAction, Command, value_parser};
-use navigate_visual_pipeline::{PipelineError, util::write_stdout_line};
+use navigate_visual_pipeline::{PipelineError, console::write_stdout_line};
 use std::path::PathBuf;
 
 fn main() -> Result<(), PipelineError> {

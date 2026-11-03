@@ -4,9 +4,9 @@
 //! the camera height below it. The ranking and the map-window check tolerate the
 //! error that hills give; the final locate step uses the terrain.
 use crate::orientation;
+use crate::place::{CANVAS_PX, Canvas};
 use image::RgbImage;
 use nalgebra::{UnitQuaternion, Vector3};
-use navigate_place::{CANVAS_PX, Canvas};
 
 /// Farthest ground from the point below the camera that a projection keeps, meters,
 /// and in camera heights.

@@ -216,6 +216,7 @@ fn validate(
     camera: CameraModel,
     limits: RenderLimits,
 ) -> Result<usize, RenderError> {
+    crate::atlas::require_tile_frame(scene.frame)?;
     let [lat, lon] = scene.frame.anchor();
     scene.frame.local([lat, lon, 0.0])?;
     let image = scene.imagery.validate()?;

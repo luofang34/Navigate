@@ -1,19 +1,19 @@
 //! Precomputed Kashin reference banks and real-time pose matching (`bank-build`, `bank-match`).
 
-pub(crate) mod helpers;
+pub(crate) mod bank_match;
 
 use crate::{
     PipelineError,
+    json_file::write_json,
     pose::candidate_priority,
     stages::{
         MatchStageOptions, estimate_intrinsics, generate_seeds, load_case_mask, load_case_rgb,
         load_horizon_attitude, load_profile_cases, scale_k, scaled_size, write_case_report,
     },
     surface::{Surface, SurfaceGpuRenderer},
-    util::write_json,
     xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };
-use helpers::{
+use bank_match::{
     check_encoder_contract, filter_terrain_features, hex, load_lighterglue_model, log_attempt,
     match_shortlisted_views, polish_pose_sparse, raw_file_sha256, rot_to_row_major,
 };

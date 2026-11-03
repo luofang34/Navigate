@@ -24,14 +24,14 @@
             src = source;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildFlags = [ "-p" "navigate-visual-pipeline" ];
-            cargoTestFlags = [ "-p" "navigate-visual-pipeline" "-p" "navigate-segment" ];
+            cargoTestFlags = [ "-p" "navigate-visual-pipeline" "-p" "navigate-match" ];
             meta.mainProgram = "navigate-visual-pipeline";
           };
           model = pipeline.overrideAttrs (_: {
-            pname = "navigate-model";
-            cargoBuildFlags = [ "-p" "navigate-model" ];
-            cargoTestFlags = [ "-p" "navigate-model" ];
-            meta.mainProgram = "navigate-model";
+            pname = "navigate-visual-model";
+            cargoBuildFlags = [ "-p" "navigate-visual-model" ];
+            cargoTestFlags = [ "-p" "navigate-visual-model" ];
+            meta.mainProgram = "navigate-visual-model";
           });
         in {
           default = pipeline;

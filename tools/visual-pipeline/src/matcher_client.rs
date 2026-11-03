@@ -1,6 +1,6 @@
 //! In-process matcher client wrapping `burn` neural matchers and pyramidal patch matching.
 
-use crate::{PipelineError, util::file_sha256};
+use crate::{PipelineError, digest::file_sha256};
 use burn::tensor::Device;
 use image::{DynamicImage, GrayImage, RgbImage};
 use navigate_match::{EngineKind, NativeMlEngine, Weights};

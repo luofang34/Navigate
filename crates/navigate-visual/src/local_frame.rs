@@ -1,16 +1,22 @@
 //! The declared local frame shared by a reference render and the poses solved in it.
 
 use nalgebra::{UnitQuaternion, Vector3};
-mod ellipsoid;
+use navigate_contract::GeodeticPosition;
+use navigate_geodesy::BodyEllipsoid;
+mod body_tangent;
 mod spherical;
 
 use crate::VisualError;
+use body_tangent::Tangent;
 
 /// Sphere radius of the Web Mercator scale that MapLibre renders with.
 pub const MERCATOR_SPHERE_RADIUS_M: f64 = 6_371_008.8;
 
-/// Latitude limit of the Web Mercator frame in degrees.
+/// Latitude limit of the map tile frames in degrees.
 const MAX_LATITUDE_DEG: f64 = 85.0;
+
+/// Latitude limit of a [`LocalFrame::BodyTangentEnu`] frame in degrees.
+const POLE_LATITUDE_DEG: f64 = 90.0;
 
 /// Local Cartesian frame of a [`crate::ReferenceView`] and of every pose derived from it.
 ///
@@ -18,6 +24,9 @@ const MAX_LATITUDE_DEG: f64 = 85.0;
 /// package's declared vertical datum. [`LocalFrame::local`] and
 /// [`LocalFrame::geodetic`] are exact inverses, so a pose solved in the frame
 /// converts back to the geodetic position that the renderer used.
+///
+/// The map tile frames (`Wgs84Enu`, `SphericalEnu`, and `AnchorMercator`) refuse
+/// latitudes past 85 degrees. [`LocalFrame::BodyTangentEnu`] has no latitude limit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LocalFrame {
@@ -50,6 +59,21 @@ pub enum LocalFrame {
         anchor_lat_deg: f64,
         /// Anchor longitude in degrees.
         anchor_lon_deg: f64,
+    },
+    /// Exact east, north, up axes at a geodetic origin on one body ellipsoid.
+    ///
+    /// A conversion goes through the body-fixed frame of `ellipsoid` and one
+    /// rotation. The frame is valid at all latitudes up to the poles, on the
+    /// Earth ([`BodyEllipsoid::WGS84`]), the Moon ([`BodyEllipsoid::MOON_PA`]),
+    /// Mars ([`BodyEllipsoid::MARS_IAU`]), and every other plausible ellipsoid.
+    /// At a pole, the origin longitude selects the east axis. All heights are
+    /// heights above `ellipsoid`. The frame origin is at `origin`, which can
+    /// have a height that is not zero.
+    BodyTangentEnu {
+        /// Reference ellipsoid of every geodetic position in the frame.
+        ellipsoid: BodyEllipsoid,
+        /// Frame origin on `ellipsoid`, in radians and metres.
+        origin: GeodeticPosition,
     },
 }
 
@@ -95,9 +119,37 @@ impl LocalFrame {
         Ok(frame)
     }
 
+    /// Declare exact east, north, up axes at `origin` on `ellipsoid`.
+    ///
+    /// # Errors
+    /// Rejects an origin that is not finite or is outside geodetic range.
+    pub fn body_tangent_enu(
+        ellipsoid: BodyEllipsoid,
+        origin: GeodeticPosition,
+    ) -> Result<Self, VisualError> {
+        let frame = Self::BodyTangentEnu { ellipsoid, origin };
+        frame.validate()?;
+        Ok(frame)
+    }
+
+    /// Reference ellipsoid of the geodetic positions that [`LocalFrame::local`]
+    /// reads and [`LocalFrame::geodetic`] gives.
+    ///
+    /// The map tile frames are Earth frames. They give positions on WGS84.
+    pub fn reference_ellipsoid(&self) -> BodyEllipsoid {
+        match self {
+            Self::BodyTangentEnu { ellipsoid, .. } => *ellipsoid,
+            _ => BodyEllipsoid::WGS84,
+        }
+    }
+
     /// Geographic anchor in latitude, longitude order, in degrees.
     pub fn anchor(&self) -> [f64; 2] {
         match *self {
+            Self::BodyTangentEnu { origin, .. } => [
+                origin.latitude_rad.to_degrees(),
+                origin.longitude_rad.to_degrees(),
+            ],
             Self::Wgs84Enu {
                 anchor_lat_deg,
                 anchor_lon_deg,
@@ -114,8 +166,14 @@ impl LocalFrame {
     }
 
     pub(crate) fn validate(&self) -> Result<(), VisualError> {
-        let [lat, lon] = self.anchor();
-        if !geodetic_in_range(lat, lon) {
+        let valid = match self {
+            Self::BodyTangentEnu { origin, .. } => origin.is_plausible(),
+            _ => {
+                let [lat, lon] = self.anchor();
+                self.in_range(lat, lon)
+            }
+        };
+        if !valid {
             return Err(VisualError::Invalid {
                 field: "local frame anchor",
             });
@@ -123,41 +181,74 @@ impl LocalFrame {
         Ok(())
     }
 
+    /// Whether a latitude and longitude in degrees are inside the range of this frame.
+    fn in_range(&self, lat: f64, lon: f64) -> bool {
+        let limit = match self {
+            Self::BodyTangentEnu { .. } => POLE_LATITUDE_DEG,
+            _ => MAX_LATITUDE_DEG,
+        };
+        lat.is_finite() && lon.is_finite() && lat.abs() <= limit && lon.abs() <= 180.0
+    }
+
+    fn tangent(&self) -> Option<Tangent> {
+        match *self {
+            Self::Wgs84Enu {
+                anchor_lat_deg,
+                anchor_lon_deg,
+            } => Some(Tangent {
+                ellipsoid: BodyEllipsoid::WGS84,
+                origin: [anchor_lat_deg, anchor_lon_deg, 0.0],
+            }),
+            Self::BodyTangentEnu { ellipsoid, origin } => Some(Tangent {
+                ellipsoid,
+                origin: [
+                    origin.latitude_rad.to_degrees(),
+                    origin.longitude_rad.to_degrees(),
+                    origin.altitude_m,
+                ],
+            }),
+            Self::SphericalEnu { .. } | Self::AnchorMercator { .. } => None,
+        }
+    }
+
     /// Rotate local east, north, up axes at a geographic point into this frame.
     ///
-    /// Mercator axes keep their flat-map orientation. Spherical axes follow curvature.
+    /// Mercator axes keep their flat-map orientation. Spherical and ellipsoid axes
+    /// follow curvature.
     ///
     /// # Errors
     /// Rejects invalid geographic coordinates.
     pub fn local_rotation(&self, [lat, lon]: [f64; 2]) -> Result<UnitQuaternion<f64>, VisualError> {
         self.validate()?;
-        if !geodetic_in_range(lat, lon) {
+        if !self.in_range(lat, lon) {
             return Err(VisualError::Invalid {
                 field: "geographic orientation",
             });
         }
         Ok(match self {
             Self::AnchorMercator { .. } => UnitQuaternion::identity(),
-            Self::SphericalEnu { .. } | Self::Wgs84Enu { .. } => UnitQuaternion::from_matrix(
-                &(spherical::basis(self.anchor()).transpose() * spherical::basis([lat, lon])),
-            ),
+            Self::SphericalEnu { .. } | Self::Wgs84Enu { .. } | Self::BodyTangentEnu { .. } => {
+                UnitQuaternion::from_matrix(
+                    &(spherical::basis(self.anchor()).transpose() * spherical::basis([lat, lon])),
+                )
+            }
         })
     }
 
     /// Convert latitude, longitude (degrees) and altitude (metres) into the frame.
     ///
     /// # Errors
-    /// Rejects non-finite values and positions outside the Mercator latitude limit.
-    /// WGS84 conversion must preserve height and surface direction within one millimetre.
+    /// Rejects non-finite values and positions outside the latitude limit of the frame.
+    /// Ellipsoid conversion must preserve height and surface direction within one millimetre.
     pub fn local(&self, [lat, lon, alt]: [f64; 3]) -> Result<Vector3<f64>, VisualError> {
         self.validate()?;
-        if !geodetic_in_range(lat, lon) || !alt.is_finite() {
+        if !self.in_range(lat, lon) || !alt.is_finite() {
             return Err(VisualError::Invalid {
                 field: "geographic position",
             });
         }
-        if matches!(self, Self::Wgs84Enu { .. }) {
-            return ellipsoid::local(self.anchor(), [lat, lon, alt]);
+        if let Some(tangent) = self.tangent() {
+            return tangent.local([lat, lon, alt]);
         }
         if matches!(self, Self::SphericalEnu { .. }) {
             if alt <= -MERCATOR_SPHERE_RADIUS_M {
@@ -175,8 +266,8 @@ impl LocalFrame {
 
     /// Convert a frame position into latitude, longitude (degrees) and altitude (metres).
     pub fn geodetic(&self, position: Vector3<f64>) -> [f64; 3] {
-        if matches!(self, Self::Wgs84Enu { .. }) {
-            return ellipsoid::geodetic(self.anchor(), position);
+        if let Some(tangent) = self.tangent() {
+            return tangent.geodetic(position);
         }
         if matches!(self, Self::SphericalEnu { .. }) {
             return spherical::geodetic(self.anchor(), position);
@@ -193,8 +284,10 @@ impl LocalFrame {
     }
 
     /// Unit Web Mercator coordinates of a frame position, as MapLibre addresses tiles.
+    ///
+    /// The coordinates are not finite at a pole.
     pub fn mercator_xy(&self, position: Vector3<f64>) -> [f64; 2] {
-        if matches!(self, Self::SphericalEnu { .. } | Self::Wgs84Enu { .. }) {
+        if !matches!(self, Self::AnchorMercator { .. }) {
             let [lat, lon, _] = self.geodetic(position);
             return mercator_xy(lat, lon);
         }
@@ -210,11 +303,11 @@ impl LocalFrame {
     /// A pose error budget must assess the point set and viewing geometry separately.
     ///
     /// Mercator frames bound curvature drop and horizontal scale drift.
-    /// WGS84 frames have no coordinate-model displacement. Spherical
+    /// WGS84 and body tangent frames have no coordinate-model displacement. Spherical
     /// frames report the displacement from WGS84 for the same geographic position
     /// and numeric altitude. Datum and terrain errors require separate budgets.
     pub fn model_error_m(&self, position: Vector3<f64>) -> f64 {
-        if matches!(self, Self::Wgs84Enu { .. }) {
+        if self.tangent().is_some() {
             return 0.0;
         }
         if matches!(self, Self::SphericalEnu { .. }) {
@@ -238,10 +331,6 @@ impl LocalFrame {
         let [lat, _] = self.anchor();
         std::f64::consts::TAU * MERCATOR_SPHERE_RADIUS_M * lat.to_radians().cos()
     }
-}
-
-fn geodetic_in_range(lat: f64, lon: f64) -> bool {
-    lat.is_finite() && lon.is_finite() && lat.abs() <= MAX_LATITUDE_DEG && lon.abs() <= 180.0
 }
 
 fn mercator_xy(lat: f64, lon: f64) -> [f64; 2] {

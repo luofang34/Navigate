@@ -31,5 +31,5 @@ pub enum Error {
     Visual(#[from] navigate_visual::VisualError),
     /// A session identity or evidence contract was violated.
     #[error("visual session failed")]
-    Session(#[from] navigate_visual_session::SessionError),
+    Session(#[from] navigate_visual::session::SessionError),
 }

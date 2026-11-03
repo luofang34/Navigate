@@ -27,3 +27,4 @@ lifecycle rules.
 | [0017](0017-unified-cartesian-inertial-core-and-frame-transitions.md) | One body-centered Cartesian inertial core with pole-free local axes, general frame changes, and IMU increments | Proposed |
 | [0018](0018-reduced-dynamic-orbit-determination-clock-and-radiometric-opnav.md) | Reduced-dynamic orbit determination with a force-model coast, receiver clock states, and radiometric and optical navigation models in the inertial filter | Proposed |
 | [0019](0019-space-trajectory-and-multiphase-guidance.md) | Space trajectory laws, space guidance setpoints, and mission-phase orchestration from orbit to a runway or to touchdown | Proposed |
+| [0020](0020-visual-stack-consolidation-polar-trn-and-visual-pose.md) | Six crates hold the visual stack; an exact body tangent frame serves polar terrain-relative navigation; a camera pose enters the inertial filter as one visual pose | Proposed |

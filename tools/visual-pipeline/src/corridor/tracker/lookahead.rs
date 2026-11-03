@@ -14,7 +14,8 @@ use super::super::{
 use super::solve::tracking_render_size;
 use crate::{
     PipelineError,
-    realtime::helpers::rot_to_row_major,
+    civil_time::parse_iso8601_ms,
+    realtime::bank_match::rot_to_row_major,
     stages::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator,
         has_calibrated_focal_prior, scale_k,
@@ -22,7 +23,6 @@ use crate::{
     surface::gpu::GpuQueueRole,
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
-    util::parse_iso8601_ms,
     xfeat_runtime::LoadedXFeat,
 };
 use navigate_match::{CorridorTileStore, HadamardProjector, LighterGlue, VirtualViewCamera};

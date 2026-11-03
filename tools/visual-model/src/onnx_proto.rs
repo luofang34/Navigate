@@ -1,7 +1,7 @@
 //! Minimal pure-Rust ONNX protobuf message definitions for graph preparation.
 //!
 //! Field tags match the upstream ONNX `onnx.proto3` wire specification so
-//! `navigate-model` compiles without external git dependencies or `protoc`.
+//! `navigate-visual-model` compiles without external git dependencies or `protoc`.
 
 /// Top-level ONNX model container (`onnx.ModelProto`).
 #[derive(Clone, PartialEq, prost::Message)]

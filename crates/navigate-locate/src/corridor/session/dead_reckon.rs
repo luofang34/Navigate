@@ -7,8 +7,10 @@ use navigate_contract::{
     MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
     SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, WrappingSequence,
 };
+use navigate_visual::fusion_bridge::{
+    FrameCapture, PropagationBudget, VisualFusionError, search_prior,
+};
 use navigate_visual::{LocalFrame, SearchPrior};
-use navigate_visual_fusion::{FrameCapture, PropagationBudget, VisualFusionError, search_prior};
 
 /// Active dead-reckoning mode during track loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

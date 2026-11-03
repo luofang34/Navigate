@@ -1,9 +1,6 @@
 //! Direct in-process Navigate session debrief builder (`prepare-navigate-debrief`).
 
-use crate::{
-    PipelineError,
-    util::{read_json, write_json},
-};
+use crate::{PipelineError, json_file::read_json, json_file::write_json};
 use navigate_recording::{Configuration, Observation, Processor, ResultFrame};
 use serde_json::{Value, json};
 use std::path::Path;

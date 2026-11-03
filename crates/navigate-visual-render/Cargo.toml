@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 navigate-geodesy = { workspace = true, features = ["std"] }
-navigate-visual = { path = "../navigate-visual" }
+navigate-visual.workspace = true
 nalgebra = { workspace = true, features = ["std"] }
 image.workspace = true
 thiserror.workspace = true
@@ -19,6 +19,9 @@ sha2 = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.3"
+
+[dev-dependencies]
+navigate-contract.workspace = true
 
 [lints]
 workspace = true

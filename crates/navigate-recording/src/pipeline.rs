@@ -10,12 +10,12 @@ pub use revisit::RevisitInput;
 
 use crate::{Configuration, Error, Observation, ResultFrame};
 use navigate_contract::ClockDomainId;
-use navigate_visual::{Frame, FrameStamp, LocalFrame, MapRevision, PosePrior, PoseVerifier};
-use navigate_visual_session::{
+use navigate_visual::session::{
     AnchorObservation, Calibration, CameraMount, CaptureTime, ContinuityEpoch, FrameKey,
     FrameRecord, LensModel, MapReliability, MediaTime, RegionChange, RelativeMotion, SessionConfig,
     StreamId, SurfaceModel, VerticalReference, VisualSession,
 };
+use navigate_visual::{Frame, FrameStamp, LocalFrame, MapRevision, PosePrior, PoseVerifier};
 use std::{collections::BTreeMap, path::Path};
 
 /// Decoded evidence from a live camera or a replay adapter.
@@ -308,8 +308,8 @@ impl Processor {
                 ));
                 return Ok(matches!(
                     decision,
-                    navigate_visual_session::AnchorDecision::Accepted { .. }
-                        | navigate_visual_session::AnchorDecision::Relocated { .. }
+                    navigate_visual::session::AnchorDecision::Accepted { .. }
+                        | navigate_visual::session::AnchorDecision::Relocated { .. }
                 ));
             }
             Err(error) => diagnostics.push(format!("Map match rejected: {error}")),

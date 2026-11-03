@@ -49,24 +49,21 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 |---|---|
 | `navigate-contract` | The typed boundary vocabulary external consumers pin: solutions, integrity, stamps, plans, guidance setpoints, draft aiding schema |
 | `navigate-celestial` | Celestial directions from a framed observer state and a reception event; supports non-Earth origins and moving observers |
-| `navigate-geodesy` | WGS84 geodesy: geodetic ↔ ECEF ↔ local NED, great-circle distance/bearing, cross-track geometry |
-| `navigate-astrodynamics` | Planetary bodies, gravity fields, coordinate time scales, and frame rotations, without heap allocation |
-| `navigate-fusion` | The navigation filters: typed observations, admission gates, correlation discipline, and integrity assessment, without heap allocation |
+| `navigate-geodesy` | Reference-ellipsoid geodesy on any body: geodetic ↔ body-fixed ↔ local NED, great-circle distance and bearing, cross-track geometry, and vertical datums |
+| `navigate-astrodynamics` | Planetary bodies, gravity fields, orbital force models, coordinate time scales, and frame rotations, without heap allocation |
+| `navigate-fusion` | The kinematic, inertial, and particle navigation filters: typed observations, admission gates, correlation discipline, and integrity assessment, without heap allocation |
 | `navigate-magnav` | Magnetic anomaly navigation: Tolles–Lawson calibration, borrowed grid maps, and Cramér–Rao bounds |
 | `navigate-route` | Route validation and leg-sequencing execution on any body |
-| `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
+| `navigate-trajectory` | Space trajectory laws: orbital burns, Clohessy–Wiltshire rendezvous, atmospheric entry corridors, and powered descent, without heap allocation |
+| `navigate-guidance` | Surface and space guidance setpoints and mission-phase orchestration |
 | `navigate-terrain-safety` | Terrain clearance with typed availability, alert vocabulary, and vertical-datum adapters on any body |
-| `navigate-visual` | Camera pose observations, model-inference traits, holdout `L1-GNC` PnP solvers, and local scene refinement |
+| `navigate-visual` | Camera pose observations, model-inference traits, holdout `L1-GNC` PnP solvers, local scene refinement, and exact body tangent frames at all latitudes on the Earth, the Moon, and Mars. The `session` module keeps continuous camera odometry, map anchors, revisit closures, and per-frame heights. The `fusion_bridge` module converts camera poses into fusion position fixes and visual poses with a declared error budget (ADR-0007, ADR-0020) |
 | `navigate-visual-render` | Terrain and orthoimagery reference renderer on CPU and `wgpu` |
-| `navigate-match` | Rust `LoFTR`, `XFeat`, `LighterGlue`, and `DINOv2` matchers across `burn` and optional `ort` runtimes |
-| `navigate-locate` | Sans-IO single-photo pose search, pair/feature localizers, and real-time corridor tracking |
+| `navigate-match` | Rust `LoFTR`, `XFeat`, `LighterGlue`, and `DINOv2` matchers across `burn` and optional `ort` runtimes. The `segment` module gives SegFormer-B0 occlusion masks, amortized homography warping, horizon estimation, propeller detection, and 4-class training on the same runtimes |
+| `navigate-locate` | Sans-IO single-photo pose search, pair/feature localizers, and real-time corridor tracking. The `place` module holds the Hilbert-sharded place index and the bounded region search plans |
 | `navigate-locate-web` | Browser `wasm32` visual locator that uses WebNN with `burn` WebGPU and CPU fallback |
-| `navigate-segment` | Rust SegFormer-B0 occlusion masks, amortized homography warping, horizon estimation, propeller detection, and 4-class training |
-| `navigate-visual-fusion` | Converts visual camera poses into fusion position fixes with a declared error budget (ADR-0007) |
-| `navigate-visual-session` | Keeps continuous camera odometry for each video segment, anchors it to the map, closes revisits, revises past map poses, and gives per-frame heights |
-| `navigate-place` | Hilbert-sharded visual place index and bounded region search plans |
 | `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
-| `tools/visual-model` | Deterministic ONNX and checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` |
+| `tools/visual-model` | `navigate-visual-model`: deterministic ONNX and checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` |
 | `tools/visual-pipeline` | Rust photo and video preparation, corridor tracking, pose search, segmentation training, and `sokoly-debrief` export |
 | `tools/navrun` | Deterministic scenario runner that tests fusion, flight plans, and guidance end to end |
 

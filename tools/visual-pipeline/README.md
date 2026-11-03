@@ -79,7 +79,7 @@ cargo run --release -p navigate-visual-pipeline -- bank-match \
 
 ## Semantic segmentation and Rust training
 
-`navigate-segment` implements SegFormer-B0 inference, propeller detection, and 4-class training in Rust on `burn`.
+The `segment` module of `navigate-match` implements SegFormer-B0 inference, propeller detection, and 4-class training in Rust on `burn`.
 The four classes are `sky` (`0`), `ground` (`1`), `airframe` (`2`), and `propeller` (`3`).
 
 1. Run `airframe-labels` to combine binary class masks into a 4-class label PNG and an optional review contact sheet.
@@ -109,8 +109,8 @@ cargo run --release -p navigate-visual-pipeline -- segment-finetune \
 Run the unit tests, linter, and documentation checks:
 
 ```sh
-cargo test -p navigate-segment -p navigate-visual-pipeline
-cargo clippy -p navigate-segment -p navigate-visual-pipeline --all-targets -- -D warnings
+cargo test -p navigate-match -p navigate-visual-pipeline
+cargo clippy -p navigate-match -p navigate-visual-pipeline --all-targets -- -D warnings
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
-  cargo doc -p navigate-segment -p navigate-visual-pipeline --no-deps
+  cargo doc -p navigate-match -p navigate-visual-pipeline --no-deps
 ```

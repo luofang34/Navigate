@@ -1,9 +1,15 @@
 //! Pure-Rust visual recording pipeline for photo test sets, terrain pose search,
 //! video tracking, semantic segmentation, and `sokoly-debrief` v1 publication.
 
+pub mod civil_time;
 pub mod clock;
+pub mod console;
+pub mod contact_sheet;
 pub mod corridor;
+pub mod digest;
 pub mod error;
+pub mod external_tool;
+pub mod json_file;
 pub mod matcher_client;
 pub mod metadata;
 pub mod mosaic;
@@ -14,7 +20,6 @@ pub mod segment_cli;
 pub mod stages;
 pub mod surface;
 pub mod testset;
-pub mod util;
 pub mod video_ops;
 pub mod xfeat_runtime;
 

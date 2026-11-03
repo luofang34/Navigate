@@ -2641,11 +2641,9 @@ dependencies = [
  "nalgebra 0.34.2",
  "navigate-contract",
  "navigate-fusion",
+ "navigate-locate",
  "navigate-match",
- "navigate-place",
  "navigate-visual",
- "navigate-visual-fusion",
- "navigate-visual-session",
  "serde",
  "serde_json",
  "tempfile",
@@ -5079,6 +5077,7 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "futures-util",
+ "half",
  "hex",
  "image",
  "kamadak-exif",
@@ -5087,11 +5086,8 @@ dependencies = [
  "navigate-fusion",
  "navigate-geodesy",
  "navigate-match",
- "navigate-place",
  "navigate-visual",
- "navigate-visual-fusion",
  "navigate-visual-render",
- "navigate-visual-session",
  "pollster",
  "serde",
  "serde_json",
@@ -5112,7 +5108,6 @@ dependencies = [
  "js-sys",
  "navigate-locate",
  "navigate-match",
- "navigate-place",
  "navigate-visual",
  "serde_json",
  "thiserror 2.0.19",
@@ -5151,14 +5146,19 @@ dependencies = [
  "navigate-visual",
  "ort",
  "pollster",
+ "rand 0.10.3",
  "safetensors 0.8.0",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.19",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
+ "zip 9.1.0",
 ]
 
 [[package]]
@@ -5169,33 +5169,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "navigate-model"
-version = "0.1.0"
-dependencies = [
- "burn",
- "clap",
- "navigate-match",
- "ort",
- "pollster",
- "prost 0.12.6",
- "pytorch-reader",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "navigate-place"
-version = "0.1.0"
-dependencies = [
- "half",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "navigate-recording"
 version = "0.1.0"
 dependencies = [
@@ -5203,7 +5176,6 @@ dependencies = [
  "nalgebra 0.34.2",
  "navigate-contract",
  "navigate-visual",
- "navigate-visual-session",
  "serde",
  "serde_json",
  "tempfile",
@@ -5218,27 +5190,6 @@ dependencies = [
  "navigate-contract",
  "navigate-geodesy",
  "thiserror 2.0.19",
-]
-
-[[package]]
-name = "navigate-segment"
-version = "0.1.0"
-dependencies = [
- "burn",
- "getrandom 0.4.3",
- "image",
- "nalgebra 0.34.2",
- "navigate-visual",
- "rand 0.10.3",
- "safetensors 0.8.0",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.19",
- "tracing",
- "web-time",
- "zip 9.1.0",
 ]
 
 [[package]]
@@ -5275,6 +5226,7 @@ dependencies = [
  "lambda-twist",
  "nalgebra 0.34.2",
  "navigate-contract",
+ "navigate-fusion",
  "navigate-geodesy",
  "pollster",
  "serde",
@@ -5285,15 +5237,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "navigate-visual-fusion"
+name = "navigate-visual-model"
 version = "0.1.0"
 dependencies = [
- "nalgebra 0.34.2",
- "navigate-contract",
- "navigate-fusion",
- "navigate-visual",
- "navigate-visual-session",
+ "burn",
+ "clap",
+ "navigate-match",
+ "ort",
+ "pollster",
+ "prost 0.12.6",
+ "pytorch-reader",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5310,13 +5267,9 @@ dependencies = [
  "navigate-geodesy",
  "navigate-locate",
  "navigate-match",
- "navigate-place",
  "navigate-recording",
- "navigate-segment",
  "navigate-visual",
- "navigate-visual-fusion",
  "navigate-visual-render",
- "navigate-visual-session",
  "pollster",
  "serde",
  "serde_json",
@@ -5335,23 +5288,13 @@ dependencies = [
  "futures-channel",
  "image",
  "nalgebra 0.34.2",
+ "navigate-contract",
  "navigate-geodesy",
  "navigate-visual",
  "pollster",
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "wgpu",
-]
-
-[[package]]
-name = "navigate-visual-session"
-version = "0.1.0"
-dependencies = [
- "image",
- "nalgebra 0.34.2",
- "navigate-contract",
- "navigate-visual",
- "thiserror 2.0.19",
 ]
 
 [[package]]

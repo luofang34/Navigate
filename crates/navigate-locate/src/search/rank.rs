@@ -1,7 +1,7 @@
 //! Descriptors of the photo projections and the ranked places of the index.
 use super::{Hypothesis, IndexSource, PlaceEncoder, SearchProgress};
 use crate::LocateError;
-use navigate_place::{
+use crate::place::{
     Canvas, Descriptor, IndexManifest, Ranked, ScaleEntry, ScalePlan, SearchRequest, cell_weights,
     decode_shard, describe, rank, refine,
 };

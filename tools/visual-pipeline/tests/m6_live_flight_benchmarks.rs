@@ -11,7 +11,7 @@ use harness::{
 };
 use image::{DynamicImage, Rgb, RgbImage};
 use nalgebra::{UnitQuaternion, Vector3};
-use navigate_place::Record;
+use navigate_locate::place::Record;
 use navigate_visual::{CameraPose, SearchPrior, SearchTier};
 use navigate_visual_pipeline::{
     XFeatRuntime, XFeatRuntimeConfig,

@@ -5,8 +5,10 @@
 //! [`AsyncImageMatcher`], fits a pose through [`PairLocalizer`] or
 //! [`FeatureLocalizer`], and verifies the best pose against a rendered view.
 //! The [`corridor`] module tracks continuous flight sequences with 3D map
-//! landmarks, platform dynamics gates, and `VisualSession` fix admission. Both
-//! pipelines run natively and in a browser Web Worker without filesystem I/O.
+//! landmarks, platform dynamics gates, and `VisualSession` fix admission. The
+//! [`place`] module holds the place index and the search plan for coarse place
+//! recognition. All pipelines run natively and in a browser Web Worker without
+//! filesystem I/O.
 //!
 //! [`AsyncImageMatcher`]: navigate_visual::AsyncImageMatcher
 mod area;
@@ -18,6 +20,7 @@ mod http;
 mod locate;
 pub mod messages;
 mod metadata;
+pub mod place;
 mod scene;
 mod search;
 mod workflow;

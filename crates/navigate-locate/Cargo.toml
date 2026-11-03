@@ -1,6 +1,6 @@
 [package]
 name = "navigate-locate"
-description = "Camera pose of one photo or flight corridor from map imagery and terrain"
+description = "Camera pose of one photo or flight corridor from map imagery, terrain, and a place index"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,18 +11,15 @@ default = []
 # Native tile source over HTTP with a disk cache, for tools and tests.
 http = ["dep:ureq"]
 # JSON encoding of worker messages and dynamics profiles across boundaries.
-serde = ["dep:serde", "navigate-visual/serde"]
+serde = ["navigate-visual/serde"]
 
 [dependencies]
 navigate-contract.workspace = true
 navigate-fusion = { workspace = true, features = ["std"] }
 navigate-geodesy = { workspace = true, features = ["std"] }
-navigate-visual = { path = "../navigate-visual" }
-navigate-visual-session = { path = "../navigate-visual-session" }
-navigate-visual-fusion = { path = "../navigate-visual-fusion" }
-navigate-place = { path = "../navigate-place" }
-navigate-visual-render = { path = "../navigate-visual-render" }
-navigate-match = { path = "../navigate-match", default-features = false }
+navigate-visual = { workspace = true, features = ["fusion"] }
+navigate-visual-render.workspace = true
+navigate-match.workspace = true
 image = { workspace = true, features = ["jpeg", "png"] }
 nalgebra = { workspace = true, features = ["std"] }
 thiserror.workspace = true
@@ -32,7 +29,9 @@ hex = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 web-time = "1"
 kamadak-exif = "0.6.1"
-serde = { version = "1", features = ["derive"], optional = true }
+half = { version = "2.7", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 ureq = { version = "3.5.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -40,9 +39,8 @@ pollster = "0.3"
 
 [dev-dependencies]
 pollster = "0.3"
-navigate-match = { path = "../navigate-match", features = ["wgpu"] }
+navigate-match = { workspace = true, features = ["flex", "wgpu"] }
 burn = { version = "0.22.1", default-features = false, features = ["std", "wgpu"] }
-serde_json = "1"
 tracing-subscriber.workspace = true
 
 [lints]

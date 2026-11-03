@@ -1,12 +1,14 @@
 //! Subcommand dispatcher for `navigate-visual-pipeline`.
 
 use clap::ArgMatches;
-use navigate_segment::{ColorMode, TrainPolicy};
+use navigate_match::segment::{ColorMode, TrainPolicy};
 use navigate_visual_pipeline::{
     PipelineError, PipelineMatcher, build_reference_catalog_zoom,
     clock::seed_live_prior,
     compose_survey_debrief, export_preview, export_publication, freeze_anchors,
-    interpolate_flight_priors, prepare_photo_testset,
+    interpolate_flight_priors,
+    json_file::write_json,
+    prepare_photo_testset,
     realtime::{BankBuildOptions, BankMatchOptions, build_reference_bank, run_realtime_bank_match},
     reproduce_bundle,
     segment_cli::{run_airframe_compose, run_photo_masks, run_segment_finetune, run_video_masks},
@@ -14,7 +16,6 @@ use navigate_visual_pipeline::{
         MatchStageOptions, run_match_stage, run_pipeline_recipe, run_refine_stage,
         run_terrain_bundle_stage, run_track_stage,
     },
-    util::write_json,
     video_ops::{
         apply_video_priors, import_video_media, prepare_navigate_debrief, prepare_video_testset,
     },

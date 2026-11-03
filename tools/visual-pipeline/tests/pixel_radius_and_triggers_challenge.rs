@@ -2,10 +2,10 @@
 //! dynamic search radius clamping, and multi-criteria interval triggers (Milestone 1).
 
 use nalgebra::{Matrix3, Rotation3, Vector3};
+use navigate_visual::session::MapCell;
 use navigate_visual_pipeline::corridor::kinematics::{
     KinematicState, TrackingSearchStrategy, determine_search_strategy, should_force_anchor,
 };
-use navigate_visual_session::MapCell;
 use std::collections::BTreeMap;
 
 #[test]

@@ -214,23 +214,22 @@ impl AsyncImageMatcher for WebMlEngine {
 /// Returns [`MatchError::Device`] when no compiled browser runtime can start.
 pub async fn open_burn_device() -> Result<(Device, EngineKind), MatchError> {
     #[cfg(feature = "webgpu")]
-    {
-        match Device::wgpu_options().init_async().await {
-            Ok(device) => return Ok((device, EngineKind::BurnWebGpu)),
-            Err(error) => {
-                #[cfg(not(feature = "flex"))]
-                return Err(MatchError::Device {
-                    stage: "webgpu init",
-                    message: format!("{error:?}"),
-                });
-                #[cfg(feature = "flex")]
-                tracing::warn!("WebGPU unavailable ({error:?}); falling back to Burn Flex CPU");
-            }
-        }
-    }
+    let webgpu_error = match Device::wgpu_options().init_async().await {
+        Ok(device) => return Ok((device, EngineKind::BurnWebGpu)),
+        Err(error) => error,
+    };
+    #[cfg(all(feature = "webgpu", feature = "flex"))]
+    tracing::warn!("WebGPU unavailable ({webgpu_error:?}); falling back to Burn Flex CPU");
     #[cfg(feature = "flex")]
     {
         Ok((Device::flex(), EngineKind::BurnCpu))
+    }
+    #[cfg(all(feature = "webgpu", not(feature = "flex")))]
+    {
+        Err(MatchError::Device {
+            stage: "webgpu init",
+            message: format!("{webgpu_error:?}"),
+        })
     }
     #[cfg(not(any(feature = "webgpu", feature = "flex")))]
     Err(MatchError::Device {

@@ -2,8 +2,8 @@
 
 use super::CorridorServeOptions;
 use crate::{
-    CorridorTrackOptions, PipelineError, metadata::extract_photo_claims, testset::PhotoCase,
-    util::file_sha256,
+    CorridorTrackOptions, PipelineError, digest::file_sha256, metadata::extract_photo_claims,
+    testset::PhotoCase,
 };
 use serde::Deserialize;
 use std::{

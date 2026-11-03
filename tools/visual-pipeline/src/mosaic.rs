@@ -1,9 +1,6 @@
 //! Ground footprint suitability, perspective mosaic composition, and multi-flight survey debrief.
 
-use crate::{
-    PipelineError,
-    util::{read_json, write_json},
-};
+use crate::{PipelineError, json_file::read_json, json_file::write_json};
 use image::{RgbImage, Rgba, RgbaImage};
 use nalgebra::Matrix3;
 use serde_json::{Value, json};

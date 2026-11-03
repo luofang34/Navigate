@@ -32,7 +32,7 @@ pub use tracker::run_corridor_track;
 
 use crate::{
     PipelineError,
-    realtime::helpers::{hex, raw_file_sha256},
+    realtime::bank_match::{hex, raw_file_sha256},
     stages::load_profile_cases,
     surface::{Surface, SurfaceGpuRenderer},
     xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
@@ -119,7 +119,7 @@ pub struct CorridorTrackOptions {
     pub anchor_on_cell_boundary: bool,
     /// Minimum PnP inliers required to accept a warm-tracked frame.
     pub min_track_inliers: usize,
-    /// Horizontal edge length of each EKF independence [`navigate_visual_session::MapCell`] in metres.
+    /// Horizontal edge length of each EKF independence [`navigate_visual::session::MapCell`] in metres.
     pub map_cell_m: f64,
     /// Maximum seed hypotheses evaluated during cold map-anchor acquisition.
     pub anchor_attempts: usize,

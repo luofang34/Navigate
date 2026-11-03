@@ -2,10 +2,10 @@
 
 use super::SearchTierMatcher;
 use crate::corridor::plausibility::CorridorTerrain;
+use crate::place::Ranked;
 use image::DynamicImage;
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use navigate_match::{CorridorTileStore, MatchError};
-use navigate_place::Ranked;
 use navigate_visual::{CameraPose, SearchPrior};
 
 const GLOBAL_HEADINGS_DEG: [f64; 6] = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0];

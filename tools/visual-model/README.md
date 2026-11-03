@@ -1,6 +1,6 @@
-# Model preparation (`navigate-model`)
+# Model preparation (`navigate-visual-model`)
 
-`navigate-model` is a Rust command-line tool that prepares `XFeat`, `LighterGlue`, and `LoFTR` model files.
+`navigate-visual-model` is a Rust command-line tool that prepares `XFeat`, `LighterGlue`, and `LoFTR` model files.
 It converts verified source files into `burn` `.safetensors` weights or fixed-shape ONNX graphs.
 It checks the input SHA-256 digest before it runs a graph recipe.
 Keep the upstream model license with each prepared output file.
@@ -16,7 +16,7 @@ Keep the upstream model license with each prepared output file.
 Build the binary from the repository root:
 
 ```sh
-cargo build --locked --release -p navigate-model
+cargo build --locked --release -p navigate-visual-model
 ```
 
 The build uses pure-Rust protobuf definitions and does not require `protoc`, a GPU, or an inference runtime.
@@ -26,12 +26,12 @@ The build uses pure-Rust protobuf definitions and does not require `protoc`, a G
 Convert verified exports into `.safetensors` files for `navigate-match`:
 
 ```sh
-target/release/navigate-model xfeat.onnx xfeat-f16.safetensors --recipe xfeat-burn-f16
-target/release/navigate-model xfeat.onnx xfeat-f32.safetensors --recipe xfeat-burn-f32
-target/release/navigate-model lighterglue.onnx lighterglue-f16.safetensors --recipe lighterglue-burn-f16
-target/release/navigate-model lighterglue.onnx lighterglue-f32.safetensors --recipe lighterglue-burn-f32
-target/release/navigate-model loftr_outdoor.ckpt loftr-f16.safetensors --recipe loftr-burn-f16
-target/release/navigate-model loftr_outdoor.ckpt loftr-f32.safetensors --recipe loftr-burn-f32
+target/release/navigate-visual-model xfeat.onnx xfeat-f16.safetensors --recipe xfeat-burn-f16
+target/release/navigate-visual-model xfeat.onnx xfeat-f32.safetensors --recipe xfeat-burn-f32
+target/release/navigate-visual-model lighterglue.onnx lighterglue-f16.safetensors --recipe lighterglue-burn-f16
+target/release/navigate-visual-model lighterglue.onnx lighterglue-f32.safetensors --recipe lighterglue-burn-f32
+target/release/navigate-visual-model loftr_outdoor.ckpt loftr-f16.safetensors --recipe loftr-burn-f16
+target/release/navigate-visual-model loftr_outdoor.ckpt loftr-f32.safetensors --recipe loftr-burn-f32
 ```
 
 ## Fixed-shape `XFeat` ONNX graphs
@@ -39,9 +39,9 @@ target/release/navigate-model loftr_outdoor.ckpt loftr-f32.safetensors --recipe 
 Prepare a dense `XFeat` ONNX graph for `navigate-match` (`--features ort`) or RK3588 compilation (`tools/visual-model/rknn/`):
 
 ```sh
-target/release/navigate-model xfeat.onnx xfeat-dense.onnx --recipe xfeat-dense
-target/release/navigate-model xfeat.onnx xfeat-gray.onnx --recipe xfeat-gray
-target/release/navigate-model xfeat.onnx xfeat-gray-2x.onnx --recipe xfeat-gray-2x
+target/release/navigate-visual-model xfeat.onnx xfeat-dense.onnx --recipe xfeat-dense
+target/release/navigate-visual-model xfeat.onnx xfeat-gray.onnx --recipe xfeat-gray
+target/release/navigate-visual-model xfeat.onnx xfeat-gray-2x.onnx --recipe xfeat-gray-2x
 ```
 
 The source export must have SHA-256 `41336466bbbb09b701b815e33932c7da69cff6ab75a068230418468430482912`.
@@ -54,15 +54,15 @@ The source export must have SHA-256 `41336466bbbb09b701b815e33932c7da69cff6ab75a
 Prepare fixed-capacity `LighterGlue` ONNX graphs (`32..=4096` features, source SHA-256 `170b10e74763fbfca483245cfa279972fc6747444065db2538500e22fc7ce9ca`):
 
 ```sh
-target/release/navigate-model lighterglue.onnx matcher-2048.onnx --features 2048
-target/release/navigate-model lighterglue.onnx matcher-masked.onnx --recipe lighterglue-masked --features 2048
+target/release/navigate-visual-model lighterglue.onnx matcher-2048.onnx --features 2048
+target/release/navigate-visual-model lighterglue.onnx matcher-masked.onnx --recipe lighterglue-masked --features 2048
 ```
 
 Prepare split `LoFTR` ONNX stage graphs (`1..=1024` fine batch, source SHA-256 `49901002e682c650dcc1cd596d4effa980f12ffcc383746b77651ac89ed88559`):
 
 ```sh
-target/release/navigate-model loftr.onnx coarse.onnx --recipe loftr-coarse
-target/release/navigate-model loftr.onnx fine.onnx --recipe loftr-fine --batch 256
+target/release/navigate-visual-model loftr.onnx coarse.onnx --recipe loftr-coarse
+target/release/navigate-visual-model loftr.onnx fine.onnx --recipe loftr-fine --batch 256
 ```
 
 ## Numerical parity check
@@ -70,7 +70,7 @@ target/release/navigate-model loftr.onnx fine.onnx --recipe loftr-fine --batch 2
 Compare the original and prepared `XFeat` graphs with ONNX Runtime:
 
 ```sh
-cargo test --release -p navigate-model dense_recipe_matches_original_model_intermediates -- --ignored
+cargo test --release -p navigate-visual-model dense_recipe_matches_original_model_intermediates -- --ignored
 ```
 
 Set `NAVIGATE_TEST_ORT` to the ONNX Runtime shared library, `NAVIGATE_XFEAT_MODEL` to `xfeat.onnx`, and `NAVIGATE_XFEAT_INPUT` to little-endian `float32` NCHW input bytes before you run the test.

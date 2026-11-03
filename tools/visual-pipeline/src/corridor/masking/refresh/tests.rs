@@ -2,7 +2,7 @@ use super::{KeyLayers, RefreshLayers, Refresher, SegEngine};
 use burn::tensor::Device;
 use image::RgbImage;
 use nalgebra::{Matrix3, Rotation3};
-use navigate_segment::{
+use navigate_match::segment::{
     AIRFRAME, CLASSES, GROUND, MaskPolicy, PROPELLER, PreprocessorConfig, SKY, Segformer,
     SegformerConfig, amortized::four_class_keep_layers,
 };

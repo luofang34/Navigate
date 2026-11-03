@@ -8,7 +8,11 @@ use navigate_contract::{
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue, RejectionReason,
 };
-use navigate_place::{Descriptor, GRID, Record, Tokens, describe, rank};
+use navigate_locate::place::{Descriptor, GRID, Record, Tokens, describe, rank};
+use navigate_visual::session::{
+    AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose, RegionChange,
+    RelativeMotion, ScaleSource, SessionError, StreamId, SurfaceModel,
+};
 use navigate_visual::{
     CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision, SearchTier,
 };
@@ -22,10 +26,6 @@ use navigate_visual_pipeline::corridor::{
     },
     can_update_vertical_velocity,
     kinematics::CHI2_GATE_3DOF_99,
-};
-use navigate_visual_session::{
-    AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose, RegionChange,
-    RelativeMotion, ScaleSource, SessionError, StreamId, SurfaceModel,
 };
 use std::error::Error;
 

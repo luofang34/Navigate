@@ -4,7 +4,7 @@ use super::super::background::BackgroundWorker;
 use crate::PipelineError;
 use image::RgbImage;
 use nalgebra::Matrix3;
-pub(super) use navigate_segment::amortized::{RefreshLayers, SegEngine};
+pub(super) use navigate_match::segment::amortized::{RefreshLayers, SegEngine};
 use std::time::Duration;
 
 /// Time that a dropped masker waits for an in-flight refresh to finish.

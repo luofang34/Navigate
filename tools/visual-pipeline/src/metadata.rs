@@ -1,6 +1,6 @@
 //! EXIF metadata extraction and sRGB/orientation photo decoding (`photo_metadata`).
 
-use crate::{PipelineError, util::run_tool};
+use crate::{PipelineError, external_tool::run_tool};
 use exif::{In, Reader, Tag, Value as ExifValue};
 use image::{RgbImage, imageops};
 use serde::{Deserialize, Serialize};

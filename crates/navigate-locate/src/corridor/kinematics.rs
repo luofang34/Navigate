@@ -12,7 +12,7 @@ pub use kashin_match::{
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::ActiveTrackSet;
-use navigate_visual_session::MapCell;
+use navigate_visual::session::MapCell;
 use std::collections::BTreeMap;
 
 /// Maximum valid time step in seconds between consecutive frames.

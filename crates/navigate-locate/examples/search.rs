@@ -6,11 +6,13 @@
 //!     HEIGHT_M HEIGHT_SIGMA_M CACHE_DIR [TRUE_LAT TRUE_LON]
 //! ```
 use burn::tensor::Device;
+use navigate_locate::place::{
+    Canvas, GRID, HeightPrior, IndexManifest, Region, SearchRequest, Tokens,
+};
 use navigate_locate::{
     CachedHttpSource, IndexSource, PlaceEncoder, SearchOutcome, SearchSources, search,
 };
 use navigate_match::{Dinov2, Loftr, LoftrMatcher, Weights};
-use navigate_place::{Canvas, GRID, HeightPrior, IndexManifest, Region, SearchRequest, Tokens};
 use std::path::PathBuf;
 
 type Error = Box<dyn std::error::Error>;
@@ -68,31 +70,30 @@ fn main() -> Result<(), Error> {
     let manifest =
         IndexManifest::from_json(&std::fs::read_to_string(index.0.join("manifest.json"))?)?;
     let photo = image::open(&args[3])?.to_rgb8();
-    let request =
-        SearchRequest {
-            region: Region::Circle {
-                centre: [args[5].parse()?, args[6].parse()?],
-                radius_m: args[7].parse()?,
-            },
-            image_px: [photo.width(), photo.height()],
-            focal_px: args[4].parse()?,
-            heading: args.get(13).map(|h| h.parse()).transpose()?.map(|deg| {
-                navigate_place::HeadingPrior {
-                    deg,
-                    sigma_deg: 5.0,
-                }
-            }),
-            height: Some(HeightPrior {
-                m: args[8].parse()?,
-                sigma_m: args[9].parse()?,
-            }),
-            pitch: args.get(14).map(|p| p.parse()).transpose()?.map(|deg| {
-                navigate_place::PitchPrior {
-                    deg,
-                    sigma_deg: 2.0,
-                }
-            }),
-        };
+    let request = SearchRequest {
+        region: Region::Circle {
+            centre: [args[5].parse()?, args[6].parse()?],
+            radius_m: args[7].parse()?,
+        },
+        image_px: [photo.width(), photo.height()],
+        focal_px: args[4].parse()?,
+        heading: args.get(13).map(|h| h.parse()).transpose()?.map(|deg| {
+            navigate_locate::place::HeadingPrior {
+                deg,
+                sigma_deg: 5.0,
+            }
+        }),
+        height: Some(HeightPrior {
+            m: args[8].parse()?,
+            sigma_m: args[9].parse()?,
+        }),
+        pitch: args.get(14).map(|p| p.parse()).transpose()?.map(|deg| {
+            navigate_locate::place::PitchPrior {
+                deg,
+                sigma_deg: 2.0,
+            }
+        }),
+    };
     let tiles = CachedHttpSource::new(&args[10]);
     let sources = SearchSources {
         tiles: &tiles,

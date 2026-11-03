@@ -2,13 +2,10 @@
 
 use super::super::collect_parent_anchors;
 use crate::{
-    PipelineError,
-    pose::LoadedPose,
-    surface::Surface,
-    util::{file_sha256, write_json},
+    PipelineError, digest::file_sha256, json_file::write_json, pose::LoadedPose, surface::Surface,
 };
 use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector2, Vector3};
-use navigate_segment::read_npz;
+use navigate_match::segment::read_npz;
 use navigate_visual::{
     CameraModel, LocalScene, LocalSceneCamera, LocalScenePoint, LocalScenePose,
     ScenePointObservation, ScenePointPrior, refine_regularized_local_scene,

@@ -5,13 +5,13 @@ use crate::tiles::{FetchSource, fetch_bytes};
 use navigate_locate::messages::search::{
     SearchProgress, SearchRequest, SearchResponse, SearchStage,
 };
+use navigate_locate::place::{Canvas, GRID, IndexManifest, Tokens};
 use navigate_locate::{
     IndexSource, PlaceEncoder, Progress, SearchProgress as Stage, SearchSources, search,
 };
 use navigate_match::{
     DINOV2_WIDTH, Dinov2, EngineKind, Loftr, LoftrMatcher, Weights, open_burn_device,
 };
-use navigate_place::{Canvas, GRID, IndexManifest, Tokens};
 use wasm_bindgen::prelude::*;
 
 /// DINOv2 input side, pixels.

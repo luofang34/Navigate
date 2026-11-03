@@ -5,8 +5,8 @@ use crate::corridor::{
     kinematics::{MAX_DELTA_T_S, MIN_DELTA_T_S},
     session::{FilterIntegritySnapshot, SessionAnchorReport, VisualCorridorSession},
 };
+use navigate_visual::session::MapCell;
 use navigate_visual::{CameraModel, LocalFrame, holdout_pnp::PoseCandidate};
-use navigate_visual_session::MapCell;
 
 impl CorridorTracker {
     /// Create a tracker and return an error if session initialization fails.
@@ -40,7 +40,7 @@ impl CorridorTracker {
         Ok(())
     }
 
-    /// Register one processed camera frame in [`VisualSession`](navigate_visual_session::VisualSession).
+    /// Register one processed camera frame in [`VisualSession`](navigate_visual::session::VisualSession).
     ///
     /// # Errors
     /// Returns an error string when frame registration fails.

@@ -10,8 +10,11 @@
 use image::{DynamicImage, Rgb, RgbImage};
 use nalgebra::{Matrix3, Matrix6, SMatrix, Translation3, UnitQuaternion, Vector3};
 use navigate_contract::MonotonicNanos;
+use navigate_locate::place::{CANVAS_PX, Canvas, Descriptor, GRID, Record, Tokens};
 use navigate_match::{CorridorLandmarkBank, CorridorTileStore};
-use navigate_place::{CANVAS_PX, Canvas, Descriptor, GRID, Record, Tokens};
+use navigate_visual::session::{
+    AnchorObservation, FrameKey, MapReliability, Pose, RegionChange, ScaleSource, SurfaceModel,
+};
 use navigate_visual::{
     CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision, SearchConfig,
     SearchPrior, SearchTier,
@@ -23,9 +26,6 @@ use navigate_visual_pipeline::corridor::{
         ground_crop_to_canvas, load_candidate_tiles, rank_candidate_regions, resolve_search_tier,
         resolve_search_tier_from_prior,
     },
-};
-use navigate_visual_session::{
-    AnchorObservation, FrameKey, MapReliability, Pose, RegionChange, ScaleSource, SurfaceModel,
 };
 use std::error::Error;
 

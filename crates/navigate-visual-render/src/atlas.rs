@@ -1,6 +1,20 @@
 use crate::RenderError;
 use navigate_visual::LocalFrame;
 
+/// Refuse a frame that the Web Mercator Earth tiles of an atlas cannot address.
+///
+/// A [`LocalFrame::BodyTangentEnu`] frame can be on another body or at a pole.
+/// The atlases hold Web Mercator Earth tiles, so the renderers refuse that frame.
+/// [`LocalFrame::Wgs84Enu`] is the exact Earth frame for these atlases.
+pub(crate) fn require_tile_frame(frame: LocalFrame) -> Result<(), RenderError> {
+    if matches!(frame, LocalFrame::BodyTangentEnu { .. }) {
+        return Err(RenderError::Invalid(
+            "body tangent frames have no Web Mercator tile atlas",
+        ));
+    }
+    Ok(())
+}
+
 /// Pixel grid on a bounded rectangle of Web Mercator tiles.
 #[derive(Clone, Copy, Debug)]
 pub struct AtlasLayout {

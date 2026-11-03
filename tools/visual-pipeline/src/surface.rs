@@ -10,10 +10,7 @@ pub use gpu::{GpuSurfaceView, SurfaceGpuRenderer};
 pub use horizon::{RansacHorizonEstimator, horizon_attitude};
 pub use sparse::{SurfaceAdaptiveStats, SurfaceRayHit};
 
-use crate::{
-    PipelineError,
-    util::{file_sha256, read_json},
-};
+use crate::{PipelineError, digest::file_sha256, json_file::read_json};
 use image::{Rgb, RgbImage};
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::GeodeticPosition;
