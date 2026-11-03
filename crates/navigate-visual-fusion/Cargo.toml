@@ -8,10 +8,10 @@ publish.workspace = true
 
 [dependencies]
 navigate-contract = { workspace = true }
-navigate-fusion = { workspace = true }
+navigate-fusion = { workspace = true, features = ["std"] }
 navigate-visual = { path = "../navigate-visual" }
 navigate-visual-session = { path = "../navigate-visual-session" }
-nalgebra = { workspace = true }
+nalgebra = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 
 [lints]

@@ -14,7 +14,7 @@ use navigate_contract::{
 };
 
 use crate::config::FusionConfig;
-use crate::provenance::{AdmittedContribution, ProvenanceLedger};
+use crate::provenance::{AdmittedContribution, MAX_SOURCES, ProvenanceLedger};
 
 mod space;
 
@@ -75,9 +75,9 @@ pub(crate) fn derive_space(
     )
 }
 
-fn support_of(records: &[AdmittedContribution]) -> Support {
+fn support_of<'a>(records: impl Iterator<Item = &'a AdmittedContribution> + Clone) -> Support {
     let contributing = records
-        .iter()
+        .clone()
         .fold(SourceComposition::empty(), |acc, record| {
             acc.union(record.composition)
         });
@@ -99,14 +99,14 @@ fn support_of(records: &[AdmittedContribution]) -> Support {
 /// of sources with disjoint compositions cross-checks across classes;
 /// sources whose declarations all pairwise overlap corroborate only
 /// within a shared class.
-fn redundancy_of(records: &[AdmittedContribution]) -> Redundancy {
-    let sources = per_source_compositions(records);
-    if sources.len() < 2 {
+fn redundancy_of<'a>(records: impl Iterator<Item = &'a AdmittedContribution>) -> Redundancy {
+    let table = per_source_compositions(records);
+    let sources = || table.iter().flatten();
+    if sources().count() < 2 {
         return Redundancy::None;
     }
-    let any_disjoint = sources.iter().enumerate().any(|(i, (_, left))| {
-        sources
-            .iter()
+    let any_disjoint = sources().enumerate().any(|(i, (_, left))| {
+        sources()
             .skip(i.wrapping_add(1))
             .any(|(_, right)| !left.overlaps(*right))
     });
@@ -119,12 +119,26 @@ fn redundancy_of(records: &[AdmittedContribution]) -> Redundancy {
 
 /// Each distinct source paired with the union of every composition it
 /// declared inside the window.
-fn per_source_compositions(records: &[AdmittedContribution]) -> Vec<(SourceId, SourceComposition)> {
-    let mut sources: Vec<(SourceId, SourceComposition)> = Vec::with_capacity(records.len());
+///
+/// Every admission in the window comes from a tracked source, so the
+/// window holds at most [`MAX_SOURCES`] distinct sources. A source beyond
+/// the table would only lower the redundancy, never raise it.
+fn per_source_compositions<'a>(
+    records: impl Iterator<Item = &'a AdmittedContribution>,
+) -> [Option<(SourceId, SourceComposition)>; MAX_SOURCES] {
+    let mut sources = [None; MAX_SOURCES];
     for record in records {
-        match sources.iter_mut().find(|(id, _)| *id == record.source) {
+        let known = sources
+            .iter_mut()
+            .flatten()
+            .find(|(id, _): &&mut (SourceId, SourceComposition)| *id == record.source);
+        match known {
             Some((_, composition)) => *composition = composition.union(record.composition),
-            None => sources.push((record.source, record.composition)),
+            None => {
+                if let Some(free) = sources.iter_mut().find(|slot| slot.is_none()) {
+                    *free = Some((record.source, record.composition));
+                }
+            }
         }
     }
     sources

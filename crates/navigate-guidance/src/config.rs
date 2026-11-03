@@ -101,7 +101,7 @@ pub struct VelocityGuidanceConfig {
     /// The slowdown makes an arrival flyable, it does not end a leg:
     /// speed never decays below [`Self::MIN_APPROACH_SPEED_MPS`], and
     /// deciding that a waypoint is captured — or that the plan is
-    /// finished — stays `navigate-fpl`'s job.
+    /// finished — stays the job of `navigate-route`.
     pub arrival_slowdown_radius_m: f64,
 }
 

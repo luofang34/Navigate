@@ -14,7 +14,7 @@ navigate-visual-fusion = { path = "../../crates/navigate-visual-fusion" }
 navigate-visual-session = { path = "../../crates/navigate-visual-session" }
 navigate-match = { path = "../../crates/navigate-match" }
 navigate-place = { path = "../../crates/navigate-place" }
-nalgebra = { workspace = true }
+nalgebra = { workspace = true, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { workspace = true }

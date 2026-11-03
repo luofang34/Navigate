@@ -52,13 +52,16 @@ initialization origin:
   rejected *and counted* before they can touch the state. Rejection
   counters are first-class observability.
 - **Pluggable propagation.** A `Propagator` advances the state between
-  measurements; the skeleton ships constant-velocity kinematics, and IMU
-  mechanization joins as a propagator when a raw inertial source lands —
-  growing the state, not changing the architecture.
-- **Delayed measurements** are a designed seam: the staleness bound is
-  what ships; a bounded state history enabling apply-at-acquisition
-  re-propagation is the designed extension the update-path seam exists
-  for (ADR-0003).
+  measurements. `NavigationFilter` uses constant-velocity kinematics.
+  `InertialNavigationFilter` is a strapdown error-state filter with
+  seventeen states: position, velocity, attitude, accelerometer and
+  gyroscope biases, a barometric bias, and a magnetic map bias. It
+  operates on a body surface or in a Cartesian space frame (ADR-0014).
+- **Delayed measurements.** Each filter keeps a bounded history of its
+  states before each update. The filter applies a delayed observation
+  at its acquisition time and then replays the later updates
+  (ADR-0012). An observation older than the history is refused with
+  `OutsideHistory`.
 - **Single-source honesty.** With one source the filter still runs; the
   integrity assessment reports the redundancy it actually has and marks
   fault detection unavailable rather than inventing confidence (ADR-0004).
@@ -68,16 +71,22 @@ initialization origin:
 Every published solution carries: a quality classification, the set of
 contributing source classes, a redundancy level, 1-sigma horizontal and
 vertical uncertainties derived from the covariance, and a fault-detection
-statement. Protection levels (RAIM-class bounds) are a reserved field, not
+statement. A run of innovation-gate refusals limits the quality to
+`Degraded` until an aiding observation passes admission, because a
+refused update does not change the covariance (ADR-0015). A space
+solution gives its uncertainty in radial, along-track, and cross-track
+axes. Protection levels (RAIM-class bounds) are a reserved field, not
 an implemented claim. Consumers that need integrity fail closed when it is
 absent; displays show quality rather than hiding it.
 
 ## Flight plans and guidance
 
-`navigate-fpl` owns the plan model's execution: validation, active-leg
-sequencing with capture criteria, terminal behavior, and procedure
-selection (a loss-of-communication procedure is a plan with a different
-role, not a different machine). Each leg carries a path terminator from
+`navigate-route` executes the plan model on any body. It validates the
+plan, sequences the active leg with capture criteria, applies the
+terminal behavior, and selects the procedure. A loss-of-communication
+procedure is a plan with a different role, not a different machine. The
+turn model uses the surface gravity of the body of the plan, not the
+gravity of the Earth. Each leg carries a path terminator from
 one vocabulary that names the RNAV leg types and the vertical procedure
 legs together, per the [leg requirements](leg-requirements.md) and
 ADR-0006; a leg type this build cannot fly is refused by name at
@@ -95,6 +104,38 @@ takes velocity commands — and refuses to guide when solution integrity
 is below what the maneuver requires. Both derivations admit a solution
 through one helper, so their floors cannot drift apart.
 
+## Core crate topology (ADR-0016)
+
+The core crates compile with `#![no_std]` and do not allocate. A
+microcontroller on a vehicle and a ground tool link the same code.
+Each crate that calls a float function has the features `std` (the
+default) and `libm`.
+
+| Crate | Responsibility |
+|---|---|
+| `navigate-contract` | Boundary types: solutions, integrity, stamps, plans, and physical time |
+| `navigate-geodesy` | Geodesy on an explicit reference ellipsoid of any body, vertical datums, and surface shapes |
+| `navigate-astrodynamics` | Planetary bodies, gravity fields, coordinate time scales, and frame rotations |
+| `navigate-fusion` | The kinematic, inertial, and particle filters, with admission and integrity |
+| `navigate-magnav` | Tolles–Lawson calibration, borrowed grid maps, and Cramér–Rao bounds for magnetic anomaly navigation |
+| `navigate-route` | Route validation and leg sequencing |
+| `navigate-guidance` | Surface guidance setpoints |
+| `navigate-terrain-safety` | Terrain clearance with vertical-datum adapters |
+
+Every table, history, and gravity model has a fixed inline capacity.
+A filter refuses a new source when its source table is full, so that
+the ordering checks of each source always run. The particle filter
+uses two particle slices that the caller owns, and it swaps them after
+each checked update.
+
+Every function that needs a body takes it explicitly: an ellipsoid, a
+`PlanetaryBody`, a `SpaceEnvironment`, or a surface gravity. A caller
+cannot apply the WGS84 ellipsoid or the gravity of the Earth to the
+Moon, Mars, or a small body by mistake (ADR-0013, ADR-0015). Terrain
+clearance compares two ellipsoidal heights. `OrthometricTerrain` adds
+the undulation of the geoid, the selenoid, or the areoid to an
+orthometric terrain height.
+
 ## The contract (ADR-0005)
 
 `navigate-contract` is the crate external consumers pin (the same pattern
@@ -111,20 +152,16 @@ vocabulary; process topology is a deployment decision, not a contract one.
   variants. The filter refuses them by name until they land (ADR-0008). The
   `Range` model is supported. Celestial and terrain-matching variants are not
   reserved yet.
-- Inertial and dead-reckoning propagators, attitude and bias states, and
-  bounded delayed-measurement history (ADR-0008).
 - Global visual retrieval for a search prior that is too uncertain to
   narrow the search (ADR-0009).
 - Batched multi-view rendering, source-driven tile detail, and a completion
   signal in the MapLibre implementation of the reference port (ADR-0010).
-- Coupling admission-gate storm rates into the quality derivation
-  (quality currently degrades on covariance bounds and source silence).
 - Position setpoint generation (the contract vocabulary mirrors the FC
   command surface; guidance derives deviation-tracking and velocity
   setpoints).
 - RAIM-class fault detection and protection levels.
-- Terrain database binding for EGPWS (the seam returns typed
-  `Unavailable`).
+- A terrain source for `navigate-terrain-safety`. Without a terrain
+  source, the assessment refuses with `NoTerrain`.
 - The aiding-observation wire schema (joint RFC with the FC side).
 - Any transport: no sockets, no shared memory, no MAVLink — integration
   binds those in the host platform's adapters.

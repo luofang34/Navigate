@@ -4,8 +4,8 @@
 //! [`guide`] maps `(solution, leg geometry, now, clock, config)` to a
 //! deviation-tracking [`navigate_contract::GuidanceCommand`].
 //! [`guide_velocity`] maps the same inputs to a local-level NED velocity
-//! command. Neither function keeps internal state. `navigate-fpl` owns leg
-//! sequencing, capture criteria, and procedure selection. The host
+//! command. Neither function keeps internal state. `navigate-route` owns
+//! leg sequencing, capture criteria, and procedure selection. The host
 //! platform owns transports and actuator authority.
 //!
 //! Guidance checks integrity with fail-closed logic (ADR-0004). A solution

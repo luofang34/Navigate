@@ -14,8 +14,8 @@ use navigate_contract::{
 
 use super::estimate::InertialCore;
 use super::{ImuSample, InertialConfig, InertialNavigationFilter};
-use crate::environment::{GravityField, PlanetaryBody};
 use crate::rejection::IngestOutcome;
+use navigate_astrodynamics::{GravityField, PlanetaryBody};
 
 const CLOCK: ClockDomainId = ClockDomainId::new(11);
 /// The source of the IMU stream in every test.

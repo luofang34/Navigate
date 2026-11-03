@@ -10,16 +10,16 @@
 use nalgebra::SMatrix;
 
 use super::scalar;
-use crate::environment::SurfaceFrame;
-use crate::filter::{
-    MagneticAnomalyModel, MapLinearization, check_gradient_information, check_linearization_region,
-    horizontal_1sigma_m,
-};
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Mode};
 use crate::inertial::nominal::{MAG_BIAS, N, POS};
+use crate::kalman::{
+    MagneticAnomalyModel, MapLinearization, check_gradient_information, check_linearization_region,
+    horizontal_1sigma_m,
+};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 pub(super) fn apply(
     core: &mut InertialCore,
@@ -47,10 +47,10 @@ pub(super) fn apply(
         gradient_ned_t_per_m,
         valid_radius_m,
     };
-    let model = MagneticAnomalyModel::new(&surface.plane, &map, measured_t, variance_t2)
+    let model = MagneticAnomalyModel::new(surface.plane(), &map, measured_t, variance_t2)
         .ok_or(RejectionReason::NonFiniteValue)?;
     let key = (obs.stamp.source, obs.map_revision);
-    let mut candidate = core.clone();
+    let mut candidate = *core;
     if candidate.mag_key.is_some_and(|active| active != key) {
         start_new_bias(&mut candidate, config);
     }

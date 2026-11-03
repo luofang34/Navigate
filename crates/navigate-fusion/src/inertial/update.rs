@@ -5,8 +5,6 @@
 //! frame of the core that the event updates. Thus a delayed observation
 //! is judged against the frame that was active at its acquisition time.
 
-use std::sync::Arc;
-
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_contract::MonotonicNanos;
 
@@ -18,23 +16,27 @@ use super::models::apply_observation;
 use super::nominal::{Mat17, POS, VEL, renormalized};
 use super::regime::Regime;
 use crate::admission::check_frame;
-use crate::environment::SpaceEnvironment;
 use crate::observation::Observation;
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SpaceEnvironment;
 
 /// A change of the space frame at one time: the target environment, the
 /// position and the velocity of its center in the active frame, and the
 /// rotation from the active axes to the target axes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Recenter {
-    pub(crate) env: Arc<SpaceEnvironment>,
+    pub(crate) env: SpaceEnvironment,
     pub(crate) origin_shift: Vector3<f64>,
     pub(crate) velocity_shift: Vector3<f64>,
     pub(crate) rotation: UnitQuaternion<f64>,
 }
 
 /// One event of the history.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "each event is inline so that the history needs no heap"
+)]
 pub(crate) enum Event {
     /// An IMU sample that propagates the state to its end time.
     Imu(ImuSample),
@@ -43,7 +45,7 @@ pub(crate) enum Event {
     /// A change of the space frame.
     Recenter(Recenter),
     /// New third-body positions in the same space frame.
-    Environment(Arc<SpaceEnvironment>),
+    Environment(SpaceEnvironment),
 }
 
 /// Applies `event` at `at`. `covering` gives the rates of the IMU sample
@@ -79,7 +81,7 @@ pub(crate) fn apply_event(
             Ok(None)
         }
         Event::Environment(env) => {
-            core.regime = Regime::CartesianSpace(Arc::clone(env));
+            core.regime = Regime::CartesianSpace(*env);
             Ok(None)
         }
     }
@@ -101,5 +103,5 @@ fn apply_recenter(core: &mut InertialCore, recenter: &Recenter) {
     j.fixed_view_mut::<3, 3>(VEL, VEL).copy_from(&rotation);
     let rotated = j * core.p * j.transpose();
     core.p = (rotated + rotated.transpose()) * 0.5;
-    core.regime = Regime::CartesianSpace(Arc::clone(&recenter.env));
+    core.regime = Regime::CartesianSpace(recenter.env);
 }

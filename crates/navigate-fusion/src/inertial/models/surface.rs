@@ -4,14 +4,14 @@ use nalgebra::{SMatrix, Vector3};
 use navigate_contract::{SensorClass, SourceComposition};
 
 use super::{block, plane_to_local_at, range, scalar, vehicle_position};
-use crate::environment::SurfaceFrame;
-use crate::filter::cov3_to_matrix;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Linearized, Mode};
 use crate::inertial::nominal::{ALT_BIAS, N, POS, VEL};
-use crate::navigation_filter::reanchor::vehicle_to_plane;
+use crate::kalman::cov3_to_matrix;
+use crate::kinematic::reanchor::vehicle_to_plane;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 /// Applies a position fix, a velocity fix, or a range. The position and
 /// velocity covariances arrive in the local NED axes at the fix and at
@@ -23,7 +23,7 @@ pub(super) fn apply_vector_or_range(
     config: &InertialConfig,
     mode: Mode,
 ) -> Result<f64, RejectionReason> {
-    let plane = &surface.plane;
+    let plane = surface.plane();
     let vector_gate = config.fusion.innovation_gate_chi2;
     match &obs.value {
         ObservationValue::PositionFix {

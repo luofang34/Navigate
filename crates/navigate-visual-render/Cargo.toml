@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-visual = { path = "../navigate-visual" }
-nalgebra.workspace = true
+nalgebra = { workspace = true, features = ["std"] }
 image.workspace = true
 thiserror.workspace = true
 wgpu = "30"

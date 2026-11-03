@@ -5,6 +5,7 @@
 //! `C_true = C_nom·exp([δθ×])` and `q_true = q_nom ⊗ exp(δθ/2)`. The bias
 //! errors are additive: `b_true = b_nom + δb`.
 
+use crate::float_math::atan2;
 use nalgebra::{Matrix3, Quaternion, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::AttitudeQuaternion;
 
@@ -108,7 +109,7 @@ pub(crate) fn rotation_vector(q: &UnitQuaternion<f64>) -> Vector3<f64> {
     if s < SMALL_ANGLE {
         return 2.0 * v;
     }
-    v * (2.0 * s.atan2(w) / s)
+    v * (2.0 * atan2(s, w) / s)
 }
 
 /// Removes the rounding drift of the quaternion norm.

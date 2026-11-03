@@ -1,7 +1,5 @@
 //! Explicit initialization of the inertial filter (ADR-0014).
 
-use std::sync::Arc;
-
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, GeodeticPosition, MonotonicNanos,
@@ -18,10 +16,10 @@ use super::nominal::{
 };
 use super::regime::{Regime, Setup};
 use crate::admission::{check_composition, check_cov3, is_unit_quaternion};
-use crate::environment::SurfaceFrame;
-use crate::filter::cov3_to_matrix;
+use crate::kalman::cov3_to_matrix;
 use crate::observation::MeasurementKind;
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 /// The initial state of one regime before the checks.
 struct InitialState {
@@ -73,7 +71,7 @@ impl InertialNavigationFilter {
             let plane = LocalTangentPlane::new(position, body.ellipsoid)
                 .map_err(|_| RejectionReason::NonFiniteValue)?;
             let initial = InitialState {
-                regime: Regime::BodySurface(Arc::new(SurfaceFrame::new(plane, *body))),
+                regime: Regime::BodySurface(SurfaceFrame::new(plane, *body)),
                 v: Vector3::new(velocity.north_mps, velocity.east_mps, velocity.down_mps),
                 attitude,
                 pos_cov,
@@ -121,7 +119,7 @@ impl InertialNavigationFilter {
                 return Err(RejectionReason::NonFiniteValue);
             }
             let initial = InitialState {
-                regime: Regime::CartesianSpace(env.clone()),
+                regime: Regime::CartesianSpace(*env),
                 v: Vector3::new(velocity.vx_mps, velocity.vy_mps, velocity.vz_mps),
                 attitude,
                 pos_cov,

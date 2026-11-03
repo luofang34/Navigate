@@ -6,11 +6,11 @@ use navigate_contract::{CartesianPosition, DurationNanos, SolutionQuality, Symme
 use navigate_geodesy::NedOffset;
 
 use super::*;
-use crate::environment::{SpaceEnvironment, SpaceGravityModel};
 use crate::inertial::models::{plane_to_local_at, quaternion_of};
 use crate::inertial::nominal::{ATT, to_contract};
 use crate::observation::{MeasurementKind, Observation, ObservationValue};
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::{SpaceEnvironment, SpaceGravityModel};
 
 fn position_fix(sequence: u32, at_ms: u64, position: GeodeticPosition) -> Observation {
     Observation::new(
@@ -34,7 +34,7 @@ fn rejection(outcome: IngestOutcome) -> RejectionReason {
 fn refusals_before_initialization_and_without_imu_data() {
     let config = InertialConfig::default();
     let mut filter =
-        InertialNavigationFilter::new_surface(config, CLOCK, PlanetaryBody::earth_wgs84());
+        InertialNavigationFilter::new_surface(config, CLOCK, PlanetaryBody::EARTH_WGS84);
     let rates = ([0.0, 0.0, -9.8], [0.0; 3]);
     assert_eq!(
         rejection(filter.ingest_imu(&imu(1, 0, rates, 0.01), t(0))),
@@ -45,7 +45,7 @@ fn refusals_before_initialization_and_without_imu_data() {
         RejectionReason::NotInitialized
     );
     assert!(filter.tick_surface(t(0)).is_none());
-    let mut filter = surface_filter(config, PlanetaryBody::earth_wgs84(), earth_origin());
+    let mut filter = surface_filter(config, PlanetaryBody::EARTH_WGS84, earth_origin());
     // A fix at the state time needs no propagation.
     assert_accepted(filter.ingest(&position_fix(1, 0, earth_origin()), t(0)));
     assert_eq!(
@@ -61,7 +61,7 @@ fn refusals_before_initialization_and_without_imu_data() {
 fn each_regime_refuses_the_models_of_the_other() {
     let mut surface = surface_filter(
         InertialConfig::default(),
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
     let cartesian = ObservationValue::CartesianPositionFix {
@@ -100,7 +100,7 @@ fn a_lunar_filter_requires_the_lunar_frame() {
     let mut filter = InertialNavigationFilter::new_surface(
         InertialConfig::default(),
         CLOCK,
-        PlanetaryBody::moon_me(),
+        PlanetaryBody::MOON_ME,
     );
     filter
         .initialize_surface(
@@ -137,7 +137,7 @@ fn a_lunar_filter_requires_the_lunar_frame() {
 fn imu_samples_do_not_reset_the_observation_silence() {
     let mut filter = surface_filter(
         InertialConfig::default(),
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
     let rates = rest_rates(&filter);
@@ -158,12 +158,12 @@ fn imu_samples_do_not_reset_the_observation_silence() {
 fn the_published_attitude_is_in_the_local_axes_at_the_vehicle() {
     let mut filter = surface_filter(
         InertialConfig::default(),
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
     let p = Vector3::new(50_000.0, 20_000.0, 0.0);
     let surface = *core(&filter).regime.surface().expect("surface");
-    let vehicle = surface.plane.from_ned(&NedOffset::new(p.x, p.y, p.z));
+    let vehicle = surface.plane().from_ned(&NedOffset::new(p.x, p.y, p.z));
     let to_local = quaternion_of(&plane_to_local_at(&surface, vehicle).expect("plausible"));
     let q_local = UnitQuaternion::from_euler_angles(0.05, -0.02, 0.6);
     {
@@ -223,7 +223,7 @@ fn attitude_fixes_and_visual_poses_update_the_attitude() {
     let mut filter = InertialNavigationFilter::new_surface(
         InertialConfig::default(),
         CLOCK,
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
     );
     filter
         .initialize_surface(
@@ -266,7 +266,7 @@ fn run_script(events: &[(bool, u64, u64, usize)]) -> crate::inertial::estimate::
         },
         ..InertialConfig::default()
     };
-    let mut filter = surface_filter(config, PlanetaryBody::earth_wgs84(), earth_origin());
+    let mut filter = surface_filter(config, PlanetaryBody::EARTH_WGS84, earth_origin());
     let rest = rest_rates(&filter);
     let rates = [
         rest,
@@ -298,7 +298,7 @@ fn run_script(events: &[(bool, u64, u64, usize)]) -> crate::inertial::estimate::
             assert_accepted(filter.ingest(&position_fix(1, at_ms, fix), t(now_ms)));
         }
     }
-    core(&filter).clone()
+    *core(&filter)
 }
 
 fn surface_plane_fix() -> GeodeticPosition {

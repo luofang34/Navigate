@@ -2,7 +2,7 @@
 //! plan completion, admission health, lateral containment, and
 //! single-source integrity honesty visible at the far end of the chain.
 use navigate_contract::{FaultDetection, Redundancy};
-use navigate_fpl::SequenceReason;
+use navigate_route::SequenceReason;
 use navrun::run_scenario;
 
 #[test]

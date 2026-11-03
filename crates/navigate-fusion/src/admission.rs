@@ -7,7 +7,8 @@ use navigate_contract::{
     SourceComposition, SymmetricCov3,
 };
 
-use crate::filter;
+use crate::float_math::sqrt;
+use crate::kalman;
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
 
@@ -159,7 +160,7 @@ fn check_attitude_or_cartesian(value: &ObservationValue) -> Result<(), Rejection
             beam_body_unit,
             variance_m2,
         } => {
-            let beam_norm = beam_body_unit.iter().map(|c| c * c).sum::<f64>().sqrt();
+            let beam_norm = sqrt(beam_body_unit.iter().map(|c| c * c).sum::<f64>());
             require(
                 clearance_m.is_finite()
                     && *clearance_m > 0.0
@@ -214,14 +215,14 @@ const fn require(plausible: bool) -> Result<(), RejectionReason> {
 /// Whether every component is finite and the norm is 1 within
 /// [`UNIT_NORM_TOLERANCE`].
 pub(crate) fn is_unit_quaternion(q: &AttitudeQuaternion) -> bool {
-    let norm = (q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z).sqrt();
+    let norm = sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z);
     norm.is_finite() && (norm - 1.0).abs() <= UNIT_NORM_TOLERANCE
 }
 
 /// A 3×3 covariance must be finite and positive definite.
 pub(crate) fn check_cov3(covariance: &SymmetricCov3) -> Result<(), RejectionReason> {
     if covariance.is_plausible()
-        && filter::is_positive_definite(&filter::cov3_to_matrix(covariance))
+        && kalman::is_positive_definite(&kalman::cov3_to_matrix(covariance))
     {
         Ok(())
     } else {

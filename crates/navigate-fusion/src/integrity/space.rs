@@ -1,6 +1,7 @@
 //! The position uncertainty of a space solution in orbital axes
 //! (ADR-0015).
 
+use crate::float_math::sqrt;
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::SpaceUncertainty;
 
@@ -41,7 +42,7 @@ pub(crate) fn space_uncertainty(
         };
     }
     let mut eigenvalues: [f64; 3] = cov.symmetric_eigenvalues().into();
-    eigenvalues.sort_by(|a, b| b.total_cmp(a));
+    eigenvalues.sort_unstable_by(|a, b| b.total_cmp(a));
     let axes_1sigma_m = eigenvalues.map(sigma);
     let max_axis_1sigma_m = axes_1sigma_m[0];
     let Some(rows) = rtn_rows(position, velocity) else {
@@ -84,5 +85,5 @@ fn rtn_rows(position: Vector3<f64>, velocity: Vector3<f64>) -> Option<Matrix3<f6
 /// The 1-sigma of a variance. Rounding can make a variance a little
 /// negative, which gives 0.
 fn sigma(variance: f64) -> f64 {
-    variance.max(0.0).sqrt()
+    sqrt(variance.max(0.0))
 }

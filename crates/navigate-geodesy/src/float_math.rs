@@ -52,6 +52,43 @@ float_functions! {
     sqrt(x);
     /// `sqrt(x² + y²)` without intermediate overflow.
     hypot(x, y);
+    /// The exponential `e^x`.
+    exp(x);
+    /// The largest integer value that is not greater than `x`.
+    floor(x);
+    /// The smallest integer value that is not less than `x`.
+    ceil(x);
+    /// The integer value nearest to `x`. A half value rounds away from
+    /// zero.
+    round(x);
+}
+
+/// The natural logarithm of `x`.
+#[must_use]
+#[inline]
+pub fn ln(x: f64) -> f64 {
+    #[cfg(feature = "std")]
+    {
+        x.ln()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        imp::log(x)
+    }
+}
+
+/// `x` to the integer power `n`.
+#[must_use]
+#[inline]
+pub fn powi(x: f64, n: i32) -> f64 {
+    #[cfg(feature = "std")]
+    {
+        x.powi(n)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        imp::pow(x, f64::from(n))
+    }
 }
 
 /// The sine and the cosine of `x` radians.

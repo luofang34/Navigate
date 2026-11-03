@@ -1,0 +1,20 @@
+[package]
+name = "navigate-terrain-safety"
+description = "Terrain clearance assessment with vertical datum adapters on any body"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["std"]
+std = ["navigate-contract/std", "navigate-geodesy/std"]
+libm = ["navigate-contract/libm", "navigate-geodesy/libm"]
+
+[dependencies]
+navigate-contract = { workspace = true, default-features = false }
+navigate-geodesy = { workspace = true, default-features = false }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

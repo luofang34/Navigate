@@ -19,18 +19,22 @@
 //! - A frame change and an environment update are events at or after the
 //!   state time. A replay that starts before them applies them again.
 
-use std::collections::VecDeque;
-
 use navigate_contract::{DurationNanos, MonotonicNanos};
 
 use super::config::InertialConfig;
 use super::estimate::{InertialCore, Mode};
 use super::mechanization::ImuRates;
 use super::update::{Event, apply_event};
+use crate::float_math::round;
+use crate::history_ring::HistoryRing;
 use crate::rejection::RejectionReason;
 
+/// Largest number of events that the inertial history keeps. A larger
+/// `FusionConfig::history_capacity` keeps this number.
+pub const MAX_INERTIAL_HISTORY: usize = 32;
+
 /// One event and the core before it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct HistoryEntry {
     at: MonotonicNanos,
     before: InertialCore,
@@ -39,10 +43,19 @@ struct HistoryEntry {
 
 /// The retained events of one filter epoch, oldest first, and the
 /// initialization time.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct History {
-    entries: VecDeque<HistoryEntry>,
+    entries: HistoryRing<HistoryEntry, MAX_INERTIAL_HISTORY>,
     anchor: Option<MonotonicNanos>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            entries: HistoryRing::new(),
+            anchor: None,
+        }
+    }
 }
 
 impl History {
@@ -67,16 +80,19 @@ impl History {
         at: MonotonicNanos,
         capacity: usize,
     ) {
-        self.entries.push_back(HistoryEntry { at, before, event });
-        while self.entries.len() > capacity {
-            self.entries.pop_front();
-        }
+        self.entries
+            .push_back(HistoryEntry { at, before, event }, capacity);
     }
 
     /// Applies `event` at `at`, before the state time of `current`. On
     /// success the result is the new core and the chi-square statistic of
     /// an observation, and the history holds the replayed entries. On an
     /// error the history does not change.
+    ///
+    /// The replay runs two times. The first pass checks that every event
+    /// applies. The second pass writes the new core before each later
+    /// entry. The replay is deterministic, so the two passes give the
+    /// same cores, and the history needs no second buffer.
     pub(crate) fn apply_delayed(
         &mut self,
         current: &InertialCore,
@@ -97,24 +113,39 @@ impl History {
         }
         // Entries at the same time as the delayed event stay before it.
         let index = self.entries.partition_point(|e| e.at <= at);
-        let Some(base) = self.entries.get(index).map(|e| e.before.clone()) else {
+        let Some(base) = self.entries.get(index).map(|e| e.before) else {
             return Err(outside());
         };
         if base.state_at > at {
             return Err(outside());
         }
-        let mut scratch = base.clone();
-        let covering = self.covering_rates(index, at);
-        let chi2 = apply_event(&mut scratch, event, at, config, Mode::Gated, covering)?;
-        let mut rebuilt: VecDeque<HistoryEntry> =
-            self.entries.iter().take(index).cloned().collect();
-        rebuilt.push_back(HistoryEntry {
+        let (scratch, chi2) = self.replay(base, event, at, index, config)?;
+        let (mut rewrite, covering) = (base, self.covering_rates(index, at));
+        apply_event(&mut rewrite, event, at, config, Mode::Gated, covering)?;
+        self.replay_rewrite(rewrite, index, config)?;
+        let delayed = HistoryEntry {
             at,
             before: base,
-            event: event.clone(),
-        });
+            event: *event,
+        };
+        self.entries.insert(index, delayed, capacity);
+        Ok((scratch, chi2))
+    }
+
+    /// Applies `event` at `at` to `base`, then replays the entries from
+    /// `index` without a change to the history.
+    fn replay(
+        &self,
+        base: InertialCore,
+        event: &Event,
+        at: MonotonicNanos,
+        index: usize,
+        config: &InertialConfig,
+    ) -> Result<(InertialCore, Option<f64>), RejectionReason> {
+        let mut scratch = base;
+        let covering = self.covering_rates(index, at);
+        let chi2 = apply_event(&mut scratch, event, at, config, Mode::Gated, covering)?;
         for (offset, entry) in self.entries.iter().enumerate().skip(index) {
-            let before = scratch.clone();
             let covering = self.covering_rates(offset.wrapping_add(1), entry.at);
             apply_event(
                 &mut scratch,
@@ -124,16 +155,31 @@ impl History {
                 Mode::Replay,
                 covering,
             )?;
-            rebuilt.push_back(HistoryEntry {
-                before,
-                ..entry.clone()
-            });
         }
-        while rebuilt.len() > capacity {
-            rebuilt.pop_front();
-        }
-        self.entries = rebuilt;
         Ok((scratch, chi2))
+    }
+
+    /// Writes `core` as the core before the entry at `index`, replays
+    /// that entry, and goes on to the newest entry.
+    fn replay_rewrite(
+        &mut self,
+        mut core: InertialCore,
+        index: usize,
+        config: &InertialConfig,
+    ) -> Result<(), RejectionReason> {
+        for position in index..self.entries.len() {
+            let covering = self
+                .entries
+                .get(position)
+                .and_then(|entry| self.covering_rates(position.wrapping_add(1), entry.at));
+            let Some(entry) = self.entries.get_mut(position) else {
+                break;
+            };
+            entry.before = core;
+            let (event, at) = (entry.event, entry.at);
+            apply_event(&mut core, &event, at, config, Mode::Replay, covering)?;
+        }
+        Ok(())
     }
 
     /// The rates of the first IMU sample at or after `index` when its
@@ -147,7 +193,7 @@ impl History {
                 Event::Imu(sample) => Some(*sample),
                 _ => None,
             })?;
-        let interval_ns = (sample.dt_s * 1e9).round() as u64;
+        let interval_ns = round(sample.dt_s * 1e9) as u64;
         let start = sample
             .stamp
             .acquired_at

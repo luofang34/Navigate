@@ -10,7 +10,7 @@ publish.workspace = true
 navigate-visual = { path = "../navigate-visual" }
 navigate-visual-session = { path = "../navigate-visual-session" }
 navigate-contract.workspace = true
-nalgebra.workspace = true
+nalgebra = { workspace = true, features = ["std"] }
 image = { workspace = true, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true, features = ["std"] }

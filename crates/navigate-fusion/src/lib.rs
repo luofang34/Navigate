@@ -1,56 +1,65 @@
-//! Sans-IO navigation fusion: typed observations, admission gates,
+//! Sans-IO navigation filters: typed observations, admission gates,
 //! correlation discipline, and integrity-honest solutions (ADR-0003,
 //! ADR-0004).
 //!
-//! The filter consumes [`Observation`]s — never sensors — over a
-//! local-level NED state anchored at the first admitted position fix.
-//! Every admission-gate refusal increments a counter in
-//! [`RejectionCounters`], every published
-//! [`navigate_contract::NavigationSolution`] carries the integrity its
-//! sensor set actually supports, and identical observation scripts yield
-//! field-identical solutions: time is always supplied by the caller as
-//! [`navigate_contract::MonotonicNanos`], never read from a clock.
+//! The filters consume [`Observation`]s, never sensors. Every
+//! admission-gate refusal increments a counter in [`RejectionCounters`].
+//! Every published [`navigate_contract::NavigationSolution`] carries the
+//! integrity that its sensor set supports. Identical observation scripts
+//! give field-identical solutions, because the caller supplies all time
+//! as [`navigate_contract::MonotonicNanos`].
 //!
-//! Scalar map models (altitude and magnetic anomaly) and a bounded
-//! delayed-measurement history extend the core (ADR-0012). The state is
-//! on one reference ellipsoid of any body, and the filter refuses an
-//! observation that declares another frame (ADR-0013).
+//! The crate has these filters:
 //!
-//! [`InertialNavigationFilter`] is a strapdown error-state filter with
-//! seventeen states on a body surface or in a Cartesian space frame.
-//! [`MarginalizedParticleFilter`] matches a scalar field map without a
-//! linearization. [`CrlbTracker`] gives the posterior Cramér–Rao bound,
-//! and [`OnlineTlCalibrator`] estimates the Tolles–Lawson coefficients of
-//! the aircraft (ADR-0014).
+//! - [`NavigationFilter`] ([`kinematic`]): a six-state constant-velocity
+//!   filter in a local NED plane on one reference ellipsoid of any body,
+//!   with scalar map models and a bounded delayed-measurement history
+//!   (ADR-0012, ADR-0013).
+//! - [`InertialNavigationFilter`] ([`inertial`]): a strapdown error-state
+//!   filter with seventeen states on a body surface or in a Cartesian
+//!   space frame (ADR-0014).
+//! - [`MarginalizedParticleFilter`] ([`particle`]): a scalar field map
+//!   match without a linearization, on particles that the caller owns.
+//!
+//! The crate is `#![no_std]` and does not allocate (ADR-0016). Every
+//! table and history has a fixed inline capacity. The `std` feature (the
+//! default) or the `libm` feature supplies the float functions. The
+//! gravity models come from `navigate-astrodynamics`, and this crate
+//! re-exports them.
+
+#![no_std]
+
+#[cfg(not(any(feature = "std", feature = "libm")))]
+compile_error!("Enable feature `std` or `libm`.");
+
+#[cfg(any(feature = "std", test))]
+extern crate std;
 
 mod admission;
-pub mod calibration;
 pub mod config;
-pub mod crlb;
-pub mod environment;
-mod filter;
+mod float_math;
+mod history_ring;
 pub mod inertial;
 mod integrity;
-pub mod mpf;
-pub mod navigation_filter;
+pub mod kalman;
+pub mod kinematic;
 pub mod observation;
+pub mod particle;
 mod provenance;
 pub mod rejection;
 
-pub use calibration::{
-    OnlineTlCalibrator, TOLLES_LAWSON_TERMS, TlCalibratorConfig, TlError, TlUpdate,
-    tolles_lawson_basis,
-};
 pub use config::FusionConfig;
-pub use crlb::{CrlbTracker, ReferencePoint};
-pub use environment::{
-    CentralBodyGravity, PlanetaryBody, PointMassBody, SpaceEnvironment, SpaceGravityModel,
-};
-pub use filter::FogmBias;
 pub use inertial::{ImuSample, InertialConfig, InertialNavigationFilter};
-pub use mpf::{
-    BilinearGridMap, MarginalizedParticleFilter, MpfConfig, MpfError, MpfEstimate, ScalarFieldMap,
+pub use kalman::FogmBias;
+pub use kinematic::{InnovationStats, NavigationFilter};
+pub use navigate_astrodynamics::{
+    CentralBodyGravity, PlanetaryBody, PointMassBody, SpaceEnvironment, SpaceGravityModel,
+    ThirdBodySet,
 };
-pub use navigation_filter::{InnovationStats, NavigationFilter};
 pub use observation::{MeasurementKind, Observation, ObservationValue};
+pub use particle::{
+    MarginalizedParticleFilter, MpfConfig, MpfError, MpfEstimate, MpfParticle, ParticlePool,
+    ScalarFieldMap,
+};
+pub use provenance::{MAX_SOURCES, MAX_WINDOW_ADMISSIONS};
 pub use rejection::{IngestOutcome, RejectionCounters, RejectionReason};

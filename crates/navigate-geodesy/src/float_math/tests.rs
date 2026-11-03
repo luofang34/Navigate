@@ -35,3 +35,17 @@ fn roots_and_remainders_hit_exact_reference_values() {
         "the remainder is never negative"
     );
 }
+
+#[test]
+fn exponentials_and_integer_parts_hit_exact_reference_values() {
+    assert!(close(exp(1.0), core::f64::consts::E));
+    assert!(close(ln(core::f64::consts::E), 1.0));
+    assert_eq!(ln(1.0), 0.0);
+    assert_eq!(powi(2.0, 10), 1024.0);
+    assert_eq!(powi(-3.0, 3), -27.0);
+    assert_eq!(powi(4.0, -1), 0.25);
+    assert_eq!(floor(-1.5), -2.0);
+    assert_eq!(ceil(-1.5), -1.0);
+    assert_eq!(round(2.5), 3.0, "a half value rounds away from zero");
+    assert_eq!(round(-2.5), -3.0);
+}

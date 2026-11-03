@@ -9,7 +9,8 @@ use super::mechanization::{ImuRates, transition};
 use super::nominal::{InertialNominal, Mat17, N, Vec17, reset_covariance};
 use super::regime::Regime;
 use crate::admission::seconds;
-use crate::filter::{KalmanState, MeasurementModel};
+use crate::float_math::ceil;
+use crate::kalman::{KalmanState, MeasurementModel};
 use crate::rejection::RejectionReason;
 
 /// Longest propagation step in seconds. A longer interval is split into
@@ -22,7 +23,7 @@ pub(crate) type MagneticKey = (SourceId, Option<u64>);
 
 /// The state of an initialized filter at one time. The history keeps a
 /// copy of it before each event, so a replay starts from it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct InertialCore {
     pub(crate) regime: Regime,
     pub(crate) nominal: InertialNominal,
@@ -60,7 +61,7 @@ impl InertialCore {
         if total_s <= 0.0 {
             return Ok(());
         }
-        let steps = (total_s / MAX_STEP_S).ceil().max(1.0);
+        let steps = ceil(total_s / MAX_STEP_S).max(1.0);
         let dt_s = total_s / steps;
         let mut nominal = self.nominal;
         let mut p = self.p;
