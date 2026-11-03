@@ -1,18 +1,18 @@
 //! Visual camera positioning from a pose prior and a map reference image.
 //!
 //! Supply an undistorted [`Frame`], a [`PosePrior`] and a [`ReferenceView`] rendered
-//! with the frame's intrinsics. [`Localizer`] returns a pose or a rejection.
-//! Cross-frame correlation is unspecified. The host owns maps, calibration,
-//! coordinate conversion and navigation fusion.
+//! with the frame's intrinsics. [`Localizer`] returns a pose or a rejection. The host
+//! owns maps, calibration, and coordinate conversion. [`LocalFrame::BodyTangentEnu`]
+//! is exact at all latitudes on the Earth, the Moon, and Mars (ADR-0020).
+//! [`Estimate::geometry_covariance`] excludes map and calibration errors. It is not an
+//! integrity bound.
 //!
-//! The default matcher searches near the prior in overlapping, similar views.
-//! [`Estimate::geometry_covariance`] excludes map and calibration errors.
-//! It must not be used as a navigation integrity bound.
+//! [`session`] keeps continuous odometry and map anchors for one camera.
+//! `fusion_bridge` (feature `fusion`, default) converts an [`Estimate`] into a
+//! fusion position fix or a 6-DOF visual pose (ADR-0007, ADR-0020).
 //!
 //! # Features
-//! The default build uses CPU matching. The `gpu` feature exposes
-//! `GpuPyramidalMatcher`. Select the backend explicitly. It does not fall back
-//! to CPU matching. Use `cargo doc -p navigate-visual --features gpu --open`.
+//! The default build uses CPU matching. The `gpu` feature adds `GpuPyramidalMatcher`.
 //!
 //! # Example
 //! ```
@@ -35,6 +35,8 @@ mod candidates;
 pub mod controller;
 mod error;
 mod frame;
+#[cfg(feature = "fusion")]
+pub mod fusion_bridge;
 mod geometry;
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -53,6 +55,7 @@ mod reference;
 mod retrieval;
 mod sampling;
 mod search;
+pub mod session;
 pub use camera::{CameraModel, CameraPose, PosePrior};
 pub use candidates::{CandidateDecision, CandidateId, CandidateResults};
 pub use error::VisualError;

@@ -176,6 +176,32 @@ clearance compares two ellipsoidal heights. `OrthometricTerrain` adds
 the undulation of the geoid, the selenoid, or the areoid to an
 orthometric terrain height.
 
+## The visual stack (ADR-0020)
+
+Six crates hold the visual stack:
+
+- `navigate-visual` gives camera poses from map reference views. Its
+  `session` module keeps continuous odometry and map anchors for one
+  camera. Its `fusion_bridge` module converts a camera pose into a
+  position fix or a visual pose for the fusion filters (ADR-0007).
+- `navigate-visual-render` renders reference views from Web Mercator
+  Earth tiles (ADR-0010).
+- `navigate-match` holds the learned matchers. Its `segment` module holds
+  the semantic segmentation on the same runtimes.
+- `navigate-match-kernels` holds the CubeCL kernels of the matchers.
+- `navigate-locate` finds the pose of one photo or of a flight corridor.
+  Its `place` module holds the place index and the search plan.
+- `navigate-locate-web` runs the locate pipeline in a browser Web Worker.
+
+A visual frame (`LocalFrame`) declares the axes of every camera pose. The
+map tile frames refuse latitudes past 85 degrees.
+`LocalFrame::BodyTangentEnu` gives exact east, north, up axes on the
+Earth, the Moon, Mars, or another body ellipsoid, at all latitudes up to
+the poles. Each fusion observation from a visual frame declares the
+body-fixed frame of that ellipsoid (ADR-0013). A visual pose carries the
+camera position and the body attitude. `InertialNavigationFilter` applies
+it as one update of dimension six (ADR-0014).
+
 ## The contract (ADR-0005)
 
 `navigate-contract` is the crate external consumers pin (the same pattern

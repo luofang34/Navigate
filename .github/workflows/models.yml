@@ -47,7 +47,7 @@ jobs:
 
       - name: Convert the checkpoint to F16 burn weights
         run: |
-          cargo run --release -p navigate-model -- --recipe loftr-burn-f16 \
+          cargo run --release -p navigate-visual-model -- --recipe loftr-burn-f16 \
             "$RUNNER_TEMP/loftr_outdoor.ckpt" "$RUNNER_TEMP/loftr-f16.safetensors"
           sha256sum "$RUNNER_TEMP/loftr-f16.safetensors"
 

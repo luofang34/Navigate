@@ -8,11 +8,11 @@ pub use seeds::{
 };
 
 use super::plausibility::CorridorTerrain;
-use image::{DynamicImage, GrayImage};
-use navigate_match::{CorridorTileKey, CorridorTileStore, DINOV2_WIDTH, Dinov2, MatchError};
-use navigate_place::{
+use crate::place::{
     CANVAS_PX, Canvas, Descriptor, Ranked, Record, Tokens, cell_weights, describe, rank,
 };
+use image::{DynamicImage, GrayImage};
+use navigate_match::{CorridorTileKey, CorridorTileStore, DINOV2_WIDTH, Dinov2, MatchError};
 use navigate_visual::{
     LocalFrame, SearchConfig, SearchPrior, SearchTier, holdout_pnp::PoseCandidate,
 };
@@ -109,11 +109,11 @@ pub fn ground_crop_to_canvas(image: &DynamicImage, mask: Option<&[bool]>) -> Can
 /// Pool a 384-dimensional unit descriptor from patch tokens and a ground-masked canvas.
 ///
 /// # Errors
-/// Returns [`navigate_place::PlaceError`] when token dimensions do not match [`Canvas`].
+/// Returns [`crate::place::PlaceError`] when token dimensions do not match [`Canvas`].
 pub fn descriptor_from_tokens_and_canvas(
     tokens: &Tokens,
     canvas: &Canvas,
-) -> Result<Descriptor, navigate_place::PlaceError> {
+) -> Result<Descriptor, crate::place::PlaceError> {
     let weights = cell_weights(canvas);
     describe(tokens, &weights, None)
 }

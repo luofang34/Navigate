@@ -15,7 +15,7 @@ use super::{
 use crate::{
     PipelineError,
     pose::PoseCandidate,
-    realtime::helpers::rot_to_row_major,
+    realtime::bank_match::rot_to_row_major,
     stages::focal::FocalLengthEstimator,
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,

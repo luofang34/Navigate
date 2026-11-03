@@ -6,6 +6,8 @@
 //! native, and embedded neural processing unit backends.
 //!
 //! [`Dinov2`] is the DINOv2 ViT-S/14 image transformer, whose tokens describe places.
+//! [`segment`] gives SegFormer-B0 semantic segmentation and occlusion masks on the same
+//! runtimes, so that one browser WebGPU device runs segmentation and matching.
 mod convert;
 pub mod corridor;
 mod dinov2;
@@ -20,6 +22,7 @@ mod matcher;
 mod native_engine;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ort"))]
 mod ort_session;
+pub mod segment;
 mod staged;
 mod traits;
 mod vendor_npu;

@@ -1,6 +1,6 @@
 [package]
 name = "navigate-match"
-description = "Learned image matchers on burn for browsers, native GPUs, and CPUs"
+description = "Learned image matchers and semantic segmentation on burn for browsers, native GPUs, and CPUs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,18 +19,25 @@ cuda = ["burn/cuda", "gpu"]
 gpu = ["dep:burn-cubecl", "dep:cubecl", "dep:navigate-match-kernels"]
 # Optional ONNX Runtime dense session on native and embedded Linux targets.
 ort = ["dep:ort"]
+# SegFormer fine-tuning and NPZ archives in the segment module.
+optim = ["burn/optim", "dep:rand", "dep:zip"]
 
 [dependencies]
-navigate-visual = { path = "../navigate-visual" }
+navigate-visual.workspace = true
 burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
 burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
 cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
-navigate-match-kernels = { path = "../navigate-match-kernels", optional = true }
+navigate-match-kernels = { workspace = true, optional = true }
 safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
 sha2 = "0.10"
 half = "2.7.1"
-image.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
 nalgebra = { workspace = true, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+web-time = "1"
+zip = { version = "9.1.0", default-features = false, features = ["deflate"], optional = true }
+rand = { version = "0.10", optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -49,9 +56,8 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
-image = { workspace = true, features = ["png"] }
 pollster = "0.3"
-serde_json = "1"
+tempfile = "3"
 tracing-subscriber.workspace = true
 
 [lints]

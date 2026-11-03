@@ -11,8 +11,8 @@ pub use navigate_locate::corridor::multitier::{
 
 use crate::PipelineError;
 use burn::tensor::Device;
+use navigate_locate::place::{GRID, IndexManifest, Record, decode_shard};
 use navigate_match::{CorridorTileStore, Dinov2, Weights};
-use navigate_place::{GRID, IndexManifest, Record, decode_shard};
 use std::{fs, path::Path, sync::Arc};
 
 const DINOV2_INPUT_PX: usize = GRID * 14;

@@ -8,7 +8,10 @@ pub use navigate_locate::corridor::{kabsch_3d, relative_rotation_ransac};
 use crate::{
     PipelineError,
     clock::{PriorTrack, capture_anchor, movie_duration_s, quicktime_udta_tags},
-    util::{file_sha256, read_json, run_tool, write_json},
+    digest::file_sha256,
+    external_tool::run_tool,
+    json_file::read_json,
+    json_file::write_json,
 };
 use nalgebra::{Matrix3, Rotation3, UnitQuaternion};
 use serde_json::{Value, json};

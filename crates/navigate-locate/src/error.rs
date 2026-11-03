@@ -59,7 +59,7 @@ pub enum LocateError {
     Index(String),
     /// A place index file or search request is not valid.
     #[error("place index")]
-    Place(#[from] navigate_place::PlaceError),
+    Place(#[from] crate::place::PlaceError),
     /// The place encoder failed.
     #[error("place encoder: {0}")]
     Encoder(String),

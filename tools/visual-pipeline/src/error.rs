@@ -1,6 +1,6 @@
 //! Error types for `navigate-visual-pipeline`.
 
-use navigate_segment::SegmentError;
+use navigate_match::segment::SegmentError;
 use std::path::PathBuf;
 use thiserror::Error;
 

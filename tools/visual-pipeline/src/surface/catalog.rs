@@ -2,8 +2,8 @@
 
 use super::{CatalogTile, Surface, SurfaceRender, mercator_tile_coords};
 use crate::{
-    PipelineError,
-    util::{bytes_sha256, read_json, run_tool, write_json},
+    PipelineError, digest::bytes_sha256, external_tool::run_tool, json_file::read_json,
+    json_file::write_json,
 };
 use nalgebra::Matrix3;
 use serde_json::{Value, json};

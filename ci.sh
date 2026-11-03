@@ -15,6 +15,22 @@ cargo fmt --all --check
 echo "== cargo clippy =="
 cargo clippy --all-targets -- -D warnings
 
+echo "== bare-metal no_std (core navigation crates) =="
+for target in thumbv8m.main-none-eabihf riscv32imac-unknown-none-elf; do
+    for crate in \
+        navigate-contract \
+        navigate-geodesy \
+        navigate-astrodynamics \
+        navigate-fusion \
+        navigate-magnav \
+        navigate-route \
+        navigate-trajectory \
+        navigate-guidance \
+        navigate-terrain-safety; do
+        cargo clippy -p "$crate" --no-default-features --features libm --target "$target" -- -D warnings
+    done
+done
+
 echo "== wasm32 (navigate-celestial) =="
 cargo clippy -p navigate-celestial --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-celestial --no-default-features --target wasm32-unknown-unknown -- -D warnings
@@ -58,10 +74,10 @@ echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
     cargo doc --no-deps --workspace
 
-echo "== wasm32 (visual locator and segmentation) =="
+echo "== wasm32 (visual locator, matchers, and segmentation) =="
 cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
-cargo clippy -p navigate-segment --target wasm32-unknown-unknown -- -D warnings
-cargo clippy -p navigate-segment --no-default-features --features webgpu --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-match --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-match --no-default-features --features webgpu --target wasm32-unknown-unknown -- -D warnings
 
 echo "== cargo build --release =="
 cargo build --release --workspace

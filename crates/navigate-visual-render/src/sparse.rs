@@ -67,6 +67,7 @@ impl<'a> SparseSceneSampler<'a> {
         steps: u32,
         refinements: u32,
     ) -> Result<Self, RenderError> {
+        crate::atlas::require_tile_frame(scene.frame)?;
         let [lat, lon] = scene.frame.anchor();
         scene.frame.local([lat, lon, 0.0])?;
         scene.imagery.validate()?;

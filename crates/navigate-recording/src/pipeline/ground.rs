@@ -2,8 +2,8 @@
 
 use super::{Processor, VisualObservation, key};
 use crate::Error;
+use navigate_visual::session::{GroundPlaneObservation, TerrainNormal};
 use navigate_visual::{PlaneMotionConfig, plane_motion};
-use navigate_visual_session::{GroundPlaneObservation, TerrainNormal};
 
 impl Processor {
     pub(super) fn ground(

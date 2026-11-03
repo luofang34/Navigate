@@ -15,7 +15,7 @@ use super::{
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::{ActiveTrackSet, MatchError, PreparedKashinQuery, TrackMatchConfig};
 use navigate_visual::holdout_pnp::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc};
-use navigate_visual_session::MapCell;
+use navigate_visual::session::MapCell;
 use odometry::{estimate_derotated_pixel_flow, estimate_ground_vo_delta, match_interframe_top};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -71,7 +71,7 @@ pub struct CorridorTracker {
     pub pose_steps: VecDeque<OdometryStep>,
     /// Frames elapsed since the last accepted map anchor.
     pub frames_since_anchor: usize,
-    /// Visited map cells synchronized with [`VisualSession`](navigate_visual_session::VisualSession).
+    /// Visited map cells synchronized with [`VisualSession`](navigate_visual::session::VisualSession).
     pub visited_cells: BTreeMap<MapCell, String>,
     /// Previous frame timestamp in seconds.
     pub prev_time_s: Option<f64>,

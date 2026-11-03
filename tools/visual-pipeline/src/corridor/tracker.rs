@@ -17,13 +17,13 @@ mod reporting;
 mod solve;
 use crate::{
     PipelineError,
+    json_file::write_json,
     stages::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator, load_case_mask,
         load_case_rgb, load_profile_cases, scale_k,
     },
     surface::SurfaceGpuRenderer,
     testset::PhotoCase,
-    util::write_json,
 };
 use image::imageops::{FilterType, colorops::grayscale};
 use lookahead::{

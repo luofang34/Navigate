@@ -7,7 +7,7 @@ use super::{
 use crate::{
     PipelineError,
     pose::{PoseCandidate, PoseScore, candidate_priority},
-    realtime::helpers::{log_attempt, polish_pose_sparse},
+    realtime::bank_match::{log_attempt, polish_pose_sparse},
     surface::{Surface, SurfaceGpuRenderer},
     xfeat_runtime::LoadedXFeat,
 };

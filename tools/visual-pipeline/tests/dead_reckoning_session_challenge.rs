@@ -10,15 +10,15 @@
 //! - Mahalanobis innovation gating and vertical velocity update criteria.
 
 use nalgebra::{Matrix3, Matrix6, Translation3, UnitQuaternion};
+use navigate_visual::session::{
+    AnchorDecision, AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose,
+    RegionChange, ScaleSource, SegmentStart, SessionError, SessionEvent, SurfaceModel,
+};
 use navigate_visual::{LocalFrame, MapRevision};
 use navigate_visual_pipeline::corridor::{
     AnchorWorkerState, DeadReckonPath, DualPathDeadReckoner, KinematicState, VisualCorridorSession,
     can_update_vertical_velocity,
     kinematics::{CHI2_GATE_3DOF_99, MAX_DELTA_T_S, MIN_DELTA_T_S},
-};
-use navigate_visual_session::{
-    AnchorDecision, AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose,
-    RegionChange, ScaleSource, SegmentStart, SessionError, SessionEvent, SurfaceModel,
 };
 use std::error::Error;
 

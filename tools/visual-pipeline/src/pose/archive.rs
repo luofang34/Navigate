@@ -3,7 +3,7 @@
 use super::PoseCandidate;
 use crate::PipelineError;
 use nalgebra::Matrix3;
-use navigate_segment::{NpyArray, read_npz, write_npz};
+use navigate_match::segment::{NpyArray, read_npz, write_npz};
 use std::{collections::BTreeMap, path::Path};
 
 /// Loaded pose tuple `(eye_enu, world_to_cam, intrinsics_k, image_size)`.

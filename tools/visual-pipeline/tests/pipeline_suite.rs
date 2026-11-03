@@ -3,14 +3,15 @@
 use image::{Rgb, RgbImage};
 use nalgebra::{Matrix3, Vector3};
 use navigate_visual_pipeline::{
-    PriorTrack, Surface, capture_anchor, compose_ground_mosaic, compose_survey_debrief,
-    export_preview, export_publication, fit_pose_ransac, freeze_anchors, group_flights,
-    horizon_attitude, interpolate_flight_priors, metadata::PhotoClaims, metadata::PositionClaim,
-    movie_duration_s, pose::load_candidate_pose, pose::save_candidate_npz, prepare_photo_testset,
-    seed_live_prior, spatial_holdout, suitability, util::parse_iso8601_ms,
-    util::unix_ms_to_iso8601, util::write_json, video_ops::dense_rotations,
-    video_ops::interpolate_eyes, video_ops::kabsch_3d, video_ops::prepare_navigate_debrief,
-    video_ops::relative_rotation_ransac, video_ops::shared_focal, video_ops::slerp_mat3,
+    PriorTrack, Surface, capture_anchor, civil_time::parse_iso8601_ms,
+    civil_time::unix_ms_to_iso8601, compose_ground_mosaic, compose_survey_debrief, export_preview,
+    export_publication, fit_pose_ransac, freeze_anchors, group_flights, horizon_attitude,
+    interpolate_flight_priors, json_file::write_json, metadata::PhotoClaims,
+    metadata::PositionClaim, movie_duration_s, pose::load_candidate_pose, pose::save_candidate_npz,
+    prepare_photo_testset, seed_live_prior, spatial_holdout, suitability,
+    video_ops::dense_rotations, video_ops::interpolate_eyes, video_ops::kabsch_3d,
+    video_ops::prepare_navigate_debrief, video_ops::relative_rotation_ransac,
+    video_ops::shared_focal, video_ops::slerp_mat3,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -154,7 +155,7 @@ fn photo_testset_and_antimeridian_slerp_priors_work() {
 
     // Inject antimeridian flight into dataset to verify SLERP interpolation.
     let mut profile: serde_json::Value =
-        navigate_visual_pipeline::util::read_json(&dst.join("profiles/with-prior.json"))
+        navigate_visual_pipeline::json_file::read_json(&dst.join("profiles/with-prior.json"))
             .expect("read profile");
     let cases = profile["cases"].as_array_mut().expect("cases");
     let ids: Vec<String> = cases
@@ -183,7 +184,7 @@ fn photo_testset_and_antimeridian_slerp_priors_work() {
     let filled = interpolate_flight_priors(&dst).expect("interpolate");
     assert_eq!(filled, 1);
     let updated: serde_json::Value =
-        navigate_visual_pipeline::util::read_json(&dst.join("profiles/with-prior.json"))
+        navigate_visual_pipeline::json_file::read_json(&dst.join("profiles/with-prior.json"))
             .expect("read updated");
     let lon_mid = updated["cases"][1]["prior"]["position"]["longitude"]
         .as_f64()

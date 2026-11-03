@@ -11,9 +11,10 @@ use navigate_match::{
 use navigate_visual_pipeline::{
     CorridorBuildOptions, CorridorTrackOptions, Surface, XFeatRuntimeConfig, build_corridor_bank,
     corridor::masking::AmortizedMasker,
+    json_file::read_json,
+    json_file::write_json,
     metadata::{PhotoClaims, PositionClaim},
     run_corridor_track,
-    util::{read_json, write_json},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

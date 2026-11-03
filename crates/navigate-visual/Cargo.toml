@@ -6,13 +6,16 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+default = ["fusion"]
 serde = ["dep:serde"]
+# Conversion of an estimate into a fusion position fix or a visual pose (ADR-0007, ADR-0020).
+fusion = ["dep:navigate-fusion"]
 reconstruction = ["dep:kornia-3d", "dep:kornia-algebra", "dep:lambda-twist", "dep:cv-core", "dep:getrandom"]
 gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
 navigate-contract.workspace = true
+navigate-fusion = { workspace = true, features = ["std"], optional = true }
 navigate-geodesy = { workspace = true, features = ["std"] }
 sha2 = "0.10"
 nalgebra = { workspace = true, features = ["std"] }
@@ -31,6 +34,10 @@ cv-core = { version = "0.15", optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
+
+[[test]]
+name = "polar_visual_pose"
+required-features = ["fusion"]
 
 [lints]
 workspace = true

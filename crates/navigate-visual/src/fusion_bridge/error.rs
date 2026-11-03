@@ -1,0 +1,55 @@
+//! Refusals of the visual fusion adapter.
+
+use thiserror::Error;
+
+/// A visual estimate cannot become a fusion observation.
+#[derive(Debug, Error, PartialEq)]
+pub enum VisualFusionError {
+    /// The datum of the visual frame does not agree with its input. An
+    /// ellipsoid frame already uses ellipsoid heights and cannot apply a
+    /// geoid offset from the error budget. A navigation solution on an
+    /// ellipsoid that is not the reference ellipsoid of the visual frame
+    /// cannot center a search prior (ADR-0013).
+    #[error("visual frame datum does not agree with the error budget or the solution ellipsoid")]
+    FrameDatumMismatch,
+    /// A search projection exceeds the host's valid time interval.
+    #[error("search projection age {age_ns} ns exceeds {maximum_ns} ns")]
+    ProjectionWindow {
+        /// Time distance including timestamp error bounds.
+        age_ns: u64,
+        /// Host's maximum supported distance.
+        maximum_ns: u64,
+    },
+    /// The host has not excluded shared errors with the filter state.
+    #[error("visual fix correlation with the filter state is unknown")]
+    UnknownCorrelation,
+    /// A budget term is missing, zero, negative, or not finite.
+    #[error("visual error budget term {field} must be finite and positive")]
+    InvalidBudget {
+        /// Name of the budget term.
+        field: &'static str,
+    },
+    /// The estimate converts to a position outside geodetic range.
+    #[error("visual estimate position is outside geodetic range")]
+    ImplausiblePosition,
+    /// The combined covariance is not finite and positive semidefinite.
+    #[error("visual estimate covariance is not usable")]
+    InvalidCovariance,
+    /// The same frame evidence was already converted once.
+    #[error("frame evidence {observation_sha256} was already admitted as a fix")]
+    RepeatedEvidence {
+        /// Evidence digest of the repeated frame.
+        observation_sha256: String,
+    },
+    /// The frame and the navigation solution use different clock domains.
+    #[error("frame and solution clock domains differ")]
+    ClockDomainMismatch,
+    /// The frame capture time does not follow the last converted frame.
+    #[error("frame capture time {received_ns} does not follow {previous_ns}")]
+    FrameOrder {
+        /// Capture time of the last converted frame.
+        previous_ns: u64,
+        /// Capture time of the refused frame.
+        received_ns: u64,
+    },
+}

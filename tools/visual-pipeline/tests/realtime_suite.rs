@@ -4,9 +4,9 @@ use image::{GrayImage, Luma, Rgb, RgbImage};
 use navigate_match::{PrecomputedReferenceBank, WeightTensor, Weights, kashin::BANK_MAGIC};
 use navigate_visual_pipeline::{
     BankBuildOptions, BankMatchOptions, XFeatRuntimeConfig, build_reference_bank,
+    json_file::write_json,
     metadata::{PhotoClaims, PositionClaim},
     run_realtime_bank_match,
-    util::write_json,
 };
 use serde_json::{Value, json};
 use std::{error::Error, fs, path::Path, path::PathBuf};
@@ -268,7 +268,8 @@ fn bank_build_and_realtime_bank_match_roundtrip_and_contracts() -> TestResult {
     assert_eq!(match_summary["evaluated"].as_u64(), Some(1));
     assert_eq!(match_summary["bank_views"].as_u64(), Some(1));
     assert!(out_dir.join("run.json").is_file());
-    let case_doc: Value = navigate_visual_pipeline::util::read_json(&out_dir.join("q-test.json"))?;
+    let case_doc: Value =
+        navigate_visual_pipeline::json_file::read_json(&out_dir.join("q-test.json"))?;
     assert_eq!(case_doc["id"].as_str(), Some("q-test"));
 
     check_encoder_contract_stamps(

@@ -13,11 +13,11 @@ mod rank;
 pub use horizon::{Horizon, horizon};
 pub use project::{View, canvas as search_canvas};
 
-use crate::{LocateError, Outcome, Progress, TileSource};
-use image::RgbImage;
-use navigate_place::{
+use crate::place::{
     Canvas, Fallback, IndexManifest, Ranked, ScalePlan, SearchRequest, Tokens, plan,
 };
+use crate::{LocateError, Outcome, Progress, TileSource};
+use image::RgbImage;
 use navigate_visual::AsyncImageMatcher;
 use std::future::Future;
 
@@ -175,8 +175,8 @@ fn planned(
     manifest: &IndexManifest,
     photo: &RgbImage,
     request: &SearchRequest,
-) -> (SearchRequest, navigate_place::SearchPlan) {
-    let covered: Vec<(f64, Vec<navigate_place::Cell>)> = manifest
+) -> (SearchRequest, crate::place::SearchPlan) {
+    let covered: Vec<(f64, Vec<crate::place::Cell>)> = manifest
         .scales
         .iter()
         .map(|s| (s.side_m, s.shards.iter().map(|e| e.cell).collect()))
@@ -185,7 +185,7 @@ fn planned(
     if request.pitch.is_none()
         && let Some(h) = horizon::horizon(photo, request.focal_px)
     {
-        request.pitch = Some(navigate_place::PitchPrior {
+        request.pitch = Some(crate::place::PitchPrior {
             deg: h.pitch_deg,
             sigma_deg: HORIZON_SIGMA_DEG,
         });

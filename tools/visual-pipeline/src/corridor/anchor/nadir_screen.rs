@@ -3,7 +3,7 @@
 use crate::{
     PipelineError,
     corridor::nadir::DENSE_NADIR_YAW_BANDS_DEG,
-    realtime::helpers::rot_to_row_major,
+    realtime::bank_match::rot_to_row_major,
     stages::{MatchStageOptions, generate_seeds},
     surface::Surface,
     testset::PhotoCase,

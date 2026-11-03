@@ -11,7 +11,7 @@ use super::CorridorTrackOptions;
 use crate::{
     PipelineError,
     pose::{PoseCandidate, candidate_priority},
-    realtime::helpers::log_attempt,
+    realtime::bank_match::log_attempt,
     stages::{MatchStageOptions, has_calibrated_focal_prior, load_horizon_attitude},
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,

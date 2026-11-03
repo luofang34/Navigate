@@ -19,7 +19,7 @@ use crate::{
         motion::{TrackState, predict_interframe_pose, try_warm_track},
     },
     pose::PoseCandidate,
-    realtime::helpers::rot_to_row_major,
+    realtime::bank_match::rot_to_row_major,
     stages::{focal::FocalLengthEstimator, scaled_size},
     surface::{Surface, SurfaceGpuRenderer},
     testset::PhotoCase,
@@ -122,7 +122,7 @@ pub(super) fn solve_frame_pose(
     let forced_pred_cell = (force_anchor && params.opts.anchor_on_cell_boundary)
         .then_some(pred_pose)
         .flatten()
-        .map(|(pe, _)| navigate_visual_session::MapCell {
+        .map(|(pe, _)| navigate_visual::session::MapCell {
             map_manifest_sha256: params.surface.catalog_sha256.clone(),
             east: (pe[0] / params.cell_m).floor() as i64,
             north: (pe[1] / params.cell_m).floor() as i64,

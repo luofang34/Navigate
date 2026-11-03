@@ -1,5 +1,5 @@
 [package]
-name = "navigate-model"
+name = "navigate-visual-model"
 description = "Reproducible inference graph preparation"
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-navigate-match = { path = "../../crates/navigate-match" }
+navigate-match = { workspace = true, features = ["flex"] }
 pytorch-reader = "0.22.1"
 prost = "0.12"
 sha2 = "0.10"

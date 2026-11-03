@@ -6,8 +6,8 @@
 
 use super::{Processor, assets, key};
 use crate::{Configuration, Error, Revisit, RevisitRequest};
+use navigate_visual::session::{RevisitEvidence, SessionError};
 use navigate_visual::{Frame, FrameStamp, MapRevision, PixelMatch, ReferenceView};
-use navigate_visual_session::{RevisitEvidence, SessionError};
 use std::path::Path;
 
 /// Decoded revisit evidence for the preceding frame.

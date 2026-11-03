@@ -8,19 +8,19 @@ use super::{
 };
 use crate::{
     PipelineError,
+    json_file::write_json,
     metadata::PositionClaim,
     pose::{PoseCandidate, save_candidate_npz},
-    realtime::helpers::rot_to_row_major,
+    realtime::bank_match::rot_to_row_major,
     surface::Surface,
     testset::PhotoCase,
-    util::write_json,
 };
 use nalgebra::Matrix3;
 use navigate_match::{
     ActiveTrackSet, CorridorTileStore, HadamardProjector, PreparedKashinQuery, SparseFeatures,
     VirtualCorridorView, VirtualViewCamera,
 };
-use navigate_visual_session::MapCell;
+use navigate_visual::session::MapCell;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},

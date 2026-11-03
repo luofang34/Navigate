@@ -26,7 +26,7 @@ pub struct Locator {
 
 #[wasm_bindgen]
 impl Locator {
-    /// Open a browser engine with LoFTR-DS weights (`navigate-model --recipe loftr-burn-f16`).
+    /// Open a browser engine with LoFTR-DS weights (`navigate-visual-model --recipe loftr-burn-f16`).
     ///
     /// # Errors
     ///

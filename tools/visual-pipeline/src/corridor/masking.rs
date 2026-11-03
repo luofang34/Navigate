@@ -4,8 +4,8 @@ use crate::PipelineError;
 use burn::tensor::Device;
 use image::{GrayImage, RgbImage, imageops::colorops::grayscale};
 use nalgebra::Matrix3;
-pub use navigate_segment::amortized::MaskFrameTelemetry;
-use navigate_segment::{
+pub use navigate_match::segment::amortized::MaskFrameTelemetry;
+use navigate_match::segment::{
     MaskPolicy, PropellerDetector, Segformer,
     amortized::{
         SegEngine, compose_amortized_u8, compose_fallback_u8, compose_unmasked_u8,

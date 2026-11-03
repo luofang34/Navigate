@@ -1,7 +1,7 @@
 use super::*;
 use nalgebra::Matrix3;
 use navigate_visual::MapRevision;
-use navigate_visual_session::{ContinuityEpoch, FrameKey, Pose, ScaleSource, StreamId};
+use navigate_visual::session::{ContinuityEpoch, FrameKey, Pose, ScaleSource, StreamId};
 
 #[test]
 fn test_session_register_frame_nominal() {
@@ -147,7 +147,7 @@ fn test_submit_anchor_with_consensus_and_handle_relocation() {
 
 #[test]
 fn test_submit_anchor_with_consensus_applies_policy() {
-    use navigate_visual_session::AnchorPolicy;
+    use navigate_visual::session::AnchorPolicy;
     let Ok(mut session) = VisualCorridorSession::new() else {
         return;
     };

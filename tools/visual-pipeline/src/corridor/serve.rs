@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     PipelineError,
-    realtime::helpers::{check_encoder_contract, load_lighterglue_model, raw_file_sha256},
+    realtime::bank_match::{check_encoder_contract, load_lighterglue_model, raw_file_sha256},
     surface::{Surface, SurfaceGpuRenderer, gpu::GpuQueueRole},
     xfeat_runtime::{LoadedXFeat, XFeatRuntimeConfig},
 };

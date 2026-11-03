@@ -2,7 +2,7 @@
 
 use super::{Processor, key};
 use crate::{Error, ResultFrame};
-use navigate_visual_session::{
+use navigate_visual::session::{
     Confirmation, Height, HeightInputs, MapPose, TerrainSample, TerrainSource, VerticalReference,
     to_camera,
 };

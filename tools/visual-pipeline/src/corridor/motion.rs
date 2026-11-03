@@ -1,7 +1,7 @@
 //! CLI adapter around [`navigate_locate::corridor::CorridorTracker`].
 
 use super::kinematics::{TrackingSearchStrategy, VehicleDynamicsProfile};
-use crate::{PipelineError, pose::PoseCandidate, realtime::helpers::log_attempt};
+use crate::{PipelineError, pose::PoseCandidate, realtime::bank_match::log_attempt};
 use nalgebra::Matrix3;
 use navigate_match::{ActiveTrackSet, PreparedKashinQuery};
 use serde_json::Value;

@@ -48,7 +48,7 @@ fn main() -> Result<(), Error> {
     prepare_blocking(input, output, count, compact, recipe, batch)
 }
 fn command() -> Command {
-    Command::new("navigate-model")
+    Command::new("navigate-visual-model")
         .about("Prepare supported feature extraction and matching graphs")
         .arg(Arg::new("recipe").long("recipe").value_parser([
             "lighterglue",

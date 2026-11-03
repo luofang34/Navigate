@@ -3,18 +3,24 @@ fn command_requires_explicit_model_files_and_feature_budget() {
     super::command().debug_assert();
     assert!(
         super::command()
-            .try_get_matches_from(["navigate-model", "in.onnx", "out.onnx"])
+            .try_get_matches_from(["navigate-visual-model", "in.onnx", "out.onnx"])
             .is_err()
     );
     assert!(
         super::command()
-            .try_get_matches_from(["navigate-model", "in.onnx", "out.onnx", "--features", "512"])
+            .try_get_matches_from([
+                "navigate-visual-model",
+                "in.onnx",
+                "out.onnx",
+                "--features",
+                "512"
+            ])
             .is_ok()
     );
     assert!(
         super::command()
             .try_get_matches_from([
-                "navigate-model",
+                "navigate-visual-model",
                 "in.onnx",
                 "out.onnx",
                 "--recipe",
@@ -27,7 +33,7 @@ fn command_requires_explicit_model_files_and_feature_budget() {
 #[test]
 fn masked_recipe_requires_a_capacity() {
     let args = [
-        "navigate-model",
+        "navigate-visual-model",
         "in.onnx",
         "out.onnx",
         "--recipe",
@@ -44,7 +50,7 @@ fn masked_recipe_requires_a_capacity() {
 #[test]
 fn fine_recipe_requires_an_explicit_batch() {
     let args = [
-        "navigate-model",
+        "navigate-visual-model",
         "in.onnx",
         "out.onnx",
         "--recipe",
@@ -59,7 +65,7 @@ fn fine_recipe_requires_an_explicit_batch() {
     assert!(
         super::command()
             .try_get_matches_from([
-                "navigate-model",
+                "navigate-visual-model",
                 "in.onnx",
                 "out.onnx",
                 "--recipe",

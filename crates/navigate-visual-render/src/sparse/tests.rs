@@ -332,3 +332,17 @@ fn render_adaptive_casts_under_quarter_rays_and_preserves_sharp_edges() {
         "expected scene to exercise localized sharp edges, found only {sharp_edge_pixels}"
     );
 }
+
+#[test]
+fn body_tangent_frames_have_no_tile_atlas() {
+    let mut scene = make_scene(LocalFrame::wgs84_enu(47.0, 8.0).unwrap(), 0.0);
+    assert!(SparseSceneSampler::new(&scene, 5000.0, 64, 12).is_ok());
+    let origin =
+        navigate_contract::GeodeticPosition::new(47_f64.to_radians(), 8_f64.to_radians(), 0.0);
+    scene.frame =
+        LocalFrame::body_tangent_enu(navigate_geodesy::BodyEllipsoid::WGS84, origin).unwrap();
+    assert!(matches!(
+        SparseSceneSampler::new(&scene, 5000.0, 64, 12),
+        Err(RenderError::Invalid(_))
+    ));
+}

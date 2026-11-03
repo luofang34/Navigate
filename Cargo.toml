@@ -22,12 +22,8 @@ members = [
     "crates/navigate-locate",
     "crates/navigate-locate-web",
     "crates/navigate-visual-render",
-    "crates/navigate-visual-fusion",
-    "crates/navigate-visual-session",
-    "crates/navigate-segment",
     "tools/visual-pipeline",
-    "crates/navigate-place",
-    "tests/e2e_corridor",
+    "tests/e2e-corridor",
 ]
 
 [workspace.package]
@@ -48,6 +44,16 @@ navigate-route = { path = "crates/navigate-route", default-features = false }
 navigate-trajectory = { path = "crates/navigate-trajectory", default-features = false }
 navigate-guidance = { path = "crates/navigate-guidance", default-features = false }
 navigate-terrain-safety = { path = "crates/navigate-terrain-safety", default-features = false }
+navigate-celestial = { path = "crates/navigate-celestial" }
+navigate-recording = { path = "crates/navigate-recording" }
+navigate-visual = { path = "crates/navigate-visual", default-features = false }
+navigate-visual-render = { path = "crates/navigate-visual-render" }
+navigate-match = { path = "crates/navigate-match", default-features = false }
+navigate-match-kernels = { path = "crates/navigate-match-kernels" }
+navigate-locate = { path = "crates/navigate-locate" }
+navigate-locate-web = { path = "crates/navigate-locate-web" }
+navigate-visual-pipeline = { path = "tools/visual-pipeline" }
+navrun = { path = "tools/navrun" }
 thiserror = { version = "2.0.18", default-features = false }
 nalgebra = { version = "0.34.1", default-features = false }
 tracing = "0.1.44"

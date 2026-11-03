@@ -22,15 +22,15 @@ use navigate_contract::{
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
-use navigate_visual::{CameraModel, Estimate};
-use navigate_visual_fusion::{
+use navigate_visual::fusion_bridge::{
     EvidenceIndependence, VerticalDatum, VisualErrorBudget, VisualFixSource, VisualSourceIdentity,
 };
-use navigate_visual_session::{
+use navigate_visual::session::{
     AnchorDecision, AnchorObservation, AnchorPolicy, Calibration, CameraMount, CaptureTime,
     ContinuityEpoch, FrameKey, FrameRecord, LensModel, MotionOutcome, Pose, RelativeMotion,
     ScaleSource, SessionConfig, SessionError, StreamId, VerticalReference, VisualSession,
 };
+use navigate_visual::{CameraModel, Estimate};
 use std::collections::{BTreeMap, HashSet};
 
 /// Integrated visual session, fix source, and tangent-plane navigation filter.

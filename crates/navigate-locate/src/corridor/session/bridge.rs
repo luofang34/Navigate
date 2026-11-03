@@ -7,15 +7,15 @@ use navigate_contract::{
     FaultDetection, IntegrityAssessment, MonotonicNanos, Redundancy, SolutionQuality,
 };
 use navigate_fusion::IngestOutcome;
-use navigate_visual::{
-    CameraModel, CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision,
-    holdout_pnp::PoseCandidate,
-};
-use navigate_visual_fusion::EvidenceIndependence;
-use navigate_visual_session::{
+use navigate_visual::fusion_bridge::EvidenceIndependence;
+use navigate_visual::session::{
     AnchorDecision, AnchorObservation, AnchorPolicy, Calibration, CameraMount, FrameKey,
     FusionEligibility, LensModel, MapCell, MapReliability, Pose, RegionChange, ScaleSource,
     SessionConfig, SessionEvent, SurfaceModel, VerticalReference, VisualSession, from_camera,
+};
+use navigate_visual::{
+    CameraModel, CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision,
+    holdout_pnp::PoseCandidate,
 };
 use sha2::{Digest, Sha256};
 
@@ -125,7 +125,7 @@ pub fn cv_world_to_cam_to_camera_pose(
     }
 }
 
-/// Convert OpenCV world-to-camera pose into [`navigate_visual_session::Pose`].
+/// Convert OpenCV world-to-camera pose into [`navigate_visual::session::Pose`].
 #[must_use]
 pub fn cv_world_to_cam_to_session_pose(eye_enu: [f64; 3], rot_world_to_cam: &Matrix3<f64>) -> Pose {
     let cam = cv_world_to_cam_to_camera_pose(eye_enu, rot_world_to_cam);
@@ -218,7 +218,7 @@ impl VisualCorridorSession {
         };
         self.session = VisualSession::new(cfg, calib).map_err(|e| format!("{e:?}"))?;
         self.next_seq = 0;
-        self.current_epoch = navigate_visual_session::ContinuityEpoch(0);
+        self.current_epoch = navigate_visual::session::ContinuityEpoch(0);
         self.prev_registered_key = None;
         self.last_registered_key = None;
         self.prev_registered_sha256 = None;
@@ -319,7 +319,7 @@ impl VisualCorridorSession {
                 manifest_sha256: normalize_manifest_sha256(catalog_sha256),
             },
         };
-        let motion = navigate_visual_session::RelativeMotion {
+        let motion = navigate_visual::session::RelativeMotion {
             from: from_key,
             to: to_key,
             from_to,
