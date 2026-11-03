@@ -31,6 +31,9 @@ pub enum SensorClass {
     /// Magnetic anomaly measurements matched against a crustal anomaly
     /// map. The magnetometer and the map supply the value.
     MagneticAnomaly,
+    /// A radar or laser altimeter. It measures the range to the terrain
+    /// surface below the vehicle.
+    SurfaceAltimeter,
 }
 
 impl SensorClass {
@@ -46,6 +49,7 @@ impl SensorClass {
             Self::NavigationSolution => 1 << 7,
             Self::RadioNavigation => 1 << 8,
             Self::MagneticAnomaly => 1 << 9,
+            Self::SurfaceAltimeter => 1 << 10,
         }
     }
 }
@@ -121,7 +125,7 @@ impl SourceComposition {
 mod tests {
     use super::{SensorClass, SourceComposition};
 
-    const ALL_CLASSES: [SensorClass; 10] = [
+    const ALL_CLASSES: [SensorClass; 11] = [
         SensorClass::Gnss,
         SensorClass::Celestial,
         SensorClass::VisualOdometry,
@@ -132,6 +136,7 @@ mod tests {
         SensorClass::NavigationSolution,
         SensorClass::RadioNavigation,
         SensorClass::MagneticAnomaly,
+        SensorClass::SurfaceAltimeter,
     ];
 
     #[test]
@@ -144,7 +149,8 @@ mod tests {
             seen |= bit;
         }
         assert_eq!(SensorClass::MagneticAnomaly.bit(), 1 << 9);
-        assert_eq!(seen.count_ones(), 10);
+        assert_eq!(SensorClass::SurfaceAltimeter.bit(), 1 << 10);
+        assert_eq!(seen.count_ones(), 11);
     }
 
     #[test]
@@ -162,6 +168,14 @@ mod tests {
             magnetic.union(SourceComposition::of(SensorClass::Barometric)),
             SourceComposition::of(SensorClass::Barometric).with(SensorClass::MagneticAnomaly)
         );
+    }
+
+    #[test]
+    fn surface_altimeter_is_independent_of_barometric_altitude() {
+        let altimeter = SourceComposition::of(SensorClass::SurfaceAltimeter);
+        assert!(!altimeter.overlaps(SourceComposition::of(SensorClass::Barometric)));
+        assert!(!altimeter.is_estimator_derived());
+        assert_eq!(altimeter.class_count(), 1);
     }
 
     #[test]

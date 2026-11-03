@@ -12,7 +12,9 @@
 //! [`navigate_contract::MonotonicNanos`], never read from a clock.
 //!
 //! Scalar map models (altitude and magnetic anomaly) and a bounded
-//! delayed-measurement history extend the core (ADR-0012).
+//! delayed-measurement history extend the core (ADR-0012). The state is
+//! on one reference ellipsoid of any body, and the filter refuses an
+//! observation that declares another frame (ADR-0013).
 
 pub mod config;
 mod filter;

@@ -5,8 +5,12 @@ use thiserror::Error;
 /// A visual estimate cannot become a fusion observation.
 #[derive(Debug, Error, PartialEq)]
 pub enum VisualFusionError {
-    /// A WGS84 frame already uses ellipsoid heights and cannot apply a geoid offset.
-    #[error("WGS84 frame requires an ellipsoid-height error budget")]
+    /// The datum of the visual frame does not agree with its input. A
+    /// WGS84 frame already uses ellipsoid heights and cannot apply a
+    /// geoid offset from the error budget. A visual frame is an Earth
+    /// frame on WGS84, so a navigation solution on a different ellipsoid
+    /// cannot center a search prior (ADR-0013).
+    #[error("visual frame datum does not agree with the error budget or the solution ellipsoid")]
     FrameDatumMismatch,
     /// A search projection exceeds the host's valid time interval.
     #[error("search projection age {age_ns} ns exceeds {maximum_ns} ns")]

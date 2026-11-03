@@ -62,6 +62,20 @@ pub enum GuidanceRefusal {
         /// Solution reference time from the stamp.
         solved_at: MonotonicNanos,
     },
+    /// The solution ellipsoid cannot define geodetic coordinates
+    /// (ADR-0013): the semi-major axis is not finite and positive, the
+    /// flattening is not in `[0, 1)`, or the frame is inertial. Guidance
+    /// geometry on such an ellipsoid has no meaning.
+    #[error(
+        "solution ellipsoid is not plausible: semi-major axis {semi_major_axis_m} m, \
+         flattening {flattening}"
+    )]
+    ImplausibleEllipsoid {
+        /// Semi-major axis of the refused ellipsoid in meters.
+        semi_major_axis_m: f64,
+        /// Flattening of the refused ellipsoid.
+        flattening: f64,
+    },
     /// Vertical 1-sigma uncertainty exceeds the configured bound on an
     /// altitude-constrained leg.
     #[error(

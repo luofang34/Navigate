@@ -1,6 +1,6 @@
 //! The terrain-elevation seam.
 
-use navigate_contract::GeodeticPosition;
+use navigate_contract::{Ellipsoid, GeodeticPosition};
 
 /// One queryable terrain-elevation source.
 ///
@@ -16,4 +16,12 @@ pub trait TerrainDatabase {
     /// integration question (see the crate-level docs); an
     /// implementation documents which datum it serves.
     fn elevation_m(&self, position: &GeodeticPosition) -> Option<f64>;
+
+    /// The reference ellipsoid of the positions that
+    /// [`Self::elevation_m`] reads (ADR-0013). [`crate::assess`] refuses
+    /// a solution on another ellipsoid. The default is
+    /// [`Ellipsoid::WGS84`].
+    fn ellipsoid(&self) -> Ellipsoid {
+        Ellipsoid::WGS84
+    }
 }

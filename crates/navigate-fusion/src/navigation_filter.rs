@@ -2,7 +2,8 @@
 //! state anchored at the first admitted position fix (ADR-0003), with an
 //! integrity assessment on every published solution (ADR-0004). A
 //! bounded history applies delayed observations at their acquisition
-//! time (ADR-0012).
+//! time (ADR-0012). The state is on one reference ellipsoid, and the
+//! filter refuses observations in another frame (ADR-0013).
 
 mod admission;
 mod history;
@@ -21,7 +22,7 @@ use navigate_contract::{
     ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, NedVelocity,
     ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId, WrappingSequence,
 };
-use navigate_geodesy::{LocalTangentPlane, NedOffset};
+use navigate_geodesy::{BodyEllipsoid, LocalTangentPlane, NedOffset};
 
 use crate::config::FusionConfig;
 use crate::filter::{self, KalmanState};
@@ -68,6 +69,7 @@ struct Core {
 pub struct NavigationFilter {
     config: FusionConfig,
     clock: ClockDomainId,
+    ellipsoid: BodyEllipsoid,
     epoch: SourceEpoch,
     next_solution_sequence: WrappingSequence,
     rejections: RejectionCounters,
@@ -84,13 +86,35 @@ pub struct NavigationFilter {
 }
 
 impl NavigationFilter {
-    /// Builds an uninitialized filter. `clock` is the domain every
-    /// observation stamp and every `now` must come from.
+    /// Builds an uninitialized filter on [`BodyEllipsoid::WGS84`].
+    /// `clock` is the domain every observation stamp and every `now` must
+    /// come from. The filter keeps `config.require_explicit_frame`.
     #[must_use]
     pub fn new(config: FusionConfig, clock: ClockDomainId) -> Self {
+        Self::build(config, clock, BodyEllipsoid::WGS84)
+    }
+
+    /// Builds an uninitialized filter on `ellipsoid` (ADR-0013). The
+    /// filter sets `config.require_explicit_frame` to `true`: every
+    /// observation must declare the frame of `ellipsoid`.
+    #[must_use]
+    pub fn new_for_ellipsoid(
+        config: FusionConfig,
+        clock: ClockDomainId,
+        ellipsoid: BodyEllipsoid,
+    ) -> Self {
+        let config = FusionConfig {
+            require_explicit_frame: true,
+            ..config
+        };
+        Self::build(config, clock, ellipsoid)
+    }
+
+    fn build(config: FusionConfig, clock: ClockDomainId, ellipsoid: BodyEllipsoid) -> Self {
         Self {
             config,
             clock,
+            ellipsoid,
             epoch: SourceEpoch::new(0),
             next_solution_sequence: WrappingSequence::new(0),
             rejections: RejectionCounters::default(),
@@ -104,7 +128,7 @@ impl NavigationFilter {
         }
     }
 
-    /// Offers one observation. Gates run in order — clock domain,
+    /// Offers one observation. Gates run in order — clock domain, frame,
     /// composition, value plausibility, freshness, per-source ordering,
     /// then the model checks and the innovation gate — and a rejected
     /// observation changes nothing, including per-source tracking and the
@@ -180,6 +204,13 @@ impl NavigationFilter {
         self.clock
     }
 
+    /// The reference ellipsoid of the state and of every published
+    /// solution.
+    #[must_use]
+    pub const fn ellipsoid(&self) -> BodyEllipsoid {
+        self.ellipsoid
+    }
+
     /// The active configuration.
     #[must_use]
     pub const fn config(&self) -> &FusionConfig {
@@ -202,6 +233,7 @@ impl NavigationFilter {
 
     fn admit(&mut self, obs: &Observation, now: MonotonicNanos) -> Result<(), RejectionReason> {
         self.check_clock(&obs.stamp)?;
+        self.check_frame(obs)?;
         check_composition(obs.composition)?;
         check_value(&obs.value)?;
         self.check_freshness(&obs.stamp, now)?;
@@ -221,6 +253,19 @@ impl NavigationFilter {
             });
         }
         Ok(())
+    }
+
+    /// A declared frame must be the frame of the filter ellipsoid. A
+    /// missing frame passes only when the configuration allows it.
+    fn check_frame(&self, obs: &Observation) -> Result<(), RejectionReason> {
+        let expected = self.ellipsoid.frame();
+        match obs.frame {
+            Some(got) if got != expected => Err(RejectionReason::FrameMismatch { expected, got }),
+            None if self.config.require_explicit_frame => {
+                Err(RejectionReason::MissingFrame { expected })
+            }
+            _ => Ok(()),
+        }
     }
 
     fn check_freshness(
@@ -323,8 +368,8 @@ impl NavigationFilter {
     ) -> Result<(), RejectionReason> {
         // The plausibility gate ran first, so plane construction cannot
         // fail; mapping the error keeps this path total without a panic.
-        let plane =
-            LocalTangentPlane::new(*position).map_err(|_| RejectionReason::NonFiniteValue)?;
+        let plane = LocalTangentPlane::with_ellipsoid(*position, self.ellipsoid)
+            .map_err(|_| RejectionReason::NonFiniteValue)?;
         // The fix anchors the origin, so its covariance IS the position
         // uncertainty; a measurement update against a diffuse prior the
         // fix itself centers would understate it. Velocity keeps the
@@ -399,17 +444,20 @@ impl NavigationFilter {
         let sequence = self.next_solution_sequence;
         self.next_solution_sequence = sequence.next();
         let stamp = SolutionStamp::new(self.epoch, sequence, now, self.clock);
-        Some(NavigationSolution::new(
-            stamp,
-            position,
-            velocity,
-            position_cov,
-            velocity_cov,
-            assessment,
-            // Provenance is epoch-cumulative: everything the state ever
-            // absorbed, while `integrity.contributing` stays
-            // window-scoped.
-            self.epoch_composition,
-        ))
+        Some(
+            NavigationSolution::new(
+                stamp,
+                position,
+                velocity,
+                position_cov,
+                velocity_cov,
+                assessment,
+                // Provenance is epoch-cumulative: everything the state ever
+                // absorbed, while `integrity.contributing` stays
+                // window-scoped.
+                self.epoch_composition,
+            )
+            .with_ellipsoid(self.ellipsoid.contract()),
+        )
     }
 }

@@ -5,7 +5,7 @@
 //! than a logging concern.
 
 use navigate_contract::{
-    ClockDomainId, DurationNanos, MonotonicNanos, SourceEpoch, WrappingSequence,
+    ClockDomainId, DurationNanos, FrameId, MonotonicNanos, SourceEpoch, WrappingSequence,
 };
 
 use crate::observation::MeasurementKind;
@@ -45,6 +45,34 @@ pub enum RejectionReason {
         expected: ClockDomainId,
         /// The observation stamp's clock domain.
         got: ClockDomainId,
+    },
+    /// The observation declares a frame that is not the frame of the
+    /// filter ellipsoid (ADR-0013). Two frames with the same center and
+    /// different orientations, such as `MOON_ME` and `MOON_PA`, do not
+    /// agree.
+    #[error(
+        "observation frame {}/{} is not the filter frame {}/{}",
+        got.center_naif_id,
+        got.orientation_naif_id,
+        expected.center_naif_id,
+        expected.orientation_naif_id
+    )]
+    FrameMismatch {
+        /// The frame of the filter ellipsoid.
+        expected: FrameId,
+        /// The frame that the observation declares.
+        got: FrameId,
+    },
+    /// The observation declares no frame, and the filter requires an
+    /// explicit frame (ADR-0013).
+    #[error(
+        "observation declares no frame; the filter requires frame {}/{}",
+        expected.center_naif_id,
+        expected.orientation_naif_id
+    )]
+    MissingFrame {
+        /// The frame of the filter ellipsoid.
+        expected: FrameId,
     },
     /// The observation declares no source composition; an empty
     /// declaration is inadmissible, never presumed independent.
@@ -185,6 +213,10 @@ pub enum RejectionReason {
 pub struct RejectionCounters {
     /// Refusals for a foreign clock domain.
     pub clock_domain_mismatch: u64,
+    /// Refusals for a declared frame that is not the filter frame.
+    pub frame_mismatch: u64,
+    /// Refusals for a missing frame when the filter requires one.
+    pub missing_frame: u64,
     /// Refusals for an empty source composition.
     pub empty_composition: u64,
     /// Refusals for an estimator-derived composition.
@@ -219,6 +251,8 @@ impl RejectionCounters {
     pub(crate) fn record(&mut self, reason: &RejectionReason) {
         let counter = match reason {
             RejectionReason::ClockDomainMismatch { .. } => &mut self.clock_domain_mismatch,
+            RejectionReason::FrameMismatch { .. } => &mut self.frame_mismatch,
+            RejectionReason::MissingFrame { .. } => &mut self.missing_frame,
             RejectionReason::EmptyComposition => &mut self.empty_composition,
             RejectionReason::EstimatorDerived => &mut self.estimator_derived,
             RejectionReason::NonFiniteValue => &mut self.non_finite_value,
@@ -244,9 +278,48 @@ impl RejectionCounters {
 
 #[cfg(test)]
 mod tests {
-    use navigate_contract::DurationNanos;
+    use navigate_contract::{DurationNanos, FrameId};
 
     use super::{RejectionCounters, RejectionReason};
+
+    #[test]
+    fn frame_refusals_each_increment_one_counter_and_wrap() {
+        let mut counters = RejectionCounters {
+            missing_frame: u64::MAX,
+            ..RejectionCounters::default()
+        };
+        counters.record(&RejectionReason::FrameMismatch {
+            expected: FrameId::MOON_ME,
+            got: FrameId::MOON_PA,
+        });
+        counters.record(&RejectionReason::MissingFrame {
+            expected: FrameId::MOON_ME,
+        });
+        assert_eq!(
+            counters,
+            RejectionCounters {
+                frame_mismatch: 1,
+                missing_frame: 0,
+                ..RejectionCounters::default()
+            }
+        );
+    }
+
+    #[test]
+    fn frame_refusals_name_both_naif_codes() {
+        let text = RejectionReason::FrameMismatch {
+            expected: FrameId::MOON_ME,
+            got: FrameId::MOON_PA,
+        }
+        .to_string();
+        assert!(text.contains("301/31000"), "{text}");
+        assert!(text.contains("301/31001"), "{text}");
+        let missing = RejectionReason::MissingFrame {
+            expected: FrameId::MARS_IAU,
+        }
+        .to_string();
+        assert!(missing.contains("499/10014"), "{missing}");
+    }
 
     #[test]
     fn counters_wrap_instead_of_overflowing() {

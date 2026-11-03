@@ -1,5 +1,5 @@
 use nalgebra::{SMatrix, UnitQuaternion, Vector3};
-use navigate_contract::{ClockDomainId, SourceEpoch, SourceId};
+use navigate_contract::{ClockDomainId, FrameId, SourceEpoch, SourceId};
 use navigate_fusion::{FusionConfig, NavigationFilter};
 use navigate_visual::{CameraPose, EstimateQuality, FrameStamp, LocalFrame};
 
@@ -209,6 +209,26 @@ fn the_navigation_filter_admits_a_visual_fix() {
     let mut filter = NavigationFilter::new(FusionConfig::default(), CLOCK);
     let outcome = filter.ingest(&fix.observation, MonotonicNanos::from_nanos(1_000_000));
     assert!(outcome.is_accepted(), "{outcome:?}");
+}
+
+#[test]
+fn a_visual_fix_declares_the_earth_frame_and_passes_an_explicit_frame_filter() {
+    let mut source = VisualFixSource::new(identity(), budget()).expect("valid budget");
+    let fix = source
+        .convert(
+            &estimate(1, 1_000_000, "frame", 0.0),
+            EvidenceIndependence::ValidatedIndependent,
+        )
+        .expect("fix");
+    assert_eq!(fix.observation.frame, Some(FrameId::EARTH_ITRF93));
+    let config = FusionConfig {
+        require_explicit_frame: true,
+        ..FusionConfig::default()
+    };
+    let mut filter = NavigationFilter::new(config, CLOCK);
+    let outcome = filter.ingest(&fix.observation, MonotonicNanos::from_nanos(1_000_000));
+    assert!(outcome.is_accepted(), "{outcome:?}");
+    assert_eq!(filter.rejections().missing_frame, 0);
 }
 
 #[test]

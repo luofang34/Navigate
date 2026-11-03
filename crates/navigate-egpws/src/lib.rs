@@ -11,7 +11,7 @@
 //! # Open integration question: vertical datum
 //!
 //! [`navigate_contract::NavigationSolution`] altitude is height above the
-//! WGS84 ellipsoid, while production terrain databases publish
+//! solution ellipsoid, while production terrain databases publish
 //! orthometric elevations (height above the geoid). Subtracting one from
 //! the other without a geoid undulation model injects an error of tens of
 //! meters in places. Resolving the datum — requiring [`TerrainDatabase`]
@@ -19,6 +19,11 @@
 //! model at the seam — is owed to the host-side terrain-package
 //! integration; this crate states the gap rather than papering over it
 //! with a constant offset.
+//!
+//! The horizontal reference is explicit (ADR-0013). Each
+//! [`TerrainDatabase`] names its ellipsoid, and [`assess`] refuses a
+//! solution on another ellipsoid with
+//! [`EgpwsUnavailable::EllipsoidMismatch`].
 
 mod assessment;
 mod config;

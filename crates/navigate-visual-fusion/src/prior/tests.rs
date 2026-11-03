@@ -1,7 +1,7 @@
 use super::*;
 use navigate_contract::{
-    FaultDetection, GeodeticPosition, IntegrityAssessment, NedVelocity, Redundancy, SensorClass,
-    SolutionQuality, SolutionStamp, SourceComposition, SourceEpoch, WrappingSequence,
+    Ellipsoid, FaultDetection, GeodeticPosition, IntegrityAssessment, NedVelocity, Redundancy,
+    SensorClass, SolutionQuality, SolutionStamp, SourceComposition, SourceEpoch, WrappingSequence,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -156,5 +156,25 @@ fn projection_refuses_unknown_process_error_excess_age_and_invalid_inputs() -> T
     let mut policy = budget();
     policy.solution_time_error_bound = DurationNanos::from_nanos(1);
     assert!(search_prior(&solution(0.0), frame()?, uncertain, policy).is_err());
+    Ok(())
+}
+
+#[test]
+fn a_solution_on_another_ellipsoid_cannot_center_an_earth_prior() -> TestResult {
+    for ellipsoid in [Ellipsoid::MOON_ME, Ellipsoid::MARS_IAU, Ellipsoid::GRS80] {
+        let lunar = solution(0.0).with_ellipsoid(ellipsoid);
+        assert_eq!(
+            search_prior(&lunar, frame()?, capture(1.0), budget()).err(),
+            Some(VisualFusionError::FrameDatumMismatch),
+            "{ellipsoid:?}"
+        );
+    }
+    let mut foreign = capture(1.0);
+    foreign.clock = ClockDomainId::new(9);
+    let lunar = solution(0.0).with_ellipsoid(Ellipsoid::MOON_ME);
+    assert_eq!(
+        search_prior(&lunar, frame()?, foreign, budget()).err(),
+        Some(VisualFusionError::ClockDomainMismatch)
+    );
     Ok(())
 }
