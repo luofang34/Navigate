@@ -6,8 +6,14 @@
 //! files. [`sun_ecef`] and [`moon_ecef`] give their apparent directions in
 //! Earth-fixed axes from a civil clock reading, [`sun_ecef_tt`] and
 //! [`moon_ecef_tt`] from an instant such as TT, and [`stars_ecef`] and
-//! [`stars_ecef_tt`] give the bright stars. [`civil_time`] and
+//! [`stars_ecef_tt`] give the bright stars, and [`stars_ecef_tt_into`]
+//! writes them into a caller buffer. [`civil_time`] and
 //! [`delta_t`](fn@delta_t) give the TT and UT1 of a civil clock reading.
+//!
+//! [`FrameId`] is the frame name of `navigate-contract`. [`physical_from_epoch`]
+//! and [`epoch_from_physical`] connect an [`Epoch`] to a
+//! [`navigate_contract::PhysicalInstant`] on any of its time scales,
+//! including the lunar scale TCL ([`tt_to_tcl`]).
 //!
 //! The Sun, the Moon, and the stars cover -2000 to 3000 with the default
 //! `long-range` feature: series tables fitted to JPL DE431, with the Sun and
@@ -25,6 +31,7 @@ mod observation;
 mod precession;
 mod stars;
 mod state;
+mod time_bridge;
 
 pub use analytic::{AnalyticEphemeris, AnalyticError};
 #[cfg(feature = "anise")]
@@ -35,6 +42,11 @@ pub use earth_fixed::{
 };
 pub use error::ObservationError;
 pub use hifitime::{Duration, Epoch, TimeScale};
+pub use navigate_contract::FrameId;
 pub use observation::{Correction, Sight, observe_body};
-pub use stars::{StarSight, stars_ecef, stars_ecef_tt};
-pub use state::{Ephemeris, FrameId, State};
+pub use stars::{StarSight, stars_ecef, stars_ecef_tt, stars_ecef_tt_into};
+pub use state::{Ephemeris, State};
+pub use time_bridge::{
+    TimeBridgeError, epoch_from_physical, physical_from_epoch, tcb_to_tdb, tcg_to_tt, tcl_to_tt,
+    tdb_to_tcb, tt_to_tcg, tt_to_tcl, ut1_minus_tai_s,
+};

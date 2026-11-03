@@ -1,16 +1,20 @@
-//! Multi-body geodesy: geodetic/body-fixed/local-NED conversions and
-//! great-circle guidance geometry on any [`BodyEllipsoid`], hand-rolled
-//! on `f64` in canonical units (radians, meters) (ADR-0013).
+//! Multi-body geodesy: geodetic/body-fixed/local-NED conversions,
+//! great-circle guidance geometry, vertical datums, and surface ray
+//! intersection on any [`BodyEllipsoid`], hand-rolled on `f64` in
+//! canonical units (radians, meters) (ADR-0013, ADR-0015).
 //!
 //! Builds on the vocabulary of `navigate-contract`
 //! ([`navigate_contract::GeodeticPosition`] is the geodetic type and
 //! [`navigate_contract::Ellipsoid`] is the reference ellipsoid); this
 //! crate adds the frame types the contract deliberately omits
 //! ([`BodyFixedPosition`], [`NedOffset`]) and the pure conversion math
-//! between them. The functions without an ellipsoid argument use
-//! [`BodyEllipsoid::WGS84`]. Everything is sans-IO and deterministic
-//! (ADR-0002): plain functions over typed values, no clocks, no
-//! allocation on the hot path.
+//! between them. Every function at the crate root takes its ellipsoid
+//! explicitly. The Earth-only shorthand is in [`wgs84`]. Everything is
+//! sans-IO and deterministic (ADR-0002): plain functions over typed
+//! values, no clocks, no allocation.
+//!
+//! The crate is `#![no_std]`. The `std` feature (the default) or the
+//! `libm` feature supplies the float functions ([`float_math`]).
 //!
 //! Accuracy contracts:
 //!
@@ -28,21 +32,34 @@
 //!   `Result` and refuses tracks whose endpoints are closer than 1 mm
 //!   ([`GeodesyError::DegenerateTrack`]).
 
+#![no_std]
+
+#[cfg(not(any(feature = "std", feature = "libm")))]
+compile_error!(
+    "navigate-geodesy needs the `std` feature or the `libm` feature for float functions"
+);
+
+#[cfg(any(feature = "std", test))]
+extern crate std;
+
+pub mod datum;
 pub mod ecef;
 pub mod ellipsoid;
 pub mod error;
+pub mod float_math;
 pub mod great_circle;
 pub mod local_plane;
+pub mod shape;
 pub mod wgs84;
 
-pub use ecef::{
-    BodyFixedPosition, EcefPosition, body_fixed_to_geodetic, ecef_to_geodetic,
-    geodetic_to_body_fixed, geodetic_to_ecef,
+pub use datum::{
+    GeoidUndulation, ZeroUndulation, ellipsoidal_to_orthometric_m, orthometric_to_ellipsoidal_m,
 };
+pub use ecef::{BodyFixedPosition, body_fixed_to_geodetic, geodetic_to_body_fixed};
 pub use ellipsoid::{BodyEllipsoid, west_to_east_lon_rad};
 pub use error::GeodesyError;
 pub use great_circle::{
-    along_track_m, along_track_on_m, cross_track_from_course_m, cross_track_from_course_on_m,
-    cross_track_m, cross_track_on_m, distance_m, distance_on_m, initial_bearing_rad,
+    along_track_m, cross_track_from_course_m, cross_track_m, distance_m, initial_bearing_rad,
 };
 pub use local_plane::{LocalTangentPlane, NedOffset};
+pub use shape::{SurfaceHit, SurfaceShape};

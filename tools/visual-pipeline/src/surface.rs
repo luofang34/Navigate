@@ -17,7 +17,7 @@ use crate::{
 use image::{Rgb, RgbImage};
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
+use navigate_geodesy::wgs84::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
 use navigate_visual_render::RenderScene;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

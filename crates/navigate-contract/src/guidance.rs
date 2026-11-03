@@ -57,7 +57,8 @@ impl LateralReference {
 pub enum GuidanceSetpoint {
     /// Hold or capture a position.
     Position {
-        /// Target position, WGS84.
+        /// Target position on the ellipsoid of the solution that
+        /// [`GuidanceCommand::basis`] names.
         target: GeodeticPosition,
     },
     /// Fly a velocity vector.

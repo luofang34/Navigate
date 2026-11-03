@@ -27,7 +27,7 @@ use navigate_celestial::{
     AniseEphemeris, AniseError, Correction, Epoch, FrameId, ObservationError, State, observe_body,
 };
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::geodetic_to_ecef;
+use navigate_geodesy::wgs84::geodetic_to_ecef;
 
 const START_TDB_S: f64 = 43_200.0; // 2000-01-02T00:00:00 TDB
 const END_TDB_S: f64 = 844_171_200.0; // 2026-10-01T00:00:00 TDB

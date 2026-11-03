@@ -1,8 +1,16 @@
 //! Integrity vocabulary: what a solution's confidence actually rests on
 //! (ADR-0004). The assessment never overstates redundancy — with a single
 //! source, fault detection is `Unavailable`, not implied.
+//!
+//! [`IntegrityAssessment`] serves a solution on a body surface.
+//! [`SpaceIntegrityAssessment`] serves a solution in a Cartesian frame
+//! (ADR-0015).
 
 use crate::composition::SourceComposition;
+
+mod space;
+
+pub use space::{SpaceIntegrityAssessment, SpaceUncertainty};
 
 /// Quality classification of a navigation solution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +69,8 @@ impl ProtectionLevels {
     }
 }
 
-/// The integrity assessment published with every solution.
+/// The integrity assessment published with every
+/// [`crate::NavigationSolution`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct IntegrityAssessment {

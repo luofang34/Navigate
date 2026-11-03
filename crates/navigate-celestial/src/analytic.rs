@@ -13,7 +13,7 @@ const SUN: i32 = 10;
 const MOON: i32 = 301;
 const EARTH: i32 = 399;
 const J2000: i32 = 1;
-const ITRF93: i32 = FrameId::EARTH_ITRF93.orientation;
+const ITRF93: i32 = FrameId::EARTH_ITRF93.orientation_naif_id;
 const ASTRONOMICAL_UNIT_M: f64 = 149_597_870_700.0;
 const SECONDS_PER_CENTURY: f64 = 36_525.0 * 86_400.0;
 /// The supported range in TDB Julian centuries from J2000: 1800 to 2200, or
@@ -41,14 +41,23 @@ pub enum AnalyticError {
     /// The provider cannot convert a state with this origin or orientation.
     #[error(
         "the analytic ephemeris cannot convert a state with origin {} and orientation {}",
-        .0.center,
-        .0.orientation
+        .0.center_naif_id,
+        .0.orientation_naif_id
     )]
     UnsupportedFrame(FrameId),
     /// The epoch is outside the range where the accuracy bounds apply: 1800
     /// to 2200 TDB, or -2000 to 3000 with the `long-range` feature.
     #[error("epoch {0} is outside the analytic ephemeris range")]
     EpochOutOfRange(Epoch),
+    /// An output buffer cannot hold every result. The function wrote
+    /// nothing.
+    #[error("the output buffer holds {capacity} entries, and {needed} are necessary")]
+    BufferTooSmall {
+        /// The number of entries that the result needs.
+        needed: usize,
+        /// The number of entries that the buffer holds.
+        capacity: usize,
+    },
 }
 
 /// Sun, Earth, and Moon states from truncated analytic series.
@@ -91,16 +100,17 @@ impl Ephemeris for AnalyticEphemeris {
     fn barycentric_state(&self, state: State) -> Result<State, Self::Error> {
         let position = Vector3::from(state.position_m);
         let velocity = Vector3::from(state.velocity_m_s);
-        let (position, velocity) = match (state.frame.center, state.frame.orientation) {
-            (SUN | EARTH | MOON, J2000) => (position, velocity),
-            (EARTH, ITRF93) => {
-                let to_j2000 = earth_rotation::j2000_to_earth_fixed(state.epoch).transpose();
-                let velocity = velocity + earth_rotation::rotation_velocity(position);
-                (to_j2000 * position, to_j2000 * velocity)
-            }
-            _ => return Err(AnalyticError::UnsupportedFrame(state.frame)),
-        };
-        let origin = self.body_state(state.frame.center, state.epoch)?;
+        let (position, velocity) =
+            match (state.frame.center_naif_id, state.frame.orientation_naif_id) {
+                (SUN | EARTH | MOON, J2000) => (position, velocity),
+                (EARTH, ITRF93) => {
+                    let to_j2000 = earth_rotation::j2000_to_earth_fixed(state.epoch).transpose();
+                    let velocity = velocity + earth_rotation::rotation_velocity(position);
+                    (to_j2000 * position, to_j2000 * velocity)
+                }
+                _ => return Err(AnalyticError::UnsupportedFrame(state.frame)),
+            };
+        let origin = self.body_state(state.frame.center_naif_id, state.epoch)?;
         Ok(State {
             position_m: (Vector3::from(origin.position_m) + position).into(),
             velocity_m_s: (Vector3::from(origin.velocity_m_s) + velocity).into(),

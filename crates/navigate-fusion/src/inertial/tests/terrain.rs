@@ -24,7 +24,8 @@ fn beam() -> [f64; 3] {
 }
 
 fn sloped_core() -> InertialCore {
-    let plane = LocalTangentPlane::new(earth_origin()).expect("plausible origin");
+    let plane = LocalTangentPlane::new(earth_origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     InertialCore {
         regime: Regime::BodySurface(std::sync::Arc::new(SurfaceFrame::new(
             plane,
@@ -67,7 +68,8 @@ fn true_range(core: &InertialCore, dx: &Vec17) -> f64 {
     let perturbed = nominal.inject(dx);
     let p = |v: Vector3<f64>| surface.plane.from_ned(&NedOffset::new(v.x, v.y, v.z));
     let vehicle = p(nominal.p);
-    let local = LocalTangentPlane::new(vehicle).expect("plausible");
+    let local =
+        LocalTangentPlane::new(vehicle, navigate_geodesy::BodyEllipsoid::WGS84).expect("plausible");
     let moved = p(perturbed.p);
     let offset = local.to_ned(&moved);
     let terrain = TERRAIN_HEIGHT_M + SLOPE[0] * offset.north_m + SLOPE[1] * offset.east_m;

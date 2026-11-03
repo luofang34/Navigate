@@ -9,9 +9,10 @@
 //! field-identical solutions.
 
 use navigate_contract::{
-    ClockDomainId, FaultDetection, FlightPlan, GeodeticPosition, GuidanceSetpoint, MonotonicNanos,
-    NavigationSolution, ObservationStamp, PlanRole, Redundancy, SensorClass, SolutionQuality,
-    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, Waypoint, WrappingSequence,
+    ClockDomainId, Ellipsoid, FaultDetection, FlightPlan, GeodeticPosition, GuidanceSetpoint,
+    Ident, IdentError, MonotonicNanos, NavigationSolution, ObservationStamp, PlanRole, Redundancy,
+    SensorClass, SolutionQuality, SourceComposition, SourceEpoch, SourceId, SymmetricCov3,
+    Waypoint, WrappingSequence,
 };
 use navigate_egpws::{EgpwsAssessment, EgpwsConfig, EgpwsUnavailable, assess};
 use navigate_fpl::{
@@ -21,7 +22,7 @@ use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
 use navigate_geodesy::{
-    GeodesyError, LocalTangentPlane, NedOffset, distance_m, initial_bearing_rad,
+    BodyEllipsoid, GeodesyError, LocalTangentPlane, NedOffset, distance_m, initial_bearing_rad,
 };
 use navigate_guidance::{GuidanceConfig, GuidanceRefusal, guide};
 
@@ -101,6 +102,9 @@ pub struct ScenarioSummary {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ScenarioError {
+    /// A scripted identifier failed validation.
+    #[error(transparent)]
+    InvalidIdent(#[from] IdentError),
     /// The scripted flight plan could not become an execution.
     #[error(transparent)]
     InvalidPlan(#[from] PlanActivationError),
@@ -151,7 +155,8 @@ pub enum ScenarioError {
 /// published. An incomplete plan is not an error: the summary reports
 /// `plan_completed: false` and the caller judges it.
 pub fn run_scenario() -> Result<ScenarioSummary, ScenarioError> {
-    let mut run = ScenarioRun::new()?;
+    let waypoints = mission_waypoints()?;
+    let mut run = ScenarioRun::new(&waypoints)?;
     let mut steps_run = 0_u32;
     for step in 0..MAX_STEPS {
         run.step(step)?;
@@ -165,9 +170,9 @@ pub fn run_scenario() -> Result<ScenarioSummary, ScenarioError> {
 
 /// Mutable state of one scenario run: the systems under test plus the
 /// truth model driving them.
-struct ScenarioRun {
+struct ScenarioRun<'a> {
     filter: NavigationFilter,
-    execution: PlanExecution,
+    execution: PlanExecution<'a>,
     truth: GeodeticPosition,
     next_sequence: WrappingSequence,
     now: MonotonicNanos,
@@ -182,13 +187,13 @@ struct ScenarioRun {
     truth_course_rad: f64,
 }
 
-impl ScenarioRun {
+impl<'a> ScenarioRun<'a> {
     /// Builds the run: truth starts at waypoint 0's position.
-    fn new() -> Result<Self, ScenarioError> {
-        let waypoints = mission_waypoints();
+    fn new(waypoints: &'a [Waypoint; 3]) -> Result<Self, ScenarioError> {
         let truth = waypoints[0].position;
         let initial_course_rad = initial_bearing_rad(&truth, &waypoints[1].position);
-        let plan = FlightPlan::new("navrun-mission".into(), PlanRole::Mission, waypoints.into());
+        let plan_id = Ident::try_new("navrun-mission")?;
+        let plan = FlightPlan::new(plan_id, PlanRole::Mission, Ellipsoid::WGS84, waypoints);
         let execution = PlanExecution::new(plan, ExecutionConfig::default())?;
         Ok(Self {
             filter: NavigationFilter::new(FusionConfig::default(), CLOCK),
@@ -280,7 +285,7 @@ impl ScenarioRun {
             leg.to,
             self.now,
             CLOCK,
-            &GuidanceConfig::default(),
+            &GuidanceConfig::default().with_expected_ellipsoid(Ellipsoid::WGS84),
         )
         .map_err(|source| ScenarioError::GuidanceRefused { step, source })?;
         if let GuidanceSetpoint::DeviationTracking { lateral_m, .. } = command.setpoint {
@@ -297,7 +302,7 @@ impl ScenarioRun {
             return Ok(());
         };
         let target = leg.to.position;
-        let travel_m = distance_m(&self.truth, &target).min(GROUND_SPEED_MPS);
+        let travel_m = distance_m(&self.truth, &target, BodyEllipsoid::WGS84).min(GROUND_SPEED_MPS);
         let desired_rad = initial_bearing_rad(&self.truth, &target);
         // A bank-limited turn toward the desired course: the truth flies
         // the same 18° turn geometry the sequencer anticipates, so the
@@ -353,30 +358,31 @@ fn check_terrain_seam(
 
 /// Three eastbound waypoints along 47° N, roughly 3 km apart — a
 /// straight-ish track, so leg transitions carry no heading transient.
-fn mission_waypoints() -> [Waypoint; 3] {
-    [
-        waypoint("W0", 47.0, 8.00),
-        waypoint("W1", 47.0, 8.04),
+fn mission_waypoints() -> Result<[Waypoint; 3], IdentError> {
+    Ok([
+        waypoint("W0", 47.0, 8.00)?,
+        waypoint("W1", 47.0, 8.04)?,
         // A 90° dogleg: the corner at W1 exercises fly-by anticipation
         // end to end (DTA ≈ 282 m at 30 m/s under the 18° default).
-        waypoint("W2", 47.0273, 8.04),
-    ]
+        waypoint("W2", 47.0273, 8.04)?,
+    ])
 }
 
-fn waypoint(ident: &str, latitude_deg: f64, longitude_deg: f64) -> Waypoint {
-    Waypoint::new(
-        ident.to_owned(),
+fn waypoint(ident: &str, latitude_deg: f64, longitude_deg: f64) -> Result<Waypoint, IdentError> {
+    Ok(Waypoint::new(
+        Ident::try_new(ident)?,
         GeodeticPosition::new(
             latitude_deg.to_radians(),
             longitude_deg.to_radians(),
             CRUISE_ALTITUDE_M,
         ),
-    )
+    ))
 }
 
 /// Anchors a tangent plane at `origin`, naming the step on refusal.
 fn tangent_plane(origin: &GeodeticPosition, step: u32) -> Result<LocalTangentPlane, ScenarioError> {
-    LocalTangentPlane::new(*origin).map_err(|source| ScenarioError::TruthGeometry { step, source })
+    LocalTangentPlane::new(*origin, BodyEllipsoid::WGS84)
+        .map_err(|source| ScenarioError::TruthGeometry { step, source })
 }
 
 #[cfg(test)]
@@ -392,13 +398,14 @@ mod tests {
 
     #[test]
     fn synthesized_fixes_stay_within_the_offset_bound() {
-        let run = ScenarioRun::new().expect("scenario constructs");
+        let waypoints = mission_waypoints().expect("valid waypoints");
+        let run = ScenarioRun::new(&waypoints).expect("scenario constructs");
         for step in 0..8 {
             let observation = run.synthesize_fix(step).expect("fix synthesizes");
             let ObservationValue::PositionFix { position, .. } = observation.value else {
                 panic!("scenario synthesizes position fixes");
             };
-            let displacement_m = distance_m(&run.truth, &position);
+            let displacement_m = distance_m(&run.truth, &position, BodyEllipsoid::WGS84);
             assert!(
                 displacement_m < 3.0,
                 "step {step}: fix displaced {displacement_m} m from truth"
@@ -408,7 +415,8 @@ mod tests {
 
     #[test]
     fn truth_flies_the_ground_speed_toward_the_active_waypoint() {
-        let mut run = ScenarioRun::new().expect("scenario constructs");
+        let waypoints = mission_waypoints().expect("valid waypoints");
+        let mut run = ScenarioRun::new(&waypoints).expect("scenario constructs");
         // Truth starts at W0, so the first advance captures it and the
         // active waypoint becomes W1, about 3 km east.
         let start = run.truth;
@@ -421,9 +429,9 @@ mod tests {
             }
         ));
         let target = run.execution.active_leg().expect("active leg").to.position;
-        let before_m = distance_m(&run.truth, &target);
+        let before_m = distance_m(&run.truth, &target, BodyEllipsoid::WGS84);
         run.propagate_truth(0).expect("truth propagates");
-        let after_m = distance_m(&run.truth, &target);
+        let after_m = distance_m(&run.truth, &target, BodyEllipsoid::WGS84);
         // The step is 30 tangent-plane meters on the ellipsoid while
         // `distance_m` measures on the mean-radius sphere; the two
         // metrics diverge by up to ~0.5% (see `navigate_geodesy`).

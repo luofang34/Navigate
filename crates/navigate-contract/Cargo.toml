@@ -1,10 +1,18 @@
 [package]
 name = "navigate-contract"
-description = "Typed boundary vocabulary external consumers pin: solutions, integrity, stamps, plans, guidance setpoints, draft aiding schema"
+description = "Typed boundary vocabulary external consumers pin: solutions, integrity, stamps, physical time, plans, guidance setpoints, draft aiding schema"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+# The crate is `#![no_std]` and does not allocate in every build. These
+# features let a dependent crate forward `std` or `libm` to every crate in
+# one list. They change nothing in this crate.
+[features]
+default = ["std"]
+std = []
+libm = []
 
 [dependencies]
 thiserror = { workspace = true }

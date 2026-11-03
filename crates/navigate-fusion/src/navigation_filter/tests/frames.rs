@@ -184,7 +184,7 @@ fn a_martian_altitude_50_km_from_the_origin_has_no_curvature_bias() {
     };
     let mars = BodyEllipsoid::MARS_IAU;
     let origin = GeodeticPosition::new(-0.08, 2.4, -2_500.0);
-    let plane = LocalTangentPlane::with_ellipsoid(origin, mars).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin, mars).expect("plausible origin");
     let on_plane = plane.from_ned(&NedOffset::new(48_000.0, 0.0, 0.0));
     // The plane drops below the surface: the curvature drop on Mars is
     // larger than on the Earth.

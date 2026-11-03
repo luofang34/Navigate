@@ -29,6 +29,7 @@ fn solution(north_mps: f64) -> NavigationSolution {
             FaultDetection::Unavailable,
         ),
         SourceComposition::of(SensorClass::Gnss),
+        Ellipsoid::WGS84,
     )
 }
 

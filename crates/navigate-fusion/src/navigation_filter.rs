@@ -117,6 +117,7 @@ impl NavigationFilter {
                 self.rejections.record(&reason);
                 if matches!(reason, RejectionReason::InnovationGate { .. }) {
                     self.stats.record_gate_rejection(obs.value.kind());
+                    self.ledger.record_gate_rejection();
                 }
                 IngestOutcome::Rejected(reason)
             }
@@ -277,7 +278,7 @@ impl NavigationFilter {
     ) -> Result<(), RejectionReason> {
         // The plausibility gate ran first, so plane construction cannot
         // fail; mapping the error keeps this path total without a panic.
-        let plane = LocalTangentPlane::with_ellipsoid(*position, self.ellipsoid)
+        let plane = LocalTangentPlane::new(*position, self.ellipsoid)
             .map_err(|_| RejectionReason::NonFiniteValue)?;
         // The fix anchors the origin, so its covariance IS the position
         // uncertainty; a measurement update against a diffuse prior the
@@ -307,12 +308,11 @@ impl NavigationFilter {
         now: MonotonicNanos,
     ) -> Option<NavigationSolution> {
         let core = self.core.as_ref()?;
-        let silence = self.ledger.silence(now);
         let assessment = integrity::derive(
-            self.ledger.window(),
+            &self.ledger,
+            now,
             filter::horizontal_1sigma_m(&state.p),
             filter::vertical_1sigma_m(&state.p),
-            silence,
             &self.config,
         );
         let x = &state.x;
@@ -330,20 +330,18 @@ impl NavigationFilter {
         let sequence = self.next_solution_sequence;
         self.next_solution_sequence = sequence.next();
         let stamp = SolutionStamp::new(self.epoch, sequence, now, self.clock);
-        Some(
-            NavigationSolution::new(
-                stamp,
-                position,
-                velocity,
-                position_cov,
-                velocity_cov,
-                assessment,
-                // Provenance is epoch-cumulative: everything the state ever
-                // absorbed, while `integrity.contributing` stays
-                // window-scoped.
-                self.ledger.epoch_composition(),
-            )
-            .with_ellipsoid(self.ellipsoid.contract()),
-        )
+        Some(NavigationSolution::new(
+            stamp,
+            position,
+            velocity,
+            position_cov,
+            velocity_cov,
+            assessment,
+            // Provenance is epoch-cumulative: everything the state ever
+            // absorbed, while `integrity.contributing` stays
+            // window-scoped.
+            self.ledger.epoch_composition(),
+            self.ellipsoid.contract(),
+        ))
     }
 }

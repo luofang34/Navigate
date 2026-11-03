@@ -1,7 +1,7 @@
 use super::*;
 use crate::{Duration, Ephemeris, TimeScale};
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::geodetic_to_ecef;
+use navigate_geodesy::wgs84::geodetic_to_ecef;
 
 const ITRF93: &str = include_str!("../../fixtures/de421-itrf93.txt");
 const BEFORE_1972: &str = include_str!("../../fixtures/skyfield-before-1972.txt");

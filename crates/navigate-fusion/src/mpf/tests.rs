@@ -18,7 +18,8 @@ fn origin() -> GeodeticPosition {
 }
 
 fn plane() -> LocalTangentPlane {
-    LocalTangentPlane::new(origin()).expect("plausible origin")
+    LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin")
 }
 
 /// An analytic anomaly field over the plane of [`origin`].

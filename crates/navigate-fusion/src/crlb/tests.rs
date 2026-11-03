@@ -26,7 +26,8 @@ fn tracker() -> CrlbTracker {
 /// Straight and level flight north at 50 m/s with the body axes along
 /// the plane axes.
 fn reference(time_s: f64) -> ReferencePoint {
-    let plane = LocalTangentPlane::new(origin()).expect("plausible");
+    let plane = LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible");
     let frame = SurfaceFrame::new(plane, PlanetaryBody::earth_wgs84());
     let p = Vector3::new(50.0 * time_s, 0.0, 0.0);
     let v = Vector3::new(50.0, 0.0, 0.0);

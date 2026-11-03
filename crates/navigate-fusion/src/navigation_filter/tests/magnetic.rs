@@ -90,7 +90,8 @@ fn a_rotated_gradient_50_km_from_the_origin_predicts_the_state_exactly() {
         ..FusionConfig::default()
     };
     let mut f = NavigationFilter::new(config, CLOCK);
-    let plane = LocalTangentPlane::new(origin()).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     let far = plane.from_ned(&NedOffset::new(48_000.0, 3_000.0, 0.0));
     assert_accepted(f.ingest(&fix_with_variance(1, 0, origin(), 1e10), t(0)));
     assert_accepted(f.ingest(&fix_with_variance(2, 0, far, 25.0), t(0)));
@@ -99,9 +100,11 @@ fn a_rotated_gradient_50_km_from_the_origin_predicts_the_state_exactly() {
     let vehicle = plane.from_ned(&NedOffset::new(x[0], x[1], x[2]));
     // The map is linearized 364 m from the vehicle, inside the 500 m
     // radius.
-    let vehicle_local = LocalTangentPlane::new(vehicle).expect("plausible point");
+    let vehicle_local = LocalTangentPlane::new(vehicle, navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible point");
     let lin_point = vehicle_local.from_ned(&NedOffset::new(300.0, -200.0, 50.0));
-    let local = LocalTangentPlane::new(lin_point).expect("plausible point");
+    let local = LocalTangentPlane::new(lin_point, navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible point");
     let gradient = [3e-11, -2e-11, 4e-11];
     let offset = local.to_ned(&vehicle);
     let measured = MAP_T

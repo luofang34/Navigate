@@ -1,6 +1,8 @@
 //! Leg-vocabulary tests: resolution, activation refusal, and the
 //! sequencing each flown terminator earns (`docs/leg-requirements.md`).
 
+use std::string::ToString;
+
 use navigate_contract::CourseReference;
 
 use super::*;
@@ -29,16 +31,14 @@ fn eastbound_course(reference: CourseReference) -> LegPath {
 }
 
 /// The resolved terminator of the leg the execution is flying.
-fn active_path(exec: &PlanExecution) -> LegPath {
+fn active_path(exec: &PlanExecution<'_>) -> LegPath {
     exec.active_leg().expect("an active leg").path
 }
 
 #[test]
 fn nav_lg_002_an_undeclared_plan_flies_direct_then_tracks() {
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.5)],
-        ExecutionConfig::default(),
-    );
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.5)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     assert_eq!(
         active_path(&exec),
         LegPath::DirectToFix,
@@ -54,24 +54,19 @@ fn nav_lg_002_an_undeclared_plan_flies_direct_then_tracks() {
 
 #[test]
 fn nav_lg_002_a_declared_terminator_overrides_the_position_rule() {
-    let exec = execution(
-        vec![
-            wp("W0", 0.0, 0.0).with_path(LegPath::InitialFix),
-            wp("W1", 0.0, 0.5),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0).with_path(LegPath::InitialFix),
+        wp("W1", 0.0, 0.5),
+    ];
+    let exec = execution(&wps, ExecutionConfig::default());
     assert_eq!(active_path(&exec), LegPath::InitialFix);
 }
 
 #[test]
 fn nav_lg_005_every_reserved_terminator_is_refused_at_activation_by_name() {
     for path in RESERVED {
-        let plan = FlightPlan::new(
-            "reserved".into(),
-            PlanRole::Mission,
-            vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5).with_path(path)],
-        );
+        let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5).with_path(path)];
+        let plan = FlightPlan::new(id("reserved"), PlanRole::Mission, Ellipsoid::WGS84, &wps);
         plan.validate()
             .expect("the plan itself is structurally valid");
         let refused = PlanExecution::new(plan, ExecutionConfig::default())
@@ -97,14 +92,11 @@ fn nav_lg_005_every_reserved_terminator_is_refused_at_activation_by_name() {
 /// hide which leg this build cannot fly.
 #[test]
 fn nav_lg_012_a_reserved_leg_is_refused_by_kind_not_by_a_geometry_guard() {
-    let plan = FlightPlan::new(
-        "hover".into(),
-        PlanRole::Mission,
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, 0.0).with_path(LegPath::Hover),
-        ],
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.0).with_path(LegPath::Hover),
+    ];
+    let plan = FlightPlan::new(id("hover"), PlanRole::Mission, Ellipsoid::WGS84, &wps);
     assert!(matches!(
         PlanExecution::new(plan, ExecutionConfig::default()),
         Err(PlanActivationError::UnsupportedLegKind {
@@ -116,36 +108,34 @@ fn nav_lg_012_a_reserved_leg_is_refused_by_kind_not_by_a_geometry_guard() {
 
 #[test]
 fn nav_lg_005_a_magnetic_course_is_refused_and_the_true_one_activates() {
-    let plan = |reference| {
-        FlightPlan::new(
-            "course".into(),
-            PlanRole::Mission,
-            vec![
-                wp("W0", 0.0, 0.0),
-                wp("W1", 0.0, 0.5).with_path(eastbound_course(reference)),
-            ],
-        )
-    };
-    let refused = PlanExecution::new(plan(CourseReference::Magnetic), ExecutionConfig::default())
+    let mag_wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::Magnetic)),
+    ];
+    let mag_plan = FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &mag_wps);
+    let refused = PlanExecution::new(mag_plan, ExecutionConfig::default())
         .expect_err("no magnetic variation model exists");
     assert!(matches!(
         refused,
         PlanActivationError::MagneticCourseUnsupported { index: 1, ident, .. } if ident == "W1"
     ));
+    let true_wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
+    ];
+    let true_plan = FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &true_wps);
     // The same geometry against true north is flyable, so the refusal
     // is about the reference and not about the course.
-    assert!(PlanExecution::new(plan(CourseReference::True), ExecutionConfig::default()).is_ok());
+    assert!(PlanExecution::new(true_plan, ExecutionConfig::default()).is_ok());
 }
 
 #[test]
 fn nav_lg_008_an_initial_fix_flies_from_the_present_position() {
-    let mut exec = execution(
-        vec![
-            wp("W0", 0.0, 0.5).with_path(LegPath::InitialFix),
-            wp("W1", 0.0, 0.0),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.5).with_path(LegPath::InitialFix),
+        wp("W1", 0.0, 0.0),
+    ];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     let leg = exec.active_leg().expect("an active leg");
     assert_eq!(leg.lateral_reference(), LateralReference::PresentPosition);
     assert_eq!(
@@ -157,14 +147,12 @@ fn nav_lg_008_an_initial_fix_flies_from_the_present_position() {
 
 #[test]
 fn nav_lg_009_a_course_to_fix_leg_sequences_inside_the_capture_radius_only() {
-    let mut exec = execution(
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
-            wp("W2", 0.5, 0.5),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
+        wp("W2", 0.5, 0.5),
+    ];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     // The 90° corner at W1 would earn 1129.8 m of anticipation on a
     // track leg; a course leg has no fixed inbound track to anticipate
@@ -190,10 +178,11 @@ fn nav_lg_010_an_outbound_leg_that_is_not_a_track_stops_anticipation() {
         if let Some(path) = w2_path {
             w2 = w2.with_path(path);
         }
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), w2]
+        [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), w2]
     };
     // Both legs are tracks: the fly-by corner anticipates.
-    let mut tracks = execution(plan_with(None), ExecutionConfig::default());
+    let wps_tracks = plan_with(None);
+    let mut tracks = execution(&wps_tracks, ExecutionConfig::default());
     capture_w0(&mut tracks);
     assert!(matches!(
         tracks.advance(&short_of_w1(1120.0), 60.0),
@@ -208,7 +197,8 @@ fn nav_lg_010_an_outbound_leg_that_is_not_a_track_stops_anticipation() {
         LegPath::DirectToFix,
         eastbound_course(CourseReference::True),
     ] {
-        let mut exec = execution(plan_with(Some(outbound)), ExecutionConfig::default());
+        let wps = plan_with(Some(outbound));
+        let mut exec = execution(&wps, ExecutionConfig::default());
         capture_w0(&mut exec);
         assert_eq!(
             exec.advance(&short_of_w1(1120.0), 60.0),
@@ -228,14 +218,12 @@ fn nav_lg_010_an_outbound_leg_that_is_not_a_track_stops_anticipation() {
 
 #[test]
 fn nav_lg_010_an_inbound_leg_that_is_not_a_track_stops_anticipation() {
-    let mut exec = execution(
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, 0.5).with_path(LegPath::DirectToFix),
-            wp("W2", 0.5, 0.5),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.5).with_path(LegPath::DirectToFix),
+        wp("W2", 0.5, 0.5),
+    ];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     assert_eq!(
         exec.advance(&short_of_w1(1120.0), 60.0),
@@ -254,10 +242,8 @@ fn nav_lg_010_an_inbound_leg_that_is_not_a_track_stops_anticipation() {
 
 #[test]
 fn nav_lg_014_each_flown_terminator_yields_its_own_lateral_reference() {
-    let mut tracks = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5)],
-        ExecutionConfig::default(),
-    );
+    let track_wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5)];
+    let mut tracks = execution(&track_wps, ExecutionConfig::default());
     assert_eq!(
         tracks
             .active_leg()
@@ -276,13 +262,11 @@ fn nav_lg_014_each_flown_terminator_yields_its_own_lateral_reference() {
         "a track leg runs from the fix before it"
     );
 
-    let mut courses = execution(
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
-        ],
-        ExecutionConfig::default(),
-    );
+    let course_wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
+    ];
+    let mut courses = execution(&course_wps, ExecutionConfig::default());
     capture_w0(&mut courses);
     assert_eq!(
         courses

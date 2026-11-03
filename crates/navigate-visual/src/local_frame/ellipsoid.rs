@@ -3,7 +3,7 @@ use super::spherical::basis;
 use crate::VisualError;
 use nalgebra::Vector3;
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
+use navigate_geodesy::wgs84::{EcefPosition, ecef_to_geodetic, geodetic_to_ecef};
 
 fn ecef([lat, lon, height]: [f64; 3]) -> Vector3<f64> {
     let p = geodetic_to_ecef(&GeodeticPosition::new(

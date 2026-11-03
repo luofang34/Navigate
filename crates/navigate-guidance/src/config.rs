@@ -1,7 +1,7 @@
 //! Admission floors guidance enforces before deriving a setpoint, and
 //! the limits each derivation shapes its setpoint within.
 
-use navigate_contract::{DurationNanos, SolutionQuality};
+use navigate_contract::{DurationNanos, Ellipsoid, SolutionQuality};
 
 /// Floors a solution must clear before a derivation reads it. Every
 /// derivation enforces these, so a solution refused by [`crate::guide`]
@@ -23,6 +23,10 @@ pub struct GuidanceConfig {
     /// Maximum vertical 1-sigma uncertainty in meters accepted when the
     /// target waypoint carries an altitude constraint. Defaults to 50.0 m.
     pub max_vertical_1sigma_m: f64,
+    /// Expected reference ellipsoid of the active flight plan when the
+    /// caller requires ellipsoid agreement (ADR-0015). `None` accepts any
+    /// plausible body ellipsoid carried by the solution.
+    pub expected_ellipsoid: Option<Ellipsoid>,
 }
 
 impl GuidanceConfig {
@@ -36,6 +40,7 @@ impl GuidanceConfig {
             minimum_quality,
             max_solution_age,
             max_vertical_1sigma_m: Self::DEFAULT_MAX_VERTICAL_1SIGMA_M,
+            expected_ellipsoid: None,
         }
     }
 
@@ -43,6 +48,13 @@ impl GuidanceConfig {
     #[must_use]
     pub const fn with_max_vertical_1sigma_m(mut self, max_vertical_1sigma_m: f64) -> Self {
         self.max_vertical_1sigma_m = max_vertical_1sigma_m;
+        self
+    }
+
+    /// Requires the solution ellipsoid to equal `ellipsoid`.
+    #[must_use]
+    pub const fn with_expected_ellipsoid(mut self, ellipsoid: Ellipsoid) -> Self {
+        self.expected_ellipsoid = Some(ellipsoid);
         self
     }
 }

@@ -100,8 +100,8 @@ fn location_has_no_earth_radius_or_altitude_limit() {
 fn rejects_unknown_frame_from_provider_and_nonfinite_state() {
     let invalid_frame = State {
         frame: FrameId {
-            center: 499,
-            orientation: 1,
+            center_naif_id: 499,
+            orientation_naif_id: 1,
         },
         ..observer()
     };

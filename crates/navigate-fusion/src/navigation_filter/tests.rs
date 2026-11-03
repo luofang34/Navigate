@@ -28,7 +28,7 @@ fn origin() -> GeodeticPosition {
 }
 
 fn position_north_m(north_m: f64) -> GeodeticPosition {
-    LocalTangentPlane::new(origin())
+    LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
         .expect("plausible origin")
         .from_ned(&NedOffset::new(north_m, 0.0, 0.0))
 }

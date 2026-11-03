@@ -9,7 +9,7 @@ use navigate_contract::{
 use crate::config::{GuidanceConfig, VelocityGuidanceConfig};
 use crate::derive::guide;
 use crate::refusal::GuidanceRefusal;
-use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
+use crate::scenario::{CLOCK, deg, equator_leg, id, now, solution};
 
 use super::super::guide_velocity;
 
@@ -124,7 +124,7 @@ fn now_read_on_another_clock_domain_is_refused_before_age_arithmetic() {
 #[test]
 fn an_implausible_target_is_refused_by_name() {
     let (from, _) = equator_leg();
-    let bad = Waypoint::new("BAD".into(), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
+    let bad = Waypoint::new(id("BAD"), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
     let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
     let refusal = guide_velocity(
         &own,
@@ -137,16 +137,14 @@ fn an_implausible_target_is_refused_by_name() {
     .expect_err("refuses");
     assert_eq!(
         refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "BAD".into(),
-        }
+        GuidanceRefusal::ImplausibleTarget { ident: id("BAD") }
     );
 }
 
 #[test]
 fn a_leg_with_coincident_endpoints_is_refused_as_implausible() {
     let anchor = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("ZERO".into(), anchor);
+    let to = Waypoint::new(id("ZERO"), anchor);
     let own = solution(SolutionQuality::Good, deg(10.5, 20.5, 0.0), now());
     let refusal = guide_velocity(
         &own,
@@ -159,9 +157,7 @@ fn a_leg_with_coincident_endpoints_is_refused_as_implausible() {
     .expect_err("refuses");
     assert_eq!(
         refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "ZERO".into(),
-        }
+        GuidanceRefusal::ImplausibleTarget { ident: id("ZERO") }
     );
 }
 

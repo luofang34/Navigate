@@ -7,29 +7,29 @@
 //! operation, sustained link loss, explicit contingency command — is the
 //! host platform's decision; this crate only executes the selection.
 
-use navigate_contract::{FlightPlan, LegPath, PlanRole, PlanValidationError};
+use navigate_contract::{FlightPlan, Ident, LegPath, PlanRole, PlanValidationError};
 
 use crate::execution::{ExecutionConfig, PlanExecution};
 
 /// The procedures loaded for one vehicle, keyed by [`PlanRole`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
-pub struct PlanSet {
+pub struct PlanSet<'a> {
     /// The primary mission plan.
-    pub mission: FlightPlan,
+    pub mission: FlightPlan<'a>,
     /// The procedure flown on sustained loss of communication, if
     /// loaded.
-    pub loss_of_comm: Option<FlightPlan>,
+    pub loss_of_comm: Option<FlightPlan<'a>>,
     /// The contingency procedure selected by explicit command, if
     /// loaded.
-    pub contingency: Option<FlightPlan>,
+    pub contingency: Option<FlightPlan<'a>>,
 }
 
-impl PlanSet {
+impl<'a> PlanSet<'a> {
     /// A set holding only the mission plan; the `with_*` builders add
     /// the optional procedures.
     #[must_use]
-    pub const fn new(mission: FlightPlan) -> Self {
+    pub const fn new(mission: FlightPlan<'a>) -> Self {
         Self {
             mission,
             loss_of_comm: None,
@@ -39,14 +39,14 @@ impl PlanSet {
 
     /// This set with a loss-of-communication procedure loaded.
     #[must_use]
-    pub fn with_loss_of_comm(mut self, plan: FlightPlan) -> Self {
+    pub const fn with_loss_of_comm(mut self, plan: FlightPlan<'a>) -> Self {
         self.loss_of_comm = Some(plan);
         self
     }
 
     /// This set with a contingency procedure loaded.
     #[must_use]
-    pub fn with_contingency(mut self, plan: FlightPlan) -> Self {
+    pub const fn with_contingency(mut self, plan: FlightPlan<'a>) -> Self {
         self.contingency = Some(plan);
         self
     }
@@ -64,22 +64,22 @@ impl PlanSet {
         &self,
         role: PlanRole,
         config: ExecutionConfig,
-    ) -> Result<PlanExecution, PlanActivationError> {
+    ) -> Result<PlanExecution<'a>, PlanActivationError> {
         let plan = match role {
-            PlanRole::Mission => Some(&self.mission),
-            PlanRole::LossOfComm => self.loss_of_comm.as_ref(),
-            PlanRole::Contingency => self.contingency.as_ref(),
+            PlanRole::Mission => Some(self.mission),
+            PlanRole::LossOfComm => self.loss_of_comm,
+            PlanRole::Contingency => self.contingency,
             // `PlanRole` is non-exhaustive: a role this crate does not
             // know yet has no slot here.
             _ => None,
         };
         let plan = plan.ok_or(PlanActivationError::RoleUnavailable { role })?;
-        PlanExecution::new(plan.clone(), config)
+        PlanExecution::new(plan, config)
     }
 }
 
 /// Why a plan could not become an execution.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlanActivationError {
     /// No plan is loaded for the requested role.
@@ -98,9 +98,9 @@ pub enum PlanActivationError {
     )]
     SpeedBelowFloor {
         /// Offending plan id.
-        plan: String,
+        plan: Ident,
         /// Offending waypoint identifier.
-        ident: String,
+        ident: Ident,
         /// The constraint that cannot be flown.
         max_speed_mps: f64,
         /// The configured floor it violates.
@@ -113,9 +113,9 @@ pub enum PlanActivationError {
     )]
     CaptureRadiusExceedsLeg {
         /// Offending plan id.
-        plan: String,
+        plan: Ident,
         /// The waypoint the too-short leg runs to.
-        ident: String,
+        ident: Ident,
         /// The fixed leg's length.
         leg_length_m: f64,
         /// The configured capture radius it does not clear.
@@ -135,11 +135,11 @@ pub enum PlanActivationError {
     #[error("plan {plan} leg {index} ({ident}) declares a {path} leg this build cannot fly")]
     UnsupportedLegKind {
         /// Offending plan id.
-        plan: String,
+        plan: Ident,
         /// Waypoint index in fly order.
         index: usize,
         /// The waypoint the leg runs to.
-        ident: String,
+        ident: Ident,
         /// The path terminator that has no sequencer.
         path: LegPath,
     },
@@ -151,11 +151,11 @@ pub enum PlanActivationError {
     )]
     MagneticCourseUnsupported {
         /// Offending plan id.
-        plan: String,
+        plan: Ident,
         /// Waypoint index in fly order.
         index: usize,
         /// The waypoint the leg runs to.
-        ident: String,
+        ident: Ident,
         /// The declared magnetic course.
         course_rad: f64,
     },
@@ -163,18 +163,23 @@ pub enum PlanActivationError {
 
 #[cfg(test)]
 mod tests {
-    use navigate_contract::{GeodeticPosition, Waypoint};
+    use navigate_contract::{Ellipsoid, GeodeticPosition, Waypoint};
 
     use super::*;
 
-    fn plan(id: &str, role: PlanRole) -> FlightPlan {
-        let home = Waypoint::new("HOME".into(), GeodeticPosition::new(0.0, 0.0, 0.0));
-        FlightPlan::new(id.into(), role, vec![home])
+    fn id(text: &str) -> Ident {
+        Ident::try_new(text).expect("valid ident")
+    }
+
+    fn home_waypoint() -> Waypoint {
+        Waypoint::new(id("HOME"), GeodeticPosition::new(0.0, 0.0, 0.0))
     }
 
     #[test]
     fn activating_a_missing_role_names_the_role() {
-        let set = PlanSet::new(plan("m", PlanRole::Mission));
+        let waypoints = [home_waypoint()];
+        let mission = FlightPlan::new(id("m"), PlanRole::Mission, Ellipsoid::WGS84, &waypoints);
+        let set = PlanSet::new(mission);
         let refused = set.activate(PlanRole::LossOfComm, ExecutionConfig::default());
         assert!(matches!(
             refused,
@@ -186,8 +191,11 @@ mod tests {
 
     #[test]
     fn activating_a_loaded_role_starts_at_the_first_waypoint() {
-        let set = PlanSet::new(plan("m", PlanRole::Mission))
-            .with_loss_of_comm(plan("lc", PlanRole::LossOfComm));
+        let waypoints = [home_waypoint()];
+        let mission = FlightPlan::new(id("m"), PlanRole::Mission, Ellipsoid::WGS84, &waypoints);
+        let loss_of_comm =
+            FlightPlan::new(id("lc"), PlanRole::LossOfComm, Ellipsoid::WGS84, &waypoints);
+        let set = PlanSet::new(mission).with_loss_of_comm(loss_of_comm);
         let exec = set
             .activate(PlanRole::LossOfComm, ExecutionConfig::default())
             .expect("loaded role activates");
@@ -198,8 +206,10 @@ mod tests {
 
     #[test]
     fn activating_an_invalid_plan_reports_the_defect() {
-        let empty = FlightPlan::new("bad".into(), PlanRole::Contingency, Vec::new());
-        let set = PlanSet::new(plan("m", PlanRole::Mission)).with_contingency(empty);
+        let waypoints = [home_waypoint()];
+        let mission = FlightPlan::new(id("m"), PlanRole::Mission, Ellipsoid::WGS84, &waypoints);
+        let empty = FlightPlan::new(id("bad"), PlanRole::Contingency, Ellipsoid::WGS84, &[]);
+        let set = PlanSet::new(mission).with_contingency(empty);
         let refused = set.activate(PlanRole::Contingency, ExecutionConfig::default());
         assert!(matches!(
             refused,

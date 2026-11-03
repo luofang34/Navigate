@@ -23,7 +23,8 @@ mod altitude {
 
     fn plane() -> LocalTangentPlane {
         let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-        LocalTangentPlane::new(origin).expect("plausible origin")
+        LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
+            .expect("plausible origin")
     }
 
     fn state_at(plane: &LocalTangentPlane, position: &GeodeticPosition) -> Vec6 {
@@ -82,7 +83,8 @@ mod magnetic {
 
     fn plane() -> LocalTangentPlane {
         let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-        LocalTangentPlane::new(origin).expect("plausible origin")
+        LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
+            .expect("plausible origin")
     }
 
     fn position_cov(variance_m2: f64) -> Mat6 {
@@ -126,7 +128,8 @@ mod magnetic {
     fn gradient_50_km_from_the_origin_is_rotated_into_the_plane() {
         let plane = plane();
         let lin_point = plane.from_ned(&NedOffset::new(48_000.0, 3_000.0, 0.0));
-        let local_lin = LocalTangentPlane::new(lin_point).expect("plausible point");
+        let local_lin = LocalTangentPlane::new(lin_point, navigate_geodesy::BodyEllipsoid::WGS84)
+            .expect("plausible point");
         let g_local = [3e-11, -2e-11, 4e-11];
         let truth = local_lin.from_ned(&NedOffset::new(200.0, -150.0, -30.0));
         let local_offset = local_lin.to_ned(&truth);

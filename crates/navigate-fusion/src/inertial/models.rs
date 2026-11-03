@@ -109,7 +109,7 @@ pub(crate) fn plane_to_local_at(
     surface: &SurfaceFrame,
     position: GeodeticPosition,
 ) -> Result<Matrix3<f64>, RejectionReason> {
-    let local = LocalTangentPlane::with_ellipsoid(position, surface.plane.ellipsoid())
+    let local = LocalTangentPlane::new(position, surface.plane.ellipsoid())
         .map_err(|_| RejectionReason::NonFiniteValue)?;
     Ok(rotation_between(&surface.plane, &local))
 }

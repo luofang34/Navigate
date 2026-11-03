@@ -8,7 +8,7 @@ use navigate_contract::{
 use crate::config::{GuidanceConfig, VelocityGuidanceConfig};
 use crate::derive::guide;
 use crate::refusal::GuidanceRefusal;
-use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
+use crate::scenario::{CLOCK, deg, equator_leg, id, now, solution};
 use crate::velocity::guide_velocity;
 
 /// The lunar mean radius in meters.
@@ -97,7 +97,7 @@ fn the_ellipsoid_is_judged_after_age_and_before_the_target() {
         Err(GuidanceRefusal::SolutionStale { .. })
     ));
     let fresh = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now()).with_ellipsoid(bad);
-    let nowhere = Waypoint::new("NOWHERE".into(), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
+    let nowhere = Waypoint::new(id("NOWHERE"), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
     assert!(matches!(
         guide(
             &fresh,
@@ -109,6 +109,43 @@ fn the_ellipsoid_is_judged_after_age_and_before_the_target() {
         ),
         Err(GuidanceRefusal::ImplausibleEllipsoid { .. })
     ));
+}
+
+#[test]
+fn ellipsoid_mismatch_is_refused_when_expected_ellipsoid_is_configured() {
+    let (from, to) = equator_leg();
+    let earth_solution = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
+    let lunar_config = GuidanceConfig::default().with_expected_ellipsoid(Ellipsoid::MOON_ME);
+    let refusal = guide(
+        &earth_solution,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &lunar_config,
+    )
+    .expect_err("Earth solution on Moon plan must be refused");
+    assert_eq!(
+        refusal,
+        GuidanceRefusal::EllipsoidMismatch {
+            expected: Ellipsoid::MOON_ME,
+            got: Ellipsoid::WGS84,
+        }
+    );
+    let vel_config = VelocityGuidanceConfig {
+        admission: lunar_config,
+        ..VelocityGuidanceConfig::default()
+    };
+    let vel_refusal = guide_velocity(
+        &earth_solution,
+        LateralReference::track(from),
+        &to,
+        now(),
+        CLOCK,
+        &vel_config,
+    )
+    .expect_err("velocity guidance must refuse identically");
+    assert_eq!(vel_refusal, refusal);
 }
 
 #[test]

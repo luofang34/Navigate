@@ -16,7 +16,7 @@ use crate::inertial::nominal::InertialNominal;
 /// after a 1 m/s north velocity error, and the expected period.
 fn schuler_period_s(body: PlanetaryBody, lat_deg: f64) -> (f64, f64) {
     let origin = GeodeticPosition::new(lat_deg.to_radians(), 0.3, 0.0);
-    let plane = LocalTangentPlane::with_ellipsoid(origin, body.ellipsoid).expect("plausible");
+    let plane = LocalTangentPlane::new(origin, body.ellipsoid).expect("plausible");
     let frame = SurfaceFrame::new(plane, body);
     let (g, _) = frame.gravity(&Vector3::zeros());
     let radius_m = frame.body_fixed_position(&Vector3::zeros()).norm();

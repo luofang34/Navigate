@@ -19,7 +19,8 @@ use crate::inertial::nominal::{
 
 fn earth_frame() -> SurfaceFrame {
     let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-    let plane = LocalTangentPlane::new(origin).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     SurfaceFrame::new(plane, PlanetaryBody::earth_wgs84())
 }
 

@@ -6,6 +6,7 @@
 
 use crate::admission::AdmittedLeg;
 use crate::config::VelocityGuidanceConfig;
+use crate::float_math::{cos, hypot, sin};
 
 /// The horizontal half of a commanded velocity, local-level NED.
 pub(crate) struct HorizontalMps {
@@ -30,7 +31,7 @@ pub(crate) fn horizontal_mps(
     cruise_mps: f64,
     config: &VelocityGuidanceConfig,
 ) -> (HorizontalMps, f64) {
-    let (along_north, along_east) = (leg.course_rad.cos(), leg.course_rad.sin());
+    let (along_north, along_east) = (cos(leg.course_rad), sin(leg.course_rad));
     // Right of course is the course rotated a quarter turn clockwise;
     // the identity avoids re-evaluating trigonometry a quarter turn on.
     let (right_north, right_east) = (-along_east, along_north);
@@ -99,7 +100,7 @@ fn correction_along_right_mps(cross_track_m: f64, config: &VelocityGuidanceConfi
 /// preserves the commanded direction, which per-axis clipping would
 /// rotate.
 fn capped(horizontal: HorizontalMps, max_mps: f64) -> HorizontalMps {
-    let magnitude_mps = horizontal.north_mps.hypot(horizontal.east_mps);
+    let magnitude_mps = hypot(horizontal.north_mps, horizontal.east_mps);
     if magnitude_mps <= max_mps || magnitude_mps == 0.0 {
         return horizontal;
     }

@@ -1,5 +1,22 @@
-//! Monotonic time vocabulary. Time is always supplied by the caller;
-//! nothing in this workspace reads a clock (ADR-0002).
+//! Time vocabulary in two layers (ADR-0015). The caller always supplies
+//! the time. Nothing in this workspace reads a clock (ADR-0002).
+//!
+//! - The hardware layer is the proper time of one onboard clock:
+//!   [`MonotonicNanos`], [`DurationNanos`], and [`ClockDomainId`].
+//! - The physical layer is a coordinate time scale: [`TimeScale`],
+//!   [`SignedDuration`], and [`PhysicalInstant`].
+//!
+//! A [`ClockAnchor`] maps a reading of the hardware layer to the physical
+//! layer.
+
+mod anchor;
+mod physical;
+
+#[cfg(test)]
+mod tests;
+
+pub use anchor::ClockAnchor;
+pub use physical::{ATTOSECONDS_PER_SECOND, PhysicalInstant, SignedDuration, TimeScale};
 
 /// Monotonic time in nanoseconds since an unspecified per-process origin.
 ///

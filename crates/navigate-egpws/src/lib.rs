@@ -20,10 +20,16 @@
 //! integration; this crate states the gap rather than papering over it
 //! with a constant offset.
 //!
-//! The horizontal reference is explicit (ADR-0013). Each
+//! The horizontal reference is explicit (ADR-0013, ADR-0015). Each
 //! [`TerrainDatabase`] names its ellipsoid, and [`assess`] refuses a
 //! solution on another ellipsoid with
-//! [`EgpwsUnavailable::EllipsoidMismatch`].
+//! [`EgpwsUnavailable::EllipsoidMismatch`]. The crate is `#![no_std]` and
+//! does not allocate.
+
+#![no_std]
+
+#[cfg(test)]
+extern crate std;
 
 mod assessment;
 mod config;

@@ -55,7 +55,8 @@ fn an_altitude_50_km_from_the_origin_has_no_curvature_bias() {
         reanchor_distance_m: 0.0,
         ..FusionConfig::default()
     };
-    let plane = LocalTangentPlane::new(origin()).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     let on_plane = plane.from_ned(&NedOffset::new(48_000.0, 0.0, 0.0));
     let truth = GeodeticPosition::new(on_plane.latitude_rad, on_plane.longitude_rad, 500.0);
     // A diffuse first fix, then a fix at the far position.

@@ -18,7 +18,8 @@ fn fix(
     east_m: f64,
     variance_m2: f64,
 ) -> Observation {
-    let plane = LocalTangentPlane::new(origin()).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     let class = if source == VISUAL {
         SensorClass::VisualLandmark
     } else {

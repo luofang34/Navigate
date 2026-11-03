@@ -1,24 +1,28 @@
 //! Active-leg sequencing over a validated flight plan.
 //!
-//! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg. Every leg
-//! carries a path terminator (NAV-LG-001); a waypoint that declares none
-//! gets one by position in the fly order (NAV-LG-002), which names the
-//! implicit model rather than changing it. The active leg runs from the
-//! previously captured waypoint — or from the present position on a
-//! direct-to leg — to the next waypoint in fly order. A fly-by waypoint
-//! between two track-to-fix legs sequences early by the distance of turn
-//! anticipation when the turn geometry earns it (NAV-TT-003,
-//! NAV-LG-010); a fly-over waypoint and the terminal waypoint sequence
-//! only inside the capture radius (NAV-TT-004). After the final waypoint
-//! captures, the execution is complete and further advances are inert.
+//! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg on the reference
+//! ellipsoid of the plan. Every leg carries a path terminator (NAV-LG-001);
+//! a waypoint that declares none gets one by position in the fly order
+//! (NAV-LG-002), which names the implicit model rather than changing it.
+//! The active leg runs from the captured upstream waypoint — or from the
+//! present position on a direct-to leg — to the next waypoint in fly order.
+//! A fly-by waypoint between two track-to-fix legs sequences early by the
+//! distance of turn anticipation when the turn geometry earns it
+//! (NAV-TT-003, NAV-LG-010); a fly-over waypoint and the terminal waypoint
+//! sequence only inside the capture radius (NAV-TT-004). After the final
+//! waypoint captures, the execution is complete and further advances are
+//! inert.
 
 use navigate_contract::{
-    FlightPlan, GeodeticPosition, LateralReference, LegPath, TurnType, Waypoint,
+    FlightPlan, GeodeticPosition, LateralReference, LegPath, PlanValidationError, TurnType,
+    Waypoint,
 };
-use navigate_geodesy::{distance_m, initial_bearing_rad};
+use navigate_geodesy::{BodyEllipsoid, distance_m, initial_bearing_rad};
 
 use crate::plan_set::PlanActivationError;
-use crate::turn::{fold_to_half_turn, turn_anticipation_m, turn_radius_m};
+use crate::turn::{
+    EARTH_STANDARD_GRAVITY_MPS2, fold_to_half_turn, turn_anticipation_m, turn_radius_m,
+};
 
 mod activation;
 
@@ -52,23 +56,35 @@ pub struct ExecutionConfig {
     /// (NAV-VC-003): a plan demanding a slower approach is refused at
     /// activation, never silently clamped in flight.
     pub min_approach_speed_mps: f64,
+    /// Surface gravitational acceleration of the body in meters per second
+    /// squared, used to compute the fly-by turn radius `v² / (g · tan φ)`.
+    pub surface_gravity_mps2: f64,
 }
 
 impl ExecutionConfig {
     /// Builds a config with the given capture radius in meters and the
-    /// default bank limit and approach-speed floor.
+    /// default bank limit, approach-speed floor, and Earth surface gravity.
     #[must_use]
-    pub fn new(capture_radius_m: f64) -> Self {
+    pub const fn new(capture_radius_m: f64) -> Self {
         Self {
             capture_radius_m,
             bank_limit_rad: 18.0_f64.to_radians(),
             min_approach_speed_mps: 0.3,
+            surface_gravity_mps2: EARTH_STANDARD_GRAVITY_MPS2,
         }
+    }
+
+    /// Sets the surface gravitational acceleration in meters per second
+    /// squared, for flight on another body such as Mars (`3.72076 m/s²`).
+    #[must_use]
+    pub const fn with_surface_gravity_mps2(mut self, surface_gravity_mps2: f64) -> Self {
+        self.surface_gravity_mps2 = surface_gravity_mps2;
+        self
     }
 }
 
-/// 100 m capture radius, the 18° fly-by bank standard, and a 0.3 m/s
-/// approach-speed floor.
+/// 100 m capture radius, the 18° fly-by bank standard, a 0.3 m/s
+/// approach-speed floor, and [`EARTH_STANDARD_GRAVITY_MPS2`].
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self::new(100.0)
@@ -106,7 +122,7 @@ impl Leg<'_> {
             // A track leg without an upstream fix is refused at
             // activation, so the fallback is unreachable; it is also
             // the fail-safe answer, because a track anchored at ownship
-            // is exactly a direct-to.
+            // is a direct-to.
             LegPath::TrackToFix => self.from.map_or(LateralReference::PresentPosition, |from| {
                 LateralReference::track(from.position)
             }),
@@ -154,15 +170,16 @@ pub enum SequenceEvent {
 }
 
 /// Sequencing state for one activated flight plan.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlanExecution {
-    plan: FlightPlan,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanExecution<'a> {
+    plan: FlightPlan<'a>,
+    ellipsoid: BodyEllipsoid,
     config: ExecutionConfig,
     active_index: usize,
     complete: bool,
 }
 
-impl PlanExecution {
+impl<'a> PlanExecution<'a> {
     /// Validates the plan and the config, then starts execution on the
     /// initial direct-to leg toward the first waypoint.
     ///
@@ -172,31 +189,33 @@ impl PlanExecution {
     /// waypoint speed constraint below the approach-speed floor
     /// (NAV-VC-003), or a path terminator this build cannot fly
     /// (NAV-LG-005) — an invalid plan never becomes an execution.
-    pub fn new(plan: FlightPlan, config: ExecutionConfig) -> Result<Self, PlanActivationError> {
+    pub fn new(plan: FlightPlan<'a>, config: ExecutionConfig) -> Result<Self, PlanActivationError> {
         plan.validate()?;
+        let ellipsoid = BodyEllipsoid::try_from_contract(plan.ellipsoid)
+            .map_err(|_| PlanValidationError::ImplausibleEllipsoid { plan: plan.id })?;
         validate_config(&config)?;
         screen_leg_paths(&plan)?;
-        for waypoint in &plan.waypoints {
+        for waypoint in plan.waypoints {
             if let Some(max_speed_mps) = waypoint.max_speed_mps
                 && max_speed_mps < config.min_approach_speed_mps
             {
                 return Err(PlanActivationError::SpeedBelowFloor {
-                    plan: plan.id.clone(),
-                    ident: waypoint.ident.clone(),
+                    plan: plan.id,
+                    ident: waypoint.ident,
                     max_speed_mps,
                     floor_mps: config.min_approach_speed_mps,
                 });
             }
         }
         for pair in plan.waypoints.windows(2) {
-            let leg_length_m = distance_m(&pair[0].position, &pair[1].position);
+            let leg_length_m = distance_m(&pair[0].position, &pair[1].position, ellipsoid);
             // A leg shorter than the capture radius would sequence while
             // the vehicle is still at the previous fix — a plan-design
             // defect refused here rather than flown as a skip.
             if leg_length_m <= config.capture_radius_m {
                 return Err(PlanActivationError::CaptureRadiusExceedsLeg {
-                    plan: plan.id.clone(),
-                    ident: pair[1].ident.clone(),
+                    plan: plan.id,
+                    ident: pair[1].ident,
                     leg_length_m,
                     capture_radius_m: config.capture_radius_m,
                 });
@@ -204,6 +223,7 @@ impl PlanExecution {
         }
         Ok(Self {
             plan,
+            ellipsoid,
             config,
             active_index: 0,
             complete: false,
@@ -227,7 +247,7 @@ impl PlanExecution {
         };
         let index = leg.index;
         let turn = leg.to.turn;
-        let distance = distance_m(position, &leg.to.position);
+        let distance = distance_m(position, &leg.to.position, self.ellipsoid);
         if !distance.is_finite() {
             return SequenceEvent::None;
         }
@@ -288,8 +308,8 @@ impl PlanExecution {
         if resolve_path(next_index, next.path) != LegPath::TrackToFix {
             return 0.0;
         }
-        let inbound_length = distance_m(&from.position, &leg.to.position);
-        let outbound_length = distance_m(&leg.to.position, &next.position);
+        let inbound_length = distance_m(&from.position, &leg.to.position, self.ellipsoid);
+        let outbound_length = distance_m(&leg.to.position, &next.position, self.ellipsoid);
         if inbound_length < MIN_TRACK_SEPARATION_M || outbound_length < MIN_TRACK_SEPARATION_M {
             return 0.0;
         }
@@ -302,13 +322,17 @@ impl PlanExecution {
         if track_change > MAX_ANTICIPATED_TRACK_CHANGE_RAD {
             return 0.0;
         }
-        let radius = turn_radius_m(groundspeed_mps, self.config.bank_limit_rad);
+        let radius = turn_radius_m(
+            groundspeed_mps,
+            self.config.bank_limit_rad,
+            self.config.surface_gravity_mps2,
+        );
         turn_anticipation_m(radius, track_change).min(0.5 * inbound_length.min(outbound_length))
     }
 
     /// The leg being flown, or `None` once the plan is complete.
     #[must_use]
-    pub fn active_leg(&self) -> Option<Leg<'_>> {
+    pub fn active_leg(&self) -> Option<Leg<'a>> {
         if self.complete {
             return None;
         }
@@ -327,8 +351,14 @@ impl PlanExecution {
 
     /// The plan being executed.
     #[must_use]
-    pub const fn plan(&self) -> &FlightPlan {
+    pub const fn plan(&self) -> &FlightPlan<'a> {
         &self.plan
+    }
+
+    /// The derived ellipsoid of the plan.
+    #[must_use]
+    pub const fn ellipsoid(&self) -> BodyEllipsoid {
+        self.ellipsoid
     }
 
     /// Index of the active `to` waypoint. After completion this stays at
@@ -340,7 +370,7 @@ impl PlanExecution {
 
     /// Waypoints not yet captured, in fly order; empty once complete.
     #[must_use]
-    pub fn remaining_waypoints(&self) -> &[Waypoint] {
+    pub fn remaining_waypoints(&self) -> &'a [Waypoint] {
         if self.complete {
             return &[];
         }
@@ -373,6 +403,9 @@ fn validate_config(config: &ExecutionConfig) -> Result<(), PlanActivationError> 
             "min_approach_speed_mps",
             config.min_approach_speed_mps,
         ));
+    }
+    if !config.surface_gravity_mps2.is_finite() || config.surface_gravity_mps2 <= 0.0 {
+        return Err(defect("surface_gravity_mps2", config.surface_gravity_mps2));
     }
     Ok(())
 }

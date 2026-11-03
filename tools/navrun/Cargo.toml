@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 navigate-contract = { workspace = true }
-navigate-geodesy = { workspace = true }
+navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-fusion = { workspace = true }
 navigate-fpl = { workspace = true }
 navigate-guidance = { workspace = true }
