@@ -1,23 +1,24 @@
 //! Bounded event history and out-of-sequence replay (ADR-0012,
-//! ADR-0014).
+//! ADR-0014, ADR-0017).
 //!
 //! The history keeps the core before each event and the event. The
-//! events are IMU samples, observations, frame changes, and environment
-//! updates. The rules of time are these:
+//! events are IMU samples, IMU increments, observations, frame changes,
+//! and regime updates. The rules of time are these:
 //!
-//! - An IMU sample at or after the state time propagates the state to its
-//!   end time with its own rates.
+//! - An IMU sample or an IMU increment at or after the state time
+//!   propagates the state to its end time.
 //! - An observation at or after the state time propagates the state with
 //!   the most recent IMU rates.
-//! - An IMU sample or an observation before the state time rewinds to
-//!   the core before the first later event. The propagation to the
-//!   acquisition time uses the rates of the first later IMU sample when
-//!   its interval holds the acquisition time. Then the replay of that
-//!   sample propagates the rest of its interval with the same rates, so
-//!   the split of the interval is exact. The later events replay in time
-//!   order without the gates.
-//! - A frame change and an environment update are events at or after the
-//!   state time. A replay that starts before them applies them again.
+//! - An IMU event or an observation before the state time rewinds to the
+//!   core before the first later event. The propagation to the
+//!   acquisition time uses the rates of the first later IMU event when
+//!   its interval holds the acquisition time. For an increment these
+//!   rates are its mean rates. Then the replay of that event propagates
+//!   the rest of its interval with the same rates, so the split of the
+//!   interval is exact. The later events replay in time order without
+//!   the gates.
+//! - A frame change and a regime update are events at or after the state
+//!   time. A replay that starts before them applies them again.
 
 use navigate_contract::{DurationNanos, MonotonicNanos};
 
@@ -182,24 +183,27 @@ impl History {
         Ok(())
     }
 
-    /// The rates of the first IMU sample at or after `index` when its
+    /// The rates of the first IMU event at or after `index` when its
     /// interval holds `at`.
     fn covering_rates(&self, index: usize, at: MonotonicNanos) -> Option<ImuRates> {
-        let sample = self
+        let (end, dt_s, rates) = self
             .entries
             .iter()
             .skip(index)
             .find_map(|entry| match &entry.event {
-                Event::Imu(sample) => Some(*sample),
+                Event::Imu(sample) => {
+                    Some((sample.stamp.acquired_at, sample.dt_s, ImuRates::of(sample)))
+                }
+                Event::Increment(increment) => Some((
+                    increment.stamp.acquired_at,
+                    increment.dt_s,
+                    ImuRates::mean_of(increment),
+                )),
                 _ => None,
             })?;
-        let interval_ns = round(sample.dt_s * 1e9) as u64;
-        let start = sample
-            .stamp
-            .acquired_at
-            .as_nanos()
-            .saturating_sub(interval_ns);
-        (start <= at.as_nanos()).then(|| ImuRates::of(&sample))
+        let interval_ns = round(dt_s * 1e9) as u64;
+        let start = end.as_nanos().saturating_sub(interval_ns);
+        (start <= at.as_nanos()).then_some(rates)
     }
 
     /// Time from the oldest rewind point to the state time of `current`.

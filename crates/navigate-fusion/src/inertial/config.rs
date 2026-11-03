@@ -5,15 +5,16 @@ use crate::config::FusionConfig;
 use crate::kalman::FogmBias;
 
 /// Number of history events that the default configuration keeps: the
-/// inline bound. One event is one IMU sample or one observation, so a
-/// delayed observation must arrive within this number of events.
+/// inline bound. One event is one IMU sample, one IMU increment, or one
+/// observation, so a delayed observation must arrive within this number
+/// of events.
 const DEFAULT_HISTORY_CAPACITY: usize = MAX_INERTIAL_HISTORY;
 
 /// Configuration of a [`crate::InertialNavigationFilter`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InertialConfig {
     /// The admission, gate, quality, and history settings.
-    /// `history_capacity` counts IMU samples and observations, up to
+    /// `history_capacity` counts IMU events and observations, up to
     /// [`super::MAX_INERTIAL_HISTORY`].
     pub fusion: FusionConfig,
     /// White noise density of the accelerometer in (m/s²)/√Hz.

@@ -94,9 +94,6 @@ fn a_new_map_revision_starts_a_new_bias_and_a_constant_revision_converges() {
     );
     // The position stays at the origin: the bias, not the position,
     // absorbed the offset.
-    assert!(
-        core(&filter).nominal.p.norm() < 1.0,
-        "{}",
-        core(&filter).nominal.p
-    );
+    let offset = core(&filter).nominal.p - earth_body_fixed(&earth_origin());
+    assert!(offset.norm() < 1.0, "{offset}");
 }

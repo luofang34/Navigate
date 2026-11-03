@@ -166,7 +166,7 @@ fn a_delayed_fix_replays_through_the_change_of_frame() {
     );
     let solution = delayed_filter.tick_space(t(20_000)).expect("initialized");
     assert_eq!(solution.frame, FrameId::MOON_J2000);
-    assert!(delayed_filter.tick_surface(t(20_000)).is_none());
+    assert!(delayed_filter.tick(t(20_000)).is_none());
 }
 
 #[test]
@@ -217,17 +217,28 @@ fn an_environment_update_keeps_the_frame() {
         .expect("one body");
     }
     assert!(filter.update_space_environment(moved).is_ok());
-    assert!(
-        matches!(&core(&filter).regime, crate::inertial::regime::Regime::CartesianSpace(env) if *env == moved)
-    );
+    assert_eq!(core(&filter).regime.env, moved);
+    assert_eq!(filter.environment(), moved);
     assert_eq!(filter.rejections().frame_mismatch, 1);
+    // A surface filter keeps its ellipsoid through an environment update
+    // in its own frame.
     let mut surface = surface_filter(
         InertialConfig::default(),
         PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
-    assert!(matches!(
-        surface.recenter_space_frame(moon_env(), [0.0; 3], [0.0; 3], None, t(0)),
-        Err(RejectionReason::FrameMismatch { .. })
-    ));
+    assert_eq!(
+        surface.update_space_environment(moon_env()),
+        Err(RejectionReason::FrameMismatch {
+            expected: FrameId::EARTH_ITRF93,
+            got: FrameId::MOON_J2000
+        })
+    );
+    let rotating = SpaceEnvironment::from_body(PlanetaryBody::EARTH_WGS84);
+    assert!(surface.update_space_environment(rotating).is_ok());
+    assert_eq!(
+        surface.surface_ellipsoid(),
+        Some(navigate_geodesy::BodyEllipsoid::WGS84)
+    );
+    assert!(surface.tick(t(0)).is_some());
 }

@@ -1,22 +1,23 @@
-//! Measurement models of the inertial filter (ADR-0014).
+//! Measurement models of the inertial filter (ADR-0014, ADR-0017).
 //!
 //! Each model linearizes one observation at the nominal state and gives
-//! a [`Linearized`] update of the error state. The models read the
-//! regime of the core that they update, so a replay after a frame
-//! change uses the frame of the replayed core.
+//! a [`Linearized`] update of the error state. The position and the
+//! velocity errors are in the body-centered Cartesian axes of the
+//! regime. A geodetic model converts its value into these axes with the
+//! local NED axes of [`LocalLevel`], so no model has a tangent plane and
+//! no model has a limit at a pole. The models read the regime of the
+//! core that they update, so a replay after a frame change uses the
+//! frame of the replayed core.
 
-use nalgebra::{Matrix3, Rotation3, SMatrix, SVector, UnitQuaternion, Vector3};
-use navigate_contract::GeodeticPosition;
-use navigate_geodesy::{LocalTangentPlane, NedOffset};
+use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
+use navigate_geodesy::BodyEllipsoid;
 
 use super::config::InertialConfig;
 use super::estimate::{InertialCore, Linearized, Mode};
+use super::local_level::LocalLevel;
 use super::nominal::N;
-use super::regime::Regime;
-use crate::kalman::rotation_between;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
-use navigate_astrodynamics::SurfaceFrame;
 
 mod attitude;
 mod cartesian;
@@ -35,103 +36,80 @@ pub(crate) fn apply_observation(
     config: &InertialConfig,
     mode: Mode,
 ) -> Result<f64, RejectionReason> {
+    let kind = obs.value.kind();
+    if !core.regime.supports(kind) {
+        return Err(RejectionReason::UnsupportedMeasurement { kind });
+    }
     let fusion = &config.fusion;
-    let vector_gate = fusion.innovation_gate_chi2;
-    let scalar_gate = fusion.scalar_gate_chi2;
-    let unsupported = || RejectionReason::UnsupportedMeasurement {
-        kind: obs.value.kind(),
-    };
-    match &core.regime {
-        Regime::BodySurface(surface) => {
-            let surface = *surface;
-            match &obs.value {
-                ObservationValue::PositionFix { .. }
-                | ObservationValue::VelocityFix { .. }
-                | ObservationValue::Range { .. } => {
-                    surface::apply_vector_or_range(core, &surface, obs, config, mode)
-                }
-                ObservationValue::Altitude {
-                    altitude_m,
-                    variance_m2,
-                } => {
-                    let model = surface::altitude(
-                        core,
-                        &surface,
-                        *altitude_m,
-                        *variance_m2,
-                        obs.composition,
-                    )?;
-                    core.update(&model, scalar_gate, mode)
-                }
-                ObservationValue::TerrainClearance { .. } => {
-                    let model = terrain::terrain_clearance(core, &surface, &obs.value)?;
-                    core.update(&model, scalar_gate, mode)
-                }
-                ObservationValue::MagneticAnomaly { .. } => {
-                    magnetic::apply(core, &surface, obs, config, mode)
-                }
-                ObservationValue::AttitudeFix {
-                    attitude,
-                    covariance,
-                } => {
-                    let to_local = vehicle_plane_to_local(core, &surface)?;
-                    let model = attitude::attitude_fix(core, &to_local, attitude, covariance);
-                    core.update(&model, vector_gate, mode)
-                }
-                ObservationValue::VisualPose { .. } => {
-                    let model = attitude::visual_pose(core, &surface, &obs.value)?;
-                    core.update(&model, fusion.pose_gate_chi2, mode)
-                }
-                _ => Err(unsupported()),
-            }
+    match &obs.value {
+        ObservationValue::CartesianPositionFix { .. }
+        | ObservationValue::CartesianVelocityFix { .. }
+        | ObservationValue::CartesianRange { .. } => {
+            cartesian::apply(core, &obs.value, config, mode)
         }
-        Regime::CartesianSpace(_) => match &obs.value {
-            ObservationValue::AttitudeFix {
-                attitude,
-                covariance,
-            } => {
-                let model =
-                    attitude::attitude_fix(core, &UnitQuaternion::identity(), attitude, covariance);
-                core.update(&model, vector_gate, mode)
-            }
-            ObservationValue::CartesianPositionFix { .. }
-            | ObservationValue::CartesianVelocityFix { .. }
-            | ObservationValue::CartesianRange { .. } => {
-                cartesian::apply(core, &obs.value, config, mode)
-            }
-            _ => Err(unsupported()),
-        },
+        ObservationValue::AttitudeFix {
+            attitude,
+            covariance,
+        } => {
+            let to_reference = core
+                .regime
+                .surface
+                .map_or_else(UnitQuaternion::identity, |ellipsoid| {
+                    vehicle_level(core, ellipsoid).bf_to_ned_quaternion()
+                });
+            let model = attitude::attitude_fix(core, &to_reference, attitude, covariance);
+            core.update(&model, fusion.innovation_gate_chi2, mode)
+        }
+        _ => apply_geodetic(core, obs, config, mode),
     }
 }
 
-/// The rotation from the plane axes to the local NED axes at `position`.
-pub(crate) fn plane_to_local_at(
-    surface: &SurfaceFrame,
-    position: GeodeticPosition,
-) -> Result<Matrix3<f64>, RejectionReason> {
-    let local = LocalTangentPlane::new(position, surface.plane().ellipsoid())
-        .map_err(|_| RejectionReason::NonFiniteValue)?;
-    Ok(rotation_between(surface.plane(), &local))
+/// Applies a model that needs the reference ellipsoid of the regime.
+fn apply_geodetic(
+    core: &mut InertialCore,
+    obs: &Observation,
+    config: &InertialConfig,
+    mode: Mode,
+) -> Result<f64, RejectionReason> {
+    let unsupported = RejectionReason::UnsupportedMeasurement {
+        kind: obs.value.kind(),
+    };
+    let Some(ellipsoid) = core.regime.surface else {
+        return Err(unsupported);
+    };
+    let fusion = &config.fusion;
+    match &obs.value {
+        ObservationValue::PositionFix { .. }
+        | ObservationValue::VelocityFix { .. }
+        | ObservationValue::Range { .. } => {
+            surface::apply_vector_or_range(core, ellipsoid, obs, config, mode)
+        }
+        ObservationValue::Altitude {
+            altitude_m,
+            variance_m2,
+        } => {
+            let model =
+                surface::altitude(core, ellipsoid, *altitude_m, *variance_m2, obs.composition);
+            core.update(&model, fusion.scalar_gate_chi2, mode)
+        }
+        ObservationValue::TerrainClearance { .. } => {
+            let model = terrain::terrain_clearance(core, ellipsoid, &obs.value)?;
+            core.update(&model, fusion.scalar_gate_chi2, mode)
+        }
+        ObservationValue::MagneticAnomaly { .. } => {
+            magnetic::apply(core, ellipsoid, obs, config, mode)
+        }
+        ObservationValue::VisualPose { .. } => {
+            let model = attitude::visual_pose(core, ellipsoid, &obs.value)?;
+            core.update(&model, fusion.pose_gate_chi2, mode)
+        }
+        _ => Err(unsupported),
+    }
 }
 
-/// The geodetic position of the nominal state.
-pub(crate) fn vehicle_position(core: &InertialCore, surface: &SurfaceFrame) -> GeodeticPosition {
-    let p = core.nominal.p;
-    surface.plane().from_ned(&NedOffset::new(p.x, p.y, p.z))
-}
-
-/// The rotation from the plane axes to the local NED axes at the
-/// vehicle, as a unit quaternion.
-pub(crate) fn vehicle_plane_to_local(
-    core: &InertialCore,
-    surface: &SurfaceFrame,
-) -> Result<UnitQuaternion<f64>, RejectionReason> {
-    let rotation = plane_to_local_at(surface, vehicle_position(core, surface))?;
-    Ok(quaternion_of(&rotation))
-}
-
-pub(crate) fn quaternion_of(rotation: &Matrix3<f64>) -> UnitQuaternion<f64> {
-    UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(*rotation))
+/// The geodetic position and the local NED axes of the nominal state.
+pub(crate) fn vehicle_level(core: &InertialCore, ellipsoid: BodyEllipsoid) -> LocalLevel {
+    LocalLevel::at_body_fixed(&core.nominal.p, ellipsoid)
 }
 
 /// A scalar update with the row `h` and the variance `variance`.

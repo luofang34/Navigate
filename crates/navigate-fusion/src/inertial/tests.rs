@@ -1,4 +1,8 @@
+mod frame_change;
+mod increment;
 mod magnetic;
+mod polar;
+mod regimes;
 mod schuler;
 mod space;
 mod surface;
@@ -13,6 +17,7 @@ use navigate_contract::{
 };
 
 use super::estimate::InertialCore;
+use super::nominal::{InertialNominal, Vec17, rotation_vector};
 use super::{ImuSample, InertialConfig, InertialNavigationFilter};
 use crate::rejection::IngestOutcome;
 use navigate_astrodynamics::{GravityField, PlanetaryBody};
@@ -78,13 +83,19 @@ fn core(filter: &InertialNavigationFilter) -> &InertialCore {
     filter.core.as_ref().expect("initialized")
 }
 
-/// The IMU rates of a vehicle at rest at the plane origin with the body
-/// axes along the plane axes: `f = −g_app(0)` and `ω_ib = ω_plane`.
+/// The IMU rates of a vehicle at rest in the body-fixed frame at the
+/// nominal position and attitude: `f = −Cᵀ·g_app(p)` and `ω_ib = Cᵀ·ω`.
 fn rest_rates(filter: &InertialNavigationFilter) -> ([f64; 3], [f64; 3]) {
-    let regime = &core(filter).regime;
-    let (g, _) = regime.gravity(&Vector3::zeros());
-    let omega = regime.frame_rotation();
-    ((-g).into(), omega.into())
+    let state = core(filter);
+    let (g, _) = state.regime.gravity(&state.nominal.p);
+    let omega = state.regime.frame_rotation();
+    let c = state.nominal.c_b_to_f();
+    ((c.transpose() * -g).into(), (c.transpose() * omega).into())
+}
+
+/// The body-fixed position of `position` on WGS84.
+fn earth_body_fixed(position: &GeodeticPosition) -> Vector3<f64> {
+    super::local_level::body_fixed(position, navigate_geodesy::BodyEllipsoid::WGS84)
 }
 
 fn imu(sequence: u32, at_ms: u64, rates: ([f64; 3], [f64; 3]), dt_s: f64) -> ImuSample {
@@ -112,4 +123,21 @@ fn assert_accepted(outcome: IngestOutcome) {
         outcome.is_accepted(),
         "expected acceptance, got {outcome:?}"
     );
+}
+
+/// The error state of `x` relative to `reference`, with the attitude
+/// as the body-axis rotation vector.
+fn error_between(x: &InertialNominal, reference: &InertialNominal) -> Vec17 {
+    let mut dx = Vec17::zeros();
+    dx.fixed_rows_mut::<3>(0).copy_from(&(x.p - reference.p));
+    dx.fixed_rows_mut::<3>(3).copy_from(&(x.v - reference.v));
+    dx.fixed_rows_mut::<3>(6)
+        .copy_from(&rotation_vector(&(reference.q.inverse() * x.q)));
+    dx.fixed_rows_mut::<3>(9)
+        .copy_from(&(x.b_a - reference.b_a));
+    dx.fixed_rows_mut::<3>(12)
+        .copy_from(&(x.b_g - reference.b_g));
+    dx[15] = x.b_alt - reference.b_alt;
+    dx[16] = x.b_mag - reference.b_mag;
+    dx
 }

@@ -1,29 +1,33 @@
-//! Scalar magnetic anomaly with a map bias state (ADR-0014).
+//! Scalar magnetic anomaly with a map bias state (ADR-0014, ADR-0017).
 //!
-//! The model is `h(x) = map_t_at_lin + g·(p − p_lin) + b_mag`. The bias
+//! The model is `h(x) = map_t_at_lin + g·(p − p_lin) + b_mag` in the
+//! body-fixed axes. `p_lin` is the body-fixed position of the
+//! linearization point, and `g` is the map gradient rotated from the
+//! local NED axes at that point into the body-fixed axes. The bias
 //! `b_mag` belongs to one map: one source and one map revision. When the
 //! source or the revision changes, the filter starts a new bias at zero
 //! with the stationary variance and no correlation. The reset is part of
 //! the candidate state, so a refused observation does not reset the
 //! bias.
 
-use nalgebra::SMatrix;
+use nalgebra::{SMatrix, Vector3};
+use navigate_geodesy::BodyEllipsoid;
 
-use super::scalar;
+use super::{scalar, vehicle_level};
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Mode};
+use crate::inertial::local_level::{LocalLevel, body_fixed};
 use crate::inertial::nominal::{MAG_BIAS, N, POS};
-use crate::kalman::{
-    MagneticAnomalyModel, MapLinearization, check_gradient_information, check_linearization_region,
-    horizontal_1sigma_m,
-};
+use crate::kalman::{check_gradient_information, check_linearization_region, horizontal_1sigma_m};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
-use navigate_astrodynamics::SurfaceFrame;
 
+/// Applies a magnetic anomaly. The gated mode checks the linearization
+/// region with the horizontal 1-sigma in the local NED axes at the
+/// vehicle, and the information of the gradient.
 pub(super) fn apply(
     core: &mut InertialCore,
-    surface: &SurfaceFrame,
+    ellipsoid: BodyEllipsoid,
     obs: &Observation,
     config: &InertialConfig,
     mode: Mode,
@@ -41,32 +45,26 @@ pub(super) fn apply(
             kind: obs.value.kind(),
         });
     };
-    let map = MapLinearization {
-        linearization_point,
-        map_t_at_lin,
-        gradient_ned_t_per_m,
-        valid_radius_m,
-    };
-    let model = MagneticAnomalyModel::new(surface.plane(), &map, measured_t, variance_t2)
-        .ok_or(RejectionReason::NonFiniteValue)?;
+    let p_lin = body_fixed(&linearization_point, ellipsoid);
+    let g = LocalLevel::at(linearization_point).ned_to_bf * Vector3::from(gradient_ned_t_per_m);
     let key = (obs.stamp.source, obs.map_revision);
     let mut candidate = *core;
     if candidate.mag_key.is_some_and(|active| active != key) {
         start_new_bias(&mut candidate, config);
     }
-    let g = model.g_plane();
-    let offset = candidate.nominal.p - model.p_lin_plane();
+    let offset = candidate.nominal.p - p_lin;
     if mode == Mode::Gated {
+        let p_pos = candidate.p.fixed_view::<3, 3>(POS, POS).into_owned();
+        let p_pos_ned = vehicle_level(&candidate, ellipsoid).bf_to_ned_cov(&p_pos);
         check_linearization_region(
             offset.norm(),
-            horizontal_1sigma_m(&candidate.p),
-            model.valid_radius_m(),
+            horizontal_1sigma_m(&p_pos_ned),
+            valid_radius_m,
             &config.fusion,
         )?;
-        let p_pos = candidate.p.fixed_view::<3, 3>(POS, POS).into_owned();
         check_gradient_information(&g, &p_pos, variance_t2, &config.fusion)?;
     }
-    let predicted = model.map_t_at_lin() + g.dot(&offset) + candidate.nominal.b_mag;
+    let predicted = map_t_at_lin + g.dot(&offset) + candidate.nominal.b_mag;
     let mut h = SMatrix::<f64, 1, N>::zeros();
     h.fixed_view_mut::<1, 3>(0, POS).copy_from(&g.transpose());
     h[(0, MAG_BIAS)] = 1.0;

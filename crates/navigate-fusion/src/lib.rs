@@ -16,8 +16,8 @@
 //!   with scalar map models and a bounded delayed-measurement history
 //!   (ADR-0012, ADR-0013).
 //! - [`InertialNavigationFilter`] ([`inertial`]): a strapdown error-state
-//!   filter with seventeen states on a body surface or in a Cartesian
-//!   space frame (ADR-0014).
+//!   filter with seventeen states in one body-centered Cartesian frame,
+//!   on a body surface or in space (ADR-0014, ADR-0017).
 //! - [`MarginalizedParticleFilter`] ([`particle`]): a scalar field map
 //!   match without a linearization, on particles that the caller owns.
 //!
@@ -49,7 +49,9 @@ mod provenance;
 pub mod rejection;
 
 pub use config::FusionConfig;
-pub use inertial::{ImuSample, InertialConfig, InertialNavigationFilter};
+pub use inertial::{
+    FrameChange, ImuIncrement, ImuSample, InertialConfig, InertialNavigationFilter,
+};
 pub use kalman::FogmBias;
 pub use kinematic::{InnovationStats, NavigationFilter};
 pub use navigate_astrodynamics::{

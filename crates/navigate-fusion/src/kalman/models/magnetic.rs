@@ -59,26 +59,6 @@ impl MagneticAnomalyModel {
         })
     }
 
-    /// The gradient in the plane axes, in tesla per meter.
-    pub(crate) const fn g_plane(&self) -> Vector3<f64> {
-        self.g_plane
-    }
-
-    /// The linearization point in the plane axes.
-    pub(crate) const fn p_lin_plane(&self) -> Vector3<f64> {
-        self.p_lin_plane
-    }
-
-    /// The map value at the linearization point in tesla.
-    pub(crate) const fn map_t_at_lin(&self) -> f64 {
-        self.map_t_at_lin
-    }
-
-    /// The radius of the valid region in meters.
-    pub(crate) const fn valid_radius_m(&self) -> f64 {
-        self.valid_radius_m
-    }
-
     fn offset_from_lin(&self, x: &Vec6) -> Vector3<f64> {
         Vector3::new(x[0], x[1], x[2]) - self.p_lin_plane
     }

@@ -1,16 +1,16 @@
-//! Attitude fixes and visual poses (ADR-0014).
+//! Attitude fixes and visual poses (ADR-0014, ADR-0017).
 
 use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::{AttitudeQuaternion, SymmetricCov3};
+use navigate_geodesy::BodyEllipsoid;
 
-use super::{block, plane_to_local_at, quaternion_of};
+use super::block;
 use crate::inertial::estimate::{InertialCore, Linearized};
+use crate::inertial::local_level::{LocalLevel, body_fixed};
 use crate::inertial::nominal::{ATT, N, POS, rotation_vector, to_unit_quaternion};
 use crate::kalman::cov3_to_matrix;
-use crate::kinematic::reanchor::vehicle_to_plane;
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
-use navigate_astrodynamics::SurfaceFrame;
 
 /// The residual of a measured attitude: the body-axis rotation vector
 /// `2·log(q_nom⁻¹ ⊗ q_meas)` in the hemisphere `w ≥ 0`. `to_reference`
@@ -26,6 +26,9 @@ fn attitude_residual(
 }
 
 /// An attitude fix with `H_θ = I`. The covariance is in the body axes.
+/// `to_reference` rotates the frame axes into the reference axes of the
+/// fix: the local NED axes at the vehicle when the regime has a
+/// reference ellipsoid, and the frame axes when it has none.
 pub(super) fn attitude_fix(
     core: &InertialCore,
     to_reference: &UnitQuaternion<f64>,
@@ -36,14 +39,14 @@ pub(super) fn attitude_fix(
     block(residual, ATT, cov3_to_matrix(covariance))
 }
 
-/// A visual pose: the position error in the plane axes and the attitude
-/// error in the body axes. The position covariance rotates from the
-/// local NED axes at the pose into the plane axes. The attitude
-/// covariance rotates from the same local axes into the body axes:
-/// `R_body = C_blᵀ·R_ned·C_bl`.
+/// A visual pose: the position error in the body-fixed axes and the
+/// attitude error in the body axes. The position covariance rotates from
+/// the local NED axes at the pose into the body-fixed axes. The pose
+/// attitude is relative to the same local axes, and its covariance
+/// rotates into the body axes: `R_body = C_blᵀ·R_ned·C_bl`.
 pub(super) fn visual_pose(
     core: &InertialCore,
-    surface: &SurfaceFrame,
+    ellipsoid: BodyEllipsoid,
     value: &ObservationValue,
 ) -> Result<Linearized<6>, RejectionReason> {
     let ObservationValue::VisualPose {
@@ -55,12 +58,10 @@ pub(super) fn visual_pose(
     else {
         return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
     };
-    let plane = surface.plane();
-    let offset = plane.to_ned(position);
-    let z = Vector3::new(offset.north_m, offset.east_m, offset.down_m);
-    let (_, r_position) =
-        vehicle_to_plane(plane, *position, z, cov3_to_matrix(position_covariance));
-    let to_local = quaternion_of(&plane_to_local_at(surface, *position)?);
+    let z = body_fixed(position, ellipsoid);
+    let local = LocalLevel::at(*position);
+    let r_position = local.ned_to_bf_cov(&cov3_to_matrix(position_covariance));
+    let to_local = local.bf_to_ned_quaternion();
     let (r_attitude, nominal_local) = attitude_residual(core, &to_local, attitude);
     let c_bl = nominal_local.to_rotation_matrix().into_inner();
     let r_attitude_body = c_bl.transpose() * cov3_to_matrix(attitude_covariance) * c_bl;

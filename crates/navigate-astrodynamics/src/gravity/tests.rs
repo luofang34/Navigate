@@ -53,6 +53,29 @@ fn the_surface_frame_reads_the_body_centered_position() {
     assert_eq!(by_reference.frame_rotation(), omega);
 }
 
+#[test]
+fn the_environment_of_a_body_is_its_rotating_body_fixed_frame() {
+    for body in [
+        PlanetaryBody::EARTH_WGS84,
+        PlanetaryBody::MOON_PA,
+        PlanetaryBody::MARS_IAU,
+    ] {
+        let env = SpaceEnvironment::from_body(body);
+        assert!(env.is_plausible());
+        assert_eq!(env.frame, body.ellipsoid.frame());
+        assert_eq!(env.frame_rotation(), body.rotation_body_fixed());
+        for lat_deg in [-90.0_f64, -30.0, 0.0, 47.0, 90.0] {
+            let at = GeodeticPosition::new(lat_deg.to_radians(), 1.1, 2_000.0);
+            let r = geodetic_to_body_fixed(&at, body.ellipsoid);
+            let p = Vector3::new(r.x_m, r.y_m, r.z_m);
+            let (g, gradient) = env.gravity(&p);
+            let (g_body, gradient_body) = body.apparent_gravity_body_fixed(&p);
+            assert!((g - g_body).norm() <= 1e-15 * g_body.norm(), "{lat_deg}");
+            assert!((gradient - gradient_body).abs().max() <= 1e-15 * gradient_body.abs().max());
+        }
+    }
+}
+
 fn earth_j2000_central() -> CentralBodyGravity {
     // The J2000 axes are equatorial, so the pole of the Earth is close
     // to `z`. A pole tilted by the obliquity exercises the
