@@ -5,6 +5,7 @@ use nalgebra::{Matrix3, SMatrix, Vector3};
 use navigate_contract::GeodeticPosition;
 
 use super::error_between;
+use crate::inertial::ClockNoiseModel;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::discretization::{expm, van_loan};
 use crate::inertial::local_level::body_fixed;
@@ -12,7 +13,7 @@ use crate::inertial::mechanization::{
     ImuRates, continuous_jacobian, continuous_noise, mechanize, transition,
 };
 use crate::inertial::nominal::{
-    ALT_BIAS, InertialNominal, MAG_BIAS, Mat17, N, Vec17, exp_rotation, reset_jacobian,
+    ALT_BIAS, ErrorMat, ErrorVec, InertialNominal, MAG_BIAS, N, exp_rotation, reset_jacobian,
     rotation_vector,
 };
 use crate::kalman::FogmBias;
@@ -34,6 +35,13 @@ fn short_bias_config() -> InertialConfig {
         gyro_bias: FogmBias::new(200.0, 1e-5),
         baro_bias: FogmBias::new(50.0, 3.0),
         mag_bias: FogmBias::new(30.0, 3e-9),
+        dmc: Some(FogmBias::new(120.0, 1e-6)),
+        clock_model: Some(ClockNoiseModel {
+            white_frequency_psd_m2_per_s: 0.04,
+            random_walk_frequency_psd_m2_per_s3: 0.001,
+            initial_bias_sigma_m: 100.0,
+            initial_drift_sigma_mps: 1.0,
+        }),
         ..InertialConfig::default()
     }
 }
@@ -47,6 +55,9 @@ fn nominal() -> InertialNominal {
         b_g: Vector3::new(1e-4, -2e-4, 5e-5),
         b_alt: 2.0,
         b_mag: 1e-9,
+        a_dmc: Vector3::new(2e-6, -1e-6, 4e-7),
+        clock_bias_m: 35.0,
+        clock_drift_mps: -0.2,
     }
 }
 
@@ -69,7 +80,9 @@ fn epsilon(index: usize) -> f64 {
         9..=11 => 1e-3,
         12..=14 => 1e-4,
         15 => 1e-2,
-        _ => 1e-12,
+        16 => 1e-12,
+        17..=19 => 1e-6,
+        _ => 1e-2,
     }
 }
 
@@ -80,10 +93,10 @@ fn transition_matrix_matches_finite_differences_of_the_mechanization() {
     let x = nominal();
     let dt_s = 0.005;
     let (next, phi, _) = transition(&x, &rates(), dt_s, &field, &config).expect("finite");
-    let mut numeric = Mat17::zeros();
+    let mut numeric = ErrorMat::zeros();
     for j in 0..N {
         let eps = epsilon(j);
-        let mut dx = Vec17::zeros();
+        let mut dx = ErrorVec::zeros();
         dx[j] = eps;
         let plus = mechanize(&x.inject(&dx), &rates(), dt_s, &field, &config).0;
         let minus = mechanize(&x.inject(&(-dx)), &rates(), dt_s, &field, &config).0;

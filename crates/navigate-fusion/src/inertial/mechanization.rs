@@ -19,9 +19,9 @@ use super::config::InertialConfig;
 use super::discretization::van_loan;
 use super::imu::{ImuIncrement, ImuSample};
 use super::nominal::{
-    ACCEL_BIAS, ALT_BIAS, ATT, GYRO_BIAS, InertialNominal, MAG_BIAS, Mat17, POS, VEL, exp_rotation,
-    renormalized,
+    ACCEL_BIAS, ATT, ErrorMat, GYRO_BIAS, InertialNominal, POS, VEL, exp_rotation, renormalized,
 };
+use super::stochastic;
 use crate::float_math::powi;
 use navigate_astrodynamics::GravityField;
 
@@ -138,8 +138,8 @@ pub(crate) fn mechanize_increment(
 }
 
 /// The nominal state after one step: the trapezoidal position, the new
-/// velocity and attitude, and each bias decayed with its first-order
-/// Gauss–Markov model.
+/// velocity and attitude, and the bias, empirical acceleration, and
+/// clock models of [`stochastic::advance`].
 fn advanced(
     x: &InertialNominal,
     v_next: Vector3<f64>,
@@ -147,27 +147,25 @@ fn advanced(
     dt_s: f64,
     config: &InertialConfig,
 ) -> InertialNominal {
-    let decay = |bias: &crate::kalman::FogmBias, value: f64| bias.propagate(value, dt_s).0;
     InertialNominal {
         p: x.p + (x.v + v_next) * (0.5 * dt_s),
         v: v_next,
         q: q_next,
-        b_a: x.b_a.map(|b| decay(&config.accel_bias, b)),
-        b_g: x.b_g.map(|b| decay(&config.gyro_bias, b)),
-        b_alt: decay(&config.baro_bias, x.b_alt),
-        b_mag: decay(&config.mag_bias, x.b_mag),
+        ..stochastic::advance(x, dt_s, config)
     }
 }
 
 /// The continuous Jacobian `F` of the error-state dynamics at the
 /// midpoint. The right perturbation removes the frame rotation from the
-/// attitude block: `δθ̇ = −[ω_ib×]·δθ − δb_g`.
+/// attitude block: `δθ̇ = −[ω_ib×]·δθ − δb_g`. The accelerometers sense
+/// each non-gravitational force, so the empirical acceleration does not
+/// enter the velocity.
 pub(crate) fn continuous_jacobian(
     midpoint: &Midpoint,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Mat17 {
-    let mut f = Mat17::zeros();
+) -> ErrorMat {
+    let mut f = ErrorMat::zeros();
     let identity = Matrix3::identity();
     let omega = field.frame_rotation();
     let gradient = field.gravity(&midpoint.p_mid).1;
@@ -183,31 +181,23 @@ pub(crate) fn continuous_jacobian(
         .copy_from(&(-midpoint.w_ib_b.cross_matrix()));
     f.fixed_view_mut::<3, 3>(ATT, GYRO_BIAS)
         .copy_from(&(-identity));
-    f.fixed_view_mut::<3, 3>(ACCEL_BIAS, ACCEL_BIAS)
-        .copy_from(&(identity * config.accel_bias.decay_rate()));
-    f.fixed_view_mut::<3, 3>(GYRO_BIAS, GYRO_BIAS)
-        .copy_from(&(identity * config.gyro_bias.decay_rate()));
-    f[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.decay_rate();
-    f[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.decay_rate();
+    stochastic::add_dynamics(&mut f, config);
     f
 }
 
 /// The continuous process noise density `Q_c`. The accelerometer and
 /// gyroscope noise are isotropic, so the rotation into the frame axes
-/// does not change the velocity block. A bias with a first-order
-/// Gauss–Markov model has the density `2·σ²/τ`.
-pub(crate) fn continuous_noise(config: &InertialConfig) -> Mat17 {
+/// does not change the velocity block. [`stochastic::add_noise`] gives
+/// the bias, empirical acceleration, and clock densities.
+pub(crate) fn continuous_noise(config: &InertialConfig) -> ErrorMat {
     let accel = powi(config.accel_noise_sigma_mps2_sqrt_hz, 2);
     let gyro = powi(config.gyro_noise_sigma_rad_s_sqrt_hz, 2);
-    let mut q = Mat17::zeros();
+    let mut q = ErrorMat::zeros();
     for axis in 0..3 {
         q[(VEL + axis, VEL + axis)] = accel;
         q[(ATT + axis, ATT + axis)] = gyro;
-        q[(ACCEL_BIAS + axis, ACCEL_BIAS + axis)] = config.accel_bias.continuous_psd();
-        q[(GYRO_BIAS + axis, GYRO_BIAS + axis)] = config.gyro_bias.continuous_psd();
     }
-    q[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.continuous_psd();
-    q[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.continuous_psd();
+    stochastic::add_noise(&mut q, config);
     q
 }
 
@@ -220,7 +210,7 @@ pub(crate) fn transition(
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(InertialNominal, Mat17, Mat17)> {
+) -> Option<(InertialNominal, ErrorMat, ErrorMat)> {
     let (next, midpoint) = mechanize(x, rates, dt_s, field, config);
     let (phi, q_d) = discretize(&midpoint, dt_s, field, config)?;
     Some((next, phi, q_d))
@@ -234,7 +224,7 @@ pub(crate) fn increment_transition(
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(InertialNominal, Mat17, Mat17)> {
+) -> Option<(InertialNominal, ErrorMat, ErrorMat)> {
     let (next, midpoint) = mechanize_increment(x, increment, dt_s, field, config);
     let (phi, q_d) = discretize(&midpoint, dt_s, field, config)?;
     Some((next, phi, q_d))
@@ -246,7 +236,7 @@ fn discretize(
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(Mat17, Mat17)> {
+) -> Option<(ErrorMat, ErrorMat)> {
     let f = continuous_jacobian(midpoint, field, config);
     van_loan(&f, &continuous_noise(config), dt_s)
 }

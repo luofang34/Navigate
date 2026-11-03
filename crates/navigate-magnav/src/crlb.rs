@@ -74,8 +74,8 @@ impl ReferencePoint {
     }
 }
 
-/// The posterior Cramér–Rao bound of the seventeen-state inertial error
-/// on a body surface.
+/// The posterior Cramér–Rao bound of the inertial error state on a body
+/// surface.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrlbTracker {
     config: InertialConfig,

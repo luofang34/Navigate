@@ -74,18 +74,22 @@ fn each_regime_refuses_the_models_that_it_does_not_have() {
     };
     let obs = Observation::new(stamp(4, 1, 0), cartesian, gnss());
     assert_accepted(surface.ingest(&obs, t(0)));
+    // A pseudorange needs the clock states, which the default
+    // configuration does not have.
     let pseudorange = ObservationValue::Pseudorange {
-        satellite_ecef_m: [1.0e7, 2.0e7, 1.0e7],
+        emitter_position_m: [1.0e7, 2.0e7, 1.0e7],
         pseudorange_m: 2.1e7,
+        sagnac_and_media_correction_m: 0.0,
         variance_m2: 9.0,
     };
     let obs = Observation::new(stamp(4, 2, 0), pseudorange, gnss());
     assert_eq!(
         rejection(surface.ingest(&obs, t(0))),
-        RejectionReason::UnsupportedMeasurement {
+        RejectionReason::ClockStateDisabled {
             kind: pseudorange.kind()
         }
     );
+    assert_eq!(surface.rejections().clock_state_disabled, 1);
     let env = SpaceEnvironment::inertial(FrameId::EARTH_J2000, SpaceGravityModel::Zero);
     let mut space = InertialNavigationFilter::new_space(InertialConfig::default(), CLOCK, env);
     let obs = position_fix(1, 0, earth_origin()).with_frame(FrameId::EARTH_J2000);
@@ -96,7 +100,7 @@ fn each_regime_refuses_the_models_that_it_does_not_have() {
         }
     );
     assert_eq!(space.rejections().unsupported_measurement, 1);
-    assert_eq!(surface.rejections().unsupported_measurement, 1);
+    assert_eq!(surface.rejections().unsupported_measurement, 0);
 }
 
 #[test]

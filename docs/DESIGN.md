@@ -53,16 +53,29 @@ initialization origin:
   counters are first-class observability.
 - **Pluggable propagation.** A `Propagator` advances the state between
   measurements. `NavigationFilter` uses constant-velocity kinematics.
-  `InertialNavigationFilter` is a strapdown error-state filter with
-  seventeen states: position, velocity, attitude, accelerometer and
-  gyroscope biases, a barometric bias, and a magnetic map bias
-  (ADR-0014). Its state is always in one body-centered Cartesian frame.
+  `InertialNavigationFilter` is an error-state filter with twenty-two
+  states: position, velocity, attitude, accelerometer and gyroscope
+  biases, a barometric bias, a magnetic map bias, an empirical
+  acceleration, and a receiver clock bias and drift (ADR-0014,
+  ADR-0018). The empirical acceleration and the clock states are
+  optional. A state without a model has no effect on the other states.
+  The filter state is always in one body-centered Cartesian frame.
   On a body surface this frame is the rotating body-fixed frame, and a
   reference ellipsoid gives the geodetic models and the geodetic
   solution at each latitude, the poles included. `change_frame` moves
   the state between rotating and inertial frames without loss, so one
   filter operates from a launch site to the surface of another body
   (ADR-0017).
+- **Two propagation modes.** In the sensed-IMU mode, IMU data drives
+  the inertial filter. In the force-model mode, an orbital force model
+  drives it with Runge–Kutta steps: spherical harmonic gravity, third
+  bodies, solar radiation pressure, and drag from
+  `navigate-astrodynamics`. A coast needs no IMU data. An impulsive burn
+  adds a velocity change that no sensor measures (ADR-0018).
+- **Radiometric and optical models.** The inertial filter applies a
+  one-way pseudorange and range rate with the clock states, a two-way
+  range with the solar Shapiro delay, a two-way range rate, and a line
+  of sight to a star or to a target such as Mars (ADR-0018).
 - **Delayed measurements.** Each filter keeps a bounded history of its
   states before each update. The filter applies a delayed observation
   at its acquisition time and then replays the later updates
@@ -141,7 +154,7 @@ default) and `libm`.
 |---|---|
 | `navigate-contract` | Boundary types: solutions, integrity, stamps, plans, and physical time |
 | `navigate-geodesy` | Geodesy on an explicit reference ellipsoid of any body, vertical datums, and surface shapes |
-| `navigate-astrodynamics` | Planetary bodies, gravity fields, coordinate time scales, and frame rotations |
+| `navigate-astrodynamics` | Planetary bodies, gravity fields, orbital force models, coordinate time scales, and frame rotations |
 | `navigate-fusion` | The kinematic, inertial, and particle filters, with admission and integrity |
 | `navigate-magnav` | Tolles–Lawson calibration, borrowed grid maps, and Cramér–Rao bounds for magnetic anomaly navigation |
 | `navigate-route` | Route validation and leg sequencing |
@@ -175,10 +188,9 @@ vocabulary; process topology is a deployment decision, not a contract one.
 
 ## What the skeleton deliberately defers
 
-- Measurement models for the reserved `Pseudorange` and `VisualPose`
-  variants. The filter refuses them by name until they land (ADR-0008). The
-  `Range` model is supported. Celestial and terrain-matching variants are not
-  reserved yet.
+- The models of `Pseudorange` and `VisualPose` in the six-state
+  `NavigationFilter`. It refuses them by name (ADR-0008). The inertial
+  filter has both models (ADR-0014, ADR-0018).
 - Global visual retrieval for a search prior that is too uncertain to
   narrow the search (ADR-0009).
 - Batched multi-view rendering, source-driven tile detail, and a completion

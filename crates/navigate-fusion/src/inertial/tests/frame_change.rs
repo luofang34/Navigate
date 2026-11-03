@@ -9,7 +9,7 @@ use navigate_geodesy::BodyEllipsoid;
 use super::*;
 use crate::inertial::FrameChange;
 use crate::inertial::frame_change::{frame_change_jacobian, transformed_nominal};
-use crate::inertial::nominal::{Mat17, N, POS, VEL, to_contract};
+use crate::inertial::nominal::{DMC, ErrorMat, N, POS, VEL, to_contract};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
 use navigate_astrodynamics::{SpaceEnvironment, SpaceGravityModel};
@@ -67,11 +67,14 @@ fn the_jacobian_matches_finite_differences_of_the_change() {
         b_g: Vector3::new(1e-5, 2e-5, -3e-5),
         b_alt: 4.0,
         b_mag: 2e-9,
+        a_dmc: Vector3::new(3e-7, -1e-7, 2e-7),
+        clock_bias_m: 120.0,
+        clock_drift_mps: 0.4,
     };
     let next = transformed_nominal(&x, &change);
-    let mut numeric = Mat17::zeros();
+    let mut numeric = ErrorMat::zeros();
     for j in 0..N {
-        let mut dx = Vec17::zeros();
+        let mut dx = ErrorVec::zeros();
         dx[j] = epsilon(j);
         let plus = transformed_nominal(&x.inject(&dx), &change);
         let minus = transformed_nominal(&x.inject(&(-dx)), &change);
@@ -84,6 +87,9 @@ fn the_jacobian_matches_finite_differences_of_the_change() {
     // The rate couples the position error into the velocity error.
     let coupling = analytic.fixed_view::<3, 3>(VEL, POS).abs().max();
     assert!(coupling > 1e-3, "{coupling}");
+    // The empirical acceleration turns with the axes.
+    let dmc = analytic.fixed_view::<3, 3>(DMC, DMC).into_owned();
+    assert!((dmc - Matrix3::identity()).abs().max() > 0.1);
 }
 
 #[test]
@@ -172,7 +178,7 @@ fn a_round_trip_between_the_rotating_and_the_inertial_frame_is_lossless() {
     let expected_v = c * (before.nominal.v + w.cross(&before.nominal.p));
     assert!((inertial.nominal.v - expected_v).norm() < 1e-9);
     assert!(inertial.nominal.v.norm() > 400.0, "{}", inertial.nominal.v);
-    let block = |p: &Mat17, row: usize, col: usize| p.fixed_view::<3, 3>(row, col).into_owned();
+    let block = |p: &ErrorMat, row: usize, col: usize| p.fixed_view::<3, 3>(row, col).into_owned();
     let wx: Matrix3<f64> = w.cross_matrix();
     let p_vv = block(&before.p, VEL, VEL)
         + wx * block(&before.p, POS, VEL)

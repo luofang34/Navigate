@@ -1,4 +1,5 @@
-//! One event applied to an initialized core (ADR-0014, ADR-0017).
+//! One event applied to an initialized core (ADR-0014, ADR-0017,
+//! ADR-0018).
 //!
 //! The in-order path, the delayed path, and the replay of the history
 //! use this module. The frame gate compares the declared frame with the
@@ -13,6 +14,7 @@ use super::frame_change::{FrameChange, apply_frame_change};
 use super::imu::{ImuIncrement, ImuSample};
 use super::mechanization::ImuRates;
 use super::models::apply_observation;
+use super::propagation::{ImpulsiveBurn, PropagationMode};
 use super::regime::Regime;
 use crate::admission::check_frame;
 use crate::observation::Observation;
@@ -35,6 +37,12 @@ pub(crate) enum Event {
     FrameChange(FrameChange),
     /// A new environment or reference ellipsoid in the same frame.
     Regime(Regime),
+    /// A new propagation mode from the event time.
+    Mode(PropagationMode),
+    /// A velocity change that no sensor measures.
+    Burn(ImpulsiveBurn),
+    /// A force-model propagation to the event time.
+    Coast,
 }
 
 /// Applies `event` at `at`. `covering` gives the rates of the IMU sample
@@ -51,7 +59,11 @@ pub(crate) fn apply_event(
     covering: Option<ImuRates>,
 ) -> Result<Option<f64>, RejectionReason> {
     let explicit = config.fusion.require_explicit_frame || core.regime.requires_explicit_frame();
+    let force_model = matches!(core.mode, PropagationMode::ForceModel(_));
     match event {
+        Event::Imu(_) | Event::Increment(_) if force_model => {
+            Err(RejectionReason::PropagationModeMismatch)
+        }
         Event::Imu(sample) => {
             check_frame(core.regime.frame(), sample.frame, explicit)?;
             let rates = ImuRates::of(sample);
@@ -77,6 +89,29 @@ pub(crate) fn apply_event(
         }
         Event::Regime(regime) => {
             core.regime = *regime;
+            Ok(None)
+        }
+        Event::Mode(mode) => {
+            core.propagate_with(at, covering, config)?;
+            if core.mode != *mode {
+                // Rates from before the change do not describe the
+                // vehicle after it, for example the thrust of a burn
+                // before a coast.
+                core.last_rates = None;
+            }
+            core.mode = *mode;
+            Ok(None)
+        }
+        Event::Burn(_) | Event::Coast if !force_model => {
+            Err(RejectionReason::PropagationModeMismatch)
+        }
+        Event::Burn(burn) => {
+            core.propagate_with(at, covering, config)?;
+            burn.apply(core);
+            Ok(None)
+        }
+        Event::Coast => {
+            core.propagate_with(at, covering, config)?;
             Ok(None)
         }
     }

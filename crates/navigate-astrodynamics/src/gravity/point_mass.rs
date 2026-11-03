@@ -147,6 +147,28 @@ impl ThirdBodySet {
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Whether each body in the set is plausible.
+    #[must_use]
+    pub fn is_plausible(&self) -> bool {
+        self.as_slice().iter().all(PointMassBody::is_plausible)
+    }
+
+    /// `central` plus the tidal acceleration and the tidal gradient of
+    /// each body at `r`.
+    #[must_use]
+    pub fn add_tidal(
+        &self,
+        central: (Vector3<f64>, Matrix3<f64>),
+        r: &Vector3<f64>,
+    ) -> (Vector3<f64>, Matrix3<f64>) {
+        self.as_slice().iter().fold(central, |(g, gradient), body| {
+            (
+                g + body.tidal_acceleration(r),
+                gradient + body.tidal_gradient(r),
+            )
+        })
+    }
 }
 
 impl Default for ThirdBodySet {

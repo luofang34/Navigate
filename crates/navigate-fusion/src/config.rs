@@ -97,6 +97,10 @@ pub struct FusionConfig {
     /// degrees of freedom. The inertial filter applies it to a visual
     /// pose. Default: 22.46, the 99.9% point.
     pub pose_gate_chi2: f64,
+    /// Innovation gate threshold on the chi-square statistic with 2
+    /// degrees of freedom. The inertial filter applies it to a line of
+    /// sight. Default: 13.82, the 99.9% point.
+    pub line_of_sight_gate_chi2: f64,
     /// Number of consecutive innovation-gate refusals at or beyond which
     /// a `Good` quality degrades to `Degraded`. An admitted aiding
     /// observation resets the count. A refused update does not change
@@ -128,6 +132,7 @@ impl Default for FusionConfig {
             require_explicit_frame: false,
             unmodeled_magnetic_bias_variance_t2: 0.0,
             pose_gate_chi2: 22.46,
+            line_of_sight_gate_chi2: 13.82,
             max_consecutive_gate_rejections: 5,
         }
     }
@@ -167,6 +172,7 @@ mod tests {
         assert!(!config.require_explicit_frame);
         assert_eq!(config.unmodeled_magnetic_bias_variance_t2, 0.0);
         assert!((config.pose_gate_chi2 - 22.46).abs() < 1e-12);
+        assert!((config.line_of_sight_gate_chi2 - 13.82).abs() < 1e-12);
         assert_eq!(config.max_consecutive_gate_rejections, 5);
     }
 }

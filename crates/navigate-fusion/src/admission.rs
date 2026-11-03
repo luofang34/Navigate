@@ -1,5 +1,5 @@
 //! Admission gates that do not depend on the filter state (ADR-0003,
-//! ADR-0013). [`crate::NavigationFilter`] and
+//! ADR-0013, ADR-0018). [`crate::NavigationFilter`] and
 //! [`crate::InertialNavigationFilter`] run the same gates.
 
 use navigate_contract::{
@@ -18,6 +18,8 @@ const UNIT_NORM_TOLERANCE: f64 = 1e-3;
 /// Largest distance of a beam direction norm from 1 that admission
 /// accepts.
 const BEAM_NORM_TOLERANCE: f64 = 1e-3;
+
+mod radiometric;
 
 /// The stamp must come from the clock domain of the filter.
 pub(crate) fn check_clock(
@@ -127,14 +129,6 @@ pub(crate) fn check_value(value: &ObservationValue) -> Result<(), RejectionReaso
             )?;
             check_scalar_variance(*variance_t2)
         }
-        ObservationValue::Pseudorange {
-            satellite_ecef_m,
-            pseudorange_m,
-            variance_m2,
-        } => {
-            require(satellite_ecef_m.iter().all(|c| c.is_finite()) && pseudorange_m.is_finite())?;
-            check_scalar_variance(*variance_m2)
-        }
         _ => check_attitude_or_cartesian(value),
     }
 }
@@ -160,14 +154,12 @@ fn check_attitude_or_cartesian(value: &ObservationValue) -> Result<(), Rejection
             beam_body_unit,
             variance_m2,
         } => {
-            let beam_norm = sqrt(beam_body_unit.iter().map(|c| c * c).sum::<f64>());
             require(
                 clearance_m.is_finite()
                     && *clearance_m > 0.0
                     && terrain_height_m.is_finite()
                     && terrain_slope_north_east.iter().all(|s| s.is_finite())
-                    && beam_norm.is_finite()
-                    && (beam_norm - 1.0).abs() <= BEAM_NORM_TOLERANCE,
+                    && is_unit_vector(beam_body_unit),
             )?;
             check_scalar_variance(*variance_m2)
         }
@@ -200,8 +192,15 @@ fn check_attitude_or_cartesian(value: &ObservationValue) -> Result<(), Rejection
             require(beacon.is_finite() && range_m.is_finite() && *range_m >= 0.0)?;
             check_scalar_variance(*variance_m2)
         }
-        _ => Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() }),
+        _ => radiometric::check(value),
     }
+}
+
+/// Whether every component is finite and the norm is 1 within
+/// [`BEAM_NORM_TOLERANCE`].
+fn is_unit_vector(v: &[f64; 3]) -> bool {
+    let norm = sqrt(v.iter().map(|c| c * c).sum::<f64>());
+    norm.is_finite() && (norm - 1.0).abs() <= BEAM_NORM_TOLERANCE
 }
 
 const fn require(plausible: bool) -> Result<(), RejectionReason> {

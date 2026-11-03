@@ -3,7 +3,7 @@
 
 use nalgebra::{Const, DimMin, SMatrix};
 
-use super::nominal::{Mat17, N};
+use super::nominal::{ErrorMat, N};
 use crate::float_math::powi;
 
 /// Degree of the diagonal Padé approximant.
@@ -72,7 +72,7 @@ fn infinity_norm<const D: usize>(a: &SMatrix<f64, D, D>) -> f64 {
 /// over `dt_s` seconds. With `M = [[−F, Q_c], [0, Fᵀ]]·dt` and
 /// `E = exp(M)`, the result is `Φ = E₂₂ᵀ` and the symmetric
 /// `Q_d = Φ·E₁₂`. `None` when [`expm`] fails.
-pub(crate) fn van_loan(f: &Mat17, q_c: &Mat17, dt_s: f64) -> Option<(Mat17, Mat17)> {
+pub(crate) fn van_loan(f: &ErrorMat, q_c: &ErrorMat, dt_s: f64) -> Option<(ErrorMat, ErrorMat)> {
     let mut m = SMatrix::<f64, VAN_LOAN_DIM, VAN_LOAN_DIM>::zeros();
     m.fixed_view_mut::<N, N>(0, 0).copy_from(&(-f * dt_s));
     m.fixed_view_mut::<N, N>(0, N).copy_from(&(q_c * dt_s));

@@ -5,8 +5,9 @@
 //! the filter judges it at admission. The value enum is
 //! `#[non_exhaustive]`. A filter that has no model for a value refuses
 //! it by name with [`crate::RejectionReason::UnsupportedMeasurement`]
-//! and counts it (ADR-0008). [`ObservationValue::Pseudorange`] is
-//! reserved: no filter in this crate has its model.
+//! and counts it (ADR-0008). The radiometric and line-of-sight values
+//! of ADR-0018 are in the Cartesian frame of
+//! [`crate::InertialNavigationFilter`], which has their models.
 
 use navigate_contract::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, FrameId, GeodeticPosition,
@@ -75,16 +76,101 @@ pub enum ObservationValue {
         /// the map error.
         variance_t2: f64,
     },
-    /// GNSS pseudorange to one satellite, before any position solution.
-    /// Reserved: every filter refuses it with
-    /// [`crate::RejectionReason::UnsupportedMeasurement`] (ADR-0008).
+    /// One-way range from an emitter with a corrected clock, such as a
+    /// GNSS satellite or a lunar surface beacon (ADR-0018). The model is
+    /// `|p − p_e| + c·δt + Δρ`, with the receiver clock bias `c·δt` as a
+    /// state. [`crate::InertialNavigationFilter`] refuses it with
+    /// [`crate::RejectionReason::ClockStateDisabled`] without a clock
+    /// model. [`crate::NavigationFilter`] refuses it with
+    /// [`crate::RejectionReason::UnsupportedMeasurement`].
     Pseudorange {
-        /// Satellite position at transmission, Earth-centered Earth-fixed meters.
-        satellite_ecef_m: [f64; 3],
-        /// Measured pseudorange in meters, satellite clock corrected.
+        /// Emitter position at the transmission time in meters, in the
+        /// frame of the filter.
+        emitter_position_m: [f64; 3],
+        /// Measured pseudorange in meters, with the emitter clock
+        /// corrected.
         pseudorange_m: f64,
+        /// Sum `Δρ` of the Sagnac, ionosphere, and troposphere terms in
+        /// meters. The model adds it to the geometric range.
+        sagnac_and_media_correction_m: f64,
         /// Pseudorange variance in meters².
         variance_m2: f64,
+    },
+    /// One-way range rate from an emitter with a corrected clock, such
+    /// as a one-way Doppler (ADR-0018). The model is
+    /// `u·(v − v_e) + c·δṫ`, with `u` the unit vector from the emitter to
+    /// the vehicle and the receiver clock drift `c·δṫ` as a state. The
+    /// filter refuses it without a clock model.
+    PseudorangeRate {
+        /// Emitter position in meters, in the frame of the filter.
+        emitter_position_m: [f64; 3],
+        /// Emitter velocity relative to the frame in m/s, in the frame
+        /// axes.
+        emitter_velocity_mps: [f64; 3],
+        /// Measured range rate in m/s, with the emitter clock drift
+        /// corrected.
+        pseudorange_rate_mps: f64,
+        /// Range-rate variance in (m/s)².
+        variance_m2_per_s2: f64,
+    },
+    /// Coherent two-way range from a ground station through a
+    /// transponder (ADR-0018). The model is the sum of the uplink and the
+    /// downlink distances, the general-relativistic delay of each leg,
+    /// and the turnaround delay. The round trip cancels the vehicle
+    /// clock, so the model does not use the clock states. The
+    /// acquisition time is the time of the turnaround. The caller gives
+    /// each station at its own transmission or reception time, which
+    /// applies the light time.
+    TwoWayRange {
+        /// Transmitting station position in meters, in the frame of the
+        /// filter, at the uplink transmission time.
+        tx_station_pos_m: [f64; 3],
+        /// Receiving station position in meters, in the frame of the
+        /// filter, at the downlink reception time.
+        rx_station_pos_m: [f64; 3],
+        /// Gravitational parameter `μ` in m³/s² and position in meters of
+        /// the body of the Shapiro delay, such as the Sun. Each leg adds
+        /// `2μ/c²·ln((r₁ + r₂ + r₁₂)/(r₁ + r₂ − r₁₂))`. `None` adds no
+        /// delay.
+        gravitation_gm_m3_s2: Option<(f64, [f64; 3])>,
+        /// Measured round-trip light distance in meters.
+        round_trip_range_m: f64,
+        /// Turnaround and equipment delay of the transponder and the
+        /// stations, as a distance in meters.
+        turnaround_delay_m: f64,
+        /// Round-trip range variance in meters².
+        variance_m2: f64,
+    },
+    /// Coherent two-way range rate, such as a two-way Doppler
+    /// (ADR-0018). The model is the sum of the uplink and the downlink
+    /// range rates. The model does not use the clock states.
+    TwoWayRangeRate {
+        /// Transmitting station position in meters, in the frame of the
+        /// filter.
+        tx_station_pos_m: [f64; 3],
+        /// Transmitting station velocity relative to the frame in m/s.
+        tx_station_vel_mps: [f64; 3],
+        /// Receiving station position in meters, in the frame of the
+        /// filter.
+        rx_station_pos_m: [f64; 3],
+        /// Receiving station velocity relative to the frame in m/s.
+        rx_station_vel_mps: [f64; 3],
+        /// Measured round-trip range rate in m/s.
+        round_trip_range_rate_mps: f64,
+        /// Range-rate variance in (m/s)².
+        variance_m2_per_s2: f64,
+    },
+    /// A unit direction measured in the body axes, such as a star
+    /// tracker direction or an optical navigation bearing (ADR-0018).
+    /// The update has two degrees of freedom, in the plane that is
+    /// orthogonal to the predicted direction.
+    LineOfSight {
+        /// Measured unit direction in the body axes.
+        measured_body_unit: [f64; 3],
+        /// The reference of the direction.
+        reference: LineOfSightReference,
+        /// Variance of each angle of the plane in radians².
+        angular_variance_rad2: f64,
     },
     /// Camera position and attitude from a map reference (ADR-0014).
     /// [`crate::InertialNavigationFilter`] applies it on a body surface as
@@ -158,6 +244,25 @@ pub enum ObservationValue {
     },
 }
 
+/// The reference of a [`ObservationValue::LineOfSight`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOfSightReference {
+    /// A direction to a far source, such as a star or the Sun, in the
+    /// frame axes at the acquisition time. The caller applies the
+    /// aberration and the parallax. The update corrects the attitude.
+    InertialDirection {
+        /// Unit direction in the frame axes.
+        direction_in_frame_unit: [f64; 3],
+    },
+    /// A target at a known position, such as a moon, a planet, an
+    /// asteroid, or a beacon. The update corrects the position and the
+    /// attitude.
+    TargetPosition {
+        /// Target position in meters, in the frame of the filter.
+        position_in_frame_m: [f64; 3],
+    },
+}
+
 /// The measurement model that an [`ObservationValue`] needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -186,6 +291,14 @@ pub enum MeasurementKind {
     CartesianVelocityFix,
     /// [`ObservationValue::CartesianRange`].
     CartesianRange,
+    /// [`ObservationValue::PseudorangeRate`].
+    PseudorangeRate,
+    /// [`ObservationValue::TwoWayRange`].
+    TwoWayRange,
+    /// [`ObservationValue::TwoWayRangeRate`].
+    TwoWayRangeRate,
+    /// [`ObservationValue::LineOfSight`].
+    LineOfSight,
 }
 
 impl ObservationValue {
@@ -205,6 +318,10 @@ impl ObservationValue {
             Self::CartesianPositionFix { .. } => MeasurementKind::CartesianPositionFix,
             Self::CartesianVelocityFix { .. } => MeasurementKind::CartesianVelocityFix,
             Self::CartesianRange { .. } => MeasurementKind::CartesianRange,
+            Self::PseudorangeRate { .. } => MeasurementKind::PseudorangeRate,
+            Self::TwoWayRange { .. } => MeasurementKind::TwoWayRange,
+            Self::TwoWayRangeRate { .. } => MeasurementKind::TwoWayRangeRate,
+            Self::LineOfSight { .. } => MeasurementKind::LineOfSight,
         }
     }
 

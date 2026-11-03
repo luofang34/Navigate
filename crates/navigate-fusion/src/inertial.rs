@@ -1,13 +1,22 @@
-//! Strapdown error-state inertial navigation with seventeen states
-//! (ADR-0014, ADR-0017).
+//! Error-state inertial navigation with twenty-two states (ADR-0014,
+//! ADR-0017, ADR-0018).
 //!
-//! [`InertialNavigationFilter`] propagates a nominal strapdown state with
-//! IMU samples or IMU increments and corrects it with admission-gated
-//! observations. The error state is
-//! `[δp, δv, δθ, δb_a, δb_g, δb_alt, δb_mag]`. The attitude error is a
-//! right perturbation in the body axes. Each update injects the error
-//! estimate into the nominal state and resets the covariance (closed
-//! loop).
+//! [`InertialNavigationFilter`] propagates a nominal state and corrects
+//! it with admission-gated observations. The error state is
+//! `[δp, δv, δθ, δb_a, δb_g, δb_alt, δb_mag, δa_dmc, c·δt, c·δṫ]`. The
+//! attitude error is a right perturbation in the body axes. The
+//! empirical acceleration `a_dmc` of the dynamic model compensation and
+//! the receiver clock states `c·δt` and `c·δṫ` are optional. A state
+//! without a configured model keeps zero variance and does not couple
+//! into the other states. Each update injects the error estimate into
+//! the nominal state and resets the covariance (closed loop).
+//!
+//! In [`PropagationMode::SensedImu`] IMU samples or IMU increments drive
+//! the state. In [`PropagationMode::ForceModel`] the orbital force model
+//! of the environment drives the state with fourth-order Runge–Kutta
+//! steps, for a coast without IMU data.
+//! [`InertialNavigationFilter::apply_impulsive_burn`] adds a velocity
+//! change that no sensor measures.
 //!
 //! The state is always in one body-centered Cartesian frame: the frame
 //! of a [`crate::SpaceEnvironment`]. On a body surface this frame is the
@@ -19,7 +28,8 @@
 //! state into another frame with a different center, axes, or rotation
 //! rate, and [`InertialNavigationFilter::recenter_space_frame`] is its
 //! form for frames with the same rotation rate. A bounded history
-//! applies a delayed IMU event or observation at its acquisition time.
+//! applies a delayed IMU event or observation at its acquisition time,
+//! and replays a change of mode, a burn, and a coast.
 //!
 //! The filter does not allocate (ADR-0016). The environment is `Copy`,
 //! and the history is inline with at most [`MAX_INERTIAL_HISTORY`]
@@ -27,6 +37,8 @@
 //! covariance model of the filter to a covariance analysis that has no
 //! filter state, such as a Cramér–Rao bound.
 
+mod clock;
+mod coast;
 mod config;
 mod discretization;
 pub(crate) mod estimate;
@@ -38,9 +50,11 @@ mod local_level;
 pub(crate) mod mechanization;
 mod models;
 pub(crate) mod nominal;
+mod propagation;
 mod publish;
 mod reference;
 pub(crate) mod regime;
+mod stochastic;
 mod update;
 
 #[cfg(test)]
@@ -58,6 +72,7 @@ use crate::kinematic::stats::StatsTable;
 use crate::observation::{MeasurementKind, Observation};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
+pub use clock::ClockNoiseModel;
 pub use config::InertialConfig;
 pub use frame_change::FrameChange;
 use history::History;
@@ -65,16 +80,17 @@ pub use history::MAX_INERTIAL_HISTORY;
 pub use imu::{ImuIncrement, ImuSample};
 pub use local_level::ned_to_body_fixed_dcm;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
+pub use propagation::{ForceModelCoast, PropagationMode};
 pub use reference::{
-    ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_GYRO_BIAS, ERROR_MAG_BIAS,
-    ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY, ErrorMatrix, NominalPoint, error_transition,
-    initial_error_covariance,
+    ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_CLOCK_BIAS, ERROR_CLOCK_DRIFT,
+    ERROR_DMC, ERROR_GYRO_BIAS, ERROR_MAG_BIAS, ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY,
+    ErrorMatrix, NominalPoint, error_transition, initial_error_covariance,
 };
 use regime::Regime;
 use update::Event;
 
-/// Sans-IO strapdown inertial filter with seventeen error states
-/// (ADR-0014).
+/// Sans-IO inertial filter with twenty-two error states (ADR-0014,
+/// ADR-0018).
 ///
 /// All time is caller-supplied [`MonotonicNanos`] on the clock domain of
 /// the filter. Identical event scripts give identical solutions.
@@ -84,6 +100,8 @@ pub struct InertialNavigationFilter {
     clock: ClockDomainId,
     /// The regime before the initialization and after a reset.
     setup: Regime,
+    /// The propagation mode before the initialization and after a reset.
+    setup_mode: PropagationMode,
     epoch: SourceEpoch,
     next_solution_sequence: WrappingSequence,
     rejections: RejectionCounters,
@@ -124,6 +142,7 @@ impl InertialNavigationFilter {
             config,
             clock,
             setup,
+            setup_mode: PropagationMode::SensedImu,
             epoch: SourceEpoch::new(0),
             next_solution_sequence: WrappingSequence::new(0),
             rejections: RejectionCounters::default(),
@@ -288,10 +307,12 @@ impl InertialNavigationFilter {
 
     /// Starts a new filter epoch: forgets the state, the history, the
     /// per-source tracking, the window, and the innovation statistics.
-    /// Rejection counters persist. The active regime persists, so a
-    /// filter that changed its frame starts again in the new frame.
+    /// Rejection counters persist. The active regime and the active
+    /// propagation mode persist, so a filter that changed its frame
+    /// starts again in the new frame.
     pub fn reset(&mut self) {
         self.setup = self.active_regime();
+        self.setup_mode = self.propagation_mode();
         self.epoch = self.epoch.next();
         self.next_solution_sequence = WrappingSequence::new(0);
         self.ledger.clear();

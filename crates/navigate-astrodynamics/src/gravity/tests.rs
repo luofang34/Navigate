@@ -175,6 +175,8 @@ fn a_rotating_frame_adds_the_centrifugal_term() {
         frame: FrameId::MOON_PA,
         frame_rotation_rad_per_s: [0.0, 0.0, 2.661_699_5e-6],
         gravity: SpaceGravityModel::Zero,
+        srp: None,
+        drag: None,
     };
     let r = Vector3::new(2_000_000.0, 0.0, 500_000.0);
     let (g, gradient) = env.gravity(&r);

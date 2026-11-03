@@ -4,7 +4,7 @@
 //! A covariance analysis, for example a posterior Cramér–Rao bound,
 //! propagates the error covariance of the filter along a reference
 //! trajectory without a filter state. This module gives the layout of
-//! the seventeen error states, the initial covariance of the filter,
+//! the error states, the initial covariance of the filter,
 //! and the transition `Φ` and the discrete process noise `Q_d` at one
 //! point of the trajectory. The filter propagates its covariance with the
 //! same transition, so the analysis and the filter use one model.
@@ -16,9 +16,10 @@ use navigate_contract::{AttitudeQuaternion, SymmetricCov3};
 use super::config::InertialConfig;
 use super::mechanization::{ImuRates, transition};
 use super::nominal::{
-    ACCEL_BIAS, ALT_BIAS, ATT, GYRO_BIAS, InertialNominal, MAG_BIAS, N, POS, VEL,
-    to_unit_quaternion,
+    ACCEL_BIAS, ALT_BIAS, ATT, CLOCK_BIAS, CLOCK_DRIFT, DMC, GYRO_BIAS, InertialNominal, MAG_BIAS,
+    N, POS, VEL, to_unit_quaternion,
 };
+use super::stochastic;
 use crate::admission::{check_cov3, is_unit_quaternion};
 use crate::kalman::cov3_to_matrix;
 use crate::rejection::RejectionReason;
@@ -39,6 +40,13 @@ pub const ERROR_GYRO_BIAS: usize = GYRO_BIAS;
 pub const ERROR_ALT_BIAS: usize = ALT_BIAS;
 /// Index of the scalar magnetic map bias error in tesla.
 pub const ERROR_MAG_BIAS: usize = MAG_BIAS;
+/// First index of the empirical acceleration error of the dynamic model
+/// compensation in m/s², in the frame axes.
+pub const ERROR_DMC: usize = DMC;
+/// Index of the receiver clock range bias error `c·δt` in meters.
+pub const ERROR_CLOCK_BIAS: usize = CLOCK_BIAS;
+/// Index of the receiver clock range-rate drift error `c·δṫ` in m/s.
+pub const ERROR_CLOCK_DRIFT: usize = CLOCK_DRIFT;
 
 /// A square matrix over the error states.
 pub type ErrorMatrix = SMatrix<f64, ERROR_STATES, ERROR_STATES>;
@@ -76,8 +84,10 @@ impl NominalPoint {
 }
 
 /// The initial error covariance of the filter: the position, velocity,
-/// and attitude blocks from the given covariances, and each bias at its
-/// stationary variance.
+/// and attitude blocks from the given covariances, each bias and the
+/// empirical acceleration at its stationary variance, and the clock at
+/// its configured initial variance. A state without a configured model
+/// has zero variance.
 ///
 /// # Errors
 ///
@@ -99,12 +109,7 @@ pub fn initial_error_covariance(
         .copy_from(&cov3_to_matrix(velocity_cov));
     p.fixed_view_mut::<3, 3>(ATT, ATT)
         .copy_from(&cov3_to_matrix(attitude_cov));
-    for axis in 0..3 {
-        p[(ACCEL_BIAS + axis, ACCEL_BIAS + axis)] = config.accel_bias.stationary_variance();
-        p[(GYRO_BIAS + axis, GYRO_BIAS + axis)] = config.gyro_bias.stationary_variance();
-    }
-    p[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.stationary_variance();
-    p[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.stationary_variance();
+    stochastic::set_initial_variances(&mut p, config);
     Ok(p)
 }
 
@@ -126,15 +131,11 @@ pub fn error_transition(
     if !(point.is_plausible() && dt_s.is_finite() && dt_s > 0.0) {
         return Err(RejectionReason::NonFiniteValue);
     }
-    let nominal = InertialNominal {
-        p: Vector3::from(point.position_m),
-        v: Vector3::from(point.velocity_mps),
-        q: to_unit_quaternion(&point.attitude),
-        b_a: Vector3::zeros(),
-        b_g: Vector3::zeros(),
-        b_alt: 0.0,
-        b_mag: 0.0,
-    };
+    let nominal = InertialNominal::at(
+        Vector3::from(point.position_m),
+        Vector3::from(point.velocity_mps),
+        to_unit_quaternion(&point.attitude),
+    );
     let rates = ImuRates {
         specific_force: Vector3::from(point.specific_force_body_mps2),
         angular_rate: Vector3::from(point.angular_rate_body_rad_s),

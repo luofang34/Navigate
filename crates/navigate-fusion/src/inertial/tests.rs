@@ -1,10 +1,16 @@
+mod coast;
+mod deep_space;
 mod frame_change;
 mod increment;
+mod lunar_beacon;
 mod magnetic;
+mod measurements;
+mod orbit_determination;
 mod polar;
 mod regimes;
 mod schuler;
 mod space;
+mod stochastic;
 mod surface;
 mod terrain;
 mod transition;
@@ -17,7 +23,7 @@ use navigate_contract::{
 };
 
 use super::estimate::InertialCore;
-use super::nominal::{InertialNominal, Vec17, rotation_vector};
+use super::nominal::{ErrorMat, ErrorVec, InertialNominal, rotation_vector};
 use super::{ImuSample, InertialConfig, InertialNavigationFilter};
 use crate::rejection::IngestOutcome;
 use navigate_astrodynamics::{GravityField, PlanetaryBody};
@@ -127,8 +133,8 @@ fn assert_accepted(outcome: IngestOutcome) {
 
 /// The error state of `x` relative to `reference`, with the attitude
 /// as the body-axis rotation vector.
-fn error_between(x: &InertialNominal, reference: &InertialNominal) -> Vec17 {
-    let mut dx = Vec17::zeros();
+fn error_between(x: &InertialNominal, reference: &InertialNominal) -> ErrorVec {
+    let mut dx = ErrorVec::zeros();
     dx.fixed_rows_mut::<3>(0).copy_from(&(x.p - reference.p));
     dx.fixed_rows_mut::<3>(3).copy_from(&(x.v - reference.v));
     dx.fixed_rows_mut::<3>(6)
@@ -139,5 +145,17 @@ fn error_between(x: &InertialNominal, reference: &InertialNominal) -> Vec17 {
         .copy_from(&(x.b_g - reference.b_g));
     dx[15] = x.b_alt - reference.b_alt;
     dx[16] = x.b_mag - reference.b_mag;
+    dx.fixed_rows_mut::<3>(17)
+        .copy_from(&(x.a_dmc - reference.a_dmc));
+    dx[20] = x.clock_bias_m - reference.clock_bias_m;
+    dx[21] = x.clock_drift_mps - reference.clock_drift_mps;
     dx
+}
+
+/// A deterministic noise sample with zero mean and unit variance: a
+/// uniform value from a fixed integer hash, scaled by √12.
+fn noise(k: u32) -> f64 {
+    let hash = k.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9) >> 8;
+    let uniform = f64::from(hash) / f64::from(1_u32 << 24) - 0.5;
+    uniform * 12.0_f64.sqrt()
 }
