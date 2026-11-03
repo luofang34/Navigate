@@ -3,10 +3,11 @@
 
 use nalgebra::{Matrix3, SMatrix, Vector3};
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::LocalTangentPlane;
 
+use super::error_between;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::discretization::{expm, van_loan};
+use crate::inertial::local_level::body_fixed;
 use crate::inertial::mechanization::{
     ImuRates, continuous_jacobian, continuous_noise, mechanize, transition,
 };
@@ -15,13 +16,16 @@ use crate::inertial::nominal::{
     rotation_vector,
 };
 use crate::kalman::FogmBias;
-use navigate_astrodynamics::{PlanetaryBody, SurfaceFrame};
+use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
 
-fn earth_frame() -> SurfaceFrame {
+fn earth_frame() -> SpaceEnvironment {
+    SpaceEnvironment::from_body(PlanetaryBody::EARTH_WGS84)
+}
+
+/// A body-fixed position 500 m above the WGS84 ellipsoid at 47°N, 8°E.
+fn earth_position() -> Vector3<f64> {
     let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-    let plane = LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
-        .expect("plausible origin");
-    SurfaceFrame::new(plane, PlanetaryBody::EARTH_WGS84)
+    body_fixed(&origin, navigate_geodesy::BodyEllipsoid::WGS84)
 }
 
 fn short_bias_config() -> InertialConfig {
@@ -36,7 +40,7 @@ fn short_bias_config() -> InertialConfig {
 
 fn nominal() -> InertialNominal {
     InertialNominal {
-        p: Vector3::new(120.0, -40.0, -300.0),
+        p: earth_position() + Vector3::new(120.0, -40.0, -300.0),
         v: Vector3::new(60.0, 10.0, -2.0),
         q: nalgebra::UnitQuaternion::from_euler_angles(0.2, -0.1, 1.0),
         b_a: Vector3::new(0.01, -0.02, 0.005),
@@ -53,32 +57,17 @@ fn rates() -> ImuRates {
     }
 }
 
-/// The error state of `x` relative to `reference`, with the attitude
-/// as the body-axis rotation vector.
-fn error_between(x: &InertialNominal, reference: &InertialNominal) -> Vec17 {
-    let mut dx = Vec17::zeros();
-    dx.fixed_rows_mut::<3>(0).copy_from(&(x.p - reference.p));
-    dx.fixed_rows_mut::<3>(3).copy_from(&(x.v - reference.v));
-    dx.fixed_rows_mut::<3>(6)
-        .copy_from(&rotation_vector(&(reference.q.inverse() * x.q)));
-    dx.fixed_rows_mut::<3>(9)
-        .copy_from(&(x.b_a - reference.b_a));
-    dx.fixed_rows_mut::<3>(12)
-        .copy_from(&(x.b_g - reference.b_g));
-    dx[15] = x.b_alt - reference.b_alt;
-    dx[16] = x.b_mag - reference.b_mag;
-    dx
-}
-
 /// Step size per error component: position, velocity, attitude, and
-/// each bias have their own scale.
+/// each bias have their own scale. The body-fixed position is about
+/// 6.4e6 m, so its rounding is about 1e-9 m. Each step is large enough
+/// that this rounding stays below the tolerance of the check.
 fn epsilon(index: usize) -> f64 {
     match index {
-        0..=2 => 1e-2,
-        3..=5 => 1e-3,
-        6..=8 => 1e-5,
-        9..=11 => 1e-6,
-        12..=14 => 1e-7,
+        0..=2 => 1.0,
+        3..=5 => 1e-2,
+        6..=8 => 1e-3,
+        9..=11 => 1e-3,
+        12..=14 => 1e-4,
         15 => 1e-2,
         _ => 1e-12,
     }

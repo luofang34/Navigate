@@ -4,6 +4,7 @@ use nalgebra::{Matrix3, Vector3};
 use navigate_contract::FrameId;
 
 use super::{CentralBodyGravity, GravityField, ThirdBodySet, centrifugal, centrifugal_gradient};
+use crate::body::PlanetaryBody;
 
 /// The gravity model of a [`SpaceEnvironment`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -91,6 +92,20 @@ impl SpaceEnvironment {
             frame,
             frame_rotation_rad_per_s: [0.0; 3],
             gravity,
+        }
+    }
+
+    /// The body-fixed frame of `body`: the frame of its ellipsoid, the
+    /// rotation `[0, 0, ω]` about the body-fixed `z` axis, and the point
+    /// mass and the `J2` term of the body. With the centrifugal term of
+    /// [`GravityField::gravity`], the gravity is the apparent gravity of
+    /// [`PlanetaryBody::apparent_gravity_body_fixed`].
+    #[must_use]
+    pub const fn from_body(body: PlanetaryBody) -> Self {
+        Self {
+            frame: body.ellipsoid.frame(),
+            frame_rotation_rad_per_s: [0.0, 0.0, body.rotation_rate_rad_per_s],
+            gravity: SpaceGravityModel::CentralBody(body.central_gravity()),
         }
     }
 

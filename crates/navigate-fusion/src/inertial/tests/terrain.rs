@@ -6,17 +6,19 @@ use std::vec::Vec;
 
 use nalgebra::{SMatrix, UnitQuaternion, Vector3};
 use navigate_contract::{ObservationStamp, SensorClass, SourceComposition};
-use navigate_geodesy::{LocalTangentPlane, NedOffset};
+use navigate_geodesy::{
+    BodyEllipsoid, BodyFixedPosition, LocalTangentPlane, NedOffset, body_fixed_to_geodetic,
+};
 
 use super::*;
 use crate::inertial::estimate::InertialCore;
-use crate::inertial::models::{plane_to_local_at, terrain_clearance};
+use crate::inertial::local_level::LocalLevel;
+use crate::inertial::models::terrain_clearance;
 use crate::inertial::nominal::{
     ALT_BIAS, ATT, InertialNominal, Mat17, N, POS, Vec17, rotation_vector,
 };
 use crate::inertial::regime::Regime;
 use crate::observation::{Observation, ObservationValue};
-use navigate_astrodynamics::SurfaceFrame;
 
 const SLOPE: [f64; 2] = [0.08, -0.12];
 const TERRAIN_HEIGHT_M: f64 = 350.0;
@@ -27,14 +29,15 @@ fn beam() -> [f64; 3] {
 }
 
 fn sloped_core() -> InertialCore {
-    let plane = LocalTangentPlane::new(earth_origin(), navigate_geodesy::BodyEllipsoid::WGS84)
-        .expect("plausible origin");
+    let plane = LocalTangentPlane::new(earth_origin(), BodyEllipsoid::WGS84).expect("plausible");
+    let vehicle = plane.from_ned(&NedOffset::new(4_000.0, -2_500.0, -900.0));
+    let q_local = UnitQuaternion::from_euler_angles(0.15, -0.2, 0.7);
     InertialCore {
-        regime: Regime::BodySurface(SurfaceFrame::new(plane, PlanetaryBody::EARTH_WGS84)),
+        regime: Regime::surface_of(&PlanetaryBody::EARTH_WGS84),
         nominal: InertialNominal {
-            p: Vector3::new(4_000.0, -2_500.0, -900.0),
+            p: earth_body_fixed(&vehicle),
             v: Vector3::zeros(),
-            q: UnitQuaternion::from_euler_angles(0.15, -0.2, 0.7),
+            q: LocalLevel::at(vehicle).bf_to_ned_quaternion().inverse() * q_local,
             b_a: Vector3::zeros(),
             b_g: Vector3::zeros(),
             b_alt: 7.0,
@@ -61,36 +64,28 @@ fn clearance_value(clearance_m: f64) -> ObservationValue {
 /// terrain plane through the nominal horizontal position. The local axes
 /// stay the axes at the nominal vehicle.
 fn true_range(core: &InertialCore, dx: &Vec17) -> f64 {
-    let Regime::BodySurface(surface) = &core.regime else {
-        unreachable_case()
-    };
     let nominal = core.nominal;
     let perturbed = nominal.inject(dx);
-    let p = |v: Vector3<f64>| surface.plane().from_ned(&NedOffset::new(v.x, v.y, v.z));
-    let vehicle = p(nominal.p);
-    let local =
-        LocalTangentPlane::new(vehicle, navigate_geodesy::BodyEllipsoid::WGS84).expect("plausible");
-    let moved = p(perturbed.p);
+    let geodetic = |p: Vector3<f64>| {
+        body_fixed_to_geodetic(&BodyFixedPosition::new(p.x, p.y, p.z), BodyEllipsoid::WGS84)
+    };
+    let vehicle = geodetic(nominal.p);
+    let local = LocalTangentPlane::new(vehicle, BodyEllipsoid::WGS84).expect("plausible");
+    let moved = geodetic(perturbed.p);
     let offset = local.to_ned(&moved);
     let terrain = TERRAIN_HEIGHT_M + SLOPE[0] * offset.north_m + SLOPE[1] * offset.east_m;
-    let plane_to_local = plane_to_local_at(surface, vehicle).expect("plausible");
-    let u = plane_to_local * perturbed.c_b_to_f() * Vector3::from(beam());
+    let frame_to_local = LocalLevel::at(vehicle).bf_to_ned();
+    let u = frame_to_local * perturbed.c_b_to_f() * Vector3::from(beam());
     let m = Vector3::new(SLOPE[0], SLOPE[1], 1.0);
     (moved.altitude_m - terrain) / m.dot(&u)
-}
-
-fn unreachable_case() -> ! {
-    panic!("the test core is on a surface")
 }
 
 #[test]
 fn terrain_clearance_jacobian_matches_finite_differences() {
     let core = sloped_core();
-    let Regime::BodySurface(surface) = core.regime else {
-        unreachable_case()
-    };
     let rho = true_range(&core, &Vec17::zeros());
-    let model = terrain_clearance(&core, &surface, &clearance_value(rho)).expect("valid geometry");
+    let model = terrain_clearance(&core, BodyEllipsoid::WGS84, &clearance_value(rho))
+        .expect("valid geometry");
     assert!(model.residual[0].abs() < 1e-6, "{}", model.residual[0]);
     let mut numeric = SMatrix::<f64, 1, N>::zeros();
     for j in (POS..POS + 3).chain(ATT..ATT + 3).chain([ALT_BIAS]) {
@@ -115,9 +110,6 @@ fn terrain_clearance_jacobian_matches_finite_differences() {
 #[test]
 fn a_grazing_beam_or_a_vehicle_below_the_terrain_is_refused() {
     let mut core = sloped_core();
-    let Regime::BodySurface(surface) = core.regime else {
-        unreachable_case()
-    };
     let grazing = ObservationValue::TerrainClearance {
         clearance_m: 500.0,
         terrain_height_m: TERRAIN_HEIGHT_M,
@@ -126,9 +118,14 @@ fn a_grazing_beam_or_a_vehicle_below_the_terrain_is_refused() {
         variance_m2: 1.0,
     };
     // A beam that points away from the terrain has `κ < 0.05`.
-    assert!(terrain_clearance(&core, &surface, &grazing).is_err());
-    core.nominal.p.z = 1_000.0;
-    assert!(terrain_clearance(&core, &surface, &clearance_value(10.0)).is_err());
+    assert!(terrain_clearance(&core, BodyEllipsoid::WGS84, &grazing).is_err());
+    let below = earth_body_fixed(&GeodeticPosition::new(
+        earth_origin().latitude_rad,
+        earth_origin().longitude_rad,
+        TERRAIN_HEIGHT_M - 50.0,
+    ));
+    core.nominal.p = below;
+    assert!(terrain_clearance(&core, BodyEllipsoid::WGS84, &clearance_value(10.0)).is_err());
 }
 
 fn observation(

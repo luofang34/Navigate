@@ -1,37 +1,39 @@
 //! The free-inertial error oscillates with the Schuler period
-//! `2π·√(r/g)` on each body.
+//! `2π·√(r/g)` on each body, in the body-fixed frame of the body.
 
 use std::vec::Vec;
 
 use core::f64::consts::TAU;
 
-use nalgebra::{UnitQuaternion, Vector3};
+use nalgebra::Vector3;
 use navigate_contract::GeodeticPosition;
-use navigate_geodesy::LocalTangentPlane;
 
 use crate::inertial::config::InertialConfig;
+use crate::inertial::local_level::{LocalLevel, body_fixed, quaternion_of};
 use crate::inertial::mechanization::{ImuRates, mechanize};
 use crate::inertial::nominal::InertialNominal;
-use navigate_astrodynamics::{GravityField, PlanetaryBody, SurfaceFrame};
+use navigate_astrodynamics::{GravityField, PlanetaryBody, SpaceEnvironment};
 
 /// The measured period from the second zero crossing of the north error
 /// after a 1 m/s north velocity error, and the expected period.
 fn schuler_period_s(body: PlanetaryBody, lat_deg: f64) -> (f64, f64) {
     let origin = GeodeticPosition::new(lat_deg.to_radians(), 0.3, 0.0);
-    let plane = LocalTangentPlane::new(origin, body.ellipsoid).expect("plausible");
-    let frame = SurfaceFrame::new(plane, body);
-    let (g, _) = frame.gravity(&Vector3::zeros());
-    let radius_m = frame.body_fixed_position(&Vector3::zeros()).norm();
-    let expected = TAU * (radius_m / g.norm()).sqrt();
+    let field = SpaceEnvironment::from_body(body);
+    let local = LocalLevel::at(origin);
+    let p0 = body_fixed(&origin, body.ellipsoid);
+    let north = local.ned_to_bf.column(0).into_owned();
+    let (g, _) = field.gravity(&p0);
+    let expected = TAU * (p0.norm() / g.norm()).sqrt();
+    let c = local.ned_to_bf;
     let rates = ImuRates {
-        specific_force: -g,
-        angular_rate: frame.frame_rotation(),
+        specific_force: c.transpose() * -g,
+        angular_rate: c.transpose() * field.frame_rotation(),
     };
     let config = InertialConfig::default();
     let mut x = InertialNominal {
-        p: Vector3::zeros(),
-        v: Vector3::new(1.0, 0.0, 0.0),
-        q: UnitQuaternion::identity(),
+        p: p0,
+        v: north,
+        q: quaternion_of(&c),
         b_a: Vector3::zeros(),
         b_g: Vector3::zeros(),
         b_alt: 0.0,
@@ -40,11 +42,13 @@ fn schuler_period_s(body: PlanetaryBody, lat_deg: f64) -> (f64, f64) {
     let dt_s = 1.0;
     let mut crossings = Vec::new();
     let mut time_s = 0.0;
+    let north_error = |x: &InertialNominal| north.dot(&(x.p - p0));
     while crossings.len() < 2 && time_s < 2.0 * expected {
-        let (next, _) = mechanize(&x, &rates, dt_s, &frame, &config);
+        let (next, _) = mechanize(&x, &rates, dt_s, &field, &config);
         assert!(next.p.iter().chain(next.v.iter()).all(|c| c.is_finite()));
-        if time_s > 0.0 && x.p.x.signum() != next.p.x.signum() {
-            let fraction = x.p.x / (x.p.x - next.p.x);
+        let (before, after) = (north_error(&x), north_error(&next));
+        if time_s > 0.0 && before.signum() != after.signum() {
+            let fraction = before / (before - after);
             crossings.push(time_s + fraction * dt_s);
         }
         x = next;
@@ -72,7 +76,7 @@ fn the_schuler_period_holds_on_the_earth_the_moon_and_mars() {
 }
 
 #[test]
-fn the_lunar_south_pole_has_no_singularity() {
+fn the_poles_have_no_singularity() {
     let (pole, expected_pole) = schuler_period_s(PlanetaryBody::MOON_ME, -90.0);
     let (equator, _) = schuler_period_s(PlanetaryBody::MOON_ME, 0.0);
     assert!(
@@ -80,4 +84,9 @@ fn the_lunar_south_pole_has_no_singularity() {
         "{pole} vs {expected_pole}"
     );
     assert!((pole / equator - 1.0).abs() < 0.01, "{pole} vs {equator}");
+    let (north_pole, expected_north) = schuler_period_s(PlanetaryBody::EARTH_WGS84, 90.0);
+    assert!(
+        (north_pole / expected_north - 1.0).abs() < 0.01,
+        "{north_pole} vs {expected_north}"
+    );
 }

@@ -1,4 +1,6 @@
-//! Position, velocity, and range in a Cartesian space frame.
+//! Position, velocity, and range in the Cartesian frame of the regime
+//! (ADR-0014, ADR-0017). Each regime has these models, because the state
+//! is always in that frame.
 
 use nalgebra::Vector3;
 

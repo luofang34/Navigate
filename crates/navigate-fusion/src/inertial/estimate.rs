@@ -1,21 +1,26 @@
 //! The initialized state of the inertial filter and its propagation
-//! (ADR-0014).
+//! (ADR-0014, ADR-0017).
 
 use nalgebra::{SMatrix, SVector};
 use navigate_contract::{MonotonicNanos, SourceId};
 
 use super::config::InertialConfig;
-use super::mechanization::{ImuRates, transition};
+use super::imu::ImuIncrement;
+use super::mechanization::{ImuRates, increment_transition, transition};
 use super::nominal::{InertialNominal, Mat17, N, Vec17, reset_covariance};
 use super::regime::Regime;
 use crate::admission::seconds;
-use crate::float_math::ceil;
+use crate::float_math::{ceil, round};
 use crate::kalman::{KalmanState, MeasurementModel};
 use crate::rejection::RejectionReason;
 
 /// Longest propagation step in seconds. A longer interval is split into
 /// equal steps, so the midpoint integration keeps its accuracy.
 const MAX_STEP_S: f64 = 1.0;
+
+/// An elapsed time within this number of nanoseconds of the interval of
+/// an increment covers the full interval.
+const INCREMENT_MATCH_NS: u64 = 1_000;
 
 /// The map that a magnetic bias belongs to: the source and the map
 /// revision.
@@ -74,6 +79,36 @@ impl InertialCore {
         }
         self.nominal = nominal;
         self.p = p;
+        self.state_at = at;
+        Ok(())
+    }
+
+    /// Propagates the state to `at` with `increment`. When the elapsed
+    /// time is the interval of the increment, the step uses the full
+    /// increment. Otherwise a part of the interval is already applied, or
+    /// a gap comes before the interval, and the propagation uses the mean
+    /// rates of the increment. A time at or before the state time changes
+    /// nothing.
+    pub(crate) fn propagate_increment(
+        &mut self,
+        at: MonotonicNanos,
+        increment: &ImuIncrement,
+        config: &InertialConfig,
+    ) -> Result<(), RejectionReason> {
+        let Some(elapsed) = at.elapsed_since(self.state_at) else {
+            return Ok(());
+        };
+        let interval_ns = round(increment.dt_s * 1e9) as u64;
+        if elapsed.as_nanos().abs_diff(interval_ns) > INCREMENT_MATCH_NS {
+            return self.propagate_to(at, &ImuRates::mean_of(increment), config);
+        }
+        let dt_s = seconds(elapsed);
+        let (next, phi, q_d) =
+            increment_transition(&self.nominal, increment, dt_s, &self.regime, config)
+                .ok_or(RejectionReason::ImplausibleCovariance)?;
+        let propagated = phi * self.p * phi.transpose() + q_d;
+        self.p = (propagated + propagated.transpose()) * 0.5;
+        self.nominal = next;
         self.state_at = at;
         Ok(())
     }

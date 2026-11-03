@@ -1,46 +1,55 @@
 //! Strapdown error-state inertial navigation with seventeen states
-//! (ADR-0014).
+//! (ADR-0014, ADR-0017).
 //!
 //! [`InertialNavigationFilter`] propagates a nominal strapdown state with
-//! IMU samples and corrects it with admission-gated observations. The
-//! error state is `[δp, δv, δθ, δb_a, δb_g, δb_alt, δb_mag]`. The
-//! attitude error is a right perturbation in the body axes. Each update
-//! injects the error estimate into the nominal state and resets the
-//! covariance (closed loop).
+//! IMU samples or IMU increments and corrects it with admission-gated
+//! observations. The error state is
+//! `[δp, δv, δθ, δb_a, δb_g, δb_alt, δb_mag]`. The attitude error is a
+//! right perturbation in the body axes. Each update injects the error
+//! estimate into the nominal state and resets the covariance (closed
+//! loop).
 //!
-//! The filter has two regimes. In the body-surface regime the state is in
-//! a tangent plane fixed to a rotating [`crate::PlanetaryBody`]. In the
-//! Cartesian space regime the state is in the frame of a
-//! [`crate::SpaceEnvironment`], and [`InertialNavigationFilter::recenter_space_frame`]
-//! moves it to the frame of another body. A bounded history applies a
-//! delayed IMU sample or observation at its acquisition time.
+//! The state is always in one body-centered Cartesian frame: the frame
+//! of a [`crate::SpaceEnvironment`]. On a body surface this frame is the
+//! rotating body-fixed frame of a [`crate::PlanetaryBody`]. A reference
+//! ellipsoid on the frame is optional. With it, the filter has the
+//! geodetic observation models and publishes a geodetic solution with
+//! the local NED axes at the vehicle, at each latitude and without a
+//! tangent plane. [`InertialNavigationFilter::change_frame`] moves the
+//! state into another frame with a different center, axes, or rotation
+//! rate, and [`InertialNavigationFilter::recenter_space_frame`] is its
+//! form for frames with the same rotation rate. A bounded history
+//! applies a delayed IMU event or observation at its acquisition time.
 //!
-//! The filter does not allocate (ADR-0016). The environment of the space
-//! regime is `Copy`, and the history is inline with at most
-//! [`MAX_INERTIAL_HISTORY`] events. [`initial_error_covariance`] and
-//! [`error_transition`] give the covariance model of the filter to a
-//! covariance analysis that has no filter state, such as a Cramér–Rao
-//! bound.
+//! The filter does not allocate (ADR-0016). The environment is `Copy`,
+//! and the history is inline with at most [`MAX_INERTIAL_HISTORY`]
+//! events. [`initial_error_covariance`] and [`error_transition`] give the
+//! covariance model of the filter to a covariance analysis that has no
+//! filter state, such as a Cramér–Rao bound.
 
 mod config;
 mod discretization;
 pub(crate) mod estimate;
+mod frame_change;
 mod history;
 mod imu;
 mod initialize;
+mod local_level;
 pub(crate) mod mechanization;
 mod models;
 pub(crate) mod nominal;
 mod publish;
 mod reference;
 pub(crate) mod regime;
-mod space_frame;
 mod update;
 
 #[cfg(test)]
 mod tests;
 
-use navigate_contract::{ClockDomainId, FrameId, MonotonicNanos, SourceEpoch, WrappingSequence};
+use navigate_contract::{
+    ClockDomainId, FrameId, MonotonicNanos, ObservationStamp, SourceComposition, SourceEpoch,
+    WrappingSequence,
+};
 
 use self::estimate::InertialCore;
 use crate::InnovationStats;
@@ -50,16 +59,18 @@ use crate::observation::{MeasurementKind, Observation};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
 pub use config::InertialConfig;
+pub use frame_change::FrameChange;
 use history::History;
 pub use history::MAX_INERTIAL_HISTORY;
-pub use imu::ImuSample;
+pub use imu::{ImuIncrement, ImuSample};
+pub use local_level::ned_to_body_fixed_dcm;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
 pub use reference::{
     ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_GYRO_BIAS, ERROR_MAG_BIAS,
     ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY, ErrorMatrix, NominalPoint, error_transition,
     initial_error_covariance,
 };
-use regime::{Setup, supports};
+use regime::Regime;
 use update::Event;
 
 /// Sans-IO strapdown inertial filter with seventeen error states
@@ -71,7 +82,8 @@ use update::Event;
 pub struct InertialNavigationFilter {
     config: InertialConfig,
     clock: ClockDomainId,
-    setup: Setup,
+    /// The regime before the initialization and after a reset.
+    setup: Regime,
     epoch: SourceEpoch,
     next_solution_sequence: WrappingSequence,
     rejections: RejectionCounters,
@@ -82,8 +94,10 @@ pub struct InertialNavigationFilter {
 }
 
 impl InertialNavigationFilter {
-    /// Builds an uninitialized filter on the surface of `body`. A body
-    /// that is not on [`navigate_geodesy::BodyEllipsoid::WGS84`] sets
+    /// Builds an uninitialized filter in the rotating body-fixed frame of
+    /// `body`, from [`SpaceEnvironment::from_body`], with the ellipsoid of
+    /// `body` attached. A body that is not on
+    /// [`navigate_geodesy::BodyEllipsoid::WGS84`] sets
     /// `config.fusion.require_explicit_frame` to `true`, as
     /// [`crate::NavigationFilter::new_for_ellipsoid`] does.
     #[must_use]
@@ -92,19 +106,20 @@ impl InertialNavigationFilter {
         if body.ellipsoid != navigate_geodesy::BodyEllipsoid::WGS84 {
             config.fusion.require_explicit_frame = true;
         }
-        Self::build(config, clock, Setup::BodySurface(body))
+        Self::build(config, clock, Regime::surface_of(&body))
     }
 
-    /// Builds an uninitialized filter in the frame of `env`. The filter
-    /// sets `config.fusion.require_explicit_frame` to `true`.
+    /// Builds an uninitialized filter in the frame of `env` without a
+    /// reference ellipsoid. The filter sets
+    /// `config.fusion.require_explicit_frame` to `true`.
     #[must_use]
     pub fn new_space(config: InertialConfig, clock: ClockDomainId, env: SpaceEnvironment) -> Self {
         let mut config = config;
         config.fusion.require_explicit_frame = true;
-        Self::build(config, clock, Setup::CartesianSpace(env))
+        Self::build(config, clock, Regime::space(env))
     }
 
-    fn build(config: InertialConfig, clock: ClockDomainId, setup: Setup) -> Self {
+    fn build(config: InertialConfig, clock: ClockDomainId, setup: Regime) -> Self {
         Self {
             config,
             clock,
@@ -125,7 +140,36 @@ impl InertialNavigationFilter {
     /// provenance. It does not reset the observation silence, because a
     /// propagation sensor cannot cross-check the state (ADR-0004).
     pub fn ingest_imu(&mut self, sample: &ImuSample, now: MonotonicNanos) -> IngestOutcome {
-        let result = self.admit_imu(sample, now);
+        let event = Event::Imu(*sample);
+        let result = self.admit_imu(
+            &sample.stamp,
+            sample.composition,
+            sample.is_plausible(),
+            event,
+            now,
+        );
+        self.outcome(result, None)
+    }
+
+    /// Offers one IMU increment with the gates of [`Self::ingest_imu`].
+    /// A full interval propagates with the rotation correction of the
+    /// velocity increment. A part of an interval propagates with the mean
+    /// rates of the increment, so a delayed observation splits the
+    /// interval as it splits the interval of an [`ImuSample`].
+    pub fn ingest_imu_increment(
+        &mut self,
+        increment: &ImuIncrement,
+        now: MonotonicNanos,
+    ) -> IngestOutcome {
+        let event = Event::Increment(*increment);
+        let plausible = increment.is_plausible();
+        let result = self.admit_imu(
+            &increment.stamp,
+            increment.composition,
+            plausible,
+            event,
+            now,
+        );
         self.outcome(result, None)
     }
 
@@ -160,18 +204,21 @@ impl InertialNavigationFilter {
 
     fn admit_imu(
         &mut self,
-        sample: &ImuSample,
+        stamp: &ObservationStamp,
+        composition: SourceComposition,
+        plausible: bool,
+        event: Event,
         now: MonotonicNanos,
     ) -> Result<(), RejectionReason> {
-        check_clock(self.clock, &sample.stamp)?;
-        check_composition(sample.composition)?;
-        if !sample.is_plausible() {
+        check_clock(self.clock, stamp)?;
+        check_composition(composition)?;
+        if !plausible {
             return Err(RejectionReason::NonFiniteValue);
         }
-        check_freshness(&sample.stamp, now, self.config.fusion.staleness_bound)?;
-        self.ledger.check_source_ordering(&sample.stamp)?;
-        self.apply_event(Event::Imu(*sample), sample.stamp.acquired_at)?;
-        self.ledger.track(&sample.stamp, sample.composition);
+        check_freshness(stamp, now, self.config.fusion.staleness_bound)?;
+        self.ledger.check_source_ordering(stamp)?;
+        self.apply_event(event, stamp.acquired_at)?;
+        self.ledger.track(stamp, composition);
         Ok(())
     }
 
@@ -179,7 +226,13 @@ impl InertialNavigationFilter {
         check_clock(self.clock, &obs.stamp)?;
         check_composition(obs.composition)?;
         let kind = obs.value.kind();
-        if !supports(&self.setup, kind) {
+        // A delayed observation meets the regime of its acquisition time
+        // in the replay.
+        let delayed = self
+            .core
+            .as_ref()
+            .is_some_and(|core| obs.stamp.acquired_at < core.state_at);
+        if !delayed && !self.active_regime().supports(kind) {
             return Err(RejectionReason::UnsupportedMeasurement { kind });
         }
         check_value(&obs.value)?;
@@ -235,8 +288,10 @@ impl InertialNavigationFilter {
 
     /// Starts a new filter epoch: forgets the state, the history, the
     /// per-source tracking, the window, and the innovation statistics.
-    /// Rejection counters persist.
+    /// Rejection counters persist. The active regime persists, so a
+    /// filter that changed its frame starts again in the new frame.
     pub fn reset(&mut self) {
+        self.setup = self.active_regime();
         self.epoch = self.epoch.next();
         self.next_solution_sequence = WrappingSequence::new(0);
         self.ledger.clear();
@@ -273,9 +328,13 @@ impl InertialNavigationFilter {
     /// the IMU samples.
     #[must_use]
     pub fn frame(&self) -> FrameId {
-        self.core
-            .as_ref()
-            .map_or_else(|| self.setup.frame(), |core| core.regime.frame())
+        self.active_regime().frame()
+    }
+
+    /// The regime of the state, or the regime of the next
+    /// initialization.
+    fn active_regime(&self) -> Regime {
+        self.core.as_ref().map_or(self.setup, |core| core.regime)
     }
 
     /// Whether an initialization has set the state.

@@ -55,8 +55,14 @@ initialization origin:
   measurements. `NavigationFilter` uses constant-velocity kinematics.
   `InertialNavigationFilter` is a strapdown error-state filter with
   seventeen states: position, velocity, attitude, accelerometer and
-  gyroscope biases, a barometric bias, and a magnetic map bias. It
-  operates on a body surface or in a Cartesian space frame (ADR-0014).
+  gyroscope biases, a barometric bias, and a magnetic map bias
+  (ADR-0014). Its state is always in one body-centered Cartesian frame.
+  On a body surface this frame is the rotating body-fixed frame, and a
+  reference ellipsoid gives the geodetic models and the geodetic
+  solution at each latitude, the poles included. `change_frame` moves
+  the state between rotating and inertial frames without loss, so one
+  filter operates from a launch site to the surface of another body
+  (ADR-0017).
 - **Delayed measurements.** Each filter keeps a bounded history of its
   states before each update. The filter applies a delayed observation
   at its acquisition time and then replays the later updates

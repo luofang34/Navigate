@@ -1,6 +1,5 @@
-//! Publication of the inertial solution (ADR-0004, ADR-0014).
+//! Publication of the inertial solution (ADR-0004, ADR-0014, ADR-0017).
 
-use nalgebra::Matrix3;
 use navigate_contract::{
     CartesianPosition, CartesianSolution, CartesianVelocity, MonotonicNanos, NavigationSolution,
     NedVelocity, SolutionStamp,
@@ -8,33 +7,34 @@ use navigate_contract::{
 
 use super::InertialNavigationFilter;
 use super::estimate::InertialCore;
-use super::models::{plane_to_local_at, quaternion_of, vehicle_position};
+use super::models::vehicle_level;
 use super::nominal::{ATT, POS, VEL, to_contract};
 use crate::integrity;
 use crate::kalman::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
 use navigate_contract::{IntegrityAssessment, SpaceIntegrityAssessment};
 
 impl InertialNavigationFilter {
-    /// Publishes the body-surface solution for `now`. The position,
-    /// velocity, attitude, and covariances are in the local NED axes at
-    /// the vehicle: `q = q_plane→local ⊗ q_body→plane` and
-    /// `P_att = C_bl·P_θ·C_blᵀ`. The result is `None` before the
-    /// initialization, in a space filter, for a `now` before the state
-    /// time, and for a `now` after the state time before the first IMU
-    /// sample. Publication does not change the retained state.
-    pub fn tick_surface(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
+    /// Publishes the geodetic solution for `now` on the reference
+    /// ellipsoid of the regime. The filter converts the body-fixed state
+    /// at the vehicle: the position is geodetic, and the velocity, the
+    /// attitude, and the covariances are in the local NED axes at the
+    /// vehicle. Thus `v = R_fl·v_frame`, `q = q_frame→local ⊗ q`,
+    /// `P = R_fl·P_frame·R_flᵀ`, and `P_att = C_bl·P_θ·C_blᵀ`. The
+    /// horizontal and vertical 1-sigma values come from the local
+    /// position covariance. The result is `None` before the
+    /// initialization, in a regime without a reference ellipsoid, for a
+    /// `now` before the state time, and for a `now` after the state time
+    /// before the first IMU sample. Publication does not change the
+    /// retained state.
+    pub fn tick(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
         let core = self.propagated(now)?;
-        let surface = *core.regime.surface()?;
-        let position = vehicle_position(&core, &surface);
-        let r = plane_to_local_at(&surface, position).ok()?;
-        let rotate = |block: Matrix3<f64>| {
-            let rotated = r * block * r.transpose();
-            (rotated + rotated.transpose()) * 0.5
-        };
-        let pos_cov = rotate(core.p.fixed_view::<3, 3>(POS, POS).into_owned());
-        let vel_cov = rotate(core.p.fixed_view::<3, 3>(VEL, VEL).into_owned());
+        let ellipsoid = core.regime.surface?;
+        let local = vehicle_level(&core, ellipsoid);
+        let r = local.bf_to_ned();
+        let pos_cov = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(POS, POS).into_owned());
+        let vel_cov = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(VEL, VEL).into_owned());
         let v = r * core.nominal.v;
-        let attitude = quaternion_of(&r) * core.nominal.q;
+        let attitude = local.bf_to_ned_quaternion() * core.nominal.q;
         let c_bl = attitude.to_rotation_matrix().into_inner();
         let p_theta = core.p.fixed_view::<3, 3>(ATT, ATT).into_owned();
         let att_cov = c_bl * p_theta * c_bl.transpose();
@@ -47,30 +47,30 @@ impl InertialNavigationFilter {
         Some(
             NavigationSolution::new(
                 stamp,
-                position,
+                local.position,
                 NedVelocity::new(v.x, v.y, v.z),
                 matrix_to_cov3(&pos_cov),
                 matrix_to_cov3(&vel_cov),
                 integrity,
                 self.ledger.epoch_composition(),
-                surface.body().ellipsoid.contract(),
+                ellipsoid.contract(),
             )
             .with_attitude(to_contract(&attitude))
             .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
         )
     }
 
-    /// Publishes the space solution for `now` in the active frame. The
-    /// attitude rotates the body axes into the frame axes, and
-    /// `P_att = C·P_θ·Cᵀ`. The uncertainty uses the orbital `RTN` axes
-    /// when `|r × v|` defines an orbit plane, and the principal axes
-    /// otherwise (ADR-0015). The result is `None` under the same
-    /// conditions as [`Self::tick_surface`], and in a surface filter.
+    /// Publishes the Cartesian solution for `now` in the active frame.
+    /// Each regime publishes it, so one filter gives this solution in
+    /// orbit and the geodetic solution of [`Self::tick`] near the
+    /// surface. The attitude rotates the body axes into the frame axes,
+    /// and `P_att = C·P_θ·Cᵀ`. The uncertainty uses the orbital `RTN`
+    /// axes when `|r × v|` defines an orbit plane, and the principal axes
+    /// otherwise (ADR-0015). The result is `None` before the
+    /// initialization, for a `now` before the state time, and for a
+    /// `now` after the state time before the first IMU sample.
     pub fn tick_space(&mut self, now: MonotonicNanos) -> Option<CartesianSolution> {
         let core = self.propagated(now)?;
-        if core.regime.surface().is_some() {
-            return None;
-        }
         let frame = core.regime.frame();
         let x = &core.nominal;
         let pos_cov = core.p.fixed_view::<3, 3>(POS, POS).into_owned();
