@@ -14,7 +14,7 @@ use super::Core;
 use crate::config::FusionConfig;
 use crate::filter::{Mat6, Vec6, rotation_between};
 
-pub(super) fn vehicle_to_plane(
+pub(crate) fn vehicle_to_plane(
     plane: &LocalTangentPlane,
     vehicle: GeodeticPosition,
     v: Vector3<f64>,
@@ -31,7 +31,7 @@ pub(super) fn vehicle_to_plane(
     (rot * v, (r_rot + r_rot.transpose()) * 0.5)
 }
 
-pub(super) fn plane_to_vehicle(
+pub(crate) fn plane_to_vehicle(
     plane: &LocalTangentPlane,
     vehicle: GeodeticPosition,
     v: Vector3<f64>,

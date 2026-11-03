@@ -9,8 +9,8 @@ use navigate_contract::{
     SourceComposition, SourceId,
 };
 
-use super::AdmittedContribution;
 use crate::config::FusionConfig;
+use crate::provenance::AdmittedContribution;
 
 /// Derives the assessment for one publication. `records` are the
 /// admissions still inside the assessment window; `silence` is the time

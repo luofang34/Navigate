@@ -201,6 +201,10 @@ pub enum RejectionReason {
         /// time. The depth is zero when the history capacity is zero.
         depth: DurationNanos,
     },
+    /// The inertial filter must propagate to the acquisition time, and
+    /// no IMU sample has arrived since the initialization (ADR-0014).
+    #[error("no IMU sample gives the rates to reach the acquisition time")]
+    NoInertialData,
 }
 
 /// Per-reason rejection counters; every refusal increments exactly one.
@@ -245,6 +249,8 @@ pub struct RejectionCounters {
     pub uninformative_gradient: u64,
     /// Refusals of delayed observations older than the retained history.
     pub outside_history: u64,
+    /// Refusals for a missing IMU sample before the acquisition time.
+    pub no_inertial_data: u64,
 }
 
 impl RejectionCounters {
@@ -271,6 +277,7 @@ impl RejectionCounters {
             }
             RejectionReason::UninformativeGradient { .. } => &mut self.uninformative_gradient,
             RejectionReason::OutsideHistory { .. } => &mut self.outside_history,
+            RejectionReason::NoInertialData => &mut self.no_inertial_data,
         };
         *counter = counter.wrapping_add(1);
     }
@@ -334,6 +341,8 @@ mod tests {
         assert_eq!(counters.stale, 0);
         counters.record(&RejectionReason::NotInitialized);
         assert_eq!(counters.not_initialized, 1);
+        counters.record(&RejectionReason::NoInertialData);
+        assert_eq!(counters.no_inertial_data, 1);
     }
 
     #[test]

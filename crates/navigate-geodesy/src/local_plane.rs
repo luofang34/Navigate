@@ -104,6 +104,13 @@ impl LocalTangentPlane {
         self.ellipsoid
     }
 
+    /// The body-fixed position of the origin. A gravity model reads it
+    /// to find the body-centered position of a plane offset.
+    #[must_use]
+    pub const fn origin_body_fixed(&self) -> BodyFixedPosition {
+        self.origin_ecef
+    }
+
     /// Expresses `position` as a NED offset from the origin: the
     /// body-fixed delta rotated into the origin's tangent frame.
     #[must_use]
@@ -148,8 +155,8 @@ impl LocalTangentPlane {
     /// vector from `self` into `other`.
     #[must_use]
     pub fn ned_rotation_to(&self, other: &Self) -> [[f64; 3]; 3] {
-        let a = self.ecef_to_ned_rows();
-        let b = other.ecef_to_ned_rows();
+        let a = self.body_fixed_to_ned_rows();
+        let b = other.body_fixed_to_ned_rows();
         let mut r = [[0.0; 3]; 3];
         for i in 0..3 {
             for j in 0..3 {
@@ -159,7 +166,11 @@ impl LocalTangentPlane {
         r
     }
 
-    const fn ecef_to_ned_rows(&self) -> [[f64; 3]; 3] {
+    /// The rows of the rotation from the body-fixed axes to the NED axes
+    /// of the origin. The transpose rotates a NED vector into the
+    /// body-fixed axes.
+    #[must_use]
+    pub const fn body_fixed_to_ned_rows(&self) -> [[f64; 3]; 3] {
         [
             [
                 -self.sin_lat * self.cos_lon,

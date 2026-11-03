@@ -23,6 +23,7 @@ mod propagation;
 
 pub(crate) use models::{
     AltitudeModel, LinearBlock, MagneticAnomalyModel, MapLinearization, RangeModel,
+    check_gradient_information, check_linearization_region,
 };
 pub use propagation::FogmBias;
 pub(crate) use propagation::{ConstantVelocityPropagator, Propagator};
@@ -184,9 +185,9 @@ pub(crate) fn is_positive_definite(m: &Matrix3<f64>) -> bool {
 }
 
 /// One-sigma horizontal uncertainty: the square root of the largest
-/// eigenvalue of the 2×2 north/east covariance block, in closed form for
-/// a symmetric 2×2 matrix.
-pub(crate) fn horizontal_1sigma_m(p: &Mat6) -> f64 {
+/// eigenvalue of the leading 2×2 north/east covariance block, in closed
+/// form for a symmetric 2×2 matrix.
+pub(crate) fn horizontal_1sigma_m<const N: usize>(p: &SMatrix<f64, N, N>) -> f64 {
     let a = p[(0, 0)];
     let b = p[(0, 1)];
     let c = p[(1, 1)];
@@ -196,7 +197,7 @@ pub(crate) fn horizontal_1sigma_m(p: &Mat6) -> f64 {
 }
 
 /// One-sigma vertical uncertainty: the square root of the down variance.
-pub(crate) fn vertical_1sigma_m(p: &Mat6) -> f64 {
+pub(crate) fn vertical_1sigma_m<const N: usize>(p: &SMatrix<f64, N, N>) -> f64 {
     p[(2, 2)].max(0.0).sqrt()
 }
 

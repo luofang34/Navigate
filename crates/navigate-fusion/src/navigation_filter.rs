@@ -5,50 +5,34 @@
 //! time (ADR-0012). The state is on one reference ellipsoid, and the
 //! filter refuses observations in another frame (ADR-0013).
 
-mod admission;
 mod history;
-mod integrity;
-mod reanchor;
-mod stats;
+pub(crate) mod reanchor;
+pub(crate) mod stats;
 mod update;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
     ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, NedVelocity,
-    ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId, WrappingSequence,
+    SolutionStamp, SourceEpoch, WrappingSequence,
 };
 use navigate_geodesy::{BodyEllipsoid, LocalTangentPlane, NedOffset};
 
+use crate::admission::{
+    check_clock, check_composition, check_frame, check_freshness, check_value, seconds,
+};
 use crate::config::FusionConfig;
 use crate::filter::{self, KalmanState};
+use crate::integrity;
 use crate::observation::{MeasurementKind, Observation, ObservationValue};
+use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
-use admission::{check_composition, check_value, seconds};
 use history::History;
 pub use stats::InnovationStats;
 use stats::StatsTable;
 use update::Mode;
-
-/// Per-source admission tracking, valid within one source epoch.
-#[derive(Debug, Clone, Copy)]
-struct SourceTrack {
-    epoch: SourceEpoch,
-    sequence: WrappingSequence,
-    acquired_at: MonotonicNanos,
-}
-
-/// One admitted observation's contribution to the assessment window.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct AdmittedContribution {
-    pub(crate) source: SourceId,
-    pub(crate) composition: SourceComposition,
-    admitted_at: MonotonicNanos,
-}
 
 /// The initialized core: the tangent plane anchored at the first admitted
 /// fix, the Kalman state, and the time the state refers to.
@@ -73,13 +57,7 @@ pub struct NavigationFilter {
     epoch: SourceEpoch,
     next_solution_sequence: WrappingSequence,
     rejections: RejectionCounters,
-    sources: HashMap<SourceId, SourceTrack>,
-    admitted: Vec<AdmittedContribution>,
-    // Union of every admitted observation's composition this filter
-    // epoch: published provenance describes everything the state ever
-    // absorbed, not just the assessment window.
-    epoch_composition: SourceComposition,
-    last_admitted_at: Option<MonotonicNanos>,
+    ledger: ProvenanceLedger,
     core: Option<Core>,
     history: History,
     stats: StatsTable,
@@ -118,10 +96,7 @@ impl NavigationFilter {
             epoch: SourceEpoch::new(0),
             next_solution_sequence: WrappingSequence::new(0),
             rejections: RejectionCounters::default(),
-            sources: HashMap::new(),
-            admitted: Vec::new(),
-            epoch_composition: SourceComposition::empty(),
-            last_admitted_at: None,
+            ledger: ProvenanceLedger::default(),
             core: None,
             history: History::default(),
             stats: StatsTable::default(),
@@ -177,10 +152,7 @@ impl NavigationFilter {
     pub fn reset(&mut self) {
         self.epoch = self.epoch.next();
         self.next_solution_sequence = WrappingSequence::new(0);
-        self.sources.clear();
-        self.admitted.clear();
-        self.epoch_composition = SourceComposition::empty();
-        self.last_admitted_at = None;
+        self.ledger.clear();
         self.core = None;
         self.history.clear();
         self.stats.clear();
@@ -232,93 +204,30 @@ impl NavigationFilter {
     }
 
     fn admit(&mut self, obs: &Observation, now: MonotonicNanos) -> Result<(), RejectionReason> {
-        self.check_clock(&obs.stamp)?;
-        self.check_frame(obs)?;
+        check_clock(self.clock, &obs.stamp)?;
+        check_frame(
+            self.ellipsoid.frame(),
+            obs.frame,
+            self.config.require_explicit_frame,
+        )?;
         check_composition(obs.composition)?;
+        if !obs.value.is_supported() {
+            return Err(RejectionReason::UnsupportedMeasurement {
+                kind: obs.value.kind(),
+            });
+        }
         check_value(&obs.value)?;
-        self.check_freshness(&obs.stamp, now)?;
-        self.check_source_ordering(&obs.stamp)?;
+        check_freshness(&obs.stamp, now, self.config.staleness_bound)?;
+        self.ledger.check_source_ordering(&obs.stamp)?;
         if let Some(nis) = self.apply(obs)? {
             self.stats.record_admitted(obs.value.kind(), nis);
         }
-        self.commit(obs, now);
-        Ok(())
-    }
-
-    fn check_clock(&self, stamp: &ObservationStamp) -> Result<(), RejectionReason> {
-        if stamp.clock != self.clock {
-            return Err(RejectionReason::ClockDomainMismatch {
-                expected: self.clock,
-                got: stamp.clock,
-            });
-        }
-        Ok(())
-    }
-
-    /// A declared frame must be the frame of the filter ellipsoid. A
-    /// missing frame passes only when the configuration allows it.
-    fn check_frame(&self, obs: &Observation) -> Result<(), RejectionReason> {
-        let expected = self.ellipsoid.frame();
-        match obs.frame {
-            Some(got) if got != expected => Err(RejectionReason::FrameMismatch { expected, got }),
-            None if self.config.require_explicit_frame => {
-                Err(RejectionReason::MissingFrame { expected })
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn check_freshness(
-        &self,
-        stamp: &ObservationStamp,
-        now: MonotonicNanos,
-    ) -> Result<(), RejectionReason> {
-        // An acquisition time ahead of the admission reference is the
-        // same time-discipline violation as a per-source regression.
-        let Some(age) = now.elapsed_since(stamp.acquired_at) else {
-            return Err(RejectionReason::AcquisitionTimeRegression {
-                last: now,
-                got: stamp.acquired_at,
-            });
-        };
-        if age > self.config.staleness_bound {
-            return Err(RejectionReason::Stale {
-                age,
-                bound: self.config.staleness_bound,
-            });
-        }
-        Ok(())
-    }
-
-    fn check_source_ordering(&self, stamp: &ObservationStamp) -> Result<(), RejectionReason> {
-        let Some(track) = self.sources.get(&stamp.source) else {
-            // A source's first observation is always sequence-admissible.
-            return Ok(());
-        };
-        if track.epoch != stamp.epoch {
-            // Only a strictly advancing epoch resets the source's
-            // sequence and time tracking; anything else replays a prior
-            // incarnation whose stamps were already judged.
-            if track.epoch.advances(stamp.epoch) {
-                return Ok(());
-            }
-            return Err(RejectionReason::EpochRegression {
-                last: track.epoch,
-                got: stamp.epoch,
-            });
-        }
-        if !track.sequence.admits(stamp.sequence) {
-            return Err(RejectionReason::SequenceNotAdmitted {
-                last: track.sequence,
-                got: stamp.sequence,
-            });
-        }
-        if stamp.acquired_at < track.acquired_at {
-            return Err(RejectionReason::AcquisitionTimeRegression {
-                last: track.acquired_at,
-                got: stamp.acquired_at,
-            });
-        }
+        self.ledger.commit(
+            &obs.stamp,
+            obs.composition,
+            now,
+            self.config.assessment_window,
+        );
         Ok(())
     }
 
@@ -386,31 +295,8 @@ impl NavigationFilter {
         Ok(())
     }
 
-    fn commit(&mut self, obs: &Observation, now: MonotonicNanos) {
-        self.sources.insert(
-            obs.stamp.source,
-            SourceTrack {
-                epoch: obs.stamp.epoch,
-                sequence: obs.stamp.sequence,
-                acquired_at: obs.stamp.acquired_at,
-            },
-        );
-        self.admitted.push(AdmittedContribution {
-            source: obs.stamp.source,
-            composition: obs.composition,
-            admitted_at: now,
-        });
-        self.epoch_composition = self.epoch_composition.union(obs.composition);
-        self.prune_window(now);
-        self.last_admitted_at = Some(now);
-    }
-
     fn prune_window(&mut self, now: MonotonicNanos) {
-        let window = self.config.assessment_window;
-        self.admitted.retain(|c| {
-            now.elapsed_since(c.admitted_at)
-                .is_none_or(|age| age <= window)
-        });
+        self.ledger.prune_window(now, self.config.assessment_window);
     }
 
     /// Publishes `state` — already propagated to `now` by the caller —
@@ -421,9 +307,9 @@ impl NavigationFilter {
         now: MonotonicNanos,
     ) -> Option<NavigationSolution> {
         let core = self.core.as_ref()?;
-        let silence = self.last_admitted_at.and_then(|at| now.elapsed_since(at));
+        let silence = self.ledger.silence(now);
         let assessment = integrity::derive(
-            &self.admitted,
+            self.ledger.window(),
             filter::horizontal_1sigma_m(&state.p),
             filter::vertical_1sigma_m(&state.p),
             silence,
@@ -455,7 +341,7 @@ impl NavigationFilter {
                 // Provenance is epoch-cumulative: everything the state ever
                 // absorbed, while `integrity.contributing` stays
                 // window-scoped.
-                self.epoch_composition,
+                self.ledger.epoch_composition(),
             )
             .with_ellipsoid(self.ellipsoid.contract()),
         )

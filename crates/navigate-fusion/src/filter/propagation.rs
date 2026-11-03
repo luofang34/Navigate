@@ -69,6 +69,47 @@ impl FogmBias {
         Self { tau_s, sigma }
     }
 
+    /// Correlation time in seconds.
+    #[must_use]
+    pub const fn tau_s(&self) -> f64 {
+        self.tau_s
+    }
+
+    /// Steady-state 1-sigma, in the unit of the bias.
+    #[must_use]
+    pub const fn sigma(&self) -> f64 {
+        self.sigma
+    }
+
+    /// Steady-state variance `σ²`.
+    #[must_use]
+    pub const fn stationary_variance(&self) -> f64 {
+        self.sigma * self.sigma
+    }
+
+    /// Power spectral density `2·σ²/τ` of the continuous white noise
+    /// that drives the bias. A non-positive or non-finite `tau_s` gives
+    /// 0.0, which holds the bias constant.
+    #[must_use]
+    pub fn continuous_psd(&self) -> f64 {
+        if self.tau_s > 0.0 && self.tau_s.is_finite() {
+            2.0 * self.stationary_variance() / self.tau_s
+        } else {
+            0.0
+        }
+    }
+
+    /// Continuous decay rate `−1/τ` of the bias. A non-positive or
+    /// non-finite `tau_s` gives 0.0.
+    #[must_use]
+    pub fn decay_rate(&self) -> f64 {
+        if self.tau_s > 0.0 && self.tau_s.is_finite() {
+            -1.0 / self.tau_s
+        } else {
+            0.0
+        }
+    }
+
     /// Advances the bias mean `x` by `dt_s` seconds. The result is
     /// `(next_mean, process_variance)`. The next mean is `φ·x` with
     /// `φ = exp(−dt/τ)`. The process variance is `σ²·(1 − φ²)`. A

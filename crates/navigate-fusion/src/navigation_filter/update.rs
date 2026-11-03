@@ -9,8 +9,8 @@ use nalgebra::Vector3;
 use navigate_contract::MonotonicNanos;
 use navigate_geodesy::NedOffset;
 
-use super::admission::seconds;
 use super::{Core, reanchor};
+use crate::admission::seconds;
 use crate::config::FusionConfig;
 use crate::filter::{
     self, AltitudeModel, LinearBlock, MagneticAnomalyModel, MapLinearization, MeasurementModel,
@@ -104,14 +104,26 @@ pub(super) fn apply_value(
                 gradient_ned_t_per_m: *gradient_ned_t_per_m,
                 valid_radius_m: *valid_radius_m,
             };
-            let model = MagneticAnomalyModel::new(&core.plane, &map, *measured_t, *variance_t2)
+            let variance_t2 = inflated_magnetic_variance(*variance_t2, config)?;
+            let model = MagneticAnomalyModel::new(&core.plane, &map, *measured_t, variance_t2)
                 .ok_or(RejectionReason::NonFiniteValue)?;
             step(core, config, &model, scalar_gate, acquired_at, mode)
         }
-        ObservationValue::Pseudorange { .. } | ObservationValue::VisualPose { .. } => {
-            Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() })
-        }
+        _ => Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() }),
     }
+}
+
+/// Adds the error budget of the unmodeled map bias to the magnetic
+/// variance. A negative or non-finite budget fails closed.
+fn inflated_magnetic_variance(
+    variance_t2: f64,
+    config: &FusionConfig,
+) -> Result<f64, RejectionReason> {
+    let budget = config.unmodeled_magnetic_bias_variance_t2;
+    if !(budget.is_finite() && budget >= 0.0) {
+        return Err(RejectionReason::ImplausibleCovariance);
+    }
+    Ok(variance_t2 + budget)
 }
 
 fn dt_s(core: &Core, acquired_at: MonotonicNanos) -> f64 {

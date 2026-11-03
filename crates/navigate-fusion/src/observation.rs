@@ -3,14 +3,14 @@
 //! Producing observations from real hardware is outside this crate: a
 //! source adapter builds an [`Observation`] from whatever it measures and
 //! the filter judges it at admission. The value enum is
-//! `#[non_exhaustive]`. Reserved variants name measurements that this
-//! build cannot use yet (ADR-0008). The filter refuses them by name with
-//! [`crate::RejectionReason::UnsupportedMeasurement`] and counts them.
-//! A reserved variant becomes usable when its measurement model lands.
+//! `#[non_exhaustive]`. A filter that has no model for a value refuses
+//! it by name with [`crate::RejectionReason::UnsupportedMeasurement`]
+//! and counts it (ADR-0008). [`ObservationValue::Pseudorange`] is
+//! reserved: no filter in this crate has its model.
 
 use navigate_contract::{
-    AttitudeQuaternion, FrameId, GeodeticPosition, NedVelocity, ObservationStamp,
-    SourceComposition, SymmetricCov3,
+    AttitudeQuaternion, CartesianPosition, CartesianVelocity, FrameId, GeodeticPosition,
+    NedVelocity, ObservationStamp, SourceComposition, SymmetricCov3,
 };
 
 /// The measured value of one observation, with its covariance.
@@ -76,7 +76,8 @@ pub enum ObservationValue {
         variance_t2: f64,
     },
     /// GNSS pseudorange to one satellite, before any position solution.
-    /// Reserved: refused until the pseudorange model lands (ADR-0008).
+    /// Reserved: every filter refuses it with
+    /// [`crate::RejectionReason::UnsupportedMeasurement`] (ADR-0008).
     Pseudorange {
         /// Satellite position at transmission, Earth-centered Earth-fixed meters.
         satellite_ecef_m: [f64; 3],
@@ -85,17 +86,75 @@ pub enum ObservationValue {
         /// Pseudorange variance in meters².
         variance_m2: f64,
     },
-    /// Camera position and attitude from a map reference.
-    /// Reserved: refused until the filter carries attitude (ADR-0008).
+    /// Camera position and attitude from a map reference (ADR-0014).
+    /// [`crate::InertialNavigationFilter`] applies it on a body surface as
+    /// one update of dimension six with
+    /// [`crate::FusionConfig::pose_gate_chi2`].
+    /// [`crate::NavigationFilter`] has no attitude state and refuses it
+    /// with [`crate::RejectionReason::UnsupportedMeasurement`].
     VisualPose {
         /// Camera position on the reference ellipsoid.
         position: GeodeticPosition,
         /// Position covariance in local NED meters².
         position_covariance: SymmetricCov3,
-        /// Camera attitude.
+        /// Unit attitude quaternion from the body axes to the local NED
+        /// axes at `position`.
         attitude: AttitudeQuaternion,
-        /// Attitude covariance in radians² about NED axes.
+        /// Attitude covariance in radians² about the local NED axes at
+        /// `position`. The inertial filter rotates it into the body
+        /// axes.
         attitude_covariance: SymmetricCov3,
+    },
+    /// Slant range from the vehicle to the terrain along a body-fixed
+    /// beam, such as a radar altimeter range (ADR-0014). The source
+    /// adapter reads the terrain height and the terrain slope at the
+    /// nominal horizontal position. Requires an initialized filter.
+    TerrainClearance {
+        /// Measured slant range along the beam in meters.
+        clearance_m: f64,
+        /// Terrain height above the reference ellipsoid in meters.
+        terrain_height_m: f64,
+        /// Terrain slope `[∂h/∂north, ∂h/∂east]`. It has no unit.
+        terrain_slope_north_east: [f64; 2],
+        /// Unit beam direction in the body axes.
+        beam_body_unit: [f64; 3],
+        /// Range variance in meters².
+        variance_m2: f64,
+    },
+    /// An attitude measurement, such as a star tracker attitude
+    /// (ADR-0014). On a body surface the quaternion rotates the body
+    /// axes into the local NED axes at the vehicle. In a Cartesian frame
+    /// it rotates the body axes into the frame axes.
+    AttitudeFix {
+        /// Unit attitude quaternion.
+        attitude: AttitudeQuaternion,
+        /// Covariance of the body-axis rotation vector in radians².
+        covariance: SymmetricCov3,
+    },
+    /// A position in the Cartesian frame of the filter (ADR-0014).
+    CartesianPositionFix {
+        /// Measured position in meters.
+        position: CartesianPosition,
+        /// Covariance in meters², in the frame axes.
+        covariance: SymmetricCov3,
+    },
+    /// A velocity relative to the Cartesian frame of the filter, in the
+    /// frame axes (ADR-0014).
+    CartesianVelocityFix {
+        /// Measured velocity in meters per second.
+        velocity: CartesianVelocity,
+        /// Covariance in (m/s)², in the frame axes.
+        covariance: SymmetricCov3,
+    },
+    /// Range to a beacon at a known position in the Cartesian frame of
+    /// the filter (ADR-0014).
+    CartesianRange {
+        /// Beacon position in meters.
+        beacon: CartesianPosition,
+        /// Measured range in meters.
+        range_m: f64,
+        /// Range variance in meters².
+        variance_m2: f64,
     },
 }
 
@@ -117,6 +176,16 @@ pub enum MeasurementKind {
     Pseudorange,
     /// [`ObservationValue::VisualPose`].
     VisualPose,
+    /// [`ObservationValue::TerrainClearance`].
+    TerrainClearance,
+    /// [`ObservationValue::AttitudeFix`].
+    AttitudeFix,
+    /// [`ObservationValue::CartesianPositionFix`].
+    CartesianPositionFix,
+    /// [`ObservationValue::CartesianVelocityFix`].
+    CartesianVelocityFix,
+    /// [`ObservationValue::CartesianRange`].
+    CartesianRange,
 }
 
 impl ObservationValue {
@@ -131,10 +200,17 @@ impl ObservationValue {
             Self::MagneticAnomaly { .. } => MeasurementKind::MagneticAnomaly,
             Self::Pseudorange { .. } => MeasurementKind::Pseudorange,
             Self::VisualPose { .. } => MeasurementKind::VisualPose,
+            Self::TerrainClearance { .. } => MeasurementKind::TerrainClearance,
+            Self::AttitudeFix { .. } => MeasurementKind::AttitudeFix,
+            Self::CartesianPositionFix { .. } => MeasurementKind::CartesianPositionFix,
+            Self::CartesianVelocityFix { .. } => MeasurementKind::CartesianVelocityFix,
+            Self::CartesianRange { .. } => MeasurementKind::CartesianRange,
         }
     }
 
-    /// Whether this build has the measurement model for this value.
+    /// Whether the six-state [`crate::NavigationFilter`] has the
+    /// measurement model for this value. [`crate::InertialNavigationFilter`]
+    /// applies a larger set (ADR-0014).
     #[must_use]
     pub const fn is_supported(&self) -> bool {
         matches!(
@@ -165,6 +241,11 @@ pub struct Observation {
     /// declares no frame. A filter with
     /// [`crate::FusionConfig::require_explicit_frame`] refuses `None`.
     pub frame: Option<FrameId>,
+    /// Revision of the map that the source adapter read, when the value
+    /// comes from a map (ADR-0014). The inertial filter starts a new map
+    /// bias when the source or the revision changes. `None` declares no
+    /// revision.
+    pub map_revision: Option<u64>,
 }
 
 impl Observation {
@@ -180,6 +261,7 @@ impl Observation {
             value,
             composition,
             frame: None,
+            map_revision: None,
         }
     }
 
@@ -198,6 +280,13 @@ impl Observation {
     #[must_use]
     pub const fn with_frame(mut self, frame: FrameId) -> Self {
         self.frame = Some(frame);
+        self
+    }
+
+    /// This observation with `map_revision` declared.
+    #[must_use]
+    pub const fn with_map_revision(mut self, map_revision: u64) -> Self {
+        self.map_revision = Some(map_revision);
         self
     }
 }

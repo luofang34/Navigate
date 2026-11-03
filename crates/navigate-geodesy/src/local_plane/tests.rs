@@ -207,3 +207,20 @@ fn the_same_coordinates_differ_between_bodies() {
     let ratio = earth.to_ned(&target).north_m / mars.to_ned(&target).north_m;
     assert!((ratio - 1.88).abs() < 0.02, "{ratio}");
 }
+
+#[test]
+fn the_accessors_reconstruct_a_plane_offset_in_the_body_fixed_frame() {
+    let plane = plane_at_47n_8e();
+    let offset = NedOffset::new(1_200.0, -800.0, 35.0);
+    let truth = geodetic_to_ecef(&plane.from_ned(&offset));
+    let origin = plane.origin_body_fixed();
+    let rows = plane.body_fixed_to_ned_rows();
+    let ned = [offset.north_m, offset.east_m, offset.down_m];
+    let mut body_fixed = [origin.x_m, origin.y_m, origin.z_m];
+    for (axis, value) in body_fixed.iter_mut().enumerate() {
+        *value += rows[0][axis] * ned[0] + rows[1][axis] * ned[1] + rows[2][axis] * ned[2];
+    }
+    assert!((body_fixed[0] - truth.x_m).abs() < 1e-6);
+    assert!((body_fixed[1] - truth.y_m).abs() < 1e-6);
+    assert!((body_fixed[2] - truth.z_m).abs() < 1e-6);
+}
