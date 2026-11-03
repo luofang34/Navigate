@@ -1,4 +1,5 @@
-//! Measurement models of the inertial filter (ADR-0014, ADR-0017).
+//! Measurement models of the inertial filter (ADR-0014, ADR-0017,
+//! ADR-0018).
 //!
 //! Each model linearizes one observation at the nominal state and gives
 //! a [`Linearized`] update of the error state. The position and the
@@ -21,7 +22,9 @@ use crate::rejection::RejectionReason;
 
 mod attitude;
 mod cartesian;
+pub(crate) mod line_of_sight;
 mod magnetic;
+pub(crate) mod radiometric;
 mod surface;
 mod terrain;
 
@@ -59,6 +62,15 @@ pub(crate) fn apply_observation(
                 });
             let model = attitude::attitude_fix(core, &to_reference, attitude, covariance);
             core.update(&model, fusion.innovation_gate_chi2, mode)
+        }
+        ObservationValue::Pseudorange { .. }
+        | ObservationValue::PseudorangeRate { .. }
+        | ObservationValue::TwoWayRange { .. }
+        | ObservationValue::TwoWayRangeRate { .. } => {
+            radiometric::apply(core, &obs.value, config, mode)
+        }
+        ObservationValue::LineOfSight { .. } => {
+            line_of_sight::apply(core, &obs.value, config, mode)
         }
         _ => apply_geodetic(core, obs, config, mode),
     }
@@ -148,4 +160,4 @@ fn range(
 }
 
 /// Range below which the range Jacobian direction is undefined, in meters.
-const MIN_RANGE_M: f64 = 1.0;
+pub(crate) const MIN_RANGE_M: f64 = 1.0;

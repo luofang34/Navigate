@@ -2,15 +2,16 @@
 //! injection with its covariance reset (ADR-0014).
 //!
 //! The attitude error is a right perturbation in the body axes:
-//! `C_true = C_nom·exp([δθ×])` and `q_true = q_nom ⊗ exp(δθ/2)`. The bias
-//! errors are additive: `b_true = b_nom + δb`.
+//! `C_true = C_nom·exp([δθ×])` and `q_true = q_nom ⊗ exp(δθ/2)`. The bias,
+//! empirical acceleration, and clock errors are additive:
+//! `b_true = b_nom + δb`.
 
 use crate::float_math::atan2;
 use nalgebra::{Matrix3, Quaternion, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::AttitudeQuaternion;
 
 /// Dimension of the error state.
-pub(crate) const N: usize = 17;
+pub(crate) const N: usize = 22;
 /// First index of the position error in meters, in the frame axes.
 pub(crate) const POS: usize = 0;
 /// First index of the velocity error in m/s, in the frame axes.
@@ -25,9 +26,16 @@ pub(crate) const GYRO_BIAS: usize = 12;
 pub(crate) const ALT_BIAS: usize = 15;
 /// Index of the scalar magnetic map bias error in tesla.
 pub(crate) const MAG_BIAS: usize = 16;
+/// First index of the empirical acceleration error of the dynamic model
+/// compensation in m/s², in the frame axes.
+pub(crate) const DMC: usize = 17;
+/// Index of the receiver clock range bias error `c·δt` in meters.
+pub(crate) const CLOCK_BIAS: usize = 20;
+/// Index of the receiver clock range-rate drift error `c·δṫ` in m/s.
+pub(crate) const CLOCK_DRIFT: usize = 21;
 
-pub(crate) type Vec17 = SVector<f64, N>;
-pub(crate) type Mat17 = SMatrix<f64, N, N>;
+pub(crate) type ErrorVec = SVector<f64, N>;
+pub(crate) type ErrorMat = SMatrix<f64, N, N>;
 
 /// Below this rotation-vector norm, [`rotation_vector`] uses the
 /// small-angle form.
@@ -50,11 +58,35 @@ pub(crate) struct InertialNominal {
     pub(crate) b_alt: f64,
     /// Scalar magnetic map bias in tesla.
     pub(crate) b_mag: f64,
+    /// Empirical acceleration of the dynamic model compensation in m/s²,
+    /// in the frame axes.
+    pub(crate) a_dmc: Vector3<f64>,
+    /// Receiver clock range bias `c·δt` in meters.
+    pub(crate) clock_bias_m: f64,
+    /// Receiver clock range-rate drift `c·δṫ` in m/s.
+    pub(crate) clock_drift_mps: f64,
 }
 
 impl InertialNominal {
+    /// The nominal state at `p`, `v`, and `q` with each bias, the
+    /// empirical acceleration, and the clock at zero.
+    pub(crate) fn at(p: Vector3<f64>, v: Vector3<f64>, q: UnitQuaternion<f64>) -> Self {
+        Self {
+            p,
+            v,
+            q,
+            b_a: Vector3::zeros(),
+            b_g: Vector3::zeros(),
+            b_alt: 0.0,
+            b_mag: 0.0,
+            a_dmc: Vector3::zeros(),
+            clock_bias_m: 0.0,
+            clock_drift_mps: 0.0,
+        }
+    }
+
     /// The nominal state with the error estimate `dx` injected.
-    pub(crate) fn inject(&self, dx: &Vec17) -> Self {
+    pub(crate) fn inject(&self, dx: &ErrorVec) -> Self {
         Self {
             p: self.p + dx.fixed_rows::<3>(POS),
             v: self.v + dx.fixed_rows::<3>(VEL),
@@ -63,6 +95,9 @@ impl InertialNominal {
             b_g: self.b_g + dx.fixed_rows::<3>(GYRO_BIAS),
             b_alt: self.b_alt + dx[ALT_BIAS],
             b_mag: self.b_mag + dx[MAG_BIAS],
+            a_dmc: self.a_dmc + dx.fixed_rows::<3>(DMC),
+            clock_bias_m: self.clock_bias_m + dx[CLOCK_BIAS],
+            clock_drift_mps: self.clock_drift_mps + dx[CLOCK_DRIFT],
         }
     }
 
@@ -75,7 +110,7 @@ impl InertialNominal {
 /// The covariance of the error state after the injection of `dx`:
 /// `P' = J·P·Jᵀ` with `J = I` except `J_θθ = I − ½·[δθ×]`. The result is
 /// symmetric.
-pub(crate) fn reset_covariance(p: &Mat17, dx: &Vec17) -> Mat17 {
+pub(crate) fn reset_covariance(p: &ErrorMat, dx: &ErrorVec) -> ErrorMat {
     let j = reset_jacobian(&dx.fixed_rows::<3>(ATT).into_owned());
     let reset = j * p * j.transpose();
     (reset + reset.transpose()) * 0.5
@@ -83,8 +118,8 @@ pub(crate) fn reset_covariance(p: &Mat17, dx: &Vec17) -> Mat17 {
 
 /// The Jacobian of the closed-loop reset for the attitude error
 /// `dtheta`.
-pub(crate) fn reset_jacobian(dtheta: &Vector3<f64>) -> Mat17 {
-    let mut j = Mat17::identity();
+pub(crate) fn reset_jacobian(dtheta: &Vector3<f64>) -> ErrorMat {
+    let mut j = ErrorMat::identity();
     j.fixed_view_mut::<3, 3>(ATT, ATT)
         .copy_from(&(Matrix3::identity() - 0.5 * dtheta.cross_matrix()));
     j

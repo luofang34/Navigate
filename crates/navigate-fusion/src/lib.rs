@@ -15,9 +15,11 @@
 //!   filter in a local NED plane on one reference ellipsoid of any body,
 //!   with scalar map models and a bounded delayed-measurement history
 //!   (ADR-0012, ADR-0013).
-//! - [`InertialNavigationFilter`] ([`inertial`]): a strapdown error-state
-//!   filter with seventeen states in one body-centered Cartesian frame,
-//!   on a body surface or in space (ADR-0014, ADR-0017).
+//! - [`InertialNavigationFilter`] ([`inertial`]): an error-state filter
+//!   with twenty-two states in one body-centered Cartesian frame, on a
+//!   body surface or in space. IMU data or an orbital force model drives
+//!   it, and it has radiometric and line-of-sight models (ADR-0014,
+//!   ADR-0017, ADR-0018).
 //! - [`MarginalizedParticleFilter`] ([`particle`]): a scalar field map
 //!   match without a linearization, on particles that the caller owns.
 //!
@@ -50,15 +52,16 @@ pub mod rejection;
 
 pub use config::FusionConfig;
 pub use inertial::{
-    FrameChange, ImuIncrement, ImuSample, InertialConfig, InertialNavigationFilter,
+    ClockNoiseModel, ForceModelCoast, FrameChange, ImuIncrement, ImuSample, InertialConfig,
+    InertialNavigationFilter, PropagationMode,
 };
 pub use kalman::FogmBias;
 pub use kinematic::{InnovationStats, NavigationFilter};
 pub use navigate_astrodynamics::{
-    CentralBodyGravity, PlanetaryBody, PointMassBody, SpaceEnvironment, SpaceGravityModel,
-    ThirdBodySet,
+    CannonballSrp, CentralBodyGravity, ExponentialDrag, PlanetaryBody, PointMassBody,
+    SpaceEnvironment, SpaceGravityModel, SphericalHarmonicField, ThirdBodySet,
 };
-pub use observation::{MeasurementKind, Observation, ObservationValue};
+pub use observation::{LineOfSightReference, MeasurementKind, Observation, ObservationValue};
 pub use particle::{
     MarginalizedParticleFilter, MpfConfig, MpfError, MpfEstimate, MpfParticle, ParticlePool,
     ScalarFieldMap,

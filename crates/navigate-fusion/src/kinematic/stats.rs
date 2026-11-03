@@ -7,7 +7,7 @@
 use crate::observation::MeasurementKind;
 
 /// Number of slots in the statistics table.
-pub(crate) const MAX_MEASUREMENT_KINDS: usize = 16;
+pub(crate) const MAX_MEASUREMENT_KINDS: usize = 20;
 
 /// Innovation statistics of one measurement kind in one filter epoch.
 ///
@@ -104,7 +104,7 @@ mod tests {
 
     /// Every measurement kind. The match in [`listed`] fails to compile
     /// when a kind is added, so this list stays complete.
-    const EVERY_KIND: [MeasurementKind; 12] = [
+    const EVERY_KIND: [MeasurementKind; 16] = [
         MeasurementKind::PositionFix,
         MeasurementKind::VelocityFix,
         MeasurementKind::Range,
@@ -117,6 +117,10 @@ mod tests {
         MeasurementKind::CartesianPositionFix,
         MeasurementKind::CartesianVelocityFix,
         MeasurementKind::CartesianRange,
+        MeasurementKind::PseudorangeRate,
+        MeasurementKind::TwoWayRange,
+        MeasurementKind::TwoWayRangeRate,
+        MeasurementKind::LineOfSight,
     ];
 
     const fn listed(kind: MeasurementKind) -> bool {
@@ -132,13 +136,17 @@ mod tests {
             | MeasurementKind::AttitudeFix
             | MeasurementKind::CartesianPositionFix
             | MeasurementKind::CartesianVelocityFix
-            | MeasurementKind::CartesianRange => true,
+            | MeasurementKind::CartesianRange
+            | MeasurementKind::PseudorangeRate
+            | MeasurementKind::TwoWayRange
+            | MeasurementKind::TwoWayRangeRate
+            | MeasurementKind::LineOfSight => true,
         }
     }
 
     #[test]
     fn every_measurement_kind_has_its_own_slot() {
-        assert!(EVERY_KIND.len() <= MAX_MEASUREMENT_KINDS);
+        assert!(EVERY_KIND.len() < MAX_MEASUREMENT_KINDS);
         let mut table = StatsTable::default();
         for (index, kind) in EVERY_KIND.into_iter().enumerate() {
             assert!(listed(kind));

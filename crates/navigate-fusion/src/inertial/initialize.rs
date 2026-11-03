@@ -15,11 +15,9 @@ use super::InertialNavigationFilter;
 use super::config::InertialConfig;
 use super::estimate::InertialCore;
 use super::local_level::{LocalLevel, body_fixed, quaternion_of};
-use super::nominal::{
-    ACCEL_BIAS, ALT_BIAS, ATT, GYRO_BIAS, InertialNominal, MAG_BIAS, Mat17, POS, VEL,
-    to_unit_quaternion,
-};
+use super::nominal::{ATT, ErrorMat, InertialNominal, POS, VEL, to_unit_quaternion};
 use super::regime::Regime;
+use super::stochastic;
 use crate::admission::{check_composition, check_cov3, is_unit_quaternion};
 use crate::kalman::cov3_to_matrix;
 use crate::observation::MeasurementKind;
@@ -149,15 +147,7 @@ impl InertialNavigationFilter {
         at: MonotonicNanos,
         composition: SourceComposition,
     ) -> Result<(), RejectionReason> {
-        let nominal = InertialNominal {
-            p: initial.p,
-            v: initial.v,
-            q: initial.q,
-            b_a: Vector3::zeros(),
-            b_g: Vector3::zeros(),
-            b_alt: 0.0,
-            b_mag: 0.0,
-        };
+        let nominal = InertialNominal::at(initial.p, initial.v, initial.q);
         let p = initial_covariance(&self.config, initial, &nominal.c_b_to_f());
         self.core = Some(InertialCore {
             regime,
@@ -166,6 +156,7 @@ impl InertialNavigationFilter {
             state_at: at,
             last_rates: None,
             mag_key: None,
+            mode: self.setup_mode,
         });
         self.history.initialize(at);
         self.ledger.initialize(composition, at);
@@ -191,13 +182,19 @@ fn check_initial(
     Ok(())
 }
 
-/// The initial covariance. The attitude prior rotates from the frame
+/// The initial covariance. [`stochastic::set_initial_variances`] gives
+/// the bias, empirical acceleration, and clock variances. The attitude
+/// prior rotates from the frame
 /// axes into the body axes, `P_θ = Cᵀ·P_frame·C`, and then each diagonal
 /// variance rises to the configured floor. For a surface
 /// initialization, `P_frame = R·P_ned·Rᵀ`, so `P_θ = C_bnᵀ·P_ned·C_bn`
 /// with `C_bn` the rotation from the body axes to the local NED axes.
-fn initial_covariance(config: &InertialConfig, initial: &InitialState, c: &Matrix3<f64>) -> Mat17 {
-    let mut p = Mat17::zeros();
+fn initial_covariance(
+    config: &InertialConfig,
+    initial: &InitialState,
+    c: &Matrix3<f64>,
+) -> ErrorMat {
+    let mut p = ErrorMat::zeros();
     p.fixed_view_mut::<3, 3>(POS, POS)
         .copy_from(&initial.pos_cov);
     p.fixed_view_mut::<3, 3>(VEL, VEL)
@@ -211,11 +208,6 @@ fn initial_covariance(config: &InertialConfig, initial: &InitialState, c: &Matri
         }
     }
     p.fixed_view_mut::<3, 3>(ATT, ATT).copy_from(&attitude);
-    for axis in 0..3 {
-        p[(ACCEL_BIAS + axis, ACCEL_BIAS + axis)] = config.accel_bias.stationary_variance();
-        p[(GYRO_BIAS + axis, GYRO_BIAS + axis)] = config.gyro_bias.stationary_variance();
-    }
-    p[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.stationary_variance();
-    p[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.stationary_variance();
+    stochastic::set_initial_variances(&mut p, config);
     p
 }

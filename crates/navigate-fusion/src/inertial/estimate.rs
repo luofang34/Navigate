@@ -1,13 +1,15 @@
 //! The initialized state of the inertial filter and its propagation
-//! (ADR-0014, ADR-0017).
+//! (ADR-0014, ADR-0017, ADR-0018).
 
 use nalgebra::{SMatrix, SVector};
 use navigate_contract::{MonotonicNanos, SourceId};
 
+use super::coast::coast_transition;
 use super::config::InertialConfig;
 use super::imu::ImuIncrement;
 use super::mechanization::{ImuRates, increment_transition, transition};
-use super::nominal::{InertialNominal, Mat17, N, Vec17, reset_covariance};
+use super::nominal::{ErrorMat, ErrorVec, InertialNominal, N, reset_covariance};
+use super::propagation::{ForceModelCoast, PropagationMode};
 use super::regime::Regime;
 use crate::admission::seconds;
 use crate::float_math::{ceil, round};
@@ -32,13 +34,15 @@ pub(crate) type MagneticKey = (SourceId, Option<u64>);
 pub(crate) struct InertialCore {
     pub(crate) regime: Regime,
     pub(crate) nominal: InertialNominal,
-    pub(crate) p: Mat17,
+    pub(crate) p: ErrorMat,
     pub(crate) state_at: MonotonicNanos,
     /// The rates of the most recent IMU sample. A propagation without a
     /// covering sample holds them.
     pub(crate) last_rates: Option<ImuRates>,
     /// The map of the current magnetic bias estimate.
     pub(crate) mag_key: Option<MagneticKey>,
+    /// How the state propagates.
+    pub(crate) mode: PropagationMode,
 }
 
 /// How much of the admission an update runs.
@@ -113,9 +117,11 @@ impl InertialCore {
         Ok(())
     }
 
-    /// Propagates to `at` with `rates`, or with the most recent IMU
-    /// rates when `rates` is `None`. A time after the state time without
-    /// any rates is refused with [`RejectionReason::NoInertialData`].
+    /// Propagates to `at` in the active mode. In the sensed-IMU mode the
+    /// propagation uses `rates`, or the most recent IMU rates when
+    /// `rates` is `None`, and a time after the state time without any
+    /// rates is refused with [`RejectionReason::NoInertialData`]. In the
+    /// force-model mode the propagation does not use `rates`.
     pub(crate) fn propagate_with(
         &mut self,
         at: MonotonicNanos,
@@ -125,10 +131,47 @@ impl InertialCore {
         if at <= self.state_at {
             return Ok(());
         }
+        if let PropagationMode::ForceModel(settings) = self.mode {
+            return self.coast_to(at, &settings, config);
+        }
         let rates = rates
             .or(self.last_rates)
             .ok_or(RejectionReason::NoInertialData)?;
         self.propagate_to(at, &rates, config)
+    }
+
+    /// Propagates the state to `at` with the force model of the
+    /// environment, in equal steps of at most
+    /// [`ForceModelCoast::max_rk4_step_s`].
+    fn coast_to(
+        &mut self,
+        at: MonotonicNanos,
+        settings: &ForceModelCoast,
+        config: &InertialConfig,
+    ) -> Result<(), RejectionReason> {
+        let Some(elapsed) = at.elapsed_since(self.state_at) else {
+            return Ok(());
+        };
+        let total_s = seconds(elapsed);
+        if total_s <= 0.0 {
+            return Ok(());
+        }
+        let model = self.regime.env.force_model();
+        let steps = ceil(total_s / settings.max_rk4_step_s).max(1.0);
+        let dt_s = total_s / steps;
+        let mut nominal = self.nominal;
+        let mut p = self.p;
+        for _ in 0..(steps as u64) {
+            let (next, phi, q_d) = coast_transition(&nominal, dt_s, &model, settings, config)
+                .ok_or(RejectionReason::ImplausibleCovariance)?;
+            let propagated = phi * p * phi.transpose() + q_d;
+            p = (propagated + propagated.transpose()) * 0.5;
+            nominal = next;
+        }
+        self.nominal = nominal;
+        self.p = p;
+        self.state_at = at;
+        Ok(())
     }
 
     /// Applies one linearized measurement of the error state. The error
@@ -142,7 +185,7 @@ impl InertialCore {
         mode: Mode,
     ) -> Result<f64, RejectionReason> {
         let state = KalmanState::<N> {
-            x: Vec17::zeros(),
+            x: ErrorVec::zeros(),
             p: self.p,
         };
         let prepared = state
@@ -172,11 +215,11 @@ pub(crate) struct Linearized<const M: usize> {
 }
 
 impl<const M: usize> MeasurementModel<M, N> for Linearized<M> {
-    fn innovation(&self, x: &Vec17) -> SVector<f64, M> {
+    fn innovation(&self, x: &ErrorVec) -> SVector<f64, M> {
         self.residual - self.h * x
     }
 
-    fn jacobian(&self, _x: &Vec17) -> Option<SMatrix<f64, M, N>> {
+    fn jacobian(&self, _x: &ErrorVec) -> Option<SMatrix<f64, M, N>> {
         Some(self.h)
     }
 

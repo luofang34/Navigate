@@ -7,8 +7,9 @@ fn reserved_values() -> [ObservationValue; 2] {
     let covariance = SymmetricCov3::from_diagonal(25.0, 25.0, 25.0);
     [
         ObservationValue::Pseudorange {
-            satellite_ecef_m: [15_600_000.0, 7_540_000.0, 20_140_000.0],
+            emitter_position_m: [15_600_000.0, 7_540_000.0, 20_140_000.0],
             pseudorange_m: 21_000_000.0,
+            sagnac_and_media_correction_m: 0.0,
             variance_m2: 25.0,
         },
         ObservationValue::VisualPose {

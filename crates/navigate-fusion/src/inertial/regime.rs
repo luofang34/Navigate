@@ -49,9 +49,9 @@ impl Regime {
         self.surface != Some(BodyEllipsoid::WGS84)
     }
 
-    /// Whether the regime has the model of `kind`. The Cartesian kinds
-    /// and the attitude fix need no ellipsoid. The geodetic kinds need
-    /// one.
+    /// Whether the regime has the model of `kind`. The Cartesian kinds,
+    /// the attitude fix, the radiometric kinds, and the line of sight need
+    /// no ellipsoid. The geodetic kinds need one.
     pub(crate) const fn supports(&self, kind: MeasurementKind) -> bool {
         let cartesian = matches!(
             kind,
@@ -59,6 +59,11 @@ impl Regime {
                 | MeasurementKind::CartesianVelocityFix
                 | MeasurementKind::CartesianRange
                 | MeasurementKind::AttitudeFix
+                | MeasurementKind::Pseudorange
+                | MeasurementKind::PseudorangeRate
+                | MeasurementKind::TwoWayRange
+                | MeasurementKind::TwoWayRangeRate
+                | MeasurementKind::LineOfSight
         );
         let geodetic = matches!(
             kind,

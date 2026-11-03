@@ -25,4 +25,5 @@ lifecycle rules.
 | [0015](0015-zero-heap-no-std-physical-time-and-space-integrity.md) | Zero-heap `no_std` core, physical coordinate time, explicit body geodesy, and space integrity | Proposed |
 | [0016](0016-core-crate-topology-and-zero-heap-fusion.md) | Core crate topology: route, terrain safety, astrodynamics, and magnetic navigation crates, and zero-heap `no_std` fusion | Proposed |
 | [0017](0017-unified-cartesian-inertial-core-and-frame-transitions.md) | One body-centered Cartesian inertial core with pole-free local axes, general frame changes, and IMU increments | Proposed |
+| [0018](0018-reduced-dynamic-orbit-determination-clock-and-radiometric-opnav.md) | Reduced-dynamic orbit determination with a force-model coast, receiver clock states, and radiometric and optical navigation models in the inertial filter | Proposed |
 | [0019](0019-space-trajectory-and-multiphase-guidance.md) | Space trajectory laws, space guidance setpoints, and mission-phase orchestration from orbit to a runway or to touchdown | Proposed |

@@ -7,14 +7,16 @@
 //! of a filter use. [`SurfaceFrame`] is a tangent plane fixed to a
 //! rotating [`crate::PlanetaryBody`]. [`SpaceEnvironment`] is a
 //! Cartesian frame centered on one body, with a fixed number of third
-//! bodies and an optional frame rotation. Every type is `Copy` and does
-//! not allocate.
+//! bodies and an optional frame rotation. [`SphericalHarmonicField`]
+//! gives the gravity of a body from borrowed Stokes coefficients. Every
+//! type is `Copy` and does not allocate.
 
 use nalgebra::{Matrix3, Vector3};
 
 mod central;
 mod point_mass;
 mod space;
+mod spherical_harmonics;
 mod surface;
 
 #[cfg(test)]
@@ -23,6 +25,10 @@ mod tests;
 pub use central::CentralBodyGravity;
 pub use point_mass::{MAX_THIRD_BODIES, PointMassBody, ThirdBodyCapacityError, ThirdBodySet};
 pub use space::{SpaceEnvironment, SpaceGravityModel};
+pub use spherical_harmonics::{
+    HarmonicFieldError, HarmonicNormalization, MAX_INLINE_HARMONIC_DEGREE, SphericalHarmonicField,
+    harmonic_coefficient_count, harmonic_index,
+};
 pub use surface::SurfaceFrame;
 
 /// Largest magnitude of `J2` that [`crate::PlanetaryBody::is_plausible`]

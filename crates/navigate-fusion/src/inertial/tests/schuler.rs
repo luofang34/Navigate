@@ -5,7 +5,6 @@ use std::vec::Vec;
 
 use core::f64::consts::TAU;
 
-use nalgebra::Vector3;
 use navigate_contract::GeodeticPosition;
 
 use crate::inertial::config::InertialConfig;
@@ -30,15 +29,7 @@ fn schuler_period_s(body: PlanetaryBody, lat_deg: f64) -> (f64, f64) {
         angular_rate: c.transpose() * field.frame_rotation(),
     };
     let config = InertialConfig::default();
-    let mut x = InertialNominal {
-        p: p0,
-        v: north,
-        q: quaternion_of(&c),
-        b_a: Vector3::zeros(),
-        b_g: Vector3::zeros(),
-        b_alt: 0.0,
-        b_mag: 0.0,
-    };
+    let mut x = InertialNominal::at(p0, north, quaternion_of(&c));
     let dt_s = 1.0;
     let mut crossings = Vec::new();
     let mut time_s = 0.0;

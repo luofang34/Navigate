@@ -14,10 +14,15 @@
 //! - `v_N = C·(v_O − ȯ − ω_rel × (p_O − o))`
 //! - `q_b→N = q_O→N ⊗ q_b→O`
 //!
-//! The Jacobian of the error state has `J_pp = C`, `J_vv = C`, and
-//! `J_vp = −C·[ω_rel×]`. The attitude error is in the body axes and each
-//! bias error is in the body or sensor axes, so those blocks are the
-//! identity. The covariance is `P_N = J·P_O·Jᵀ`.
+//! The empirical acceleration of the dynamic model compensation is a
+//! force per unit mass in the frame axes, so it turns with the axes:
+//! `a_N = C·a_O`.
+//!
+//! The Jacobian of the error state has `J_pp = C`, `J_vv = C`,
+//! `J_vp = −C·[ω_rel×]`, and `J_aa = C` for the empirical acceleration.
+//! The attitude error is in the body axes, each bias error is in the
+//! body or sensor axes, and the clock does not depend on the frame, so
+//! those blocks are the identity. The covariance is `P_N = J·P_O·Jᵀ`.
 
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{AttitudeQuaternion, MonotonicNanos};
@@ -25,7 +30,7 @@ use navigate_geodesy::BodyEllipsoid;
 
 use super::InertialNavigationFilter;
 use super::estimate::InertialCore;
-use super::nominal::{InertialNominal, Mat17, POS, VEL, renormalized, to_unit_quaternion};
+use super::nominal::{DMC, ErrorMat, InertialNominal, POS, VEL, renormalized, to_unit_quaternion};
 use super::regime::Regime;
 use super::update::Event;
 use crate::admission::is_unit_quaternion;
@@ -102,8 +107,8 @@ impl FrameChange {
     }
 }
 
-/// The nominal state in the new frame of `change`. The biases do not
-/// change.
+/// The nominal state in the new frame of `change`. The biases and the
+/// clock do not change.
 pub(crate) fn transformed_nominal(x: &InertialNominal, change: &FrameChange) -> InertialNominal {
     let c = change.rotation();
     let omega = Vector3::from(change.relative_angular_rate_in_old_rad_s);
@@ -113,19 +118,21 @@ pub(crate) fn transformed_nominal(x: &InertialNominal, change: &FrameChange) -> 
         p: c * dp,
         v: c * (dv - omega.cross(&dp)),
         q: renormalized(to_unit_quaternion(&change.orientation_old_to_new) * x.q),
+        a_dmc: c * x.a_dmc,
         ..*x
     }
 }
 
 /// The Jacobian of the error state for `change`.
-pub(crate) fn frame_change_jacobian(change: &FrameChange) -> Mat17 {
+pub(crate) fn frame_change_jacobian(change: &FrameChange) -> ErrorMat {
     let c = change.rotation();
     let omega = Vector3::from(change.relative_angular_rate_in_old_rad_s);
-    let mut j = Mat17::identity();
+    let mut j = ErrorMat::identity();
     j.fixed_view_mut::<3, 3>(POS, POS).copy_from(&c);
     j.fixed_view_mut::<3, 3>(VEL, VEL).copy_from(&c);
     j.fixed_view_mut::<3, 3>(VEL, POS)
         .copy_from(&(-c * omega.cross_matrix()));
+    j.fixed_view_mut::<3, 3>(DMC, DMC).copy_from(&c);
     j
 }
 

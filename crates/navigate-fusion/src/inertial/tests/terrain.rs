@@ -15,7 +15,7 @@ use crate::inertial::estimate::InertialCore;
 use crate::inertial::local_level::LocalLevel;
 use crate::inertial::models::terrain_clearance;
 use crate::inertial::nominal::{
-    ALT_BIAS, ATT, InertialNominal, Mat17, N, POS, Vec17, rotation_vector,
+    ALT_BIAS, ATT, ErrorMat, ErrorVec, InertialNominal, N, POS, rotation_vector,
 };
 use crate::inertial::regime::Regime;
 use crate::observation::{Observation, ObservationValue};
@@ -35,17 +35,17 @@ fn sloped_core() -> InertialCore {
     InertialCore {
         regime: Regime::surface_of(&PlanetaryBody::EARTH_WGS84),
         nominal: InertialNominal {
-            p: earth_body_fixed(&vehicle),
-            v: Vector3::zeros(),
-            q: LocalLevel::at(vehicle).bf_to_ned_quaternion().inverse() * q_local,
-            b_a: Vector3::zeros(),
-            b_g: Vector3::zeros(),
             b_alt: 7.0,
-            b_mag: 0.0,
+            ..InertialNominal::at(
+                earth_body_fixed(&vehicle),
+                Vector3::zeros(),
+                LocalLevel::at(vehicle).bf_to_ned_quaternion().inverse() * q_local,
+            )
         },
-        p: Mat17::identity(),
+        p: ErrorMat::identity(),
         state_at: t(0),
         last_rates: None,
+        mode: crate::inertial::PropagationMode::SensedImu,
         mag_key: None,
     }
 }
@@ -63,7 +63,7 @@ fn clearance_value(clearance_m: f64) -> ObservationValue {
 /// The exact slant range for the state `nominal ⊕ dx` against the
 /// terrain plane through the nominal horizontal position. The local axes
 /// stay the axes at the nominal vehicle.
-fn true_range(core: &InertialCore, dx: &Vec17) -> f64 {
+fn true_range(core: &InertialCore, dx: &ErrorVec) -> f64 {
     let nominal = core.nominal;
     let perturbed = nominal.inject(dx);
     let geodetic = |p: Vector3<f64>| {
@@ -83,14 +83,14 @@ fn true_range(core: &InertialCore, dx: &Vec17) -> f64 {
 #[test]
 fn terrain_clearance_jacobian_matches_finite_differences() {
     let core = sloped_core();
-    let rho = true_range(&core, &Vec17::zeros());
+    let rho = true_range(&core, &ErrorVec::zeros());
     let model = terrain_clearance(&core, BodyEllipsoid::WGS84, &clearance_value(rho))
         .expect("valid geometry");
     assert!(model.residual[0].abs() < 1e-6, "{}", model.residual[0]);
     let mut numeric = SMatrix::<f64, 1, N>::zeros();
     for j in (POS..POS + 3).chain(ATT..ATT + 3).chain([ALT_BIAS]) {
         let eps = if j < ATT { 0.5 } else { 1e-6 };
-        let mut dx = Vec17::zeros();
+        let mut dx = ErrorVec::zeros();
         dx[j] = eps;
         numeric[(0, j)] = (true_range(&core, &dx) - true_range(&core, &(-dx))) / (2.0 * eps);
     }
