@@ -1,3 +1,6 @@
+mod altitude;
+mod history;
+mod magnetic;
 mod publication;
 mod range;
 mod reserved;

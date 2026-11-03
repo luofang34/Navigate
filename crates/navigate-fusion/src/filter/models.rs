@@ -1,8 +1,14 @@
-//! Measurement models of the six-state core (ADR-0008).
+//! Measurement models of the six-state core (ADR-0008, ADR-0012).
 
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::{MeasurementModel, Vec6};
+
+mod altitude;
+mod magnetic;
+
+pub(crate) use altitude::AltitudeModel;
+pub(crate) use magnetic::{MagneticAnomalyModel, MapLinearization};
 
 /// Range below which the range Jacobian direction is undefined, in meters.
 const MIN_RANGE_M: f64 = 1.0;

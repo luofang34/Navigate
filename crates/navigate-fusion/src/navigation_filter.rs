@@ -1,10 +1,15 @@
 //! The navigation filter: admission-gated fusion over a local-level NED
 //! state anchored at the first admitted position fix (ADR-0003), with an
-//! integrity assessment on every published solution (ADR-0004).
+//! integrity assessment on every published solution (ADR-0004). A
+//! bounded history applies delayed observations at their acquisition
+//! time (ADR-0012).
 
 mod admission;
+mod history;
 mod integrity;
 mod reanchor;
+mod stats;
+mod update;
 
 #[cfg(test)]
 mod tests;
@@ -14,16 +19,19 @@ use std::collections::HashMap;
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::{
     ClockDomainId, GeodeticPosition, MonotonicNanos, NavigationSolution, NedVelocity,
-    ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId, SymmetricCov3,
-    WrappingSequence,
+    ObservationStamp, SolutionStamp, SourceComposition, SourceEpoch, SourceId, WrappingSequence,
 };
 use navigate_geodesy::{LocalTangentPlane, NedOffset};
 
 use crate::config::FusionConfig;
-use crate::filter::{self, KalmanState, LinearBlock, MeasurementModel, RangeModel};
-use crate::observation::{Observation, ObservationValue};
+use crate::filter::{self, KalmanState};
+use crate::observation::{MeasurementKind, Observation, ObservationValue};
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
 use admission::{check_composition, check_value, seconds};
+use history::History;
+pub use stats::InnovationStats;
+use stats::StatsTable;
+use update::Mode;
 
 /// Per-source admission tracking, valid within one source epoch.
 #[derive(Debug, Clone, Copy)]
@@ -43,10 +51,10 @@ pub(crate) struct AdmittedContribution {
 
 /// The initialized core: the tangent plane anchored at the first admitted
 /// fix, the Kalman state, and the time the state refers to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct Core {
     pub(super) plane: LocalTangentPlane,
-    pub(super) state: KalmanState,
+    pub(super) state: KalmanState<6>,
     state_at: MonotonicNanos,
 }
 
@@ -71,6 +79,8 @@ pub struct NavigationFilter {
     epoch_composition: SourceComposition,
     last_admitted_at: Option<MonotonicNanos>,
     core: Option<Core>,
+    history: History,
+    stats: StatsTable,
 }
 
 impl NavigationFilter {
@@ -89,19 +99,26 @@ impl NavigationFilter {
             epoch_composition: SourceComposition::empty(),
             last_admitted_at: None,
             core: None,
+            history: History::default(),
+            stats: StatsTable::default(),
         }
     }
 
     /// Offers one observation. Gates run in order — clock domain,
     /// composition, value plausibility, freshness, per-source ordering,
-    /// then the innovation gate — and a rejected observation changes
-    /// nothing, including per-source tracking. `now` is the admission
-    /// reference on the filter's clock domain.
+    /// then the model checks and the innovation gate — and a rejected
+    /// observation changes nothing, including per-source tracking and the
+    /// history. `now` is the admission reference on the filter's clock
+    /// domain. An observation acquired before the state time goes through
+    /// the delayed-measurement history (ADR-0012).
     pub fn ingest(&mut self, obs: &Observation, now: MonotonicNanos) -> IngestOutcome {
         match self.admit(obs, now) {
             Ok(()) => IngestOutcome::Accepted,
             Err(reason) => {
                 self.rejections.record(&reason);
+                if matches!(reason, RejectionReason::InnovationGate { .. }) {
+                    self.stats.record_gate_rejection(obs.value.kind());
+                }
                 IngestOutcome::Rejected(reason)
             }
         }
@@ -129,9 +146,10 @@ impl NavigationFilter {
     }
 
     /// Starts a new filter epoch: forgets the origin, the state, the
-    /// assessment window, and all per-source tracking, and rewinds the
-    /// solution sequence. Rejection counters persist — they describe the
-    /// process lifetime, not one epoch.
+    /// assessment window, all per-source tracking, the delayed-measurement
+    /// history, and the innovation statistics, and rewinds the solution
+    /// sequence. Rejection counters persist — they describe the process
+    /// lifetime, not one epoch.
     pub fn reset(&mut self) {
         self.epoch = self.epoch.next();
         self.next_solution_sequence = WrappingSequence::new(0);
@@ -140,6 +158,8 @@ impl NavigationFilter {
         self.epoch_composition = SourceComposition::empty();
         self.last_admitted_at = None;
         self.core = None;
+        self.history.clear();
+        self.stats.clear();
     }
 
     /// Per-reason rejection counters.
@@ -166,6 +186,14 @@ impl NavigationFilter {
         &self.config
     }
 
+    /// Innovation statistics of one measurement kind in this filter
+    /// epoch. `None` when no update and no gate refusal of that kind
+    /// occurred.
+    #[must_use]
+    pub fn innovation_stats(&self, kind: MeasurementKind) -> Option<InnovationStats> {
+        self.stats.get(kind)
+    }
+
     /// Whether a first position fix has anchored the state.
     #[must_use]
     pub const fn is_initialized(&self) -> bool {
@@ -178,7 +206,9 @@ impl NavigationFilter {
         check_value(&obs.value)?;
         self.check_freshness(&obs.stamp, now)?;
         self.check_source_ordering(&obs.stamp)?;
-        self.apply(obs)?;
+        if let Some(nis) = self.apply(obs)? {
+            self.stats.record_admitted(obs.value.kind(), nis);
+        }
         self.commit(obs, now);
         Ok(())
     }
@@ -247,105 +277,42 @@ impl NavigationFilter {
         Ok(())
     }
 
-    fn apply(&mut self, obs: &Observation) -> Result<(), RejectionReason> {
-        match &obs.value {
-            ObservationValue::PositionFix {
-                position,
-                covariance,
-            } => self.apply_position(position, covariance, obs.stamp.acquired_at),
-            ObservationValue::VelocityFix {
-                velocity,
-                covariance,
-            } => self.apply_velocity(velocity, covariance, obs.stamp.acquired_at),
-            ObservationValue::Range {
-                station,
-                range_m,
-                variance_m2,
-            } => self.apply_range(station, *range_m, *variance_m2, obs.stamp.acquired_at),
-            ObservationValue::Pseudorange { .. } | ObservationValue::VisualPose { .. } => {
-                Err(RejectionReason::UnsupportedMeasurement {
-                    kind: obs.value.kind(),
-                })
-            }
-        }
-    }
-
-    fn apply_position(
-        &mut self,
-        position: &GeodeticPosition,
-        covariance: &SymmetricCov3,
-        acquired_at: MonotonicNanos,
-    ) -> Result<(), RejectionReason> {
-        let r = filter::cov3_to_matrix(covariance);
-        match self.core.as_mut() {
-            None => self.initialize(position, &r, acquired_at),
-            Some(core) => {
-                let offset = core.plane.to_ned(position);
-                let z = Vector3::new(offset.north_m, offset.east_m, offset.down_m);
-                update_core(
-                    core,
-                    &self.config,
-                    &LinearBlock::position(z, r),
-                    self.config.innovation_gate_chi2,
-                    acquired_at,
-                )
-            }
-        }
-    }
-
-    fn apply_velocity(
-        &mut self,
-        velocity: &NedVelocity,
-        covariance: &SymmetricCov3,
-        acquired_at: MonotonicNanos,
-    ) -> Result<(), RejectionReason> {
-        let r = filter::cov3_to_matrix(covariance);
-        let Some(core) = self.core.as_mut() else {
-            return Err(RejectionReason::NotInitialized);
+    /// Applies an admissible observation. The result is the chi-square
+    /// statistic of the update, or `None` for the fix that initializes the
+    /// filter.
+    fn apply(&mut self, obs: &Observation) -> Result<Option<f64>, RejectionReason> {
+        let acquired_at = obs.stamp.acquired_at;
+        let Some(core) = self.core else {
+            return match &obs.value {
+                ObservationValue::PositionFix {
+                    position,
+                    covariance,
+                } => {
+                    self.initialize(position, &filter::cov3_to_matrix(covariance), acquired_at)?;
+                    Ok(None)
+                }
+                _ => Err(RejectionReason::NotInitialized),
+            };
         };
-        let dt_s = acquired_at
-            .elapsed_since(core.state_at)
-            .map_or(0.0, seconds);
-        let prop = core
-            .state
-            .propagated(dt_s, self.config.process_noise_accel_psd);
-        let vehicle = core
-            .plane
-            .from_ned(&NedOffset::new(prop.x[0], prop.x[1], prop.x[2]));
-        let (z, r_plane) = reanchor::vehicle_to_plane(
-            &core.plane,
-            vehicle,
-            Vector3::new(velocity.north_mps, velocity.east_mps, velocity.down_mps),
-            r,
-        );
-        update_core(
-            core,
-            &self.config,
-            &LinearBlock::velocity(z, r_plane),
-            self.config.innovation_gate_chi2,
+        if acquired_at < core.state_at {
+            let (next, chi2) =
+                self.history
+                    .apply_delayed(&core, &obs.value, acquired_at, &self.config)?;
+            self.core = Some(next);
+            return Ok(Some(chi2));
+        }
+        let mut candidate = core;
+        let chi2 = update::apply_value(
+            &mut candidate,
+            &obs.value,
             acquired_at,
-        )
-    }
-
-    fn apply_range(
-        &mut self,
-        station: &GeodeticPosition,
-        range_m: f64,
-        variance_m2: f64,
-        acquired_at: MonotonicNanos,
-    ) -> Result<(), RejectionReason> {
-        let Some(core) = self.core.as_mut() else {
-            return Err(RejectionReason::NotInitialized);
-        };
-        let offset = core.plane.to_ned(station);
-        let station_ned = Vector3::new(offset.north_m, offset.east_m, offset.down_m);
-        update_core(
-            core,
             &self.config,
-            &RangeModel::new(station_ned, range_m, variance_m2),
-            self.config.range_gate_chi2,
-            acquired_at,
-        )
+            Mode::Gated,
+        )?;
+        self.history
+            .record(core, obs.value, acquired_at, self.config.history_capacity);
+        self.core = Some(candidate);
+        Ok(Some(chi2))
     }
 
     fn initialize(
@@ -364,11 +331,13 @@ impl NavigationFilter {
         // diffuse prior until velocity measurements arrive.
         let state =
             KalmanState::from_position_fix(r, self.config.initial_velocity_variance_m2_per_s2);
-        self.core = Some(Core {
+        let core = Core {
             plane,
             state,
             state_at: acquired_at,
-        });
+        };
+        self.history.initialize(core);
+        self.core = Some(core);
         Ok(())
     }
 
@@ -401,7 +370,11 @@ impl NavigationFilter {
 
     /// Publishes `state` — already propagated to `now` by the caller —
     /// without touching the retained state.
-    fn publish(&mut self, state: &KalmanState, now: MonotonicNanos) -> Option<NavigationSolution> {
+    fn publish(
+        &mut self,
+        state: &KalmanState<6>,
+        now: MonotonicNanos,
+    ) -> Option<NavigationSolution> {
         let core = self.core.as_ref()?;
         let silence = self.last_admitted_at.and_then(|at| now.elapsed_since(at));
         let assessment = integrity::derive(
@@ -439,37 +412,4 @@ impl NavigationFilter {
             self.epoch_composition,
         ))
     }
-}
-
-/// Propagates a candidate to the measurement time, gates it, and commits
-/// only on acceptance so a rejected observation changes nothing
-/// (ADR-0003). A measurement acquired at or before the state's time is
-/// applied at the state's present time; bounded-history re-propagation is
-/// the documented extension for delayed measurements.
-fn update_core<const M: usize>(
-    core: &mut Core,
-    config: &FusionConfig,
-    model: &impl MeasurementModel<M>,
-    gate_chi2: f64,
-    acquired_at: MonotonicNanos,
-) -> Result<(), RejectionReason> {
-    let dt_s = acquired_at
-        .elapsed_since(core.state_at)
-        .map_or(0.0, seconds);
-    let candidate = core.state.propagated(dt_s, config.process_noise_accel_psd);
-    let prepared = candidate
-        .prepare_update(model)
-        .ok_or(RejectionReason::ImplausibleCovariance)?;
-    if prepared.chi2 > gate_chi2 {
-        return Err(RejectionReason::InnovationGate {
-            chi2: prepared.chi2,
-            threshold: gate_chi2,
-        });
-    }
-    core.state = candidate.apply_update(&prepared);
-    if acquired_at > core.state_at {
-        core.state_at = acquired_at;
-    }
-    reanchor::reanchor_if_needed(core, config);
-    Ok(())
 }

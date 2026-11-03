@@ -44,6 +44,34 @@ pub enum ObservationValue {
         /// Range variance in meters².
         variance_m2: f64,
     },
+    /// Height above the WGS84 ellipsoid, such as a corrected barometric
+    /// altitude (ADR-0012). Requires an initialized filter.
+    Altitude {
+        /// Height above the WGS84 ellipsoid in meters.
+        altitude_m: f64,
+        /// Altitude variance in meters².
+        variance_m2: f64,
+    },
+    /// Scalar magnetic anomaly, linearized against an anomaly map by the
+    /// source adapter (ADR-0012). All magnetic values are SI: tesla,
+    /// tesla per meter, and tesla². Requires an initialized filter.
+    MagneticAnomaly {
+        /// Measured anomaly in tesla, after platform compensation.
+        measured_t: f64,
+        /// Map anomaly at the linearization point in tesla.
+        map_t_at_lin: f64,
+        /// Map gradient in tesla per meter. The axes are the NED axes of
+        /// the tangent plane at `linearization_point`.
+        gradient_ned_t_per_m: [f64; 3],
+        /// The position where the adapter linearized the map, WGS84.
+        linearization_point: GeodeticPosition,
+        /// Radius around `linearization_point` in meters where the linear
+        /// map model is valid.
+        valid_radius_m: f64,
+        /// Total variance in tesla². It includes the sensor noise and
+        /// the map error.
+        variance_t2: f64,
+    },
     /// GNSS pseudorange to one satellite, before any position solution.
     /// Reserved: refused until the pseudorange model lands (ADR-0008).
     Pseudorange {
@@ -78,6 +106,10 @@ pub enum MeasurementKind {
     VelocityFix,
     /// [`ObservationValue::Range`].
     Range,
+    /// [`ObservationValue::Altitude`].
+    Altitude,
+    /// [`ObservationValue::MagneticAnomaly`].
+    MagneticAnomaly,
     /// [`ObservationValue::Pseudorange`].
     Pseudorange,
     /// [`ObservationValue::VisualPose`].
@@ -92,6 +124,8 @@ impl ObservationValue {
             Self::PositionFix { .. } => MeasurementKind::PositionFix,
             Self::VelocityFix { .. } => MeasurementKind::VelocityFix,
             Self::Range { .. } => MeasurementKind::Range,
+            Self::Altitude { .. } => MeasurementKind::Altitude,
+            Self::MagneticAnomaly { .. } => MeasurementKind::MagneticAnomaly,
             Self::Pseudorange { .. } => MeasurementKind::Pseudorange,
             Self::VisualPose { .. } => MeasurementKind::VisualPose,
         }
@@ -102,7 +136,11 @@ impl ObservationValue {
     pub const fn is_supported(&self) -> bool {
         matches!(
             self,
-            Self::PositionFix { .. } | Self::VelocityFix { .. } | Self::Range { .. }
+            Self::PositionFix { .. }
+                | Self::VelocityFix { .. }
+                | Self::Range { .. }
+                | Self::Altitude { .. }
+                | Self::MagneticAnomaly { .. }
         )
     }
 }

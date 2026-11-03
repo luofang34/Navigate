@@ -28,6 +28,9 @@ pub enum SensorClass {
     NavigationSolution,
     /// Ground-based radio navigation aids, such as DME and VOR.
     RadioNavigation,
+    /// Magnetic anomaly measurements matched against a crustal anomaly
+    /// map. The magnetometer and the map supply the value.
+    MagneticAnomaly,
 }
 
 impl SensorClass {
@@ -42,6 +45,7 @@ impl SensorClass {
             Self::FcState => 1 << 6,
             Self::NavigationSolution => 1 << 7,
             Self::RadioNavigation => 1 << 8,
+            Self::MagneticAnomaly => 1 << 9,
         }
     }
 }
@@ -116,6 +120,57 @@ impl SourceComposition {
 #[cfg(test)]
 mod tests {
     use super::{SensorClass, SourceComposition};
+
+    const ALL_CLASSES: [SensorClass; 10] = [
+        SensorClass::Gnss,
+        SensorClass::Celestial,
+        SensorClass::VisualOdometry,
+        SensorClass::VisualLandmark,
+        SensorClass::Barometric,
+        SensorClass::Inertial,
+        SensorClass::FcState,
+        SensorClass::NavigationSolution,
+        SensorClass::RadioNavigation,
+        SensorClass::MagneticAnomaly,
+    ];
+
+    #[test]
+    fn every_class_has_one_unique_bit() {
+        let mut seen = 0_u32;
+        for class in ALL_CLASSES {
+            let bit = class.bit();
+            assert_eq!(bit.count_ones(), 1, "{class:?} must use one bit");
+            assert_eq!(seen & bit, 0, "{class:?} shares a bit");
+            seen |= bit;
+        }
+        assert_eq!(SensorClass::MagneticAnomaly.bit(), 1 << 9);
+        assert_eq!(seen.count_ones(), 10);
+    }
+
+    #[test]
+    fn magnetic_anomaly_composes_like_every_other_class() {
+        let magnetic = SourceComposition::of(SensorClass::MagneticAnomaly);
+        assert!(magnetic.contains(SensorClass::MagneticAnomaly));
+        assert!(!magnetic.contains(SensorClass::Gnss));
+        assert_eq!(magnetic.class_count(), 1);
+        assert!(!magnetic.overlaps(SourceComposition::of(SensorClass::Gnss)));
+        assert!(!magnetic.overlaps(SourceComposition::of(SensorClass::Inertial)));
+        let fused = magnetic.with(SensorClass::Inertial);
+        assert!(fused.overlaps(magnetic));
+        assert_eq!(fused.class_count(), 2);
+        assert_eq!(
+            magnetic.union(SourceComposition::of(SensorClass::Barometric)),
+            SourceComposition::of(SensorClass::Barometric).with(SensorClass::MagneticAnomaly)
+        );
+    }
+
+    #[test]
+    fn magnetic_anomaly_is_not_estimator_derived() {
+        let magnetic = SourceComposition::of(SensorClass::MagneticAnomaly);
+        assert!(!magnetic.is_estimator_derived());
+        assert!(magnetic.with(SensorClass::FcState).is_estimator_derived());
+        assert!(!SourceComposition::empty().is_estimator_derived());
+    }
 
     #[test]
     fn composition_set_operations() {
