@@ -4,6 +4,7 @@
 //! Commands enter the host platform's fenced authority path; nothing here
 //! names a transport or an authority concept (ADR-0005).
 
+use crate::frame::FrameId;
 use crate::kinematics::{GeodeticPosition, NedVelocity};
 use crate::stamp::SolutionStamp;
 use crate::time::MonotonicNanos;
@@ -78,6 +79,47 @@ pub enum GuidanceSetpoint {
         /// Reference course in radians, true, `[0, 2π)`.
         course_rad: f64,
     },
+    /// Point the thrust along a direction and apply a specific force,
+    /// for an orbital burn or a powered descent.
+    ThrustVector {
+        /// The frame of [`GuidanceSetpoint::ThrustVector::direction_unit`].
+        frame: FrameId,
+        /// The commanded thrust direction, a unit vector in the axes of
+        /// `frame`. At engine cutoff it is the last direction that the
+        /// law commanded, or `[0, 0, 0]` when no direction is defined.
+        direction_unit: [f64; 3],
+        /// The commanded specific force in m/s², `0.0` or more. It is
+        /// `0.0` at engine cutoff.
+        specific_force_mps2: f64,
+        /// The magnitude of the velocity to go in m/s, `0.0` or more.
+        velocity_to_go_mps: f64,
+        /// `true` when the engine must stop.
+        cutoff: bool,
+    },
+    /// Fly a bank angle that modulates the vertical lift during an
+    /// atmospheric entry.
+    EntryBank {
+        /// The commanded bank angle in radians, in `[-π, π]`. The
+        /// vertical lift is `L·cos(bank_rad)`. A positive bank turns the
+        /// velocity to the right.
+        bank_rad: f64,
+        /// The reference drag of the entry corridor at the current
+        /// energy, in m/s².
+        reference_drag_mps2: f64,
+        /// The sensed drag minus the reference drag, in m/s².
+        drag_error_mps2: f64,
+        /// The azimuth from the vehicle to the landing interface, in
+        /// radians, true, in `[0, 2π)`.
+        heading_course_rad: f64,
+    },
+    /// Fly a velocity vector in a Cartesian frame, for a rendezvous or
+    /// for orbital station keeping.
+    CartesianVelocity {
+        /// The frame of [`GuidanceSetpoint::CartesianVelocity::velocity_mps`].
+        frame: FrameId,
+        /// The commanded velocity in m/s, in the axes of `frame`.
+        velocity_mps: [f64; 3],
+    },
 }
 
 /// One guidance command: a setpoint plus the solution it was derived
@@ -110,3 +152,6 @@ impl GuidanceCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

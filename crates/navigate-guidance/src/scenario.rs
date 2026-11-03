@@ -3,12 +3,15 @@
 //!
 //! Sharing them is what lets a test assert that both derivations judge
 //! *the same* solution identically rather than two look-alike copies.
+//! The [`space`] module holds the space scenarios.
 
 use navigate_contract::{
     ClockDomainId, Ellipsoid, FaultDetection, GeodeticPosition, Ident, IntegrityAssessment,
     MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
     SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, Waypoint, WrappingSequence,
 };
+
+pub(crate) mod space;
 
 /// The single clock domain of these tests: solutions are stamped on it
 /// and `now` is read from it unless a test probes the mismatch.

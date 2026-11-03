@@ -1,13 +1,17 @@
 //! Typed refusals: why guidance declined to issue a setpoint.
 
 use navigate_contract::{
-    ClockDomainId, DurationNanos, Ellipsoid, Ident, MonotonicNanos, SolutionQuality,
+    ClockDomainId, DurationNanos, Ellipsoid, FrameId, Ident, MonotonicNanos, SolutionQuality,
 };
+use navigate_trajectory::TrajectoryError;
 use thiserror::Error;
 
-/// Why [`crate::guide`] or [`crate::guide_velocity`] refused to issue a
-/// setpoint. Both functions call one shared admission helper, so one
-/// solution gives the same refusal in both derivations.
+use crate::mission::MissionPhase;
+
+/// Why a guidance derivation refused to issue a setpoint. The surface
+/// derivations call one shared admission helper, and the space
+/// derivations call [`crate::admit_space_solution`]. Thus one solution
+/// gives the same refusal in each derivation of one kind.
 ///
 /// Guidance checks integrity with fail-closed logic (ADR-0004). Each
 /// refusal records the bound that failed so the caller can log, display,
@@ -107,4 +111,68 @@ pub enum GuidanceRefusal {
         /// Identifier of the refused waypoint.
         ident: Ident,
     },
+    /// The frame of a space solution is not the frame of the target
+    /// (ADR-0019).
+    #[error("frame mismatch: expected {expected:?}, got {got:?}")]
+    FrameMismatch {
+        /// The frame of the target.
+        expected: FrameId,
+        /// The frame of the solution.
+        got: FrameId,
+    },
+    /// The one-sigma position uncertainty along the largest principal
+    /// axis of a space solution is not finite or exceeds the configured
+    /// bound.
+    #[error("position 1-sigma uncertainty {max_axis_1sigma_m} m exceeds the bound {bound_m} m")]
+    UncertaintyExceeded {
+        /// The one-sigma uncertainty of the refused solution in meters.
+        max_axis_1sigma_m: f64,
+        /// The configured bound in meters.
+        bound_m: f64,
+    },
+    /// The vehicle is outside a keep-out corridor or below a glide
+    /// slope, or its scaled uncertainty does not fit in the corridor
+    /// margin.
+    #[error("corridor violated: {violation}")]
+    CorridorViolated {
+        /// The violation that the trajectory law found.
+        #[source]
+        violation: TrajectoryError,
+    },
+    /// The trajectory law cannot give a command for this target and
+    /// state.
+    #[error("trajectory invalid: {error}")]
+    TrajectoryInvalid {
+        /// The error of the trajectory law.
+        #[source]
+        error: TrajectoryError,
+    },
+    /// The mission input is not the kind that the phase reads: a space
+    /// phase reads a Cartesian solution, and the atmospheric route reads
+    /// a surface solution.
+    #[error("phase {phase:?} cannot read this kind of solution")]
+    PhaseInputMismatch {
+        /// The phase of the mission.
+        phase: MissionPhase,
+    },
+    /// The phase is not part of the mission profile.
+    #[error("phase {phase:?} is not part of the mission profile")]
+    PhaseNotInProfile {
+        /// The phase of the mission.
+        phase: MissionPhase,
+    },
+}
+
+impl GuidanceRefusal {
+    /// The refusal for an error of a trajectory law: a corridor
+    /// violation is [`Self::CorridorViolated`], and every other error is
+    /// [`Self::TrajectoryInvalid`].
+    #[must_use]
+    pub const fn from_trajectory(error: TrajectoryError) -> Self {
+        if error.is_corridor_violation() {
+            Self::CorridorViolated { violation: error }
+        } else {
+            Self::TrajectoryInvalid { error }
+        }
+    }
 }

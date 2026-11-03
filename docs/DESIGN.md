@@ -104,6 +104,26 @@ takes velocity commands — and refuses to guide when solution integrity
 is below what the maneuver requires. Both derivations admit a solution
 through one helper, so their floors cannot drift apart.
 
+## Space trajectory and mission phases (ADR-0019)
+
+`navigate-trajectory` holds the trajectory laws of space flight. The
+burn law steers on the velocity to go. The rendezvous law solves the
+Clohessy–Wiltshire transfer in the frame of the target and checks an
+approach corridor. The entry law tracks a reference drag against the
+specific energy and reverses the bank at the edge of a heading
+deadband. The powered descent law is polynomial E-guidance. Each law
+is `#![no_std]` and does not allocate.
+
+`navigate-guidance` admits a Cartesian solution before a space law
+reads it. A solution in the wrong frame, or with a position uncertainty
+over the configured bound, gives a typed refusal. The space setpoints
+are a thrust vector, an entry bank angle, and a Cartesian velocity.
+`step_mission` sequences the phases of one mission. A reentry goes from
+an orbital coast through a deorbit burn and an entry corridor to the
+legs of a route. A landing goes from an orbital coast through a powered
+descent to touchdown. The mission state is `Copy` and holds the bank
+state of the entry inline.
+
 ## Core crate topology (ADR-0016)
 
 The core crates compile with `#![no_std]` and do not allocate. A
@@ -119,7 +139,8 @@ default) and `libm`.
 | `navigate-fusion` | The kinematic, inertial, and particle filters, with admission and integrity |
 | `navigate-magnav` | Tolles–Lawson calibration, borrowed grid maps, and Cramér–Rao bounds for magnetic anomaly navigation |
 | `navigate-route` | Route validation and leg sequencing |
-| `navigate-guidance` | Surface guidance setpoints |
+| `navigate-trajectory` | Orbital burn, rendezvous, atmospheric entry, and powered descent laws |
+| `navigate-guidance` | Surface and space guidance setpoints, and mission-phase sequencing |
 | `navigate-terrain-safety` | Terrain clearance with vertical-datum adapters |
 
 Every table, history, and gravity model has a fixed inline capacity.
@@ -156,9 +177,11 @@ vocabulary; process topology is a deployment decision, not a contract one.
   narrow the search (ADR-0009).
 - Batched multi-view rendering, source-driven tile detail, and a completion
   signal in the MapLibre implementation of the reference port (ADR-0010).
-- Position setpoint generation (the contract vocabulary mirrors the FC
-  command surface; guidance derives deviation-tracking and velocity
-  setpoints).
+- Position setpoint generation. The contract vocabulary mirrors the FC
+  command surface. Guidance derives deviation-tracking, NED velocity,
+  thrust-vector, entry-bank, and Cartesian-velocity setpoints.
+- Range control in the entry law. The caller selects the reference drag
+  knots for the range of the mission.
 - RAIM-class fault detection and protection levels.
 - A terrain source for `navigate-terrain-safety`. Without a terrain
   source, the assessment refuses with `NoTerrain`.

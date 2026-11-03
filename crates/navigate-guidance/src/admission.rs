@@ -1,19 +1,21 @@
 //! Fail-closed admission and the leg geometry it yields.
 //!
-//! Every derivation in this crate enters through [`admit_leg`], so the
-//! floors two derivations enforce cannot drift apart: one solution
-//! judged twice yields the same refusal, and one leg yields one geometry.
-//! The geometry runs on the mean-radius sphere of the solution ellipsoid
-//! (ADR-0013).
+//! Every surface derivation in this crate enters through [`admit_leg`],
+//! so the floors two derivations enforce cannot drift apart: one
+//! solution judged twice yields the same refusal, and one leg yields one
+//! geometry. The geometry runs on the mean-radius sphere of the solution
+//! ellipsoid (ADR-0013). Every space derivation enters through
+//! [`admit_space_solution`]. Both paths share the checks of the stamp.
 
 use navigate_contract::{
-    ClockDomainId, LateralReference, MonotonicNanos, NavigationSolution, SolutionQuality, Waypoint,
+    CartesianSolution, ClockDomainId, DurationNanos, FrameId, LateralReference, MonotonicNanos,
+    NavigationSolution, SolutionQuality, SolutionStamp, Waypoint,
 };
 use navigate_geodesy::{
     BodyEllipsoid, cross_track_from_course_m, cross_track_m, initial_bearing_rad,
 };
 
-use crate::config::GuidanceConfig;
+use crate::config::{GuidanceConfig, SpaceGuidanceConfig};
 use crate::refusal::GuidanceRefusal;
 
 /// The lateral geometry an admitted solution and leg define.
@@ -129,30 +131,14 @@ fn admit_solution(
     now_clock: ClockDomainId,
     config: &GuidanceConfig,
 ) -> Result<BodyEllipsoid, GuidanceRefusal> {
-    let expected = solution.stamp.clock;
-    if now_clock != expected {
-        return Err(GuidanceRefusal::ClockDomainMismatch {
-            expected,
-            got: now_clock,
-        });
-    }
-    let quality = solution.integrity.quality;
-    if quality_rank(quality) < quality_rank(config.minimum_quality) {
-        return Err(GuidanceRefusal::IntegrityBelowFloor {
-            quality,
-            floor: config.minimum_quality,
-        });
-    }
-    let solved_at = solution.stamp.solved_at;
-    let age = now
-        .elapsed_since(solved_at)
-        .ok_or(GuidanceRefusal::ClockInversion { now, solved_at })?;
-    if age > config.max_solution_age {
-        return Err(GuidanceRefusal::SolutionStale {
-            age,
-            bound: config.max_solution_age,
-        });
-    }
+    admit_stamp(
+        &solution.stamp,
+        solution.integrity.quality,
+        now,
+        now_clock,
+        config.minimum_quality,
+        config.max_solution_age,
+    )?;
     let body_ellipsoid = BodyEllipsoid::try_from_contract(solution.ellipsoid).map_err(|_| {
         GuidanceRefusal::ImplausibleEllipsoid {
             semi_major_axis_m: solution.ellipsoid.semi_major_axis_m,
@@ -168,6 +154,91 @@ fn admit_solution(
         });
     }
     Ok(body_ellipsoid)
+}
+
+/// Fail-closed admission of a solution in a Cartesian frame (ADR-0019).
+///
+/// Every space derivation calls this function, so that one solution
+/// gives the same refusal in each of them. A caller that steps a
+/// mission can also call it to check a solution before the step.
+///
+/// # Errors
+///
+/// In the order enforced: [`GuidanceRefusal::ClockDomainMismatch`] when
+/// `now_clock` differs from the clock domain of the stamp,
+/// [`GuidanceRefusal::IntegrityBelowFloor`] when the quality is below
+/// `config.minimum_quality`, [`GuidanceRefusal::ClockInversion`] when
+/// `now` is earlier than the stamp, [`GuidanceRefusal::SolutionStale`]
+/// when the age exceeds `config.max_solution_age`,
+/// [`GuidanceRefusal::FrameMismatch`] when `solution.frame` is not
+/// `expected_frame`, and [`GuidanceRefusal::UncertaintyExceeded`] when
+/// the one-sigma position uncertainty along the largest principal axis
+/// is not finite or exceeds `config.max_position_1sigma_m`.
+pub fn admit_space_solution(
+    solution: &CartesianSolution,
+    expected_frame: FrameId,
+    now: MonotonicNanos,
+    now_clock: ClockDomainId,
+    config: &SpaceGuidanceConfig,
+) -> Result<(), GuidanceRefusal> {
+    admit_stamp(
+        &solution.stamp,
+        solution.integrity.quality,
+        now,
+        now_clock,
+        config.minimum_quality,
+        config.max_solution_age,
+    )?;
+    if solution.frame != expected_frame {
+        return Err(GuidanceRefusal::FrameMismatch {
+            expected: expected_frame,
+            got: solution.frame,
+        });
+    }
+    let max_axis_1sigma_m = solution.integrity.uncertainty.max_axis_1sigma_m();
+    let bound_m = config.max_position_1sigma_m;
+    if !(max_axis_1sigma_m.is_finite() && bound_m.is_finite() && max_axis_1sigma_m <= bound_m) {
+        return Err(GuidanceRefusal::UncertaintyExceeded {
+            max_axis_1sigma_m,
+            bound_m,
+        });
+    }
+    Ok(())
+}
+
+/// The checks that a surface solution and a space solution share: the
+/// clock domain, the quality floor, the clock order, and the age.
+fn admit_stamp(
+    stamp: &SolutionStamp,
+    quality: SolutionQuality,
+    now: MonotonicNanos,
+    now_clock: ClockDomainId,
+    minimum_quality: SolutionQuality,
+    max_solution_age: DurationNanos,
+) -> Result<(), GuidanceRefusal> {
+    if now_clock != stamp.clock {
+        return Err(GuidanceRefusal::ClockDomainMismatch {
+            expected: stamp.clock,
+            got: now_clock,
+        });
+    }
+    if quality_rank(quality) < quality_rank(minimum_quality) {
+        return Err(GuidanceRefusal::IntegrityBelowFloor {
+            quality,
+            floor: minimum_quality,
+        });
+    }
+    let solved_at = stamp.solved_at;
+    let age = now
+        .elapsed_since(solved_at)
+        .ok_or(GuidanceRefusal::ClockInversion { now, solved_at })?;
+    if age > max_solution_age {
+        return Err(GuidanceRefusal::SolutionStale {
+            age,
+            bound: max_solution_age,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
