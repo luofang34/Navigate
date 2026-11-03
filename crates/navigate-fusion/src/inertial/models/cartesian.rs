@@ -3,10 +3,10 @@
 use nalgebra::Vector3;
 
 use super::{block, range};
-use crate::filter::cov3_to_matrix;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Mode};
 use crate::inertial::nominal::{POS, VEL};
+use crate::kalman::cov3_to_matrix;
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
 

@@ -13,10 +13,10 @@ use super::config::InertialConfig;
 use super::estimate::{InertialCore, Linearized, Mode};
 use super::nominal::N;
 use super::regime::Regime;
-use crate::environment::SurfaceFrame;
-use crate::filter::rotation_between;
+use crate::kalman::rotation_between;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 mod attitude;
 mod cartesian;
@@ -43,7 +43,7 @@ pub(crate) fn apply_observation(
     };
     match &core.regime {
         Regime::BodySurface(surface) => {
-            let surface = **surface;
+            let surface = *surface;
             match &obs.value {
                 ObservationValue::PositionFix { .. }
                 | ObservationValue::VelocityFix { .. }
@@ -109,15 +109,15 @@ pub(crate) fn plane_to_local_at(
     surface: &SurfaceFrame,
     position: GeodeticPosition,
 ) -> Result<Matrix3<f64>, RejectionReason> {
-    let local = LocalTangentPlane::new(position, surface.plane.ellipsoid())
+    let local = LocalTangentPlane::new(position, surface.plane().ellipsoid())
         .map_err(|_| RejectionReason::NonFiniteValue)?;
-    Ok(rotation_between(&surface.plane, &local))
+    Ok(rotation_between(surface.plane(), &local))
 }
 
 /// The geodetic position of the nominal state.
 pub(crate) fn vehicle_position(core: &InertialCore, surface: &SurfaceFrame) -> GeodeticPosition {
     let p = core.nominal.p;
-    surface.plane.from_ned(&NedOffset::new(p.x, p.y, p.z))
+    surface.plane().from_ned(&NedOffset::new(p.x, p.y, p.z))
 }
 
 /// The rotation from the plane axes to the local NED axes at the

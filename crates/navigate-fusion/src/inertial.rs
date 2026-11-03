@@ -14,6 +14,13 @@
 //! [`crate::SpaceEnvironment`], and [`InertialNavigationFilter::recenter_space_frame`]
 //! moves it to the frame of another body. A bounded history applies a
 //! delayed IMU sample or observation at its acquisition time.
+//!
+//! The filter does not allocate (ADR-0016). The environment of the space
+//! regime is `Copy`, and the history is inline with at most
+//! [`MAX_INERTIAL_HISTORY`] events. [`initial_error_covariance`] and
+//! [`error_transition`] give the covariance model of the filter to a
+//! covariance analysis that has no filter state, such as a Cramér–Rao
+//! bound.
 
 mod config;
 mod discretization;
@@ -25,6 +32,7 @@ pub(crate) mod mechanization;
 mod models;
 pub(crate) mod nominal;
 mod publish;
+mod reference;
 pub(crate) mod regime;
 mod space_frame;
 mod update;
@@ -32,21 +40,25 @@ mod update;
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
-
 use navigate_contract::{ClockDomainId, FrameId, MonotonicNanos, SourceEpoch, WrappingSequence};
 
 use self::estimate::InertialCore;
 use crate::InnovationStats;
 use crate::admission::{check_clock, check_composition, check_freshness, check_value};
-use crate::environment::{PlanetaryBody, SpaceEnvironment};
-use crate::navigation_filter::stats::StatsTable;
+use crate::kinematic::stats::StatsTable;
 use crate::observation::{MeasurementKind, Observation};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
 pub use config::InertialConfig;
 use history::History;
+pub use history::MAX_INERTIAL_HISTORY;
 pub use imu::ImuSample;
+use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
+pub use reference::{
+    ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_GYRO_BIAS, ERROR_MAG_BIAS,
+    ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY, ErrorMatrix, NominalPoint, error_transition,
+    initial_error_covariance,
+};
 use regime::{Setup, supports};
 use update::Event;
 
@@ -89,7 +101,7 @@ impl InertialNavigationFilter {
     pub fn new_space(config: InertialConfig, clock: ClockDomainId, env: SpaceEnvironment) -> Self {
         let mut config = config;
         config.fusion.require_explicit_frame = true;
-        Self::build(config, clock, Setup::CartesianSpace(Arc::new(env)))
+        Self::build(config, clock, Setup::CartesianSpace(env))
     }
 
     fn build(config: InertialConfig, clock: ClockDomainId, setup: Setup) -> Self {
@@ -206,7 +218,7 @@ impl InertialNavigationFilter {
             self.core = Some(next);
             return Ok(chi2);
         }
-        let mut candidate = core.clone();
+        let mut candidate = *core;
         let chi2 = update::apply_event(
             &mut candidate,
             &event,
@@ -216,7 +228,7 @@ impl InertialNavigationFilter {
             None,
         )?;
         let capacity = self.config.fusion.history_capacity;
-        self.history.record(core.clone(), event, at, capacity);
+        self.history.record(*core, event, at, capacity);
         self.core = Some(candidate);
         Ok(chi2)
     }

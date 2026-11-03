@@ -41,7 +41,7 @@ mod tests;
 ///   scaled linearly by the distance remaining inside
 ///   `config.arrival_slowdown_radius_m` and floored at
 ///   [`VelocityGuidanceConfig::MIN_APPROACH_SPEED_MPS`]. Capturing the
-///   waypoint and terminating the leg stay `navigate-fpl`'s decisions;
+///   waypoint and terminating the leg stay decisions of `navigate-route`;
 ///   the slowdown only shapes the speed guidance asks for.
 /// - The correction is `config.cross_track_gain_per_s` times the
 ///   deviation, limited to `config.max_horizontal_mps`, directed to

@@ -1,8 +1,13 @@
 //! Per-source ordering, the assessment window, and the provenance of one
 //! filter epoch (ADR-0003, ADR-0004). [`crate::NavigationFilter`] and
 //! [`crate::InertialNavigationFilter`] keep one ledger each.
-
-use std::collections::HashMap;
+//!
+//! The ledger has a fixed inline capacity (ADR-0016). The source table
+//! holds [`MAX_SOURCES`] sources, and the filter refuses the first
+//! observation of one more source. Without a track, the sequence and
+//! time checks of that source would not run. The assessment window holds
+//! [`MAX_WINDOW_ADMISSIONS`] admissions. A full window drops its oldest
+//! admission, so the window can only show less redundancy, never more.
 
 use navigate_contract::{
     DurationNanos, MonotonicNanos, ObservationStamp, SourceComposition, SourceEpoch, SourceId,
@@ -10,6 +15,12 @@ use navigate_contract::{
 };
 
 use crate::rejection::RejectionReason;
+
+/// Largest number of sources that one filter epoch tracks.
+pub const MAX_SOURCES: usize = 32;
+
+/// Largest number of admissions in the assessment window.
+pub const MAX_WINDOW_ADMISSIONS: usize = 128;
 
 /// Per-source admission tracking, valid within one source epoch.
 #[derive(Debug, Clone, Copy)]
@@ -28,10 +39,10 @@ pub(crate) struct AdmittedContribution {
 }
 
 /// The admission bookkeeping of one filter epoch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ProvenanceLedger {
-    sources: HashMap<SourceId, SourceTrack>,
-    admitted: Vec<AdmittedContribution>,
+    sources: [Option<(SourceId, SourceTrack)>; MAX_SOURCES],
+    admitted: [Option<AdmittedContribution>; MAX_WINDOW_ADMISSIONS],
     // Union of every admitted composition this filter epoch: published
     // provenance describes everything the state ever absorbed, not just
     // the assessment window.
@@ -45,8 +56,8 @@ pub(crate) struct ProvenanceLedger {
 impl Default for ProvenanceLedger {
     fn default() -> Self {
         Self {
-            sources: HashMap::new(),
-            admitted: Vec::new(),
+            sources: [None; MAX_SOURCES],
+            admitted: [None; MAX_WINDOW_ADMISSIONS],
             epoch_composition: SourceComposition::empty(),
             last_admitted_at: None,
             gate_rejection_streak: 0,
@@ -57,8 +68,8 @@ impl Default for ProvenanceLedger {
 impl ProvenanceLedger {
     /// Forgets all per-source tracking, the window, and the provenance.
     pub(crate) fn clear(&mut self) {
-        self.sources.clear();
-        self.admitted.clear();
+        self.sources = [None; MAX_SOURCES];
+        self.admitted = [None; MAX_WINDOW_ADMISSIONS];
         self.epoch_composition = SourceComposition::empty();
         self.last_admitted_at = None;
         self.gate_rejection_streak = 0;
@@ -81,9 +92,18 @@ impl ProvenanceLedger {
         self.epoch_composition
     }
 
-    /// The admissions inside the assessment window.
-    pub(crate) fn window(&self) -> &[AdmittedContribution] {
-        &self.admitted
+    /// The admissions inside the assessment window, in no particular
+    /// sequence.
+    pub(crate) fn window(&self) -> impl Iterator<Item = &AdmittedContribution> + Clone {
+        self.admitted.iter().flatten()
+    }
+
+    /// The track of `source`.
+    fn track_of(&self, source: SourceId) -> Option<&SourceTrack> {
+        self.sources
+            .iter()
+            .flatten()
+            .find_map(|(id, track)| (*id == source).then_some(track))
     }
 
     /// Time from the last admitted aiding observation to `now`. `None`
@@ -98,8 +118,14 @@ impl ProvenanceLedger {
         &self,
         stamp: &ObservationStamp,
     ) -> Result<(), RejectionReason> {
-        let Some(track) = self.sources.get(&stamp.source) else {
-            // A source's first observation is always sequence-admissible.
+        let Some(track) = self.track_of(stamp.source) else {
+            // A source's first observation is always sequence-admissible
+            // when the table has room to track it.
+            if self.sources.iter().all(Option::is_some) {
+                return Err(RejectionReason::SourceCapacityExceeded {
+                    capacity: MAX_SOURCES,
+                });
+            }
             return Ok(());
         };
         if track.epoch != stamp.epoch {
@@ -139,12 +165,20 @@ impl ProvenanceLedger {
         window: DurationNanos,
     ) {
         self.track(stamp, composition);
-        self.admitted.push(AdmittedContribution {
+        self.prune_window(now, window);
+        let entry = AdmittedContribution {
             source: stamp.source,
             composition,
             admitted_at: now,
-        });
-        self.prune_window(now, window);
+        };
+        let slot = match self.admitted.iter().position(Option::is_none) {
+            Some(free) => free,
+            // A full window drops its oldest admission.
+            None => oldest_admission(&self.admitted),
+        };
+        if let Some(target) = self.admitted.get_mut(slot) {
+            *target = Some(entry);
+        }
         self.last_admitted_at = Some(now);
         self.gate_rejection_streak = 0;
     }
@@ -154,14 +188,21 @@ impl ProvenanceLedger {
     /// assessment window, and it does not reset the silence: a sensor
     /// that only propagates the state cannot cross-check it (ADR-0004).
     pub(crate) fn track(&mut self, stamp: &ObservationStamp, composition: SourceComposition) {
-        self.sources.insert(
-            stamp.source,
-            SourceTrack {
-                epoch: stamp.epoch,
-                sequence: stamp.sequence,
-                acquired_at: stamp.acquired_at,
-            },
-        );
+        let track = SourceTrack {
+            epoch: stamp.epoch,
+            sequence: stamp.sequence,
+            acquired_at: stamp.acquired_at,
+        };
+        let existing = self
+            .sources
+            .iter()
+            .position(|entry| entry.is_some_and(|(id, _)| id == stamp.source));
+        // `check_source_ordering` refused a new source when the table is
+        // full, so a new source always finds a free slot here.
+        let slot = existing.or_else(|| self.sources.iter().position(Option::is_none));
+        if let Some(entry) = slot.and_then(|index| self.sources.get_mut(index)) {
+            *entry = Some((stamp.source, track));
+        }
         self.epoch_composition = self.epoch_composition.union(composition);
     }
 
@@ -174,9 +215,27 @@ impl ProvenanceLedger {
     }
 
     pub(crate) fn prune_window(&mut self, now: MonotonicNanos, window: DurationNanos) {
-        self.admitted.retain(|c| {
-            now.elapsed_since(c.admitted_at)
-                .is_none_or(|age| age <= window)
-        });
+        for slot in &mut self.admitted {
+            let expired = slot.is_some_and(|c| {
+                now.elapsed_since(c.admitted_at)
+                    .is_some_and(|age| age > window)
+            });
+            if expired {
+                *slot = None;
+            }
+        }
     }
 }
+
+/// The slot of the admission with the earliest admission time.
+fn oldest_admission(admitted: &[Option<AdmittedContribution>]) -> usize {
+    admitted
+        .iter()
+        .enumerate()
+        .filter_map(|(index, slot)| slot.map(|c| (index, c.admitted_at)))
+        .min_by_key(|(_, at)| *at)
+        .map_or(0, |(index, _)| index)
+}
+
+#[cfg(test)]
+mod tests;

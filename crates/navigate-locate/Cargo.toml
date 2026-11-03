@@ -15,7 +15,7 @@ serde = ["dep:serde", "navigate-visual/serde"]
 
 [dependencies]
 navigate-contract.workspace = true
-navigate-fusion.workspace = true
+navigate-fusion = { workspace = true, features = ["std"] }
 navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-visual = { path = "../navigate-visual" }
 navigate-visual-session = { path = "../navigate-visual-session" }
@@ -24,7 +24,7 @@ navigate-place = { path = "../navigate-place" }
 navigate-visual-render = { path = "../navigate-visual-render" }
 navigate-match = { path = "../navigate-match", default-features = false }
 image = { workspace = true, features = ["jpeg", "png"] }
-nalgebra.workspace = true
+nalgebra = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 tracing.workspace = true
 sha2 = { version = "0.11", default-features = false }

@@ -4,6 +4,7 @@
 use nalgebra::{Const, DimMin, SMatrix};
 
 use super::nominal::{Mat17, N};
+use crate::float_math::powi;
 
 /// Degree of the diagonal Padé approximant.
 const PADE_DEGREE: usize = 6;
@@ -39,7 +40,7 @@ where
             return None;
         }
     }
-    let x = a * 0.5_f64.powi(i32::try_from(squarings).ok()?);
+    let x = a * powi(0.5, i32::try_from(squarings).ok()?);
     let identity = SMatrix::<f64, D, D>::identity();
     let mut power = identity;
     let mut numerator = identity;

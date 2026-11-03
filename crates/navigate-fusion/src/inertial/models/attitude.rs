@@ -4,13 +4,13 @@ use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::{AttitudeQuaternion, SymmetricCov3};
 
 use super::{block, plane_to_local_at, quaternion_of};
-use crate::environment::SurfaceFrame;
-use crate::filter::cov3_to_matrix;
 use crate::inertial::estimate::{InertialCore, Linearized};
 use crate::inertial::nominal::{ATT, N, POS, rotation_vector, to_unit_quaternion};
-use crate::navigation_filter::reanchor::vehicle_to_plane;
+use crate::kalman::cov3_to_matrix;
+use crate::kinematic::reanchor::vehicle_to_plane;
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 /// The residual of a measured attitude: the body-axis rotation vector
 /// `2·log(q_nom⁻¹ ⊗ q_meas)` in the hemisphere `w ≥ 0`. `to_reference`
@@ -55,7 +55,7 @@ pub(super) fn visual_pose(
     else {
         return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
     };
-    let plane = &surface.plane;
+    let plane = surface.plane();
     let offset = plane.to_ned(position);
     let z = Vector3::new(offset.north_m, offset.east_m, offset.down_m);
     let (_, r_position) =

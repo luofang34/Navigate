@@ -5,8 +5,6 @@ use nalgebra::{Matrix3, SMatrix, Vector3};
 use navigate_contract::GeodeticPosition;
 use navigate_geodesy::LocalTangentPlane;
 
-use crate::environment::{PlanetaryBody, SurfaceFrame};
-use crate::filter::FogmBias;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::discretization::{expm, van_loan};
 use crate::inertial::mechanization::{
@@ -16,12 +14,14 @@ use crate::inertial::nominal::{
     ALT_BIAS, InertialNominal, MAG_BIAS, Mat17, N, Vec17, exp_rotation, reset_jacobian,
     rotation_vector,
 };
+use crate::kalman::FogmBias;
+use navigate_astrodynamics::{PlanetaryBody, SurfaceFrame};
 
 fn earth_frame() -> SurfaceFrame {
     let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
     let plane = LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
         .expect("plausible origin");
-    SurfaceFrame::new(plane, PlanetaryBody::earth_wgs84())
+    SurfaceFrame::new(plane, PlanetaryBody::EARTH_WGS84)
 }
 
 fn short_bias_config() -> InertialConfig {
@@ -122,7 +122,7 @@ fn the_frame_rotation_cancels_in_the_attitude_block() {
         ..nominal()
     };
     let omega_body =
-        x.c_b_to_f().transpose() * crate::environment::GravityField::frame_rotation(&field);
+        x.c_b_to_f().transpose() * navigate_astrodynamics::GravityField::frame_rotation(&field);
     let rates = ImuRates {
         specific_force: Vector3::new(0.0, 0.0, -9.8),
         angular_rate: omega_body,

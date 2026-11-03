@@ -30,7 +30,7 @@ safetensors = { version = "0.8.0", default-features = false, features = ["std"] 
 sha2 = "0.10"
 half = "2.7.1"
 image.workspace = true
-nalgebra.workspace = true
+nalgebra = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 tracing.workspace = true
 

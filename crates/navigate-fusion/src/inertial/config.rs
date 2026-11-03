@@ -1,18 +1,20 @@
 //! Configuration of the inertial navigation filter (ADR-0014).
 
+use super::history::MAX_INERTIAL_HISTORY;
 use crate::config::FusionConfig;
-use crate::filter::FogmBias;
+use crate::kalman::FogmBias;
 
-/// Number of history events that the default configuration keeps. One
-/// event is one IMU sample or one observation, so the history must hold
-/// more events than the IMU rate times the staleness bound.
-const DEFAULT_HISTORY_CAPACITY: usize = 512;
+/// Number of history events that the default configuration keeps: the
+/// inline bound. One event is one IMU sample or one observation, so a
+/// delayed observation must arrive within this number of events.
+const DEFAULT_HISTORY_CAPACITY: usize = MAX_INERTIAL_HISTORY;
 
 /// Configuration of a [`crate::InertialNavigationFilter`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InertialConfig {
     /// The admission, gate, quality, and history settings.
-    /// `history_capacity` counts IMU samples and observations.
+    /// `history_capacity` counts IMU samples and observations, up to
+    /// [`super::MAX_INERTIAL_HISTORY`].
     pub fusion: FusionConfig,
     /// White noise density of the accelerometer in (m/s²)/√Hz.
     pub accel_noise_sigma_mps2_sqrt_hz: f64,
@@ -62,12 +64,12 @@ impl Default for InertialConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::InertialConfig;
+    use super::{InertialConfig, MAX_INERTIAL_HISTORY};
 
     #[test]
     fn documented_defaults_hold() {
         let config = InertialConfig::default();
-        assert_eq!(config.fusion.history_capacity, 512);
+        assert_eq!(config.fusion.history_capacity, MAX_INERTIAL_HISTORY);
         assert!((config.mag_bias.tau_s() - 600.0).abs() < 1e-12);
         assert!((config.mag_bias.sigma() - 3e-9).abs() < 1e-24);
         assert!((config.baro_bias.sigma() - 3.0).abs() < 1e-12);

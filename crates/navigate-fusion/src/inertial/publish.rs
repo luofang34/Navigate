@@ -10,8 +10,8 @@ use super::InertialNavigationFilter;
 use super::estimate::InertialCore;
 use super::models::{plane_to_local_at, quaternion_of, vehicle_position};
 use super::nominal::{ATT, POS, VEL, to_contract};
-use crate::filter::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
 use crate::integrity;
+use crate::kalman::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
 use navigate_contract::{IntegrityAssessment, SpaceIntegrityAssessment};
 
 impl InertialNavigationFilter {
@@ -53,7 +53,7 @@ impl InertialNavigationFilter {
                 matrix_to_cov3(&vel_cov),
                 integrity,
                 self.ledger.epoch_composition(),
-                surface.body.ellipsoid.contract(),
+                surface.body().ellipsoid.contract(),
             )
             .with_attitude(to_contract(&attitude))
             .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
@@ -98,7 +98,7 @@ impl InertialNavigationFilter {
 
     /// A copy of the state propagated to `now`.
     fn propagated(&self, now: MonotonicNanos) -> Option<InertialCore> {
-        let mut core = self.core.clone()?;
+        let mut core = self.core?;
         now.elapsed_since(core.state_at)?;
         core.propagate_with(now, None, &self.config).ok()?;
         Some(core)

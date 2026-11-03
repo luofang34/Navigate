@@ -1,7 +1,7 @@
 //! Flight-plan vocabulary: plans, waypoints, constraints, roles.
 //!
-//! The model here is the exchange shape; execution (sequencing, capture,
-//! procedure selection) lives in `navigate-fpl`. Turn types, the window
+//! The model here is the exchange shape. The `navigate-route` crate
+//! executes it: sequencing, capture, and procedure selection. Turn types, the window
 //! altitude form, and the per-leg speed and gradient constraints follow
 //! the requirements in `docs/procedure-requirements.md`.
 //!

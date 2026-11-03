@@ -9,11 +9,11 @@
 use nalgebra::{SMatrix, Vector3};
 
 use super::{plane_to_local_at, scalar, vehicle_position};
-use crate::environment::SurfaceFrame;
 use crate::inertial::estimate::{InertialCore, Linearized};
 use crate::inertial::nominal::{ATT, N, POS};
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SurfaceFrame;
 
 /// Smallest `κ = m·u` that the model accepts. Below it the beam is close
 /// to parallel with the terrain or points away from it.

@@ -1,0 +1,21 @@
+[package]
+name = "navigate-route"
+description = "Route validation and leg-sequencing execution on any body"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["std"]
+std = ["navigate-contract/std", "navigate-geodesy/std"]
+libm = ["dep:libm", "navigate-contract/libm", "navigate-geodesy/libm"]
+
+[dependencies]
+navigate-contract = { workspace = true, default-features = false }
+navigate-geodesy = { workspace = true, default-features = false }
+libm = { version = "0.2.16", optional = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

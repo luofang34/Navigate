@@ -9,10 +9,10 @@ publish.workspace = true
 [dependencies]
 navigate-contract = { workspace = true }
 navigate-geodesy = { workspace = true, features = ["std"] }
-navigate-fusion = { workspace = true }
-navigate-fpl = { workspace = true }
-navigate-guidance = { workspace = true }
-navigate-egpws = { workspace = true }
+navigate-fusion = { workspace = true, features = ["std"] }
+navigate-route = { workspace = true, features = ["std"] }
+navigate-guidance = { workspace = true, features = ["std"] }
+navigate-terrain-safety = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

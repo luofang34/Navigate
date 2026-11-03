@@ -1,12 +1,14 @@
 //! Terrain clearance over sloped terrain with an off-nadir beam, and
 //! the separation of the barometric bias from geometric heights.
 
+use std::vec;
+use std::vec::Vec;
+
 use nalgebra::{SMatrix, UnitQuaternion, Vector3};
 use navigate_contract::{ObservationStamp, SensorClass, SourceComposition};
 use navigate_geodesy::{LocalTangentPlane, NedOffset};
 
 use super::*;
-use crate::environment::SurfaceFrame;
 use crate::inertial::estimate::InertialCore;
 use crate::inertial::models::{plane_to_local_at, terrain_clearance};
 use crate::inertial::nominal::{
@@ -14,6 +16,7 @@ use crate::inertial::nominal::{
 };
 use crate::inertial::regime::Regime;
 use crate::observation::{Observation, ObservationValue};
+use navigate_astrodynamics::SurfaceFrame;
 
 const SLOPE: [f64; 2] = [0.08, -0.12];
 const TERRAIN_HEIGHT_M: f64 = 350.0;
@@ -27,10 +30,7 @@ fn sloped_core() -> InertialCore {
     let plane = LocalTangentPlane::new(earth_origin(), navigate_geodesy::BodyEllipsoid::WGS84)
         .expect("plausible origin");
     InertialCore {
-        regime: Regime::BodySurface(std::sync::Arc::new(SurfaceFrame::new(
-            plane,
-            PlanetaryBody::earth_wgs84(),
-        ))),
+        regime: Regime::BodySurface(SurfaceFrame::new(plane, PlanetaryBody::EARTH_WGS84)),
         nominal: InertialNominal {
             p: Vector3::new(4_000.0, -2_500.0, -900.0),
             v: Vector3::zeros(),
@@ -66,7 +66,7 @@ fn true_range(core: &InertialCore, dx: &Vec17) -> f64 {
     };
     let nominal = core.nominal;
     let perturbed = nominal.inject(dx);
-    let p = |v: Vector3<f64>| surface.plane.from_ned(&NedOffset::new(v.x, v.y, v.z));
+    let p = |v: Vector3<f64>| surface.plane().from_ned(&NedOffset::new(v.x, v.y, v.z));
     let vehicle = p(nominal.p);
     let local =
         LocalTangentPlane::new(vehicle, navigate_geodesy::BodyEllipsoid::WGS84).expect("plausible");
@@ -86,7 +86,7 @@ fn unreachable_case() -> ! {
 #[test]
 fn terrain_clearance_jacobian_matches_finite_differences() {
     let core = sloped_core();
-    let Regime::BodySurface(surface) = core.regime.clone() else {
+    let Regime::BodySurface(surface) = core.regime else {
         unreachable_case()
     };
     let rho = true_range(&core, &Vec17::zeros());
@@ -115,7 +115,7 @@ fn terrain_clearance_jacobian_matches_finite_differences() {
 #[test]
 fn a_grazing_beam_or_a_vehicle_below_the_terrain_is_refused() {
     let mut core = sloped_core();
-    let Regime::BodySurface(surface) = core.regime.clone() else {
+    let Regime::BodySurface(surface) = core.regime else {
         unreachable_case()
     };
     let grazing = ObservationValue::TerrainClearance {
@@ -143,7 +143,7 @@ fn observation(
 fn run(aiding: impl Fn(u32, u64) -> Vec<Observation>) -> InertialNavigationFilter {
     let mut filter = surface_filter(
         InertialConfig::default(),
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
     let rates = rest_rates(&filter);

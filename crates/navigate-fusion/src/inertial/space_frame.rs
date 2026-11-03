@@ -1,7 +1,5 @@
 //! Changes of the space frame and of the space environment (ADR-0014).
 
-use std::sync::Arc;
-
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_contract::{AttitudeQuaternion, MonotonicNanos};
 
@@ -10,8 +8,8 @@ use super::nominal::to_unit_quaternion;
 use super::regime::{Regime, Setup};
 use super::update::{Event, Recenter};
 use crate::admission::is_unit_quaternion;
-use crate::environment::SpaceEnvironment;
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::SpaceEnvironment;
 
 impl InertialNavigationFilter {
     /// Moves the space state into the frame of `new_env` at `at`, for
@@ -65,7 +63,7 @@ impl InertialNavigationFilter {
                 });
             }
             let recenter = Recenter {
-                env: Arc::new(new_env),
+                env: new_env,
                 origin_shift: Vector3::from(origin_shift_m),
                 velocity_shift: Vector3::from(velocity_shift_mps),
                 rotation: orientation_old_to_new
@@ -106,7 +104,6 @@ impl InertialNavigationFilter {
             if !env.is_plausible() {
                 return Err(RejectionReason::NonFiniteValue);
             }
-            let env = Arc::new(env);
             let Some(state_at) = self.core.as_ref().map(|core| core.state_at) else {
                 self.setup = Setup::CartesianSpace(env);
                 return Ok(());

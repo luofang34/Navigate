@@ -75,8 +75,12 @@ pub struct FusionConfig {
     /// check. Default: 1e-3.
     pub min_information_ratio: f64,
     /// Number of admitted updates that the delayed-measurement history
-    /// keeps. A value of 0 disables delayed-measurement replay.
-    /// Default: 64.
+    /// keeps. A value of 0 disables delayed-measurement replay. The
+    /// history is inline, so a larger value keeps
+    /// [`crate::kinematic::MAX_KINEMATIC_HISTORY`] updates in
+    /// [`crate::NavigationFilter`] and
+    /// [`crate::inertial::MAX_INERTIAL_HISTORY`] events in
+    /// [`crate::InertialNavigationFilter`]. Default: 64.
     pub history_capacity: usize,
     /// Whether every observation must declare its frame (ADR-0013). When
     /// it is `true`, the filter refuses an observation without a frame

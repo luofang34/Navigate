@@ -1,6 +1,6 @@
 //! The deterministic end-to-end scenario: a scripted three-waypoint
-//! flight driven through fusion, plan execution, guidance, and the
-//! EGPWS availability seam.
+//! flight driven through fusion, route execution, guidance, and the
+//! terrain-clearance availability seam.
 //!
 //! Nothing here reads a clock or a random source (ADR-0002): simulated
 //! time advances one second per step as plain
@@ -14,10 +14,6 @@ use navigate_contract::{
     SensorClass, SolutionQuality, SourceComposition, SourceEpoch, SourceId, SymmetricCov3,
     Waypoint, WrappingSequence,
 };
-use navigate_egpws::{EgpwsAssessment, EgpwsConfig, EgpwsUnavailable, assess};
-use navigate_fpl::{
-    ExecutionConfig, PlanActivationError, PlanExecution, SequenceEvent, SequenceReason,
-};
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
@@ -25,6 +21,12 @@ use navigate_geodesy::{
     BodyEllipsoid, GeodesyError, LocalTangentPlane, NedOffset, distance_m, initial_bearing_rad,
 };
 use navigate_guidance::{GuidanceConfig, GuidanceRefusal, guide};
+use navigate_route::{
+    ExecutionConfig, PlanActivationError, PlanExecution, SequenceEvent, SequenceReason,
+};
+use navigate_terrain_safety::{
+    ClearanceAssessment, ClearanceConfig, ClearanceUnavailable, assess_clearance,
+};
 
 /// Ground speed of the truth model in meters per second; with one-second
 /// steps, also the distance flown per step.
@@ -126,15 +128,15 @@ pub enum ScenarioError {
         #[source]
         source: GuidanceRefusal,
     },
-    /// The EGPWS seam did not refuse with
-    /// [`EgpwsUnavailable::NoDatabase`] despite no terrain database
-    /// being bound.
-    #[error("terrain seam breached at step {step}: expected NoDatabase, got {outcome:?}")]
+    /// The terrain-clearance seam did not refuse with
+    /// [`ClearanceUnavailable::NoTerrain`], but no terrain source is
+    /// bound.
+    #[error("terrain seam breached at step {step}: expected NoTerrain, got {outcome:?}")]
     TerrainSeamBreached {
         /// Step at which the seam misbehaved.
         step: u32,
-        /// What `assess` returned instead.
-        outcome: Result<EgpwsAssessment, EgpwsUnavailable>,
+        /// What `assess_clearance` returned instead.
+        outcome: Result<ClearanceAssessment, ClearanceUnavailable>,
     },
     /// The filter never published a solution.
     #[error("no navigation solution was published in {steps} steps")]
@@ -150,8 +152,8 @@ pub enum ScenarioError {
 /// # Errors
 ///
 /// Returns a [`ScenarioError`] when the plan fails validation, truth
-/// geometry cannot be anchored, guidance refuses a solution, the EGPWS
-/// seam answers anything but `NoDatabase`, or no solution is ever
+/// geometry cannot be anchored, guidance refuses a solution, the
+/// terrain-clearance seam answers anything but `NoTerrain`, or no solution is ever
 /// published. An incomplete plan is not an error: the summary reports
 /// `plan_completed: false` and the caller judges it.
 pub fn run_scenario() -> Result<ScenarioSummary, ScenarioError> {
@@ -342,16 +344,17 @@ impl<'a> ScenarioRun<'a> {
     }
 }
 
-/// The honest-seam check: with no database bound, [`assess`] must
-/// refuse with [`EgpwsUnavailable::NoDatabase`] rather than invent a
-/// terrain clearance (ADR-0004).
+/// The honest-seam check: with no terrain source bound,
+/// [`assess_clearance`] must refuse with
+/// [`ClearanceUnavailable::NoTerrain`]. It must not invent a terrain
+/// clearance (ADR-0004).
 fn check_terrain_seam(
     solution: &NavigationSolution,
     now: MonotonicNanos,
     step: u32,
 ) -> Result<(), ScenarioError> {
-    match assess(solution, now, CLOCK, None, &EgpwsConfig::default()) {
-        Err(EgpwsUnavailable::NoDatabase) => Ok(()),
+    match assess_clearance(solution, now, CLOCK, None, &ClearanceConfig::default()) {
+        Err(ClearanceUnavailable::NoTerrain) => Ok(()),
         outcome => Err(ScenarioError::TerrainSeamBreached { step, outcome }),
     }
 }

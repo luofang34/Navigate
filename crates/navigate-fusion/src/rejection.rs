@@ -205,6 +205,15 @@ pub enum RejectionReason {
     /// no IMU sample has arrived since the initialization (ADR-0014).
     #[error("no IMU sample gives the rates to reach the acquisition time")]
     NoInertialData,
+    /// The observation comes from a new source, and the source table of
+    /// the filter epoch is full (ADR-0016). The filter cannot check the
+    /// sequence and the acquisition time of a source that it does not
+    /// track.
+    #[error("the source table holds {capacity} sources and has no room for a new source")]
+    SourceCapacityExceeded {
+        /// The capacity of the source table.
+        capacity: usize,
+    },
 }
 
 /// Per-reason rejection counters; every refusal increments exactly one.
@@ -251,6 +260,8 @@ pub struct RejectionCounters {
     pub outside_history: u64,
     /// Refusals for a missing IMU sample before the acquisition time.
     pub no_inertial_data: u64,
+    /// Refusals of a new source when the source table is full.
+    pub source_capacity_exceeded: u64,
 }
 
 impl RejectionCounters {
@@ -278,6 +289,7 @@ impl RejectionCounters {
             RejectionReason::UninformativeGradient { .. } => &mut self.uninformative_gradient,
             RejectionReason::OutsideHistory { .. } => &mut self.outside_history,
             RejectionReason::NoInertialData => &mut self.no_inertial_data,
+            RejectionReason::SourceCapacityExceeded { .. } => &mut self.source_capacity_exceeded,
         };
         *counter = counter.wrapping_add(1);
     }
@@ -285,6 +297,8 @@ impl RejectionCounters {
 
 #[cfg(test)]
 mod tests {
+    use std::string::ToString;
+
     use navigate_contract::{DurationNanos, FrameId};
 
     use super::{RejectionCounters, RejectionReason};
@@ -343,6 +357,8 @@ mod tests {
         assert_eq!(counters.not_initialized, 1);
         counters.record(&RejectionReason::NoInertialData);
         assert_eq!(counters.no_inertial_data, 1);
+        counters.record(&RejectionReason::SourceCapacityExceeded { capacity: 32 });
+        assert_eq!(counters.source_capacity_exceeded, 1);
     }
 
     #[test]

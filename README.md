@@ -50,10 +50,12 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-contract` | The typed boundary vocabulary external consumers pin: solutions, integrity, stamps, plans, guidance setpoints, draft aiding schema |
 | `navigate-celestial` | Celestial directions from a framed observer state and a reception event; supports non-Earth origins and moving observers |
 | `navigate-geodesy` | WGS84 geodesy: geodetic ↔ ECEF ↔ local NED, great-circle distance/bearing, cross-track geometry |
-| `navigate-fusion` | The navigation filter: typed observations, admission gates, correlation discipline, integrity assessment |
-| `navigate-fpl` | Flight-plan validation and leg-sequencing execution |
+| `navigate-astrodynamics` | Planetary bodies, gravity fields, coordinate time scales, and frame rotations, without heap allocation |
+| `navigate-fusion` | The navigation filters: typed observations, admission gates, correlation discipline, and integrity assessment, without heap allocation |
+| `navigate-magnav` | Magnetic anomaly navigation: Tolles–Lawson calibration, borrowed grid maps, and Cramér–Rao bounds |
+| `navigate-route` | Route validation and leg-sequencing execution on any body |
 | `navigate-guidance` | Lateral/vertical guidance from solution + active leg to setpoints |
-| `navigate-egpws` | Terrain-awareness seam: typed availability, alert vocabulary; honest `Unavailable` until a terrain database is bound |
+| `navigate-terrain-safety` | Terrain clearance with typed availability, alert vocabulary, and vertical-datum adapters on any body |
 | `navigate-visual` | Camera pose observations, model-inference traits, holdout `L1-GNC` PnP solvers, and local scene refinement |
 | `navigate-visual-render` | Terrain and orthoimagery reference renderer on CPU and `wgpu` |
 | `navigate-match` | Rust `LoFTR`, `XFeat`, `LighterGlue`, and `DINOv2` matchers across `burn` and optional `ort` runtimes |

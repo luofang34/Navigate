@@ -17,7 +17,8 @@ use super::nominal::{
     ACCEL_BIAS, ALT_BIAS, ATT, GYRO_BIAS, InertialNominal, MAG_BIAS, Mat17, POS, VEL, exp_rotation,
     renormalized,
 };
-use crate::environment::GravityField;
+use crate::float_math::powi;
+use navigate_astrodynamics::GravityField;
 
 /// The mean rates of one IMU interval.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +76,7 @@ pub(crate) fn mechanize(
     let v_mid = x.v + a_0 * (0.5 * dt_s);
     let a_mid = c_mid * f_b + field.gravity(&p_mid).0 - 2.0 * omega.cross(&v_mid);
     let v_next = x.v + a_mid * dt_s;
-    let decay = |bias: &crate::filter::FogmBias, value: f64| bias.propagate(value, dt_s).0;
+    let decay = |bias: &crate::kalman::FogmBias, value: f64| bias.propagate(value, dt_s).0;
     let next = InertialNominal {
         p: x.p + (x.v + v_next) * (0.5 * dt_s),
         v: v_next,
@@ -132,8 +133,8 @@ pub(crate) fn continuous_jacobian(
 /// does not change the velocity block. A bias with a first-order
 /// Gauss–Markov model has the density `2·σ²/τ`.
 pub(crate) fn continuous_noise(config: &InertialConfig) -> Mat17 {
-    let accel = config.accel_noise_sigma_mps2_sqrt_hz.powi(2);
-    let gyro = config.gyro_noise_sigma_rad_s_sqrt_hz.powi(2);
+    let accel = powi(config.accel_noise_sigma_mps2_sqrt_hz, 2);
+    let gyro = powi(config.gyro_noise_sigma_rad_s_sqrt_hz, 2);
     let mut q = Mat17::zeros();
     for axis in 0..3 {
         q[(VEL + axis, VEL + axis)] = accel;

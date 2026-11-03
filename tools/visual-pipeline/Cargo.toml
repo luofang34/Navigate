@@ -24,7 +24,7 @@ navigate-visual = { path = "../../crates/navigate-visual", features = ["serde"] 
 navigate-visual-render = { path = "../../crates/navigate-visual-render" }
 navigate-visual-session = { path = "../../crates/navigate-visual-session" }
 navigate-locate = { path = "../../crates/navigate-locate", features = ["serde"] }
-navigate-fusion.workspace = true
+navigate-fusion = { workspace = true, features = ["std"] }
 navigate-visual-fusion = { path = "../../crates/navigate-visual-fusion" }
 navigate-recording = { path = "../../crates/navigate-recording" }
 navigate-match = { path = "../../crates/navigate-match", default-features = false, features = ["ort"] }
@@ -33,7 +33,7 @@ navigate-place = { path = "../../crates/navigate-place" }
 burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
 clap = "4"
 kamadak-exif = "0.6.1"
-nalgebra.workspace = true
+nalgebra = { workspace = true, features = ["std"] }
 pollster = "0.3"
 image = { workspace = true, features = ["png", "jpeg"] }
 serde = { version = "1", features = ["derive"] }

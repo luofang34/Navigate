@@ -3,8 +3,8 @@
 use navigate_geodesy::{LocalTangentPlane, NedOffset};
 
 use super::*;
-use crate::filter::FogmBias;
 use crate::inertial::nominal::MAG_BIAS;
+use crate::kalman::FogmBias;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
 
@@ -41,7 +41,7 @@ fn anomaly(sequence: u32, at_ms: u64, revision: u64, bias_t: f64) -> Observation
 
 #[test]
 fn a_new_map_revision_starts_a_new_bias_and_a_constant_revision_converges() {
-    let mut filter = surface_filter(config(), PlanetaryBody::earth_wgs84(), earth_origin());
+    let mut filter = surface_filter(config(), PlanetaryBody::EARTH_WGS84, earth_origin());
     let rates = rest_rates(&filter);
     let first_bias = 4e-9;
     let second_bias = -6e-9;
@@ -70,7 +70,7 @@ fn a_new_map_revision_starts_a_new_bias_and_a_constant_revision_converges() {
     // An outlier from the new revision fails the gate. The refusal does
     // not reset the bias or the active revision.
     propagate(&mut filter, 31);
-    let before_outlier = core(&filter).clone();
+    let before_outlier = *core(&filter);
     let outlier = measure(&mut filter, 31, 2, 5e-7);
     assert!(matches!(
         outlier,

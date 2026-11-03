@@ -1,16 +1,18 @@
 //! The free-inertial error oscillates with the Schuler period
 //! `2π·√(r/g)` on each body.
 
+use std::vec::Vec;
+
 use core::f64::consts::TAU;
 
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_contract::GeodeticPosition;
 use navigate_geodesy::LocalTangentPlane;
 
-use crate::environment::{GravityField, PlanetaryBody, SurfaceFrame};
 use crate::inertial::config::InertialConfig;
 use crate::inertial::mechanization::{ImuRates, mechanize};
 use crate::inertial::nominal::InertialNominal;
+use navigate_astrodynamics::{GravityField, PlanetaryBody, SurfaceFrame};
 
 /// The measured period from the second zero crossing of the north error
 /// after a 1 m/s north velocity error, and the expected period.
@@ -55,9 +57,9 @@ fn schuler_period_s(body: PlanetaryBody, lat_deg: f64) -> (f64, f64) {
 #[test]
 fn the_schuler_period_holds_on_the_earth_the_moon_and_mars() {
     let cases = [
-        (PlanetaryBody::earth_wgs84(), 47.0, 84.4),
-        (PlanetaryBody::moon_me(), 0.0, 108.3),
-        (PlanetaryBody::mars_iau(), 20.0, 100.1),
+        (PlanetaryBody::EARTH_WGS84, 47.0, 84.4),
+        (PlanetaryBody::MOON_ME, 0.0, 108.3),
+        (PlanetaryBody::MARS_IAU, 20.0, 100.1),
     ];
     for (body, lat_deg, nominal_min) in cases {
         let (measured, expected) = schuler_period_s(body, lat_deg);
@@ -71,8 +73,8 @@ fn the_schuler_period_holds_on_the_earth_the_moon_and_mars() {
 
 #[test]
 fn the_lunar_south_pole_has_no_singularity() {
-    let (pole, expected_pole) = schuler_period_s(PlanetaryBody::moon_me(), -90.0);
-    let (equator, _) = schuler_period_s(PlanetaryBody::moon_me(), 0.0);
+    let (pole, expected_pole) = schuler_period_s(PlanetaryBody::MOON_ME, -90.0);
+    let (equator, _) = schuler_period_s(PlanetaryBody::MOON_ME, 0.0);
     assert!(
         (pole / expected_pole - 1.0).abs() < 0.01,
         "{pole} vs {expected_pole}"

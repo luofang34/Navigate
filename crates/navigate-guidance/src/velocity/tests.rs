@@ -264,7 +264,7 @@ fn the_approach_speed_floor_holds_at_the_waypoint() {
     .expect("guides");
     let velocity = velocity_of(command.setpoint);
     // Linear scaling alone would command 1/30 of cruise here; the floor
-    // keeps the leg flyable, and terminating it stays navigate-fpl's call.
+    // keeps the leg flyable, and terminating it stays the call of navigate-route.
     assert!(
         (speed_mps(velocity) - VelocityGuidanceConfig::MIN_APPROACH_SPEED_MPS).abs() < 1e-6,
         "one meter out holds the approach floor: {velocity:?}"

@@ -1,21 +1,23 @@
 //! The two navigation regimes of the inertial filter (ADR-0014).
 
-use std::sync::Arc;
-
 use nalgebra::{Matrix3, Vector3};
 use navigate_contract::FrameId;
 
-use crate::environment::{GravityField, PlanetaryBody, SpaceEnvironment, SurfaceFrame};
 use crate::observation::MeasurementKind;
+use navigate_astrodynamics::{GravityField, PlanetaryBody, SpaceEnvironment, SurfaceFrame};
 
 /// The regime that a filter starts in, before the initialization fixes
 /// the tangent plane.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the environment is inline so that the filter needs no heap"
+)]
 pub(crate) enum Setup {
     /// A tangent plane on a rotating body.
     BodySurface(PlanetaryBody),
     /// A Cartesian frame centered on one body.
-    CartesianSpace(Arc<SpaceEnvironment>),
+    CartesianSpace(SpaceEnvironment),
 }
 
 impl Setup {
@@ -28,19 +30,23 @@ impl Setup {
 }
 
 /// The active regime of an initialized filter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the frames are inline so that each history entry is Copy without a heap"
+)]
 pub(crate) enum Regime {
     /// The state is in a tangent plane fixed to a rotating body.
-    BodySurface(Arc<SurfaceFrame>),
+    BodySurface(SurfaceFrame),
     /// The state is in a Cartesian frame centered on one body.
-    CartesianSpace(Arc<SpaceEnvironment>),
+    CartesianSpace(SpaceEnvironment),
 }
 
 impl Regime {
     /// The frame that every observation and IMU sample must declare.
     pub(crate) fn frame(&self) -> FrameId {
         match self {
-            Self::BodySurface(surface) => surface.body.ellipsoid.frame(),
+            Self::BodySurface(surface) => surface.body().ellipsoid.frame(),
             Self::CartesianSpace(env) => env.frame,
         }
     }

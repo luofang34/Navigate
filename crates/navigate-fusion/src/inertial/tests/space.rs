@@ -7,10 +7,12 @@ use navigate_contract::{
 };
 
 use super::*;
-use crate::environment::{CentralBodyGravity, PointMassBody, SpaceEnvironment, SpaceGravityModel};
 use crate::inertial::estimate::InertialCore;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
+use navigate_astrodynamics::{
+    CentralBodyGravity, PointMassBody, SpaceEnvironment, SpaceGravityModel, ThirdBodySet,
+};
 
 const MOON_POSITION_M: [f64; 3] = [384_400_000.0, 0.0, 0.0];
 const MOON_VELOCITY_MPS: [f64; 3] = [0.0, 1_022.0, 0.0];
@@ -26,11 +28,12 @@ fn earth_env() -> SpaceEnvironment {
                 equatorial_radius_m: 6_378_137.0,
                 pole_unit_in_frame: [0.0, 0.0, 1.0],
             },
-            third_bodies: vec![PointMassBody {
+            third_bodies: ThirdBodySet::from_slice(&[PointMassBody {
                 naif_id: 301,
                 gm_m3_per_s2: 4.904_869_5e12,
                 position_in_frame_m: MOON_POSITION_M,
-            }],
+            }])
+            .expect("one body"),
         },
     )
 }
@@ -45,11 +48,12 @@ fn moon_env() -> SpaceEnvironment {
                 equatorial_radius_m: 1_737_400.0,
                 pole_unit_in_frame: [0.0, 0.0, 1.0],
             },
-            third_bodies: vec![PointMassBody {
+            third_bodies: ThirdBodySet::from_slice(&[PointMassBody {
                 naif_id: 399,
                 gm_m3_per_s2: 3.986_004_418e14,
                 position_in_frame_m: MOON_POSITION_M.map(|c| -c),
-            }],
+            }])
+            .expect("one body"),
         },
     )
 }
@@ -134,7 +138,7 @@ fn run(fix_now_ms: u64) -> (InertialNavigationFilter, InertialCore) {
             assert_accepted(filter.ingest(&earth_fix(1, 5_000), t(at_ms)));
         }
     }
-    let state = core(&filter).clone();
+    let state = *core(&filter);
     (filter, state)
 }
 
@@ -171,7 +175,7 @@ fn the_change_of_frame_shifts_the_state_and_keeps_the_attitude_errors() {
     for k in 1..=10_u32 {
         assert_accepted(filter.ingest_imu(&coast_imu(k), t(u64::from(k) * 1_000)));
     }
-    let before = core(&filter).clone();
+    let before = *core(&filter);
     recenter(&mut filter);
     let after = core(&filter);
     let shift = Vector3::from(MOON_POSITION_M);
@@ -205,16 +209,21 @@ fn an_environment_update_keeps_the_frame() {
     );
     let mut moved = earth_env();
     if let SpaceGravityModel::MultiBody { third_bodies, .. } = &mut moved.gravity {
-        third_bodies[0].position_in_frame_m = [380_000_000.0, 40_000_000.0, 0.0];
+        *third_bodies = ThirdBodySet::from_slice(&[PointMassBody {
+            naif_id: 301,
+            gm_m3_per_s2: 4.904_869_5e12,
+            position_in_frame_m: [380_000_000.0, 40_000_000.0, 0.0],
+        }])
+        .expect("one body");
     }
-    assert!(filter.update_space_environment(moved.clone()).is_ok());
+    assert!(filter.update_space_environment(moved).is_ok());
     assert!(
-        matches!(&core(&filter).regime, crate::inertial::regime::Regime::CartesianSpace(env) if **env == moved)
+        matches!(&core(&filter).regime, crate::inertial::regime::Regime::CartesianSpace(env) if *env == moved)
     );
     assert_eq!(filter.rejections().frame_mismatch, 1);
     let mut surface = surface_filter(
         InertialConfig::default(),
-        PlanetaryBody::earth_wgs84(),
+        PlanetaryBody::EARTH_WGS84,
         earth_origin(),
     );
     assert!(matches!(
