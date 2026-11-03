@@ -3,7 +3,9 @@
 //! Every bound the admission gates and the integrity assessment apply is
 //! configuration, not code: staleness, the assessment window, the
 //! innovation gate, process noise, initial uncertainty, and the quality
-//! horizons (ADR-0003, ADR-0004).
+//! horizons (ADR-0003, ADR-0004). The scalar map-model limits and the
+//! depth of the delayed-measurement history are also configuration
+//! (ADR-0012).
 
 use navigate_contract::DurationNanos;
 
@@ -25,9 +27,10 @@ pub struct FusionConfig {
     /// chi-square distribution with 3 degrees of freedom.
     pub innovation_gate_chi2: f64,
     /// Innovation gate threshold on the chi-square statistic with 1 degree
-    /// of freedom, for scalar measurements such as a range. Default: 10.83,
-    /// the 99.9% point, the same confidence as `innovation_gate_chi2`.
-    pub range_gate_chi2: f64,
+    /// of freedom. The filter applies it to scalar measurements: range,
+    /// altitude, and magnetic anomaly. Default: 10.83, the 99.9% point.
+    /// This is the same confidence as `innovation_gate_chi2`.
+    pub scalar_gate_chi2: f64,
     /// Power spectral density of the white-acceleration process noise in
     /// m²/s³. Default: 1.0.
     pub process_noise_accel_psd: f64,
@@ -58,6 +61,20 @@ pub struct FusionConfig {
     /// Observation silence at or beyond which quality is `Unusable`.
     /// Default: 5 s.
     pub quality_silence_unusable: DurationNanos,
+    /// Number of horizontal 1-sigma values that the filter adds to the
+    /// offset from a map linearization point. The sum must not exceed the
+    /// valid radius of the map model. A negative or non-finite value
+    /// makes every map-model observation fail this check. Default: 2.0.
+    pub linearization_sigma_multiplier: f64,
+    /// Lowest information ratio that a map-model gradient must supply.
+    /// The ratio is `gᵀ P_pos g / R`, which has no unit. A negative or
+    /// non-finite value makes every map-model observation fail this
+    /// check. Default: 1e-3.
+    pub min_information_ratio: f64,
+    /// Number of admitted updates that the delayed-measurement history
+    /// keeps. A value of 0 disables delayed-measurement replay.
+    /// Default: 64.
+    pub history_capacity: usize,
 }
 
 impl Default for FusionConfig {
@@ -66,7 +83,7 @@ impl Default for FusionConfig {
             staleness_bound: DurationNanos::from_millis(500),
             assessment_window: DurationNanos::from_millis(5_000),
             innovation_gate_chi2: 16.27,
-            range_gate_chi2: 10.83,
+            scalar_gate_chi2: 10.83,
             process_noise_accel_psd: 1.0,
             initial_velocity_variance_m2_per_s2: 100.0,
             good_horizontal_1sigma_m: 10.0,
@@ -76,6 +93,9 @@ impl Default for FusionConfig {
             reanchor_distance_m: 50_000.0,
             quality_silence_degraded: DurationNanos::from_millis(2_000),
             quality_silence_unusable: DurationNanos::from_millis(5_000),
+            linearization_sigma_multiplier: 2.0,
+            min_information_ratio: 1e-3,
+            history_capacity: 64,
         }
     }
 }
@@ -92,6 +112,7 @@ mod tests {
         assert_eq!(config.staleness_bound, DurationNanos::from_millis(500));
         assert_eq!(config.assessment_window, DurationNanos::from_millis(5_000));
         assert!((config.innovation_gate_chi2 - 16.27).abs() < 1e-12);
+        assert!((config.scalar_gate_chi2 - 10.83).abs() < 1e-12);
         assert!((config.process_noise_accel_psd - 1.0).abs() < 1e-12);
         assert!((config.initial_velocity_variance_m2_per_s2 - 100.0).abs() < 1e-12);
         assert!((config.good_horizontal_1sigma_m - 10.0).abs() < 1e-12);
@@ -107,5 +128,8 @@ mod tests {
             config.quality_silence_unusable,
             DurationNanos::from_millis(5_000)
         );
+        assert!((config.linearization_sigma_multiplier - 2.0).abs() < 1e-12);
+        assert!((config.min_information_ratio - 1e-3).abs() < 1e-15);
+        assert_eq!(config.history_capacity, 64);
     }
 }

@@ -11,15 +11,7 @@ use navigate_geodesy::{LocalTangentPlane, NedOffset};
 
 use super::Core;
 use crate::config::FusionConfig;
-use crate::filter::{Mat6, Vec6};
-
-pub(super) fn rotation_matrix(from: &LocalTangentPlane, to: &LocalTangentPlane) -> Matrix3<f64> {
-    let rows = from.ned_rotation_to(to);
-    Matrix3::new(
-        rows[0][0], rows[0][1], rows[0][2], rows[1][0], rows[1][1], rows[1][2], rows[2][0],
-        rows[2][1], rows[2][2],
-    )
-}
+use crate::filter::{Mat6, Vec6, rotation_between};
 
 pub(super) fn vehicle_to_plane(
     plane: &LocalTangentPlane,
@@ -33,7 +25,7 @@ pub(super) fn vehicle_to_plane(
     if local.origin() == plane.origin() {
         return (v, r);
     }
-    let rot = rotation_matrix(&local, plane);
+    let rot = rotation_between(&local, plane);
     let r_rot = rot * r * rot.transpose();
     (rot * v, (r_rot + r_rot.transpose()) * 0.5)
 }
@@ -51,7 +43,7 @@ pub(super) fn plane_to_vehicle(
     if local.origin() == plane.origin() {
         return (v, pos_cov, vel_cov);
     }
-    let rot = rotation_matrix(plane, &local);
+    let rot = rotation_between(plane, &local);
     let p_rot = rot * pos_cov * rot.transpose();
     let v_rot = rot * vel_cov * rot.transpose();
     (
@@ -75,11 +67,7 @@ pub(super) fn reanchor_if_needed(core: &mut Core, config: &FusionConfig) {
     let Ok(new_plane) = LocalTangentPlane::new(current) else {
         return;
     };
-    let rows = core.plane.ned_rotation_to(&new_plane);
-    let r = Matrix3::new(
-        rows[0][0], rows[0][1], rows[0][2], rows[1][0], rows[1][1], rows[1][2], rows[2][0],
-        rows[2][1], rows[2][2],
-    );
+    let r = rotation_between(&core.plane, &new_plane);
     let residual = new_plane.to_ned(&current);
     let v_new = r * nalgebra::Vector3::new(x[3], x[4], x[5]);
     let mut j = Mat6::zeros();

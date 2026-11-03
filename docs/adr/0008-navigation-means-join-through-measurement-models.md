@@ -46,7 +46,7 @@ module. The filter core does not change.
 
 | Variant | Means | State in this build |
 |---|---|---|
-| `Range` | DME and other ranging transmitters | Supported. Gate with 1 degree of freedom (`range_gate_chi2`). Source class `RadioNavigation`. |
+| `Range` | DME and other ranging transmitters | Supported. Gate with 1 degree of freedom (`scalar_gate_chi2`). Source class `RadioNavigation`. |
 | `Pseudorange` | Raw GNSS | Reserved. Needs the pseudorange model and receiver clock states. |
 | `VisualPose` | Visual positioning with attitude | Reserved. Needs attitude in the state. |
 

@@ -47,10 +47,35 @@ pub(super) fn check_value(value: &ObservationValue) -> Result<(), RejectionReaso
             if !station.is_plausible() || !(range_m.is_finite() && *range_m >= 0.0) {
                 return Err(RejectionReason::NonFiniteValue);
             }
-            if !(variance_m2.is_finite() && *variance_m2 > 0.0) {
-                return Err(RejectionReason::ImplausibleCovariance);
+            return check_scalar_variance(*variance_m2);
+        }
+        ObservationValue::Altitude {
+            altitude_m,
+            variance_m2,
+        } => {
+            if !altitude_m.is_finite() {
+                return Err(RejectionReason::NonFiniteValue);
             }
-            return Ok(());
+            return check_scalar_variance(*variance_m2);
+        }
+        ObservationValue::MagneticAnomaly {
+            measured_t,
+            map_t_at_lin,
+            gradient_ned_t_per_m,
+            linearization_point,
+            valid_radius_m,
+            variance_t2,
+        } => {
+            let values_finite = linearization_point.is_plausible()
+                && measured_t.is_finite()
+                && map_t_at_lin.is_finite()
+                && gradient_ned_t_per_m.iter().all(|g| g.is_finite())
+                && valid_radius_m.is_finite()
+                && *valid_radius_m > 0.0;
+            if !values_finite {
+                return Err(RejectionReason::NonFiniteValue);
+            }
+            return check_scalar_variance(*variance_t2);
         }
         ObservationValue::Pseudorange { .. } | ObservationValue::VisualPose { .. } => {
             return Err(RejectionReason::UnsupportedMeasurement { kind: value.kind() });
@@ -62,6 +87,16 @@ pub(super) fn check_value(value: &ObservationValue) -> Result<(), RejectionReaso
         return Err(RejectionReason::ImplausibleCovariance);
     }
     Ok(())
+}
+
+/// A scalar variance must be finite and strictly positive. The check has
+/// no lower scale limit: a magnetic variance of 1e-18 T² is valid.
+fn check_scalar_variance(variance: f64) -> Result<(), RejectionReason> {
+    if variance.is_finite() && variance > 0.0 {
+        Ok(())
+    } else {
+        Err(RejectionReason::ImplausibleCovariance)
+    }
 }
 
 pub(super) fn seconds(duration: DurationNanos) -> f64 {

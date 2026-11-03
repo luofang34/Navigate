@@ -113,14 +113,15 @@ pub enum RejectionReason {
         /// The refused acquisition time.
         got: MonotonicNanos,
     },
-    /// A velocity fix arrived before any position fix anchored the
-    /// filter's origin.
+    /// A measurement that needs a state arrived before any position fix
+    /// anchored the filter's origin.
     #[error("filter is not initialized: a position fix must be admitted first")]
     NotInitialized,
     /// The innovation chi-square statistic exceeded the configured gate.
     #[error("innovation chi-square {chi2} exceeds the gate threshold {threshold}")]
     InnovationGate {
-        /// Observed chi-square statistic (3 degrees of freedom).
+        /// Observed chi-square statistic. A vector fix has 3 degrees of
+        /// freedom. A scalar measurement has 1 degree of freedom.
         chi2: f64,
         /// The configured gate threshold.
         threshold: f64,
@@ -131,6 +132,46 @@ pub enum RejectionReason {
     UnsupportedMeasurement {
         /// The measurement model the observation needs.
         kind: MeasurementKind,
+    },
+    /// The state can be outside the region where the map linearization is
+    /// valid (ADR-0012). The filter adds the offset from the linearization
+    /// point to `linearization_sigma_multiplier` horizontal 1-sigma
+    /// values. The sum exceeds the valid radius of the model.
+    #[error(
+        "offset plus sigma margin {distance_plus_ksigma_m} m exceeds the valid radius {valid_radius_m} m"
+    )]
+    LinearizationRegionExceeded {
+        /// Offset from the linearization point plus the sigma margin, in
+        /// meters.
+        distance_plus_ksigma_m: f64,
+        /// Valid radius of the linearized map model, in meters.
+        valid_radius_m: f64,
+    },
+    /// The map gradient gives too little position information
+    /// (ADR-0012). The information ratio `gᵀ P_pos g / R` is below the
+    /// configured floor, or it is not finite.
+    #[error("gradient information ratio {information_ratio} is below the floor {floor}")]
+    UninformativeGradient {
+        /// The information ratio. It has no unit.
+        information_ratio: f64,
+        /// The configured floor, `min_information_ratio`.
+        floor: f64,
+    },
+    /// A delayed observation is older than the retained history
+    /// (ADR-0012). The filter cannot apply it at its acquisition time.
+    #[error(
+        "delayed observation age {} ns is outside the history depth {} ns",
+        age.as_nanos(),
+        depth.as_nanos()
+    )]
+    OutsideHistory {
+        /// Time from the acquisition time to the state time.
+        age: DurationNanos,
+        /// Time from the oldest retained rewind point to the state time.
+        /// The oldest rewind point is the state before the oldest retained
+        /// update. Without retained updates, it is the initialization
+        /// time. The depth is zero when the history capacity is zero.
+        depth: DurationNanos,
     },
 }
 
@@ -166,6 +207,12 @@ pub struct RejectionCounters {
     pub innovation_gate: u64,
     /// Refusals of measurements whose model this build does not have.
     pub unsupported_measurement: u64,
+    /// Refusals of map measurements outside their linearization region.
+    pub linearization_region_exceeded: u64,
+    /// Refusals of map measurements with an uninformative gradient.
+    pub uninformative_gradient: u64,
+    /// Refusals of delayed observations older than the retained history.
+    pub outside_history: u64,
 }
 
 impl RejectionCounters {
@@ -185,6 +232,11 @@ impl RejectionCounters {
             RejectionReason::NotInitialized => &mut self.not_initialized,
             RejectionReason::InnovationGate { .. } => &mut self.innovation_gate,
             RejectionReason::UnsupportedMeasurement { .. } => &mut self.unsupported_measurement,
+            RejectionReason::LinearizationRegionExceeded { .. } => {
+                &mut self.linearization_region_exceeded
+            }
+            RejectionReason::UninformativeGradient { .. } => &mut self.uninformative_gradient,
+            RejectionReason::OutsideHistory { .. } => &mut self.outside_history,
         };
         *counter = counter.wrapping_add(1);
     }
@@ -209,5 +261,71 @@ mod tests {
         assert_eq!(counters.stale, 0);
         counters.record(&RejectionReason::NotInitialized);
         assert_eq!(counters.not_initialized, 1);
+    }
+
+    #[test]
+    fn map_and_history_refusals_each_increment_one_counter() {
+        let mut counters = RejectionCounters::default();
+        counters.record(&RejectionReason::LinearizationRegionExceeded {
+            distance_plus_ksigma_m: 600.0,
+            valid_radius_m: 500.0,
+        });
+        counters.record(&RejectionReason::UninformativeGradient {
+            information_ratio: 1e-6,
+            floor: 1e-3,
+        });
+        counters.record(&RejectionReason::UninformativeGradient {
+            information_ratio: f64::NAN,
+            floor: 1e-3,
+        });
+        counters.record(&RejectionReason::OutsideHistory {
+            age: DurationNanos::from_millis(300),
+            depth: DurationNanos::from_millis(100),
+        });
+        assert_eq!(
+            counters,
+            RejectionCounters {
+                linearization_region_exceeded: 1,
+                uninformative_gradient: 2,
+                outside_history: 1,
+                ..RejectionCounters::default()
+            }
+        );
+    }
+
+    #[test]
+    fn new_counters_wrap_instead_of_overflowing() {
+        let mut counters = RejectionCounters {
+            linearization_region_exceeded: u64::MAX,
+            uninformative_gradient: u64::MAX,
+            outside_history: u64::MAX,
+            ..RejectionCounters::default()
+        };
+        counters.record(&RejectionReason::LinearizationRegionExceeded {
+            distance_plus_ksigma_m: 1.0,
+            valid_radius_m: 0.5,
+        });
+        counters.record(&RejectionReason::UninformativeGradient {
+            information_ratio: 0.0,
+            floor: 1e-3,
+        });
+        counters.record(&RejectionReason::OutsideHistory {
+            age: DurationNanos::from_nanos(1),
+            depth: DurationNanos::from_nanos(0),
+        });
+        assert_eq!(counters.linearization_region_exceeded, 0);
+        assert_eq!(counters.uninformative_gradient, 0);
+        assert_eq!(counters.outside_history, 0);
+    }
+
+    #[test]
+    fn new_reasons_name_their_values() {
+        let text = RejectionReason::OutsideHistory {
+            age: DurationNanos::from_millis(300),
+            depth: DurationNanos::from_millis(100),
+        }
+        .to_string();
+        assert!(text.contains("300000000"), "{text}");
+        assert!(text.contains("100000000"), "{text}");
     }
 }

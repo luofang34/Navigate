@@ -1,62 +1,85 @@
-//! Six-state linear Kalman core over local NED.
+//! Linear Kalman core over local NED, generic over the state dimension.
 //!
-//! State ordering is `[p_north, p_east, p_down, v_north, v_east, v_down]`
-//! in meters and meters per second. Propagation is constant-velocity with
-//! white-acceleration process noise; measurement updates use the
-//! Joseph-form covariance recursion, chosen over the shorter `(I − KH)P`
-//! form because it preserves symmetry and positive semidefiniteness under
-//! floating-point rounding.
+//! The six-state layout is `[p_north, p_east, p_down, v_north, v_east,
+//! v_down]` in meters and meters per second. The core is generic over the
+//! state dimension `N` (ADR-0012). A propagator gives the prediction step
+//! and a measurement model gives the update step. Measurement updates use
+//! the Joseph-form covariance recursion. The Joseph form keeps the
+//! covariance symmetric and positive semidefinite under floating-point
+//! rounding. The shorter `(I − KH)P` form does not.
 
 use nalgebra::{Matrix3, SMatrix, SVector};
 use navigate_contract::SymmetricCov3;
+use navigate_geodesy::LocalTangentPlane;
+
+use crate::config::FusionConfig;
+use crate::rejection::RejectionReason;
 
 pub(crate) type Vec6 = SVector<f64, 6>;
 pub(crate) type Mat6 = SMatrix<f64, 6, 6>;
 
 mod models;
+mod propagation;
 
-pub(crate) use models::{LinearBlock, RangeModel};
+pub(crate) use models::{
+    AltitudeModel, LinearBlock, MagneticAnomalyModel, MapLinearization, RangeModel,
+};
+pub use propagation::FogmBias;
+pub(crate) use propagation::{ConstantVelocityPropagator, Propagator};
 
-/// A measurement of dimension `M` of the six-dimensional state (ADR-0008).
+/// A measurement of dimension `M` of the `N`-dimensional state
+/// (ADR-0008, ADR-0012).
 ///
 /// The filter core applies every model through one update path. A new
-/// navigation means is a new model; the core does not change.
-pub(crate) trait MeasurementModel<const M: usize> {
+/// navigation means is a new model. The core does not change.
+pub(crate) trait MeasurementModel<const M: usize, const N: usize = 6> {
+    /// Checks that the model is valid for the state before the gate runs.
+    /// The default accepts every state. A map model refuses a state
+    /// outside its linearization region or a gradient without
+    /// information (ADR-0012).
+    fn admissible(
+        &self,
+        _x: &SVector<f64, N>,
+        _p: &SMatrix<f64, N, N>,
+        _config: &FusionConfig,
+    ) -> Result<(), RejectionReason> {
+        Ok(())
+    }
     /// The innovation `z − h(x)` at the state mean.
-    fn innovation(&self, x: &Vec6) -> SVector<f64, M>;
+    fn innovation(&self, x: &SVector<f64, N>) -> SVector<f64, M>;
     /// The linearization `∂h/∂x` at the state mean. `None` where the model
-    /// has no defined derivative, which the core reports as an
+    /// has no defined derivative. The core reports `None` as an
     /// implausible-covariance rejection.
-    fn jacobian(&self, x: &Vec6) -> Option<SMatrix<f64, M, 6>>;
+    fn jacobian(&self, x: &SVector<f64, N>) -> Option<SMatrix<f64, M, N>>;
     /// The measurement noise covariance.
     fn noise(&self) -> SMatrix<f64, M, M>;
 }
 
 /// A gated measurement ready to apply: the innovation, its linearization,
-/// the inverted innovation covariance, and the chi-square statistic the
-/// gate judges.
+/// the inverted innovation covariance, and the chi-square statistic that
+/// the gate judges.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PreparedUpdate<const M: usize> {
+pub(crate) struct PreparedUpdate<const M: usize, const N: usize> {
     innovation: SVector<f64, M>,
-    h: SMatrix<f64, M, 6>,
+    h: SMatrix<f64, M, N>,
     r: SMatrix<f64, M, M>,
     s_inverse: SMatrix<f64, M, M>,
     pub(crate) chi2: f64,
 }
 
-/// Mean and covariance of the six-dimensional state.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct KalmanState {
-    pub(crate) x: Vec6,
-    pub(crate) p: Mat6,
+/// Mean and covariance of the `N`-dimensional state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct KalmanState<const N: usize> {
+    pub(crate) x: SVector<f64, N>,
+    pub(crate) p: SMatrix<f64, N, N>,
 }
 
-impl KalmanState {
-    /// A zero-mean state anchored at a position fix: the position block
-    /// is the fix covariance itself with zero position–velocity cross
-    /// terms, and the velocity block is a diagonal diffuse prior. A
-    /// measurement update against a diffuse prior the fix itself centers
-    /// would fake certainty the fix does not carry.
+impl KalmanState<6> {
+    /// A zero-mean state anchored at a position fix. The position block
+    /// is the fix covariance with zero position–velocity cross terms. The
+    /// velocity block is a diagonal diffuse prior. A measurement update
+    /// against a diffuse prior that the fix itself centers would show a
+    /// certainty that the fix does not have.
     pub(crate) fn from_position_fix(r: &Matrix3<f64>, velocity_variance_m2_per_s2: f64) -> Self {
         let mut p = Mat6::zeros();
         for i in 0..3 {
@@ -72,40 +95,25 @@ impl KalmanState {
     }
 
     /// Constant-velocity propagation over `dt_s` seconds with
-    /// white-acceleration process noise of density `accel_psd` (m²/s³):
-    /// `Q_pp = q·dt³/3`, `Q_pv = q·dt²/2`, `Q_vv = q·dt` per axis.
+    /// white-acceleration process noise of density `accel_psd` (m²/s³).
+    /// [`ConstantVelocityPropagator`] does the work.
     pub(crate) fn propagated(&self, dt_s: f64, accel_psd: f64) -> Self {
-        if dt_s <= 0.0 {
-            return *self;
-        }
-        let q_pp = accel_psd * dt_s * dt_s * dt_s / 3.0;
-        let q_pv = accel_psd * dt_s * dt_s / 2.0;
-        let q_vv = accel_psd * dt_s;
-        let mut f = Mat6::identity();
-        let mut q = Mat6::zeros();
-        for i in 0..3 {
-            f[(i, i + 3)] = dt_s;
-            q[(i, i)] = q_pp;
-            q[(i, i + 3)] = q_pv;
-            q[(i + 3, i)] = q_pv;
-            q[(i + 3, i + 3)] = q_vv;
-        }
-        Self {
-            x: f * self.x,
-            p: f * self.p * f.transpose() + q,
-        }
+        ConstantVelocityPropagator { accel_psd }.propagate(self, dt_s)
     }
+}
 
+impl<const N: usize> KalmanState<N> {
     /// Linearizes a model at the mean and computes the innovation and its
-    /// gate statistic. `None` when the model has no derivative at the mean,
-    /// or when the innovation covariance `S = HPHᵀ + R` has no Cholesky
-    /// factorization — surfaced to the caller as an implausible-covariance
-    /// rejection, never a panic. The fixed dimension `M` keeps the update
-    /// free of heap allocation.
+    /// gate statistic. The result is `None` when the model has no
+    /// derivative at the mean. It is also `None` when the innovation
+    /// covariance `S = HPHᵀ + R` has no Cholesky factorization. The
+    /// caller reports `None` as an implausible-covariance rejection. The
+    /// fixed dimensions `M` and `N` keep the update free of heap
+    /// allocation.
     pub(crate) fn prepare_update<const M: usize>(
         &self,
-        model: &impl MeasurementModel<M>,
-    ) -> Option<PreparedUpdate<M>> {
+        model: &impl MeasurementModel<M, N>,
+    ) -> Option<PreparedUpdate<M, N>> {
         let h = model.jacobian(&self.x)?;
         let r = model.noise();
         let s = h * self.p * h.transpose() + r;
@@ -123,11 +131,11 @@ impl KalmanState {
 
     /// Applies a prepared measurement with the Joseph-form covariance
     /// update `P' = (I − KH) P (I − KH)ᵀ + K R Kᵀ`.
-    pub(crate) fn apply_update<const M: usize>(&self, prepared: &PreparedUpdate<M>) -> Self {
+    pub(crate) fn apply_update<const M: usize>(&self, prepared: &PreparedUpdate<M, N>) -> Self {
         let h = prepared.h;
         let gain = self.p * h.transpose() * prepared.s_inverse;
         let x = self.x + gain * prepared.innovation;
-        let identity_minus_kh = Mat6::identity() - gain * h;
+        let identity_minus_kh = SMatrix::<f64, N, N>::identity() - gain * h;
         let p = identity_minus_kh * self.p * identity_minus_kh.transpose()
             + gain * prepared.r * gain.transpose();
         Self { x, p }
@@ -149,6 +157,16 @@ pub(crate) fn matrix_to_cov3(m: &Matrix3<f64>) -> SymmetricCov3 {
         m[(1, 2)],
         m[(2, 2)],
     ])
+}
+
+/// The rotation that maps a NED vector of `from` into the NED axes of
+/// `to`.
+pub(crate) fn rotation_between(from: &LocalTangentPlane, to: &LocalTangentPlane) -> Matrix3<f64> {
+    let rows = from.ned_rotation_to(to);
+    Matrix3::new(
+        rows[0][0], rows[0][1], rows[0][2], rows[1][0], rows[1][1], rows[1][2], rows[2][0],
+        rows[2][1], rows[2][2],
+    )
 }
 
 /// Whether a symmetric 3×3 matrix is positive definite: a strictly
@@ -183,75 +201,4 @@ pub(crate) fn vertical_1sigma_m(p: &Mat6) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use nalgebra::{Matrix3, Vector3};
-
-    use super::{
-        KalmanState, LinearBlock, Mat6, Vec6, horizontal_1sigma_m, is_positive_definite,
-        vertical_1sigma_m,
-    };
-
-    #[test]
-    fn propagation_inflates_position_uncertainty() {
-        let state = KalmanState::from_position_fix(&Matrix3::from_diagonal_element(4.0), 1.0);
-        let advanced = state.propagated(2.0, 0.5);
-        // P_pp' = P_pp + dt²·P_vv + q·dt³/3 = 4 + 4 + 4/3.
-        assert!((advanced.p[(0, 0)] - (4.0 + 4.0 + 4.0 / 3.0)).abs() < 1e-9);
-        assert!(advanced.p[(0, 0)] > state.p[(0, 0)]);
-    }
-
-    #[test]
-    fn update_moves_the_state_toward_the_measurement() {
-        let state = KalmanState::from_position_fix(&Matrix3::from_diagonal_element(100.0), 10.0);
-        let z = Vector3::new(10.0, 0.0, 0.0);
-        let r = Matrix3::identity();
-        let prepared = state
-            .prepare_update(&LinearBlock::position(z, r))
-            .expect("invertible innovation covariance");
-        let updated = state.apply_update(&prepared);
-        assert!((updated.x[0] - 10.0 * 100.0 / 101.0).abs() < 1e-9);
-        assert!(updated.p[(0, 0)] < state.p[(0, 0)]);
-        // Joseph form keeps the covariance symmetric.
-        assert!((updated.p - updated.p.transpose()).norm() < 1e-12);
-    }
-
-    #[test]
-    fn definiteness_screen_refuses_impossible_and_singular_covariances() {
-        let overcorrelated = Matrix3::new(25.0, 100.0, 0.0, 100.0, 25.0, 0.0, 0.0, 0.0, 25.0);
-        assert!(!is_positive_definite(&overcorrelated));
-        assert!(is_positive_definite(&Matrix3::identity()));
-        assert!(!is_positive_definite(&Matrix3::from_diagonal_element(-1.0)));
-        // Zero and rank-deficient covariances claim a direction of exact
-        // certainty; the definite screen refuses them.
-        assert!(!is_positive_definite(&Matrix3::zeros()));
-        assert!(!is_positive_definite(&Matrix3::new(
-            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0
-        )));
-    }
-
-    #[test]
-    fn singular_innovation_covariance_is_reported_not_inverted() {
-        let degenerate = KalmanState {
-            x: Vec6::zeros(),
-            p: Mat6::zeros(),
-        };
-        let prepared =
-            degenerate.prepare_update(&LinearBlock::position(Vector3::zeros(), Matrix3::zeros()));
-        assert!(prepared.is_none());
-    }
-
-    #[test]
-    fn sigma_extraction_reads_the_horizontal_block() {
-        let mut p = Mat6::zeros();
-        p[(0, 0)] = 9.0;
-        p[(1, 1)] = 4.0;
-        p[(2, 2)] = 16.0;
-        assert!((horizontal_1sigma_m(&p) - 3.0).abs() < 1e-12);
-        assert!((vertical_1sigma_m(&p) - 4.0).abs() < 1e-12);
-        // Correlation rotates the ellipse: the major axis exceeds both
-        // diagonal sigmas.
-        p[(0, 1)] = 5.0;
-        p[(1, 0)] = 5.0;
-        assert!(horizontal_1sigma_m(&p) > 3.0);
-    }
-}
+mod tests;
