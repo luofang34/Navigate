@@ -75,7 +75,7 @@ impl CrlbTracker {
         if !body.is_plausible() {
             return Err(RejectionReason::NonFiniteValue);
         }
-        let plane = LocalTangentPlane::with_ellipsoid(origin, body.ellipsoid)
+        let plane = LocalTangentPlane::new(origin, body.ellipsoid)
             .map_err(|_| RejectionReason::NonFiniteValue)?;
         for covariance in [&position_cov, &velocity_cov, &attitude_cov] {
             check_cov3(covariance)?;

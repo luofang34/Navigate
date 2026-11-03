@@ -12,7 +12,7 @@ use super::models::{plane_to_local_at, quaternion_of, vehicle_position};
 use super::nominal::{ATT, POS, VEL, to_contract};
 use crate::filter::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
 use crate::integrity;
-use navigate_contract::IntegrityAssessment;
+use navigate_contract::{IntegrityAssessment, SpaceIntegrityAssessment};
 
 impl InertialNavigationFilter {
     /// Publishes the body-surface solution for `now`. The position,
@@ -53,19 +53,19 @@ impl InertialNavigationFilter {
                 matrix_to_cov3(&vel_cov),
                 integrity,
                 self.ledger.epoch_composition(),
+                surface.body.ellipsoid.contract(),
             )
             .with_attitude(to_contract(&attitude))
-            .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5)))
-            .with_ellipsoid(surface.body.ellipsoid.contract()),
+            .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
         )
     }
 
     /// Publishes the space solution for `now` in the active frame. The
     /// attitude rotates the body axes into the frame axes, and
-    /// `P_att = C·P_θ·Cᵀ`. A Cartesian frame has no vertical, so the
-    /// integrity judges the largest position 1-sigma on both axes. The
-    /// result is `None` under the same conditions as
-    /// [`Self::tick_surface`], and in a surface filter.
+    /// `P_att = C·P_θ·Cᵀ`. The uncertainty uses the orbital `RTN` axes
+    /// when `|r × v|` defines an orbit plane, and the principal axes
+    /// otherwise (ADR-0015). The result is `None` under the same
+    /// conditions as [`Self::tick_surface`], and in a surface filter.
     pub fn tick_space(&mut self, now: MonotonicNanos) -> Option<CartesianSolution> {
         let core = self.propagated(now)?;
         if core.regime.surface().is_some() {
@@ -77,8 +77,8 @@ impl InertialNavigationFilter {
         let vel_cov = core.p.fixed_view::<3, 3>(VEL, VEL).into_owned();
         let c = x.c_b_to_f();
         let att_cov = c * core.p.fixed_view::<3, 3>(ATT, ATT) * c.transpose();
-        let largest = pos_cov.symmetric_eigenvalues().max().max(0.0).sqrt();
-        let integrity = self.assess(largest, largest, now);
+        let uncertainty = integrity::space_uncertainty(x.p, x.v, pos_cov);
+        let integrity = self.assess_space(uncertainty, now);
         let stamp = self.next_stamp(now);
         Some(
             CartesianSolution::new(
@@ -113,12 +113,22 @@ impl InertialNavigationFilter {
         let fusion = self.config.fusion;
         self.ledger.prune_window(now, fusion.assessment_window);
         integrity::derive(
-            self.ledger.window(),
+            &self.ledger,
+            now,
             horizontal_1sigma_m,
             vertical_1sigma_m,
-            self.ledger.silence(now),
             &fusion,
         )
+    }
+
+    fn assess_space(
+        &mut self,
+        uncertainty: navigate_contract::SpaceUncertainty,
+        now: MonotonicNanos,
+    ) -> SpaceIntegrityAssessment {
+        let fusion = self.config.fusion;
+        self.ledger.prune_window(now, fusion.assessment_window);
+        integrity::derive_space(&self.ledger, now, uncertainty, &fusion)
     }
 
     fn next_stamp(&mut self, now: MonotonicNanos) -> SolutionStamp {

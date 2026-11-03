@@ -16,7 +16,7 @@ serde = ["dep:serde", "navigate-visual/serde"]
 [dependencies]
 navigate-contract.workspace = true
 navigate-fusion.workspace = true
-navigate-geodesy.workspace = true
+navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-visual = { path = "../navigate-visual" }
 navigate-visual-session = { path = "../navigate-visual-session" }
 navigate-visual-fusion = { path = "../navigate-visual-fusion" }

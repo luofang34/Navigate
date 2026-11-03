@@ -191,8 +191,8 @@ impl MarginalizedParticleFilter {
         if !velocity.is_finite() {
             return Err(MpfError::NonFiniteValue);
         }
-        let plane = LocalTangentPlane::with_ellipsoid(origin, ellipsoid)
-            .map_err(|_| MpfError::NonFiniteValue)?;
+        let plane =
+            LocalTangentPlane::new(origin, ellipsoid).map_err(|_| MpfError::NonFiniteValue)?;
         let (p_pos, p_vel) = (cov3_to_matrix(&position_cov), cov3_to_matrix(&velocity_cov));
         if !(position_cov.is_plausible() && velocity_cov.is_plausible())
             || !(is_positive_definite(&p_pos) && is_positive_definite(&p_vel))
@@ -317,7 +317,7 @@ impl MarginalizedParticleFilter {
             estimate.velocity_cov,
             integrity,
             composition,
+            self.plane.ellipsoid().contract(),
         )
-        .with_ellipsoid(self.plane.ellipsoid().contract())
     }
 }

@@ -1,29 +1,81 @@
 //! Solution integrity derivation (ADR-0004): redundancy judged over the
 //! distinct sources that contributed within the assessment window and
 //! how their declared compositions overlap, quality derived mechanically
-//! from uncertainty and observation silence — never asserted, never
-//! overstated.
+//! from uncertainty, observation silence, and a storm of innovation-gate
+//! refusals — never asserted, never overstated.
+//!
+//! A surface solution gets an [`IntegrityAssessment`]. A space solution
+//! gets a [`SpaceIntegrityAssessment`] with its uncertainty in orbital
+//! axes (ADR-0015).
 
 use navigate_contract::{
-    DurationNanos, FaultDetection, IntegrityAssessment, Redundancy, SolutionQuality,
-    SourceComposition, SourceId,
+    FaultDetection, IntegrityAssessment, MonotonicNanos, Redundancy, SolutionQuality,
+    SourceComposition, SourceId, SpaceIntegrityAssessment, SpaceUncertainty,
 };
 
 use crate::config::FusionConfig;
-use crate::provenance::AdmittedContribution;
+use crate::provenance::{AdmittedContribution, ProvenanceLedger};
 
-/// Derives the assessment for one publication. `records` are the
-/// admissions still inside the assessment window; `silence` is the time
-/// since the last admitted observation, `None` when the reference clock
-/// has not passed that admission. Protection levels stay absent until an
-/// implementation earns them.
+mod space;
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use space::space_uncertainty;
+
+/// What the assessment window supports, apart from the uncertainty.
+struct Support {
+    contributing: SourceComposition,
+    redundancy: Redundancy,
+    fault_detection: FaultDetection,
+}
+
+/// Derives the surface assessment for one publication at `now`. The
+/// ledger supplies the admissions inside the assessment window, the
+/// observation silence, and the innovation-gate refusal streak.
+/// Protection levels stay absent until an implementation earns them.
 pub(crate) fn derive(
-    records: &[AdmittedContribution],
+    ledger: &ProvenanceLedger,
+    now: MonotonicNanos,
     horizontal_1sigma_m: f64,
     vertical_1sigma_m: f64,
-    silence: Option<DurationNanos>,
     config: &FusionConfig,
 ) -> IntegrityAssessment {
+    let support = support_of(ledger.window());
+    let quality = quality_of(ledger, now, horizontal_1sigma_m, vertical_1sigma_m, config);
+    IntegrityAssessment::new(
+        quality,
+        support.contributing,
+        support.redundancy,
+        horizontal_1sigma_m,
+        vertical_1sigma_m,
+        support.fault_detection,
+    )
+}
+
+/// Derives the space assessment for one publication at `now`. A
+/// Cartesian frame has no vertical, so the quality judges the largest
+/// principal 1-sigma against both the horizontal and the vertical
+/// bounds.
+pub(crate) fn derive_space(
+    ledger: &ProvenanceLedger,
+    now: MonotonicNanos,
+    uncertainty: SpaceUncertainty,
+    config: &FusionConfig,
+) -> SpaceIntegrityAssessment {
+    let support = support_of(ledger.window());
+    let largest_m = uncertainty.max_axis_1sigma_m();
+    let quality = quality_of(ledger, now, largest_m, largest_m, config);
+    SpaceIntegrityAssessment::new(
+        quality,
+        support.contributing,
+        support.redundancy,
+        uncertainty,
+        support.fault_detection,
+    )
+}
+
+fn support_of(records: &[AdmittedContribution]) -> Support {
     let contributing = records
         .iter()
         .fold(SourceComposition::empty(), |acc, record| {
@@ -35,15 +87,11 @@ pub(crate) fn derive(
         Redundancy::None => FaultDetection::Unavailable,
         _ => FaultDetection::Monitoring,
     };
-    let quality = quality_of(horizontal_1sigma_m, vertical_1sigma_m, silence, config);
-    IntegrityAssessment::new(
-        quality,
+    Support {
         contributing,
         redundancy,
-        horizontal_1sigma_m,
-        vertical_1sigma_m,
         fault_detection,
-    )
+    }
 }
 
 /// Redundancy over the distinct-source set: one source is never
@@ -82,10 +130,14 @@ fn per_source_compositions(records: &[AdmittedContribution]) -> Vec<(SourceId, S
     sources
 }
 
+/// The quality from the uncertainty, then the silence, then the
+/// innovation-gate refusal streak. The silence and the streak only make
+/// the quality worse.
 fn quality_of(
+    ledger: &ProvenanceLedger,
+    now: MonotonicNanos,
     horizontal_1sigma_m: f64,
     vertical_1sigma_m: f64,
-    silence: Option<DurationNanos>,
     config: &FusionConfig,
 ) -> SolutionQuality {
     let horizontal = axis_quality(
@@ -99,14 +151,19 @@ fn quality_of(
         config.degraded_vertical_1sigma_m,
     );
     let mut quality = worse_quality(horizontal, vertical);
-    if let Some(silence) = silence {
+    if let Some(silence) = ledger.silence(now) {
         if silence >= config.quality_silence_unusable {
             quality = SolutionQuality::Unusable;
-        } else if silence >= config.quality_silence_degraded
-            && matches!(quality, SolutionQuality::Good)
-        {
-            quality = SolutionQuality::Degraded;
+        } else if silence >= config.quality_silence_degraded {
+            quality = worse_quality(quality, SolutionQuality::Degraded);
         }
+    }
+    // A run of refused updates means the state and the sources disagree.
+    // The covariance does not show it, because a refused update leaves
+    // the covariance unchanged.
+    let limit = config.max_consecutive_gate_rejections;
+    if limit > 0 && ledger.gate_rejection_streak() >= limit {
+        quality = worse_quality(quality, SolutionQuality::Degraded);
     }
     quality
 }

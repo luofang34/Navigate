@@ -4,13 +4,20 @@
 //! procedure selection) lives in `navigate-fpl`. Turn types, the window
 //! altitude form, and the per-leg speed and gradient constraints follow
 //! the requirements in `docs/procedure-requirements.md`.
+//!
+//! The vocabulary does not allocate (ADR-0015). An [`Ident`] holds its
+//! text in place, a [`FlightPlan`] borrows its waypoints, and every
+//! [`PlanValidationError`] is `Copy`.
 
-use core::fmt;
-
+use crate::frame::Ellipsoid;
 use crate::kinematics::GeodeticPosition;
 
+mod error;
+pub mod ident;
 pub mod leg;
 
+pub use error::{ConstraintField, PlanValidationError};
+pub use ident::{Ident, IdentError, MAX_IDENT_BYTES};
 pub use leg::{CourseReference, LegPath};
 
 #[cfg(test)]
@@ -33,8 +40,8 @@ pub enum TurnType {
     FlyOver,
 }
 
-/// An altitude constraint on a waypoint, meters above the WGS84
-/// ellipsoid.
+/// An altitude constraint on a waypoint, in meters above the reference
+/// ellipsoid of the plan ([`FlightPlan::ellipsoid`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum AltitudeConstraint {
@@ -56,13 +63,13 @@ pub enum AltitudeConstraint {
 }
 
 /// One waypoint of a flight plan.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Waypoint {
     /// Human-meaningful identifier (fix name, generated id).
-    pub ident: String,
-    /// Waypoint position. The altitude component is advisory when an
-    /// explicit constraint is present.
+    pub ident: Ident,
+    /// Waypoint position on the plan ellipsoid. The altitude component
+    /// is advisory when an explicit constraint is present.
     pub position: GeodeticPosition,
     /// Altitude constraint at this waypoint, if any.
     pub altitude: Option<AltitudeConstraint>,
@@ -93,7 +100,7 @@ impl Waypoint {
     /// Builds a waypoint without constraints, flown as
     /// [`TurnType::FlyBy`]; the `with_*` builders add the rest.
     #[must_use]
-    pub const fn new(ident: String, position: GeodeticPosition) -> Self {
+    pub const fn new(ident: Ident, position: GeodeticPosition) -> Self {
         Self {
             ident,
             position,
@@ -107,14 +114,14 @@ impl Waypoint {
 
     /// This waypoint with an altitude constraint.
     #[must_use]
-    pub fn with_altitude(mut self, constraint: AltitudeConstraint) -> Self {
+    pub const fn with_altitude(mut self, constraint: AltitudeConstraint) -> Self {
         self.altitude = Some(constraint);
         self
     }
 
     /// This waypoint with an explicit turn type.
     #[must_use]
-    pub fn with_turn(mut self, turn: TurnType) -> Self {
+    pub const fn with_turn(mut self, turn: TurnType) -> Self {
         self.turn = turn;
         self
     }
@@ -122,7 +129,7 @@ impl Waypoint {
     /// This waypoint with a maximum-speed constraint on the leg toward
     /// it, meters per second.
     #[must_use]
-    pub fn with_max_speed(mut self, max_speed_mps: f64) -> Self {
+    pub const fn with_max_speed(mut self, max_speed_mps: f64) -> Self {
         self.max_speed_mps = Some(max_speed_mps);
         self
     }
@@ -130,7 +137,7 @@ impl Waypoint {
     /// This waypoint with a vertical gradient on the leg toward it,
     /// height in meters per along-track meter.
     #[must_use]
-    pub fn with_gradient(mut self, gradient: f64) -> Self {
+    pub const fn with_gradient(mut self, gradient: f64) -> Self {
         self.gradient = Some(gradient);
         self
     }
@@ -138,7 +145,7 @@ impl Waypoint {
     /// This waypoint with an explicit path terminator on the leg toward
     /// it (NAV-LG-001).
     #[must_use]
-    pub fn with_path(mut self, path: LegPath) -> Self {
+    pub const fn with_path(mut self, path: LegPath) -> Self {
         self.path = Some(path);
         self
     }
@@ -157,35 +164,49 @@ pub enum PlanRole {
     Contingency,
 }
 
-/// A validated sequence of waypoints with a role.
-#[derive(Debug, Clone, PartialEq)]
+/// A sequence of waypoints with a role, on one reference ellipsoid.
+///
+/// The plan borrows its waypoints, so it does not allocate and it is
+/// `Copy`. The owner of the waypoint storage chooses where the storage
+/// is: a static table, a stack array, or a buffer of the host.
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
-pub struct FlightPlan {
+pub struct FlightPlan<'a> {
     /// Plan identifier, unique within a deployment's plan store.
-    pub id: String,
+    pub id: Ident,
     /// Why this plan exists.
     pub role: PlanRole,
+    /// The reference ellipsoid of every waypoint position and of every
+    /// altitude constraint (ADR-0013).
+    pub ellipsoid: Ellipsoid,
     /// Waypoints in fly order.
-    pub waypoints: Vec<Waypoint>,
+    pub waypoints: &'a [Waypoint],
 }
 
-impl FlightPlan {
+impl<'a> FlightPlan<'a> {
     /// Builds a plan from its parts. Call [`Self::validate`] before
     /// executing it.
     #[must_use]
-    pub const fn new(id: String, role: PlanRole, waypoints: Vec<Waypoint>) -> Self {
+    pub const fn new(
+        id: Ident,
+        role: PlanRole,
+        ellipsoid: Ellipsoid,
+        waypoints: &'a [Waypoint],
+    ) -> Self {
         Self {
             id,
             role,
+            ellipsoid,
             waypoints,
         }
     }
 
-    /// Structural validation: a plan must have at least one waypoint,
-    /// every coordinate must be plausible, every declared constraint
-    /// must be a number that can be flown — finite, and an altitude
-    /// window that brackets a band — and every declared path terminator
-    /// must agree with its position in the fly order (NAV-LG-004).
+    /// Structural validation: the plan ellipsoid must be plausible, a
+    /// plan must have at least one waypoint, every coordinate must be
+    /// plausible, every declared constraint must be a number that can be
+    /// flown — finite, and an altitude window that brackets a band — and
+    /// every declared path terminator must agree with its position in
+    /// the fly order (NAV-LG-004).
     ///
     /// Whether a terminator is implemented is the executor's property,
     /// not this type's: a plan carrying a reserved leg is a valid plan,
@@ -195,21 +216,22 @@ impl FlightPlan {
     ///
     /// Returns the first structural defect found.
     pub fn validate(&self) -> Result<(), PlanValidationError> {
+        if !self.ellipsoid.is_plausible() {
+            return Err(PlanValidationError::ImplausibleEllipsoid { plan: self.id });
+        }
         if self.waypoints.is_empty() {
-            return Err(PlanValidationError::Empty {
-                plan: self.id.clone(),
-            });
+            return Err(PlanValidationError::Empty { plan: self.id });
         }
         for (index, waypoint) in self.waypoints.iter().enumerate() {
             if !waypoint.position.is_plausible() {
                 return Err(PlanValidationError::ImplausiblePosition {
-                    plan: self.id.clone(),
+                    plan: self.id,
                     index,
-                    ident: waypoint.ident.clone(),
+                    ident: waypoint.ident,
                 });
             }
-            validate_constraints(&self.id, index, waypoint)?;
-            leg::validate_path(&self.id, index, waypoint)?;
+            validate_constraints(self.id, index, waypoint)?;
+            leg::validate_path(self.id, index, waypoint)?;
         }
         Ok(())
     }
@@ -219,14 +241,15 @@ impl FlightPlan {
 /// silently disable every comparison a consumer makes against it, so it
 /// is refused here rather than clamped in flight.
 fn validate_constraints(
-    plan: &str,
+    plan: Ident,
     index: usize,
     waypoint: &Waypoint,
 ) -> Result<(), PlanValidationError> {
+    let ident = waypoint.ident;
     let defect = |field| PlanValidationError::NonFiniteConstraint {
-        plan: plan.to_owned(),
+        plan,
         index,
-        ident: waypoint.ident.clone(),
+        ident,
         field,
     };
     // The match is deliberately exhaustive without a wildcard: this is
@@ -251,11 +274,7 @@ fn validate_constraints(
                 return Err(defect(ConstraintField::Altitude));
             }
             if lower_m >= upper_m {
-                return Err(PlanValidationError::InvertedAltitudeWindow {
-                    plan: plan.to_owned(),
-                    index,
-                    ident: waypoint.ident.clone(),
-                });
+                return Err(PlanValidationError::InvertedAltitudeWindow { plan, index, ident });
             }
         }
     }
@@ -268,9 +287,9 @@ fn validate_constraints(
         // refusal exists (NAV-VC-003).
         if max_speed_mps <= 0.0 {
             return Err(PlanValidationError::NonPositiveSpeedConstraint {
-                plan: plan.to_owned(),
+                plan,
                 index,
-                ident: waypoint.ident.clone(),
+                ident,
                 max_speed_mps,
             });
         }
@@ -282,142 +301,8 @@ fn validate_constraints(
         // A zero gradient cannot fly any profile change; absence — not
         // zero — expresses "no gradient limit" (NAV-VC-002).
         if gradient == 0.0 {
-            return Err(PlanValidationError::ZeroGradient {
-                plan: plan.to_owned(),
-                index,
-                ident: waypoint.ident.clone(),
-            });
+            return Err(PlanValidationError::ZeroGradient { plan, index, ident });
         }
     }
     Ok(())
-}
-
-/// Which declared quantity a validation refusal names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ConstraintField {
-    /// A bound of the altitude constraint.
-    Altitude,
-    /// The maximum-speed constraint.
-    MaxSpeed,
-    /// The vertical gradient.
-    Gradient,
-}
-
-impl fmt::Display for ConstraintField {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::Altitude => "altitude constraint",
-            Self::MaxSpeed => "maximum-speed constraint",
-            Self::Gradient => "gradient",
-        };
-        formatter.write_str(name)
-    }
-}
-
-/// Structural defects a plan can carry.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-#[non_exhaustive]
-pub enum PlanValidationError {
-    /// The plan holds no waypoints.
-    #[error("plan {plan} has no waypoints")]
-    Empty {
-        /// Offending plan id.
-        plan: String,
-    },
-    /// A waypoint coordinate is non-finite or out of geodetic range.
-    #[error("plan {plan} waypoint {index} ({ident}) has an implausible position")]
-    ImplausiblePosition {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-    },
-    /// A waypoint's altitude window does not bracket a band: its lower
-    /// bound is at or above its upper bound.
-    #[error(
-        "plan {plan} waypoint {index} ({ident}) has an altitude window whose lower bound is not below its upper bound"
-    )]
-    InvertedAltitudeWindow {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-    },
-    /// A declared constraint on a waypoint is not a finite number.
-    #[error("plan {plan} waypoint {index} ({ident}) has a non-finite {field}")]
-    NonFiniteConstraint {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-        /// Which declared quantity is non-finite.
-        field: ConstraintField,
-    },
-    /// A waypoint demands a speed no vehicle can fly a leg at.
-    #[error(
-        "plan {plan} waypoint {index} ({ident}) demands a non-positive speed {max_speed_mps} m/s"
-    )]
-    NonPositiveSpeedConstraint {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-        /// The speed that cannot be flown.
-        max_speed_mps: f64,
-    },
-    /// A waypoint declares a zero gradient, which cannot fly any profile
-    /// change; absence expresses "no gradient limit".
-    #[error("plan {plan} waypoint {index} ({ident}) declares a zero gradient")]
-    ZeroGradient {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-    },
-    /// The first waypoint declares a track-to-fix leg, which needs a fix
-    /// before it to run from (NAV-LG-004).
-    #[error("plan {plan} waypoint 0 ({ident}) declares a TF leg with no fix before it")]
-    TrackWithoutUpstreamFix {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint identifier.
-        ident: String,
-    },
-    /// A waypoint after the first declares an initial-fix leg, which
-    /// starts a procedure and cannot sit inside one (NAV-LG-004).
-    #[error("plan {plan} waypoint {index} ({ident}) declares an IF leg after the first waypoint")]
-    InitialFixNotFirst {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-    },
-    /// A course-to-fix leg declares a course that is not a finite angle
-    /// in `[0, 2π)`, so no vehicle can fly it (NAV-LG-004).
-    #[error(
-        "plan {plan} waypoint {index} ({ident}) declares a course {course_rad} outside [0, 2π)"
-    )]
-    CourseOutOfRange {
-        /// Offending plan id.
-        plan: String,
-        /// Waypoint index in fly order.
-        index: usize,
-        /// Waypoint identifier.
-        ident: String,
-        /// The course that cannot be flown.
-        course_rad: f64,
-    },
 }

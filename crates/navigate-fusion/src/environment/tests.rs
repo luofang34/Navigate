@@ -22,7 +22,7 @@ fn finite_difference(
 
 fn body_fixed(body: &PlanetaryBody, lat_deg: f64, alt_m: f64) -> Vector3<f64> {
     let position = GeodeticPosition::new(lat_deg.to_radians(), 0.3, alt_m);
-    let r = geodetic_to_body_fixed(&position, &body.ellipsoid);
+    let r = geodetic_to_body_fixed(&position, body.ellipsoid);
     Vector3::new(r.x_m, r.y_m, r.z_m)
 }
 
@@ -66,7 +66,8 @@ fn apparent_gravity_gradient_matches_finite_differences() {
 fn the_surface_frame_reads_the_body_centered_position() {
     let body = PlanetaryBody::earth_wgs84();
     let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-    let plane = LocalTangentPlane::new(origin).expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin, navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible origin");
     let frame = SurfaceFrame::new(plane, body);
     let (g0, _) = frame.gravity(&Vector3::zeros());
     // At the origin the apparent gravity points almost straight down.
@@ -77,7 +78,7 @@ fn the_surface_frame_reads_the_body_centered_position() {
     let tilt = -g.x / g.z;
     assert!((tilt - 100_000.0 / 6_371_000.0).abs() < 1e-3, "{tilt}");
     let at = frame.plane.from_ned(&NedOffset::new(p.x, p.y, p.z));
-    let r = geodetic_to_body_fixed(&at, &body.ellipsoid);
+    let r = geodetic_to_body_fixed(&at, body.ellipsoid);
     assert!((frame.body_fixed_position(&p) - Vector3::new(r.x_m, r.y_m, r.z_m)).norm() < 1e-6);
     let numeric = finite_difference(|q| frame.gravity(q).0, &p, 10.0);
     assert!((gradient - numeric).abs().max() < 1e-6 * gradient.abs().max());

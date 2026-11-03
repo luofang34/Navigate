@@ -59,8 +59,8 @@ impl Ephemeris for AniseEphemeris<'_> {
             velocity_km_s: Vector3::from(state.velocity_m_s) / 1000.0,
             epoch: state.epoch,
             frame: Frame::new(
-                state.frame.center,
-                self.orientation(state.frame.orientation)?,
+                state.frame.center_naif_id,
+                self.orientation(state.frame.orientation_naif_id)?,
             ),
         };
         self.almanac

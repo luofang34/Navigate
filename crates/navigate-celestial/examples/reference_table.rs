@@ -108,8 +108,8 @@ fn main() -> Result<(), Error> {
             velocity_m_s: [0.0; 3],
             epoch: Epoch::from_tdb_seconds(tdb_s),
             frame: FrameId {
-                center: 399,
-                orientation: 1,
+                center_naif_id: 399,
+                orientation_naif_id: 1,
             },
         };
         write!(table, "{tdb_s:?}")?;

@@ -37,6 +37,9 @@ pub(crate) struct ProvenanceLedger {
     // the assessment window.
     epoch_composition: SourceComposition,
     pub(crate) last_admitted_at: Option<MonotonicNanos>,
+    // Innovation-gate refusals since the last admitted aiding
+    // observation.
+    gate_rejection_streak: u32,
 }
 
 impl Default for ProvenanceLedger {
@@ -46,6 +49,7 @@ impl Default for ProvenanceLedger {
             admitted: Vec::new(),
             epoch_composition: SourceComposition::empty(),
             last_admitted_at: None,
+            gate_rejection_streak: 0,
         }
     }
 }
@@ -57,6 +61,19 @@ impl ProvenanceLedger {
         self.admitted.clear();
         self.epoch_composition = SourceComposition::empty();
         self.last_admitted_at = None;
+        self.gate_rejection_streak = 0;
+    }
+
+    /// The innovation-gate refusals since the last admitted aiding
+    /// observation of this filter epoch.
+    pub(crate) const fn gate_rejection_streak(&self) -> u32 {
+        self.gate_rejection_streak
+    }
+
+    /// Records one innovation-gate refusal. The streak saturates: a wrap
+    /// to 0 would report the longest storm as no storm.
+    pub(crate) fn record_gate_rejection(&mut self) {
+        self.gate_rejection_streak = self.gate_rejection_streak.saturating_add(1);
     }
 
     /// The union of every admitted composition in this filter epoch.
@@ -129,6 +146,7 @@ impl ProvenanceLedger {
         });
         self.prune_window(now, window);
         self.last_admitted_at = Some(now);
+        self.gate_rejection_streak = 0;
     }
 
     /// Records an admitted sample of the propagation sensor. The sample
@@ -152,6 +170,7 @@ impl ProvenanceLedger {
     pub(crate) fn initialize(&mut self, composition: SourceComposition, at: MonotonicNanos) {
         self.epoch_composition = self.epoch_composition.union(composition);
         self.last_admitted_at = Some(at);
+        self.gate_rejection_streak = 0;
     }
 
     pub(crate) fn prune_window(&mut self, now: MonotonicNanos, window: DurationNanos) {

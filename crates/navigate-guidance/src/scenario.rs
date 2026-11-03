@@ -5,14 +5,19 @@
 //! *the same* solution identically rather than two look-alike copies.
 
 use navigate_contract::{
-    ClockDomainId, FaultDetection, GeodeticPosition, IntegrityAssessment, MonotonicNanos,
-    NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality, SolutionStamp,
-    SourceComposition, SourceEpoch, SymmetricCov3, Waypoint, WrappingSequence,
+    ClockDomainId, Ellipsoid, FaultDetection, GeodeticPosition, Ident, IntegrityAssessment,
+    MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
+    SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, Waypoint, WrappingSequence,
 };
 
 /// The single clock domain of these tests: solutions are stamped on it
 /// and `now` is read from it unless a test probes the mismatch.
 pub(crate) const CLOCK: ClockDomainId = ClockDomainId::new(0);
+
+/// Builds a short test identifier.
+pub(crate) fn id(text: &str) -> Ident {
+    Ident::try_new(text).expect("valid short test identifier")
+}
 
 /// A position from degrees, the unit these scenarios are written in.
 pub(crate) fn deg(latitude_deg: f64, longitude_deg: f64, altitude_m: f64) -> GeodeticPosition {
@@ -51,6 +56,7 @@ pub(crate) fn solution(
             FaultDetection::Unavailable,
         ),
         composition,
+        Ellipsoid::WGS84,
     )
 }
 
@@ -64,6 +70,6 @@ pub(crate) fn now() -> MonotonicNanos {
 pub(crate) fn equator_leg() -> (GeodeticPosition, Waypoint) {
     (
         deg(0.0, 0.0, 0.0),
-        Waypoint::new("END".into(), deg(0.0, 1.0, 0.0)),
+        Waypoint::new(id("END"), deg(0.0, 1.0, 0.0)),
     )
 }

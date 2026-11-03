@@ -9,6 +9,7 @@ use navigate_contract::GeodeticPosition;
 use crate::ecef::{BodyFixedPosition, body_fixed_to_geodetic, geodetic_to_body_fixed};
 use crate::ellipsoid::BodyEllipsoid;
 use crate::error::GeodesyError;
+use crate::float_math::sin_cos;
 
 /// An offset in a local North-East-Down frame. Down is positive toward
 /// the ellipsoid, along the origin's ellipsoidal normal.
@@ -50,28 +51,16 @@ pub struct LocalTangentPlane {
 }
 
 impl LocalTangentPlane {
-    /// Anchors a plane at `origin` on [`BodyEllipsoid::WGS84`].
-    ///
-    /// # Errors
-    ///
-    /// [`GeodesyError::ImplausibleOrigin`] when `origin` fails the
-    /// geodetic plausibility screen.
-    pub fn new(origin: GeodeticPosition) -> Result<Self, GeodesyError> {
-        Self::with_ellipsoid(origin, BodyEllipsoid::WGS84)
-    }
-
-    /// Anchors a plane at `origin` on `ellipsoid`. Rejecting an
-    /// implausible origin here keeps [`Self::to_ned`] and
+    /// Anchors a plane at `origin` on `ellipsoid`. No ellipsoid is
+    /// implicit: [`crate::wgs84::tangent_plane`] is the Earth shorthand.
+    /// Rejecting an implausible origin here keeps [`Self::to_ned`] and
     /// [`Self::from_ned`] total.
     ///
     /// # Errors
     ///
     /// [`GeodesyError::ImplausibleOrigin`] when `origin` fails the
     /// geodetic plausibility screen.
-    pub fn with_ellipsoid(
-        origin: GeodeticPosition,
-        ellipsoid: BodyEllipsoid,
-    ) -> Result<Self, GeodesyError> {
+    pub fn new(origin: GeodeticPosition, ellipsoid: BodyEllipsoid) -> Result<Self, GeodesyError> {
         if !origin.is_plausible() {
             return Err(GeodesyError::ImplausibleOrigin {
                 latitude_rad: origin.latitude_rad,
@@ -79,12 +68,12 @@ impl LocalTangentPlane {
                 altitude_m: origin.altitude_m,
             });
         }
-        let (sin_lat, cos_lat) = origin.latitude_rad.sin_cos();
-        let (sin_lon, cos_lon) = origin.longitude_rad.sin_cos();
+        let (sin_lat, cos_lat) = sin_cos(origin.latitude_rad);
+        let (sin_lon, cos_lon) = sin_cos(origin.longitude_rad);
         Ok(Self {
             ellipsoid,
             origin,
-            origin_ecef: geodetic_to_body_fixed(&origin, &ellipsoid),
+            origin_ecef: geodetic_to_body_fixed(&origin, ellipsoid),
             sin_lat,
             cos_lat,
             sin_lon,
@@ -115,7 +104,7 @@ impl LocalTangentPlane {
     /// body-fixed delta rotated into the origin's tangent frame.
     #[must_use]
     pub fn to_ned(&self, position: &GeodeticPosition) -> NedOffset {
-        let ecef = geodetic_to_body_fixed(position, &self.ellipsoid);
+        let ecef = geodetic_to_body_fixed(position, self.ellipsoid);
         let dx = ecef.x_m - self.origin_ecef.x_m;
         let dy = ecef.y_m - self.origin_ecef.y_m;
         let dz = ecef.z_m - self.origin_ecef.z_m;
@@ -148,7 +137,7 @@ impl LocalTangentPlane {
                 - self.cos_lat * self.sin_lon * d,
             z_m: self.origin_ecef.z_m + self.cos_lat * n - self.sin_lat * d,
         };
-        body_fixed_to_geodetic(&ecef, &self.ellipsoid)
+        body_fixed_to_geodetic(&ecef, self.ellipsoid)
     }
 
     /// Computes the exact 3x3 rotation matrix that maps a North-East-Down

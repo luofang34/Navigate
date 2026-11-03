@@ -32,8 +32,8 @@ fn geocentre(epoch: Epoch) -> State {
         velocity_m_s: [0.0; 3],
         epoch,
         frame: FrameId {
-            center: EARTH,
-            orientation: J2000,
+            center_naif_id: EARTH,
+            orientation_naif_id: J2000,
         },
     }
 }
@@ -72,8 +72,8 @@ fn sun_matches_the_cspice_reception_fixture() {
             velocity_m_s: [state[3], state[4], state[5]],
             epoch,
             frame: FrameId {
-                center: case["center"].as_i64().unwrap() as i32,
-                orientation: case["orientation"].as_i64().unwrap() as i32,
+                center_naif_id: case["center"].as_i64().unwrap() as i32,
+                orientation_naif_id: case["orientation"].as_i64().unwrap() as i32,
             },
         };
         let result = observe_body(
@@ -306,4 +306,17 @@ fn velocity_holds_at_the_ends_of_the_range() {
             assert!(error < bound, "{epoch} {body}: {error} m/s");
         }
     }
+}
+
+#[test]
+fn the_state_frame_is_the_contract_frame() {
+    // One type: a celestial state frame is a contract frame without a
+    // conversion.
+    let frame: navigate_contract::FrameId = crate::FrameId::EARTH_ITRF93;
+    assert_eq!(frame, navigate_contract::FrameId::new(399, 13_000));
+    let state = AnalyticEphemeris
+        .body_state(301, Epoch::from_gregorian_utc_at_noon(2026, 1, 1))
+        .unwrap();
+    assert_eq!(state.frame, navigate_contract::FrameId::SSB_J2000);
+    assert!(state.frame.is_inertial());
 }

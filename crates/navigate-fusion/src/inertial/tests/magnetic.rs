@@ -21,7 +21,8 @@ fn config() -> InertialConfig {
 
 /// A measurement at rest at the origin with the map bias `bias_t`.
 fn anomaly(sequence: u32, at_ms: u64, revision: u64, bias_t: f64) -> Observation {
-    let plane = LocalTangentPlane::new(earth_origin()).expect("plausible");
+    let plane = LocalTangentPlane::new(earth_origin(), navigate_geodesy::BodyEllipsoid::WGS84)
+        .expect("plausible");
     let value = ObservationValue::MagneticAnomaly {
         measured_t: MAP_T + bias_t,
         map_t_at_lin: MAP_T,

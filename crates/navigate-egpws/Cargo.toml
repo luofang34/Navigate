@@ -6,8 +6,13 @@ version.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = ["std"]
+std = ["navigate-contract/std"]
+libm = ["navigate-contract/libm"]
+
 [dependencies]
-navigate-contract = { workspace = true }
+navigate-contract = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 
 [lints]

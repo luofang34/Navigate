@@ -9,7 +9,7 @@ use crate::velocity::guide_velocity;
 #[test]
 fn nav_vc_003_a_waypoint_speed_constraint_bounds_the_leg_toward_it() {
     let (from, to) = equator_leg();
-    let constrained = to.clone().with_max_speed(0.8);
+    let constrained = to.with_max_speed(0.8);
     let own = solution(SolutionQuality::Good, deg(0.0, 0.3, 0.0), now());
     let config = VelocityGuidanceConfig::default();
     let command = guide_velocity(
@@ -38,7 +38,6 @@ fn nav_vc_002_a_tighter_gradient_binds_the_vertical_rate() {
     // 200 m above an At profile: the gain demands far more descent than
     // either limit allows.
     let profiled = to
-        .clone()
         .with_altitude(AltitudeConstraint::At(0.0))
         .with_gradient(0.05);
     let own = solution(SolutionQuality::Good, deg(0.0, 0.3, 200.0), now());
@@ -65,7 +64,6 @@ fn nav_vc_002_a_tighter_gradient_binds_the_vertical_rate() {
 
     // A loose gradient leaves the configured ceiling in charge.
     let loose = to
-        .clone()
         .with_altitude(AltitudeConstraint::At(0.0))
         .with_gradient(10.0);
     let command = guide_velocity(
@@ -90,7 +88,7 @@ fn nav_vc_002_a_tighter_gradient_binds_the_vertical_rate() {
 #[test]
 fn nav_vc_001_a_window_flows_through_the_deviation_derivation_too() {
     let (from, to) = equator_leg();
-    let windowed = to.clone().with_altitude(AltitudeConstraint::Window {
+    let windowed = to.with_altitude(AltitudeConstraint::Window {
         lower_m: 100.0,
         upper_m: 200.0,
     });

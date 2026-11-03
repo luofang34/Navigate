@@ -110,3 +110,46 @@ fn stars_tt_takes_the_instant_and_stars_reads_a_clock() {
     // arcseconds in 1900.
     assert!(separation_deg(from_instant.direction, expected.into()) < 1e-9);
 }
+
+#[test]
+fn the_buffer_form_writes_the_same_stars_without_allocation() {
+    let epoch: Epoch = "2026-06-14T09:19:41 TT".parse().unwrap();
+    let listed = stars_ecef_tt(epoch, 3.0).unwrap();
+    let blank = StarSight {
+        hr: 0,
+        direction: [0.0; 3],
+        v_magnitude: f64::NAN,
+        b_minus_v: None,
+    };
+    let mut buffer = [blank; 512];
+    let written = stars_ecef_tt_into(epoch, 3.0, &mut buffer).unwrap();
+    assert_eq!(written, listed.len());
+    assert_eq!(&buffer[..written], listed.as_slice());
+    assert!(
+        buffer[written..].iter().all(|star| star.hr == 0),
+        "the rest is kept"
+    );
+}
+
+#[test]
+fn a_short_buffer_is_refused_and_left_unwritten() {
+    let epoch: Epoch = "2026-06-14T09:19:41 TT".parse().unwrap();
+    let needed = stars_ecef_tt(epoch, 2.0).unwrap().len();
+    let blank = StarSight {
+        hr: 0,
+        direction: [0.0; 3],
+        v_magnitude: 0.0,
+        b_minus_v: None,
+    };
+    let mut buffer = vec![blank; needed - 1];
+    assert_eq!(
+        stars_ecef_tt_into(epoch, 2.0, &mut buffer),
+        Err(AnalyticError::BufferTooSmall {
+            needed,
+            capacity: needed - 1
+        })
+    );
+    assert!(buffer.iter().all(|star| star.hr == 0));
+    let mut exact = vec![blank; needed];
+    assert_eq!(stars_ecef_tt_into(epoch, 2.0, &mut exact), Ok(needed));
+}

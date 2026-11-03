@@ -18,10 +18,8 @@ pub trait TerrainDatabase {
     fn elevation_m(&self, position: &GeodeticPosition) -> Option<f64>;
 
     /// The reference ellipsoid of the positions that
-    /// [`Self::elevation_m`] reads (ADR-0013). [`crate::assess`] refuses
-    /// a solution on another ellipsoid. The default is
-    /// [`Ellipsoid::WGS84`].
-    fn ellipsoid(&self) -> Ellipsoid {
-        Ellipsoid::WGS84
-    }
+    /// [`Self::elevation_m`] reads (ADR-0013, ADR-0015). [`crate::assess`]
+    /// refuses a solution on another ellipsoid. Each implementation names
+    /// its ellipsoid explicitly.
+    fn ellipsoid(&self) -> Ellipsoid;
 }

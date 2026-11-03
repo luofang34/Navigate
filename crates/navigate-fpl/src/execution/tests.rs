@@ -1,33 +1,40 @@
-use navigate_contract::PlanRole;
+use navigate_contract::{Ellipsoid, Ident, PlanRole};
 
 use super::*;
 
 mod leg_paths;
 
-/// Meters per degree of arc on the mean-radius sphere the geodesy layer
-/// uses; exact along the equator, where these fixtures live.
+/// Meters per degree of arc on the mean-radius sphere of [`Ellipsoid::WGS84`];
+/// exact along the equator, where these fixtures live.
 const M_PER_DEG: f64 = 111_194.926;
+
+fn id(text: &str) -> Ident {
+    Ident::try_new(text).expect("valid ident")
+}
 
 fn pos(lat_deg: f64, lon_deg: f64) -> GeodeticPosition {
     GeodeticPosition::new(lat_deg.to_radians(), lon_deg.to_radians(), 0.0)
 }
 
 fn wp(ident: &str, lat_deg: f64, lon_deg: f64) -> Waypoint {
-    Waypoint::new(ident.to_owned(), pos(lat_deg, lon_deg))
+    Waypoint::new(id(ident), pos(lat_deg, lon_deg))
 }
 
-fn execution(waypoints: Vec<Waypoint>, config: ExecutionConfig) -> PlanExecution {
-    let plan = FlightPlan::new("mission".into(), PlanRole::Mission, waypoints);
+fn execution(waypoints: &[Waypoint], config: ExecutionConfig) -> PlanExecution<'_> {
+    let plan = FlightPlan::new(
+        id("mission"),
+        PlanRole::Mission,
+        Ellipsoid::WGS84,
+        waypoints,
+    );
     PlanExecution::new(plan, config).expect("valid plan")
 }
 
-/// A dogleg with a 90° turn at W1, legs long enough (~55 km) that the
-/// 60 m/s DTA (1129.8 m) sits far inside the half-leg cap.
-fn dogleg(turn_fix: Waypoint) -> PlanExecution {
-    execution(
-        vec![wp("W0", 0.0, 0.0), turn_fix, wp("W2", 0.5, 0.5)],
-        ExecutionConfig::default(),
-    )
+/// Three waypoints forming a dogleg with a 90° turn at W1, legs long
+/// enough (~55 km) that the 60 m/s DTA (1129.8 m) sits far inside the
+/// half-leg cap.
+fn dogleg(turn_fix: Waypoint) -> [Waypoint; 3] {
+    [wp("W0", 0.0, 0.0), turn_fix, wp("W2", 0.5, 0.5)]
 }
 
 /// A position on the inbound equatorial track, `meters` short of W1 at
@@ -36,7 +43,7 @@ fn short_of_w1(meters: f64) -> GeodeticPosition {
     pos(0.0, 0.5 - meters / M_PER_DEG)
 }
 
-fn capture_w0(exec: &mut PlanExecution) {
+fn capture_w0(exec: &mut PlanExecution<'_>) {
     assert!(matches!(
         exec.advance(&pos(0.0, 0.0), 60.0),
         SequenceEvent::LegAdvanced { to_index: 1, .. }
@@ -45,7 +52,8 @@ fn capture_w0(exec: &mut PlanExecution) {
 
 #[test]
 fn nav_tt_003_a_fly_by_fix_sequences_at_the_anticipation_distance() {
-    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    let wps = dogleg(wp("W1", 0.0, 0.5));
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
 
     // DTA at 60 m/s under the 18° default is 1129.8 m for a 90° turn.
@@ -64,11 +72,39 @@ fn nav_tt_003_a_fly_by_fix_sequences_at_the_anticipation_distance() {
 }
 
 #[test]
+fn mars_gravity_and_ellipsoid_widen_fly_by_anticipation() {
+    // On Mars (g = 3.72076 m/s²), 60 m/s at 18° bank gives r ≈ 2977.8 m
+    // instead of Earth's 1129.8 m. Two 2° (~118 km on Mars) legs keep DTA
+    // well below the half-leg cap.
+    let mars_m_per_deg = BodyEllipsoid::MARS_IAU.mean_radius_m().to_radians();
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 2.0), wp("W2", 2.0, 2.0)];
+    let plan = FlightPlan::new(id("mars"), PlanRole::Mission, Ellipsoid::MARS_IAU, &wps);
+    let config = ExecutionConfig::default().with_surface_gravity_mps2(3.72076);
+    let mut exec = PlanExecution::new(plan, config).expect("valid Mars plan");
+    capture_w0(&mut exec);
+
+    let short_on_mars = |meters: f64| pos(0.0, 2.0 - meters / mars_m_per_deg);
+    assert_eq!(
+        exec.advance(&short_on_mars(3000.0), 60.0),
+        SequenceEvent::None
+    );
+    assert_eq!(
+        exec.advance(&short_on_mars(2950.0), 60.0),
+        SequenceEvent::LegAdvanced {
+            to_index: 2,
+            turn: TurnType::FlyBy,
+            reason: SequenceReason::Anticipated,
+        }
+    );
+}
+
+#[test]
 fn nav_tt_005_a_late_sample_on_an_anticipated_fix_still_names_the_rule() {
     // The fix's anticipation (1129.8 m) exceeds the capture radius, so
     // the transition IS anticipated even when the deciding sample lands
     // inside the radius — the reason names the rule, not the sample.
-    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    let wps = dogleg(wp("W1", 0.0, 0.5));
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     assert_eq!(
         exec.advance(&short_of_w1(90.0), 60.0),
@@ -82,7 +118,8 @@ fn nav_tt_005_a_late_sample_on_an_anticipated_fix_still_names_the_rule() {
 
 #[test]
 fn nav_tt_004_a_fly_over_fix_waits_for_the_capture_radius() {
-    let mut exec = dogleg(wp("W1", 0.0, 0.5).with_turn(TurnType::FlyOver));
+    let wps = dogleg(wp("W1", 0.0, 0.5).with_turn(TurnType::FlyOver));
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
 
     assert_eq!(
@@ -102,10 +139,8 @@ fn nav_tt_004_a_fly_over_fix_waits_for_the_capture_radius() {
 
 #[test]
 fn nav_tt_003_collinear_legs_degrade_to_the_capture_radius() {
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.0, 1.0)],
-        ExecutionConfig::default(),
-    );
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.0, 1.0)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
 
     assert_eq!(
@@ -128,14 +163,12 @@ fn nav_tt_003_anticipation_is_capped_at_half_the_shorter_adjoining_leg() {
     // to 200 m — the leg keeps a flyable middle and never sequences at
     // the instant it begins.
     let w1_lon = 400.0 / M_PER_DEG;
-    let mut exec = execution(
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, w1_lon),
-            wp("W2", 0.5, w1_lon),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, w1_lon),
+        wp("W2", 0.5, w1_lon),
+    ];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
 
     let short_of_short_w1 = |meters: f64| pos(0.0, w1_lon - meters / M_PER_DEG);
@@ -165,14 +198,12 @@ fn a_parked_vehicle_never_walks_through_short_legs() {
     // the whole-leg skip is the failure this pins against.
     let w1_lon = 500.0 / M_PER_DEG;
     let w2_lat = 500.0 / M_PER_DEG;
-    let mut exec = execution(
-        vec![
-            wp("W0", 0.0, 0.0),
-            wp("W1", 0.0, w1_lon),
-            wp("W2", w2_lat, w1_lon),
-        ],
-        ExecutionConfig::default(),
-    );
+    let wps = [
+        wp("W0", 0.0, 0.0),
+        wp("W1", 0.0, w1_lon),
+        wp("W2", w2_lat, w1_lon),
+    ];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     let parked = pos(0.0, 0.0);
     assert!(matches!(
         exec.advance(&parked, 60.0),
@@ -190,10 +221,8 @@ fn a_direct_to_leg_anticipates_nothing_even_before_a_reversal() {
     // inbound geometry is the live position, so anticipation would be
     // self-referential — it degrades to the capture radius, and no fix
     // captures from tens of kilometers away.
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.5), wp("W1", 0.0, 0.0)],
-        ExecutionConfig::default(),
-    );
+    let wps = [wp("W0", 0.0, 0.5), wp("W1", 0.0, 0.0)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     assert_eq!(
         exec.advance(&pos(0.0, 0.05), 60.0),
         SequenceEvent::None,
@@ -206,10 +235,8 @@ fn a_direct_to_leg_anticipates_nothing_even_before_a_reversal() {
 fn nav_tt_003_a_track_change_beyond_the_limit_falls_back_to_capture() {
     // A 180° reversal at W1: tan(Δ/2) blows up, so anticipation refuses
     // and the fix sequences at the capture radius like a fly-over.
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.0, 0.0)],
-        ExecutionConfig::default(),
-    );
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.0, 0.0)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     assert_eq!(exec.advance(&short_of_w1(500.0), 60.0), SequenceEvent::None);
     assert_eq!(
@@ -225,10 +252,8 @@ fn nav_tt_003_a_track_change_beyond_the_limit_falls_back_to_capture() {
 #[test]
 fn nav_tt_001_the_terminal_waypoint_ignores_its_turn_type() {
     for turn in [TurnType::FlyBy, TurnType::FlyOver] {
-        let mut exec = execution(
-            vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5).with_turn(turn)],
-            ExecutionConfig::default(),
-        );
+        let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5).with_turn(turn)];
+        let mut exec = execution(&wps, ExecutionConfig::default());
         capture_w0(&mut exec);
         assert_eq!(
             exec.advance(&short_of_w1(1120.0), 60.0),
@@ -248,7 +273,8 @@ fn nav_tt_001_the_terminal_waypoint_ignores_its_turn_type() {
 #[test]
 fn an_unflyable_groundspeed_anticipates_nothing() {
     for groundspeed in [f64::NAN, -10.0, 0.0] {
-        let mut exec = dogleg(wp("W1", 0.0, 0.5));
+        let wps = dogleg(wp("W1", 0.0, 0.5));
+        let mut exec = execution(&wps, ExecutionConfig::default());
         capture_w0(&mut exec);
         assert_eq!(
             exec.advance(&short_of_w1(1120.0), groundspeed),
@@ -260,7 +286,8 @@ fn an_unflyable_groundspeed_anticipates_nothing() {
 
 #[test]
 fn a_non_finite_position_captures_nothing() {
-    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    let wps = dogleg(wp("W1", 0.0, 0.5));
+    let mut exec = execution(&wps, ExecutionConfig::default());
     let bad = GeodeticPosition::new(f64::NAN, 0.0, 0.0);
     assert_eq!(exec.advance(&bad, 60.0), SequenceEvent::None);
     assert_eq!(exec.active_index(), 0);
@@ -270,11 +297,9 @@ fn a_non_finite_position_captures_nothing() {
 /// capture-radius stations whenever the DTA stays inside the capture
 /// radius (here 1.26 m at 2 m/s against 100 m).
 #[test]
-fn nav_hn_002_a_legacy_plan_keeps_capture_radius_behavior_at_low_speed() {
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 1.0), wp("W2", 1.0, 1.0)],
-        ExecutionConfig::default(),
-    );
+fn nav_hn_002_a_minimal_plan_keeps_capture_radius_behavior_at_low_speed() {
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 1.0), wp("W2", 1.0, 1.0)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     assert_eq!(exec.advance(&pos(0.001, 0.0), 2.0), SequenceEvent::None);
     assert!(matches!(
         exec.advance(&pos(0.0008, 0.0), 2.0),
@@ -301,11 +326,9 @@ fn nav_hn_002_a_legacy_plan_keeps_capture_radius_behavior_at_low_speed() {
 /// vocabulary-free plan anticipates once the groundspeed makes the DTA
 /// exceed the capture radius — intentional, not a regression.
 #[test]
-fn nav_hn_002_a_legacy_plan_anticipates_at_speed_by_design() {
-    let mut exec = execution(
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.5)],
-        ExecutionConfig::default(),
-    );
+fn nav_hn_002_a_minimal_plan_anticipates_at_speed_by_design() {
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.5)];
+    let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     assert!(matches!(
         exec.advance(&short_of_w1(1120.0), 60.0),
@@ -318,11 +341,8 @@ fn nav_hn_002_a_legacy_plan_anticipates_at_speed_by_design() {
 
 #[test]
 fn nav_vc_003_a_speed_constraint_below_the_floor_is_refused() {
-    let plan = FlightPlan::new(
-        "slow".into(),
-        PlanRole::Mission,
-        vec![wp("W0", 0.0, 0.0).with_max_speed(0.1)],
-    );
+    let wps = [wp("W0", 0.0, 0.0).with_max_speed(0.1)];
+    let plan = FlightPlan::new(id("slow"), PlanRole::Mission, Ellipsoid::WGS84, &wps);
     let refused = PlanExecution::new(plan, ExecutionConfig::default());
     assert!(matches!(
         refused,
@@ -333,13 +353,14 @@ fn nav_vc_003_a_speed_constraint_below_the_floor_is_refused() {
 
 #[test]
 fn an_unflyable_config_is_refused_by_field() {
-    let plan = || FlightPlan::new("p".into(), PlanRole::Mission, vec![wp("W0", 0.0, 0.0)]);
+    let wps = [wp("W0", 0.0, 0.0)];
+    let plan = FlightPlan::new(id("p"), PlanRole::Mission, Ellipsoid::WGS84, &wps);
     let zero_bank = ExecutionConfig {
         bank_limit_rad: 0.0,
         ..ExecutionConfig::default()
     };
     assert!(matches!(
-        PlanExecution::new(plan(), zero_bank),
+        PlanExecution::new(plan, zero_bank),
         Err(PlanActivationError::InvalidConfig {
             field: "bank_limit_rad",
             ..
@@ -350,9 +371,17 @@ fn an_unflyable_config_is_refused_by_field() {
         ..ExecutionConfig::default()
     };
     assert!(matches!(
-        PlanExecution::new(plan(), bad_floor),
+        PlanExecution::new(plan, bad_floor),
         Err(PlanActivationError::InvalidConfig {
             field: "min_approach_speed_mps",
+            ..
+        })
+    ));
+    let zero_gravity = ExecutionConfig::default().with_surface_gravity_mps2(0.0);
+    assert!(matches!(
+        PlanExecution::new(plan, zero_gravity),
+        Err(PlanActivationError::InvalidConfig {
+            field: "surface_gravity_mps2",
             ..
         })
     ));
@@ -360,7 +389,8 @@ fn an_unflyable_config_is_refused_by_field() {
 
 #[test]
 fn a_position_far_from_everything_advances_nothing() {
-    let mut exec = dogleg(wp("W1", 0.0, 0.5));
+    let wps = dogleg(wp("W1", 0.0, 0.5));
+    let mut exec = execution(&wps, ExecutionConfig::default());
     for _ in 0..3 {
         assert_eq!(exec.advance(&pos(45.0, -120.0), 60.0), SequenceEvent::None);
     }
@@ -373,11 +403,8 @@ fn nav_tt_003_a_leg_no_longer_than_the_capture_radius_is_refused_at_activation()
     // A 50 m fixed leg under the 100 m capture radius would sequence
     // while the vehicle is still at the previous fix.
     let w1_lon = 50.0 / M_PER_DEG;
-    let plan = FlightPlan::new(
-        "short".into(),
-        PlanRole::Mission,
-        vec![wp("W0", 0.0, 0.0), wp("W1", 0.0, w1_lon)],
-    );
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, w1_lon)];
+    let plan = FlightPlan::new(id("short"), PlanRole::Mission, Ellipsoid::WGS84, &wps);
     assert!(matches!(
         PlanExecution::new(plan, ExecutionConfig::default()),
         Err(PlanActivationError::CaptureRadiusExceedsLeg { ident, .. }) if ident == "W1"

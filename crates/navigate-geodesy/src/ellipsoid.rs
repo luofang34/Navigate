@@ -9,6 +9,7 @@ use core::f64::consts::{PI, TAU};
 use navigate_contract::{Ellipsoid, FrameId};
 
 use crate::error::GeodesyError;
+use crate::float_math::{atan2, rem_euclid, sin, sin_cos, sqrt};
 
 /// A plausible reference ellipsoid and its derived constants.
 ///
@@ -23,6 +24,15 @@ pub struct BodyEllipsoid {
     first_eccentricity_squared: f64,
     second_eccentricity_squared: f64,
     mean_radius_m: f64,
+}
+
+impl TryFrom<Ellipsoid> for BodyEllipsoid {
+    type Error = GeodesyError;
+
+    /// The same as [`BodyEllipsoid::try_from_contract`].
+    fn try_from(ellipsoid: Ellipsoid) -> Result<Self, GeodesyError> {
+        Self::try_from_contract(ellipsoid)
+    }
 }
 
 impl BodyEllipsoid {
@@ -125,9 +135,9 @@ impl BodyEllipsoid {
     pub fn radii_of_curvature_m(&self, latitude_rad: f64) -> (f64, f64) {
         let a = self.semi_major_axis_m();
         let e2 = self.first_eccentricity_squared;
-        let sin_lat = latitude_rad.sin();
+        let sin_lat = sin(latitude_rad);
         let w2 = 1.0 - e2 * sin_lat * sin_lat;
-        let w = w2.sqrt();
+        let w = sqrt(w2);
         (a * (1.0 - e2) / (w2 * w), a / w)
     }
 
@@ -137,16 +147,16 @@ impl BodyEllipsoid {
     /// latitudes are equal.
     #[must_use]
     pub fn planetocentric_to_geodetic_lat(&self, planetocentric_lat_rad: f64) -> f64 {
-        let (sin_lat, cos_lat) = planetocentric_lat_rad.sin_cos();
-        sin_lat.atan2((1.0 - self.first_eccentricity_squared) * cos_lat)
+        let (sin_lat, cos_lat) = sin_cos(planetocentric_lat_rad);
+        atan2(sin_lat, (1.0 - self.first_eccentricity_squared) * cos_lat)
     }
 
     /// Converts a planetographic (geodetic) latitude of a surface point
     /// to the planetocentric latitude: `tan φc = (1 − e²)·tan φg`.
     #[must_use]
     pub fn geodetic_to_planetocentric_lat(&self, geodetic_lat_rad: f64) -> f64 {
-        let (sin_lat, cos_lat) = geodetic_lat_rad.sin_cos();
-        ((1.0 - self.first_eccentricity_squared) * sin_lat).atan2(cos_lat)
+        let (sin_lat, cos_lat) = sin_cos(geodetic_lat_rad);
+        atan2((1.0 - self.first_eccentricity_squared) * sin_lat, cos_lat)
     }
 }
 
@@ -155,7 +165,7 @@ impl BodyEllipsoid {
 /// [`navigate_contract::GeodeticPosition`] uses.
 #[must_use]
 pub fn west_to_east_lon_rad(west_lon_rad: f64) -> f64 {
-    let east = (-west_lon_rad).rem_euclid(TAU);
+    let east = rem_euclid(-west_lon_rad, TAU);
     if east > PI { east - TAU } else { east }
 }
 

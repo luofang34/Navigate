@@ -21,6 +21,10 @@ impl TerrainDatabase for FlatTerrain {
     fn elevation_m(&self, _position: &GeodeticPosition) -> Option<f64> {
         Some(self.elevation_m)
     }
+
+    fn ellipsoid(&self) -> Ellipsoid {
+        Ellipsoid::WGS84
+    }
 }
 
 /// A database with no coverage anywhere.
@@ -29,6 +33,10 @@ struct NoCoverageTerrain;
 impl TerrainDatabase for NoCoverageTerrain {
     fn elevation_m(&self, _position: &GeodeticPosition) -> Option<f64> {
         None
+    }
+
+    fn ellipsoid(&self) -> Ellipsoid {
+        Ellipsoid::WGS84
     }
 }
 
@@ -59,6 +67,7 @@ fn solution_with_vertical_sigma(
             FaultDetection::Unavailable,
         ),
         composition,
+        Ellipsoid::WGS84,
     )
 }
 
@@ -289,11 +298,12 @@ impl TerrainDatabase for LunarTerrain {
 }
 
 #[test]
-fn a_database_serves_wgs84_by_default() {
+fn each_database_names_its_ellipsoid() {
     assert_eq!(
         FlatTerrain { elevation_m: 0.0 }.ellipsoid(),
         Ellipsoid::WGS84
     );
+    assert_eq!(LunarTerrain.ellipsoid(), Ellipsoid::MOON_ME);
 }
 
 #[test]

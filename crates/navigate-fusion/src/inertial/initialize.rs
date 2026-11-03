@@ -70,7 +70,7 @@ impl InertialNavigationFilter {
             if !(body.is_plausible() && position.is_plausible() && velocity.is_finite()) {
                 return Err(RejectionReason::NonFiniteValue);
             }
-            let plane = LocalTangentPlane::with_ellipsoid(position, body.ellipsoid)
+            let plane = LocalTangentPlane::new(position, body.ellipsoid)
                 .map_err(|_| RejectionReason::NonFiniteValue)?;
             let initial = InitialState {
                 regime: Regime::BodySurface(Arc::new(SurfaceFrame::new(plane, *body))),

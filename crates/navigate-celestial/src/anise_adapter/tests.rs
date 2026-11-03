@@ -9,8 +9,8 @@ fn naif_frame_ids_are_not_silently_used_as_anise_orientation_ids() {
         velocity_m_s: [0.0; 3],
         epoch: Epoch::from_tdb_seconds(0.0),
         frame: FrameId {
-            center: 399,
-            orientation: 13000,
+            center_naif_id: 399,
+            orientation_naif_id: 13000,
         },
     };
     assert!(matches!(

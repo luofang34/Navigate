@@ -12,7 +12,7 @@
 use core::f64::consts::TAU;
 use core::fmt;
 
-use super::{PlanValidationError, Waypoint};
+use super::{Ident, PlanValidationError, Waypoint};
 
 /// North reference a published course is measured from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -121,7 +121,7 @@ impl fmt::Display for LegPath {
 /// exchange type, so a reserved terminator validates here and is
 /// refused at activation.
 pub(super) fn validate_path(
-    plan: &str,
+    plan: Ident,
     index: usize,
     waypoint: &Waypoint,
 ) -> Result<(), PlanValidationError> {
@@ -130,21 +130,21 @@ pub(super) fn validate_path(
     };
     match path {
         LegPath::TrackToFix if index == 0 => Err(PlanValidationError::TrackWithoutUpstreamFix {
-            plan: plan.to_owned(),
-            ident: waypoint.ident.clone(),
+            plan,
+            ident: waypoint.ident,
         }),
         LegPath::InitialFix if index != 0 => Err(PlanValidationError::InitialFixNotFirst {
-            plan: plan.to_owned(),
+            plan,
             index,
-            ident: waypoint.ident.clone(),
+            ident: waypoint.ident,
         }),
         LegPath::CourseToFix { course_rad, .. }
             if !course_rad.is_finite() || !(0.0..TAU).contains(&course_rad) =>
         {
             Err(PlanValidationError::CourseOutOfRange {
-                plan: plan.to_owned(),
+                plan,
                 index,
-                ident: waypoint.ident.clone(),
+                ident: waypoint.ident,
                 course_rad,
             })
         }

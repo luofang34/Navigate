@@ -36,8 +36,8 @@ publish = false
 [workspace.dependencies]
 eclipse-canon = { path = "crates/eclipse-canon" }
 flamsteed = { path = "crates/flamsteed", version = "0.1.0" }
-navigate-contract = { path = "crates/navigate-contract" }
-navigate-geodesy = { path = "crates/navigate-geodesy" }
+navigate-contract = { path = "crates/navigate-contract", default-features = false }
+navigate-geodesy = { path = "crates/navigate-geodesy", default-features = false }
 navigate-fusion = { path = "crates/navigate-fusion" }
 navigate-fpl = { path = "crates/navigate-fpl" }
 navigate-guidance = { path = "crates/navigate-guidance" }

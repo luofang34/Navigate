@@ -16,6 +16,7 @@
 //! independent.
 
 use crate::composition::SourceComposition;
+use crate::frame::Ellipsoid;
 use crate::integrity::SolutionQuality;
 use crate::kinematics::{GeodeticPosition, NedVelocity, SymmetricCov3};
 use crate::stamp::ObservationStamp;
@@ -27,8 +28,11 @@ use crate::stamp::ObservationStamp;
 pub enum AidingValue {
     /// An absolute position fix.
     PositionFix {
-        /// Measured position, WGS84.
+        /// Measured position on `ellipsoid`.
         position: GeodeticPosition,
+        /// The reference ellipsoid of `position`. No ellipsoid is
+        /// implicit, so a fix on any body states its body (ADR-0015).
+        ellipsoid: Ellipsoid,
         /// Measurement covariance, local NED meters².
         covariance: SymmetricCov3,
     },

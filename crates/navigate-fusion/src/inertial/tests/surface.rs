@@ -201,8 +201,11 @@ fn attitude_fix(sequence: u32, at_ms: u64, q: UnitQuaternion<f64>) -> Observatio
 }
 
 fn pose(sequence: u32, at_ms: u64, north_m: f64, attitude: UnitQuaternion<f64>) -> Observation {
-    let surface_plane =
-        navigate_geodesy::LocalTangentPlane::new(earth_origin()).expect("plausible");
+    let surface_plane = navigate_geodesy::LocalTangentPlane::new(
+        earth_origin(),
+        navigate_geodesy::BodyEllipsoid::WGS84,
+    )
+    .expect("plausible");
     Observation::new(
         stamp(6, sequence, at_ms),
         ObservationValue::VisualPose {
@@ -299,7 +302,11 @@ fn run_script(events: &[(bool, u64, u64, usize)]) -> crate::inertial::estimate::
 }
 
 fn surface_plane_fix() -> GeodeticPosition {
-    let plane = navigate_geodesy::LocalTangentPlane::new(earth_origin()).expect("plausible");
+    let plane = navigate_geodesy::LocalTangentPlane::new(
+        earth_origin(),
+        navigate_geodesy::BodyEllipsoid::WGS84,
+    )
+    .expect("plausible");
     plane.from_ned(&NedOffset::new(3.0, -2.0, 1.0))
 }
 

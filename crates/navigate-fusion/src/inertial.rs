@@ -139,6 +139,7 @@ impl InertialNavigationFilter {
                 self.rejections.record(&reason);
                 if let (RejectionReason::InnovationGate { .. }, Some(kind)) = (&reason, kind) {
                     self.stats.record_gate_rejection(kind);
+                    self.ledger.record_gate_rejection();
                 }
                 IngestOutcome::Rejected(reason)
             }

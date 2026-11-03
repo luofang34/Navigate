@@ -3,7 +3,7 @@
 use crate::corridor::kinematics::{KinematicState, MAX_DELTA_T_S, MIN_DELTA_T_S};
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use navigate_contract::{
-    ClockDomainId, DurationNanos, FaultDetection, GeodeticPosition, IntegrityAssessment,
+    ClockDomainId, DurationNanos, Ellipsoid, FaultDetection, GeodeticPosition, IntegrityAssessment,
     MonotonicNanos, NavigationSolution, NedVelocity, Redundancy, SensorClass, SolutionQuality,
     SolutionStamp, SourceComposition, SourceEpoch, SymmetricCov3, WrappingSequence,
 };
@@ -78,6 +78,7 @@ impl DualPathDeadReckoner {
                 SymmetricCov3::from_diagonal(0.25, 0.25, 0.25),
                 integrity,
                 comp,
+                Ellipsoid::WGS84,
             );
             Some((sol, frame))
         } else {

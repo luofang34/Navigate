@@ -1,16 +1,18 @@
 //! Typed refusals: why guidance declined to issue a setpoint.
 
-use navigate_contract::{ClockDomainId, DurationNanos, MonotonicNanos, SolutionQuality};
+use navigate_contract::{
+    ClockDomainId, DurationNanos, Ellipsoid, Ident, MonotonicNanos, SolutionQuality,
+};
 use thiserror::Error;
 
-/// Why a derivation — [`crate::guide`] or [`crate::guide_velocity`] —
-/// refused to issue a setpoint. Both admit through one helper, so one
-/// solution draws the same refusal from either.
+/// Why [`crate::guide`] or [`crate::guide_velocity`] refused to issue a
+/// setpoint. Both functions call one shared admission helper, so one
+/// solution gives the same refusal in both derivations.
 ///
-/// Guidance consumes integrity fail-closed (ADR-0004): every refusal
-/// names the floor or bound it enforced so the caller can log, display,
-/// or escalate without re-deriving the judgment.
-#[derive(Debug, Clone, PartialEq, Error)]
+/// Guidance checks integrity with fail-closed logic (ADR-0004). Each
+/// refusal records the bound that failed so the caller can log, display,
+/// or escalate the condition directly.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
 #[non_exhaustive]
 pub enum GuidanceRefusal {
     /// Solution quality is below the configured floor.
@@ -76,6 +78,15 @@ pub enum GuidanceRefusal {
         /// Flattening of the refused ellipsoid.
         flattening: f64,
     },
+    /// The solution ellipsoid does not match the expected plan ellipsoid
+    /// (ADR-0015).
+    #[error("ellipsoid mismatch: expected {expected:?}, got {got:?}")]
+    EllipsoidMismatch {
+        /// Reference ellipsoid required by the active plan or config.
+        expected: Ellipsoid,
+        /// Reference ellipsoid carried by the navigation solution.
+        got: Ellipsoid,
+    },
     /// Vertical 1-sigma uncertainty exceeds the configured bound on an
     /// altitude-constrained leg.
     #[error(
@@ -94,6 +105,6 @@ pub enum GuidanceRefusal {
     #[error("target waypoint {ident} has an implausible position or defines a degenerate leg")]
     ImplausibleTarget {
         /// Identifier of the refused waypoint.
-        ident: String,
+        ident: Ident,
     },
 }

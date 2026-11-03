@@ -1,10 +1,14 @@
 //! Plan-vocabulary tests. Every constraint form is pinned against the
 //! requirement it implements (`docs/procedure-requirements.md`).
 
+use std::string::ToString;
+use std::vec::Vec;
+
 use super::{
-    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, LegPath, PlanRole,
+    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, Ident, LegPath, PlanRole,
     PlanValidationError, TurnType, Waypoint,
 };
+use crate::frame::{Ellipsoid, FrameId};
 use crate::kinematics::GeodeticPosition;
 
 /// Every reserved terminator, so a test walks the whole reserved set
@@ -20,17 +24,21 @@ const RESERVED: [LegPath; 8] = [
     LegPath::VerticalLanding,
 ];
 
-fn waypoint(ident: &str) -> Waypoint {
-    Waypoint::new(ident.to_owned(), GeodeticPosition::new(0.0, 0.0, 0.0))
+fn ident(text: &str) -> Ident {
+    Ident::try_new(text).expect("a short identifier")
 }
 
-fn plan_of(waypoints: Vec<Waypoint>) -> FlightPlan {
-    FlightPlan::new("p".into(), PlanRole::Mission, waypoints)
+fn waypoint(name: &str) -> Waypoint {
+    Waypoint::new(ident(name), GeodeticPosition::new(0.0, 0.0, 0.0))
+}
+
+fn plan_of(waypoints: &[Waypoint]) -> FlightPlan<'_> {
+    FlightPlan::new(ident("p"), PlanRole::Mission, Ellipsoid::WGS84, waypoints)
 }
 
 #[test]
 fn empty_plan_is_invalid() {
-    let plan = FlightPlan::new("p1".into(), PlanRole::Mission, Vec::new());
+    let plan = FlightPlan::new(ident("p1"), PlanRole::Mission, Ellipsoid::WGS84, &[]);
     assert!(matches!(
         plan.validate(),
         Err(PlanValidationError::Empty { .. })
@@ -39,12 +47,54 @@ fn empty_plan_is_invalid() {
 
 #[test]
 fn implausible_waypoint_is_named() {
-    let bad = Waypoint::new("W1".into(), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
-    let plan = FlightPlan::new("p2".into(), PlanRole::Mission, vec![bad]);
+    let bad = [Waypoint::new(
+        ident("W1"),
+        GeodeticPosition::new(f64::NAN, 0.0, 0.0),
+    )];
+    let plan = FlightPlan::new(ident("p2"), PlanRole::Mission, Ellipsoid::WGS84, &bad);
     assert!(matches!(
         plan.validate(),
         Err(PlanValidationError::ImplausiblePosition { index: 0, .. })
     ));
+}
+
+#[test]
+fn a_plan_names_its_ellipsoid_and_refuses_an_implausible_one() {
+    let waypoints = [waypoint("W0")];
+    let lunar = FlightPlan::new(
+        ident("moon"),
+        PlanRole::Mission,
+        Ellipsoid::MOON_ME,
+        &waypoints,
+    );
+    assert_eq!(lunar.ellipsoid, Ellipsoid::MOON_ME);
+    assert!(lunar.validate().is_ok());
+    let inertial = Ellipsoid::sphere(FrameId::MOON_J2000, 1_737_400.0);
+    for ellipsoid in [inertial, Ellipsoid::sphere(FrameId::MOON_ME, f64::NAN)] {
+        let plan = FlightPlan::new(ident("bad"), PlanRole::Mission, ellipsoid, &waypoints);
+        assert_eq!(
+            plan.validate(),
+            Err(PlanValidationError::ImplausibleEllipsoid { plan: ident("bad") })
+        );
+    }
+    // The ellipsoid check runs first: an empty plan on a bad ellipsoid
+    // names the ellipsoid.
+    let empty = FlightPlan::new(ident("e"), PlanRole::Mission, inertial, &[]);
+    assert!(matches!(
+        empty.validate(),
+        Err(PlanValidationError::ImplausibleEllipsoid { .. })
+    ));
+}
+
+#[test]
+fn a_plan_and_its_refusal_are_copy() {
+    let waypoints = [waypoint("W0").with_gradient(0.0)];
+    let plan = plan_of(&waypoints);
+    let copy = plan;
+    let refusal = plan.validate().expect_err("zero gradient");
+    let again = refusal;
+    assert_eq!(copy, plan);
+    assert_eq!(again, refusal);
 }
 
 #[test]
@@ -65,7 +115,7 @@ fn nav_hn_002_a_waypoint_built_without_builders_declares_no_constraint() {
     assert_eq!(plain.max_speed_mps, None);
     assert_eq!(plain.gradient, None);
     assert_eq!(plain.turn, TurnType::FlyBy);
-    assert!(plan_of(vec![plain]).validate().is_ok());
+    assert!(plan_of(&[plain]).validate().is_ok());
 }
 
 #[test]
@@ -74,14 +124,14 @@ fn nav_vc_001_a_window_brackets_a_band_and_an_inverted_one_is_refused() {
         lower_m: 300.0,
         upper_m: 600.0,
     });
-    assert!(plan_of(vec![ok]).validate().is_ok());
+    assert!(plan_of(&[ok]).validate().is_ok());
 
     for (lower_m, upper_m) in [(600.0, 300.0), (400.0, 400.0)] {
         let inverted =
             waypoint("W1").with_altitude(AltitudeConstraint::Window { lower_m, upper_m });
         assert!(
             matches!(
-                plan_of(vec![inverted]).validate(),
+                plan_of(&[inverted]).validate(),
                 Err(PlanValidationError::InvertedAltitudeWindow { index: 0, .. })
             ),
             "lower {lower_m} upper {upper_m} must not validate"
@@ -96,7 +146,7 @@ fn nav_vc_001_a_non_finite_window_bound_is_refused_before_the_ordering_test() {
         upper_m: 600.0,
     });
     assert!(matches!(
-        plan_of(vec![bad]).validate(),
+        plan_of(&[bad]).validate(),
         Err(PlanValidationError::NonFiniteConstraint {
             field: ConstraintField::Altitude,
             ..
@@ -108,7 +158,7 @@ fn nav_vc_001_a_non_finite_window_bound_is_refused_before_the_ordering_test() {
 fn nav_vc_003_a_non_finite_speed_or_gradient_is_refused_by_field() {
     let speed = waypoint("W0").with_max_speed(f64::INFINITY);
     assert!(matches!(
-        plan_of(vec![speed]).validate(),
+        plan_of(&[speed]).validate(),
         Err(PlanValidationError::NonFiniteConstraint {
             field: ConstraintField::MaxSpeed,
             ..
@@ -116,7 +166,7 @@ fn nav_vc_003_a_non_finite_speed_or_gradient_is_refused_by_field() {
     ));
     let gradient = waypoint("W1").with_gradient(f64::NAN);
     assert!(matches!(
-        plan_of(vec![gradient]).validate(),
+        plan_of(&[gradient]).validate(),
         Err(PlanValidationError::NonFiniteConstraint {
             field: ConstraintField::Gradient,
             ..
@@ -134,7 +184,7 @@ fn nav_vc_001_a_non_finite_one_sided_altitude_is_refused() {
         let bad = waypoint("W0").with_altitude(constraint);
         assert!(
             matches!(
-                plan_of(vec![bad]).validate(),
+                plan_of(&[bad]).validate(),
                 Err(PlanValidationError::NonFiniteConstraint {
                     field: ConstraintField::Altitude,
                     ..
@@ -152,7 +202,8 @@ fn nav_vc_004_constraints_are_exactly_what_the_source_declared() {
         .with_gradient(0.052)
         .with_turn(TurnType::FlyOver)
         .with_altitude(AltitudeConstraint::AtOrAbove(1_200.0));
-    let plan = plan_of(vec![waypoint]);
+    let waypoints = [waypoint];
+    let plan = plan_of(&waypoints);
     plan.validate().expect("declared constraints validate");
     let stored = plan.waypoints.first().expect("one waypoint");
     assert_eq!(stored.max_speed_mps, Some(35.0));
@@ -166,10 +217,8 @@ fn nav_vc_004_constraints_are_exactly_what_the_source_declared() {
 
 #[test]
 fn a_defect_names_the_waypoint_that_carries_it() {
-    let plan = plan_of(vec![
-        waypoint("GOOD"),
-        waypoint("BAD").with_gradient(f64::NAN),
-    ]);
+    let waypoints = [waypoint("GOOD"), waypoint("BAD").with_gradient(f64::NAN)];
+    let plan = plan_of(&waypoints);
     let refusal = plan
         .validate()
         .expect_err("the second waypoint is defective");
@@ -186,14 +235,8 @@ fn a_defect_names_the_waypoint_that_carries_it() {
 #[test]
 fn nav_vc_003_a_non_positive_speed_constraint_is_refused() {
     for speed in [0.0, -5.0] {
-        let plan = FlightPlan::new(
-            "p".into(),
-            PlanRole::Mission,
-            vec![
-                Waypoint::new("W0".into(), GeodeticPosition::new(0.0, 0.0, 0.0))
-                    .with_max_speed(speed),
-            ],
-        );
+        let waypoints = [waypoint("W0").with_max_speed(speed)];
+        let plan = plan_of(&waypoints);
         assert!(
             matches!(
                 plan.validate(),
@@ -246,7 +289,8 @@ fn nav_lg_001_every_terminator_names_itself_distinctly() {
 
 #[test]
 fn nav_lg_004_a_track_leg_at_the_first_waypoint_has_no_fix_to_run_from() {
-    let plan = plan_of(vec![waypoint("W0").with_path(LegPath::TrackToFix)]);
+    let waypoints = [waypoint("W0").with_path(LegPath::TrackToFix)];
+    let plan = plan_of(&waypoints);
     assert!(matches!(
         plan.validate(),
         Err(PlanValidationError::TrackWithoutUpstreamFix { ident, .. }) if ident == "W0"
@@ -255,17 +299,18 @@ fn nav_lg_004_a_track_leg_at_the_first_waypoint_has_no_fix_to_run_from() {
 
 #[test]
 fn nav_lg_004_an_initial_fix_after_the_first_waypoint_is_refused() {
-    let plan = plan_of(vec![
+    let waypoints = [
         waypoint("W0"),
         waypoint("W1").with_path(LegPath::InitialFix),
-    ]);
+    ];
+    let plan = plan_of(&waypoints);
     assert!(matches!(
         plan.validate(),
         Err(PlanValidationError::InitialFixNotFirst { index: 1, ident, .. }) if ident == "W1"
     ));
     // The same terminator at the first waypoint is exactly its place.
     assert!(
-        plan_of(vec![waypoint("W0").with_path(LegPath::InitialFix)])
+        plan_of(&[waypoint("W0").with_path(LegPath::InitialFix)])
             .validate()
             .is_ok()
     );
@@ -274,13 +319,14 @@ fn nav_lg_004_an_initial_fix_after_the_first_waypoint_is_refused() {
 #[test]
 fn nav_lg_004_a_course_outside_the_full_turn_is_refused() {
     for course_rad in [f64::NAN, f64::INFINITY, -0.1, core::f64::consts::TAU, 10.0] {
-        let plan = plan_of(vec![
+        let waypoints = [
             waypoint("W0"),
             waypoint("W1").with_path(LegPath::CourseToFix {
                 course_rad,
                 reference: CourseReference::True,
             }),
-        ]);
+        ];
+        let plan = plan_of(&waypoints);
         assert!(
             matches!(
                 plan.validate(),
@@ -290,13 +336,14 @@ fn nav_lg_004_a_course_outside_the_full_turn_is_refused() {
         );
     }
     // The open upper bound admits everything below a full turn.
-    let plan = plan_of(vec![
+    let waypoints = [
         waypoint("W0"),
         waypoint("W1").with_path(LegPath::CourseToFix {
             course_rad: core::f64::consts::TAU - 1e-9,
             reference: CourseReference::True,
         }),
-    ]);
+    ];
+    let plan = plan_of(&waypoints);
     assert!(plan.validate().is_ok());
 }
 
@@ -306,7 +353,8 @@ fn nav_lg_004_a_course_outside_the_full_turn_is_refused() {
 #[test]
 fn nav_lg_005_a_reserved_terminator_is_a_valid_plan_here() {
     for path in RESERVED {
-        let plan = plan_of(vec![waypoint("W0").with_path(path)]);
+        let waypoints = [waypoint("W0").with_path(path)];
+        let plan = plan_of(&waypoints);
         assert!(
             plan.validate().is_ok(),
             "{path} must validate as an exchange shape"
@@ -318,10 +366,11 @@ fn nav_lg_005_a_reserved_terminator_is_a_valid_plan_here() {
 /// identifier, so an operator reads which leg blocked the plan.
 #[test]
 fn nav_lg_013_a_leg_refusal_names_the_leg_that_carries_it() {
-    let plan = plan_of(vec![
+    let waypoints = [
         waypoint("GOOD"),
         waypoint("BAD").with_path(LegPath::InitialFix),
-    ]);
+    ];
+    let plan = plan_of(&waypoints);
     let refusal = plan
         .validate()
         .expect_err("the second waypoint is misplaced");
@@ -336,11 +385,8 @@ fn nav_lg_013_a_leg_refusal_names_the_leg_that_carries_it() {
 
 #[test]
 fn nav_vc_002_a_zero_gradient_is_refused_absence_expresses_no_limit() {
-    let plan = FlightPlan::new(
-        "p".into(),
-        PlanRole::Mission,
-        vec![Waypoint::new("W0".into(), GeodeticPosition::new(0.0, 0.0, 0.0)).with_gradient(0.0)],
-    );
+    let waypoints = [waypoint("W0").with_gradient(0.0)];
+    let plan = plan_of(&waypoints);
     assert!(matches!(
         plan.validate(),
         Err(PlanValidationError::ZeroGradient { .. })

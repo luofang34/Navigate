@@ -3,7 +3,7 @@
 
 use crate::composition::SourceComposition;
 use crate::frame::{Ellipsoid, FrameId};
-use crate::integrity::IntegrityAssessment;
+use crate::integrity::{IntegrityAssessment, SpaceIntegrityAssessment};
 use crate::kinematics::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, GeodeticPosition, NedVelocity,
     SymmetricCov3,
@@ -45,10 +45,15 @@ pub struct NavigationSolution {
 }
 
 impl NavigationSolution {
-    /// Builds a solution from its parts on [`Ellipsoid::WGS84`].
-    /// Attitude starts absent. [`Self::with_ellipsoid`] sets a different
-    /// ellipsoid, and [`Self::with_attitude`] adds an attitude.
+    /// Builds a solution from its parts on `ellipsoid`. No ellipsoid is
+    /// implicit: the producer names the body of every solution
+    /// (ADR-0015). Attitude starts absent. [`Self::with_attitude`] adds
+    /// an attitude.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one required field of the published solution"
+    )]
     pub const fn new(
         stamp: SolutionStamp,
         position: GeodeticPosition,
@@ -57,6 +62,7 @@ impl NavigationSolution {
         velocity_cov: SymmetricCov3,
         integrity: IntegrityAssessment,
         composition: SourceComposition,
+        ellipsoid: Ellipsoid,
     ) -> Self {
         Self {
             stamp,
@@ -68,7 +74,7 @@ impl NavigationSolution {
             attitude_cov: None,
             integrity,
             composition,
-            ellipsoid: Ellipsoid::WGS84,
+            ellipsoid,
         }
     }
 
@@ -86,7 +92,8 @@ impl NavigationSolution {
         self
     }
 
-    /// This solution on `ellipsoid`.
+    /// This solution on `ellipsoid`, for a producer that re-expresses
+    /// one state on another ellipsoid.
     #[must_use]
     pub const fn with_ellipsoid(mut self, ellipsoid: Ellipsoid) -> Self {
         self.ellipsoid = ellipsoid;
@@ -117,7 +124,7 @@ pub struct CartesianSolution {
     /// Attitude covariance in radians², when it is known.
     pub attitude_cov: Option<SymmetricCov3>,
     /// The integrity assessment this solution rests on.
-    pub integrity: IntegrityAssessment,
+    pub integrity: SpaceIntegrityAssessment,
     /// Declared provenance of the solution.
     pub composition: SourceComposition,
 }
@@ -136,7 +143,7 @@ impl CartesianSolution {
         velocity: CartesianVelocity,
         position_cov: SymmetricCov3,
         velocity_cov: SymmetricCov3,
-        integrity: IntegrityAssessment,
+        integrity: SpaceIntegrityAssessment,
         composition: SourceComposition,
     ) -> Self {
         Self {

@@ -3,14 +3,14 @@
 //! admission refusals.
 
 use navigate_contract::{
-    AltitudeConstraint, ClockDomainId, DurationNanos, GeodeticPosition, GuidanceSetpoint,
-    LateralReference, MonotonicNanos, SolutionQuality, Waypoint,
+    AltitudeConstraint, ClockDomainId, DurationNanos, Ellipsoid, GeodeticPosition,
+    GuidanceSetpoint, LateralReference, MonotonicNanos, SolutionQuality, Waypoint,
 };
-use navigate_geodesy::{cross_track_from_course_m, cross_track_m, initial_bearing_rad, wgs84};
+use navigate_geodesy::{initial_bearing_rad, wgs84};
 
 use crate::config::GuidanceConfig;
 use crate::refusal::GuidanceRefusal;
-use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
+use crate::scenario::{CLOCK, deg, equator_leg, id, now, solution};
 
 use super::guide;
 
@@ -75,7 +75,7 @@ fn right_of_track_is_positive_matching_geodesy() {
         (lateral_m - 500.0).abs() < 1.0,
         "offset magnitude: {lateral_m}"
     );
-    let reference = cross_track_m(&own_pos, &from, &to.position).expect("valid track");
+    let reference = wgs84::cross_track_m(&own_pos, &from, &to.position).expect("valid track");
     assert!(
         (lateral_m - reference).abs() < 1e-9,
         "sign convention pinned to geodesy: {lateral_m} vs {reference}"
@@ -85,7 +85,7 @@ fn right_of_track_is_positive_matching_geodesy() {
 #[test]
 fn direct_to_has_zero_lateral_and_bearing_to_waypoint() {
     let own_pos = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("DCT".into(), deg(11.0, 21.0, 0.0));
+    let to = Waypoint::new(id("DCT"), deg(11.0, 21.0, 0.0));
     let own = solution(SolutionQuality::Good, own_pos, now());
     let command = guide(
         &own,
@@ -277,7 +277,7 @@ fn now_read_on_another_clock_domain_is_refused_before_age_arithmetic() {
 #[test]
 fn a_leg_with_coincident_endpoints_is_refused_as_implausible() {
     let anchor = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("ZERO".into(), anchor);
+    let to = Waypoint::new(id("ZERO"), anchor);
     let own = solution(SolutionQuality::Good, deg(10.5, 20.5, 0.0), now());
     let refusal = guide(
         &own,
@@ -290,9 +290,7 @@ fn a_leg_with_coincident_endpoints_is_refused_as_implausible() {
     .expect_err("refuses");
     assert_eq!(
         refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "ZERO".into(),
-        }
+        GuidanceRefusal::ImplausibleTarget { ident: id("ZERO") }
     );
 }
 
@@ -319,7 +317,7 @@ fn nav_lg_009_a_course_leg_reports_its_published_course_not_the_track() {
         (course_rad - published_rad).abs() < 1e-15,
         "course {course_rad} vs published {published_rad}"
     );
-    let reference = cross_track_from_course_m(&own.position, &to.position, published_rad);
+    let reference = wgs84::cross_track_from_course_m(&own.position, &to.position, published_rad);
     assert!(
         (course_lateral_m - reference).abs() < 1e-9,
         "sign convention pinned to geodesy: {course_lateral_m} vs {reference}"
@@ -373,7 +371,7 @@ fn nav_lg_009_right_of_a_published_course_is_positive() {
 #[test]
 fn nav_lg_012_a_course_leg_has_no_coincident_endpoint_case_to_refuse() {
     let anchor = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("ZERO".into(), anchor);
+    let to = Waypoint::new(id("ZERO"), anchor);
     let own = solution(SolutionQuality::Good, anchor, now());
     let config = GuidanceConfig::default();
     let refusal = guide(
@@ -387,9 +385,7 @@ fn nav_lg_012_a_course_leg_has_no_coincident_endpoint_case_to_refuse() {
     .expect_err("a track needs two separate ends");
     assert_eq!(
         refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "ZERO".into(),
-        }
+        GuidanceRefusal::ImplausibleTarget { ident: id("ZERO") }
     );
     let published_rad = 1.0;
     let command = guide(
@@ -409,7 +405,7 @@ fn nav_lg_012_a_course_leg_has_no_coincident_endpoint_case_to_refuse() {
 #[test]
 fn implausible_target_is_refused_by_name() {
     let (from, _) = equator_leg();
-    let bad = Waypoint::new("BAD".into(), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
+    let bad = Waypoint::new(id("BAD"), GeodeticPosition::new(f64::NAN, 0.0, 0.0));
     let own = solution(SolutionQuality::Good, deg(0.0, 0.5, 0.0), now());
     let refusal = guide(
         &own,
@@ -422,9 +418,7 @@ fn implausible_target_is_refused_by_name() {
     .expect_err("refuses");
     assert_eq!(
         refusal,
-        GuidanceRefusal::ImplausibleTarget {
-            ident: "BAD".into(),
-        }
+        GuidanceRefusal::ImplausibleTarget { ident: id("BAD") }
     );
 }
 
@@ -437,9 +431,7 @@ fn constrained_leg_refuses_excessive_vertical_uncertainty_while_lateral_only_adm
     };
 
     let (from, to_lateral) = equator_leg();
-    let to_vertical = to_lateral
-        .clone()
-        .with_altitude(AltitudeConstraint::At(100.0));
+    let to_vertical = to_lateral.with_altitude(AltitudeConstraint::At(100.0));
     let composition = SourceComposition::of(SensorClass::Gnss);
     let weak_vertical = NavigationSolution::new(
         SolutionStamp::new(SourceEpoch::new(1), WrappingSequence::new(42), now(), CLOCK),
@@ -456,6 +448,7 @@ fn constrained_leg_refuses_excessive_vertical_uncertainty_while_lateral_only_adm
             FaultDetection::Unavailable,
         ),
         composition,
+        Ellipsoid::WGS84,
     );
     let config = GuidanceConfig::default();
     let err = guide(

@@ -7,7 +7,8 @@
 //! depth of the delayed-measurement history are also configuration
 //! (ADR-0012). The frame discipline is configuration (ADR-0013). The
 //! pose gate and the error budget of an unmodeled magnetic map bias are
-//! configuration (ADR-0014).
+//! configuration (ADR-0014). The limit on consecutive innovation-gate
+//! refusals is configuration (ADR-0015).
 
 use navigate_contract::DurationNanos;
 
@@ -92,6 +93,13 @@ pub struct FusionConfig {
     /// degrees of freedom. The inertial filter applies it to a visual
     /// pose. Default: 22.46, the 99.9% point.
     pub pose_gate_chi2: f64,
+    /// Number of consecutive innovation-gate refusals at or beyond which
+    /// a `Good` quality degrades to `Degraded`. An admitted aiding
+    /// observation resets the count. A refused update does not change
+    /// the covariance, so without this limit a storm of refusals would
+    /// not show in the quality. A value of 0 disables the limit.
+    /// Default: 5.
+    pub max_consecutive_gate_rejections: u32,
 }
 
 impl Default for FusionConfig {
@@ -116,6 +124,7 @@ impl Default for FusionConfig {
             require_explicit_frame: false,
             unmodeled_magnetic_bias_variance_t2: 0.0,
             pose_gate_chi2: 22.46,
+            max_consecutive_gate_rejections: 5,
         }
     }
 }
@@ -154,5 +163,6 @@ mod tests {
         assert!(!config.require_explicit_frame);
         assert_eq!(config.unmodeled_magnetic_bias_variance_t2, 0.0);
         assert!((config.pose_gate_chi2 - 22.46).abs() < 1e-12);
+        assert_eq!(config.max_consecutive_gate_rejections, 5);
     }
 }

@@ -22,3 +22,4 @@ lifecycle rules.
 | [0012](0012-scalar-map-models-and-bounded-state-history.md) | Scalar map models and a bounded state history extend the filter core | Proposed |
 | [0013](0013-body-frames-and-ellipsoids-are-explicit.md) | Body frames and reference ellipsoids are explicit | Proposed |
 | [0014](0014-strapdown-inertial-propagation-and-marginalized-particle-filter.md) | Strapdown inertial propagation and a marginalized particle filter extend fusion to attitude, biases, space frames, and multimodal maps | Proposed |
+| [0015](0015-zero-heap-no-std-physical-time-and-space-integrity.md) | Zero-heap `no_std` core, physical coordinate time, explicit body geodesy, and space integrity | Proposed |

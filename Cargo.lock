@@ -4985,6 +4985,7 @@ dependencies = [
 name = "navigate-fpl"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "navigate-contract",
  "navigate-geodesy",
  "thiserror 2.0.19",
@@ -5004,6 +5005,7 @@ dependencies = [
 name = "navigate-geodesy"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "navigate-contract",
  "thiserror 2.0.19",
 ]
@@ -5012,6 +5014,7 @@ dependencies = [
 name = "navigate-guidance"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "navigate-contract",
  "navigate-geodesy",
  "thiserror 2.0.19",

@@ -1,18 +1,18 @@
 use core::f64::consts::FRAC_PI_2;
 
 use super::*;
-use crate::ecef::geodetic_to_ecef;
+use crate::wgs84::geodetic_to_ecef;
 
 fn plane_at_47n_8e() -> LocalTangentPlane {
     let origin = GeodeticPosition::new(47.0_f64.to_radians(), 8.0_f64.to_radians(), 500.0);
-    LocalTangentPlane::new(origin).expect("plausible origin")
+    LocalTangentPlane::new(origin, BodyEllipsoid::WGS84).expect("plausible origin")
 }
 
 #[test]
 fn implausible_origin_is_rejected() {
     let origin = GeodeticPosition::new(2.0, 0.0, 0.0);
     assert!(matches!(
-        LocalTangentPlane::new(origin),
+        LocalTangentPlane::new(origin, BodyEllipsoid::WGS84),
         Err(GeodesyError::ImplausibleOrigin { .. })
     ));
 }
@@ -86,11 +86,10 @@ fn ned_round_trip_within_100_km_stays_below_a_micrometer() {
 #[test]
 fn ned_rotation_between_planes_matches_ecef_transport() {
     let a = plane_at_47n_8e();
-    let b = LocalTangentPlane::new(GeodeticPosition::new(
-        48.5_f64.to_radians(),
-        10.2_f64.to_radians(),
-        800.0,
-    ))
+    let b = LocalTangentPlane::new(
+        GeodeticPosition::new(48.5_f64.to_radians(), 10.2_f64.to_radians(), 800.0),
+        BodyEllipsoid::WGS84,
+    )
     .expect("plausible origin");
     let r = a.ned_rotation_to(&b);
     let target = GeodeticPosition::new(48.0_f64.to_radians(), 9.0_f64.to_radians(), 1_200.0);
@@ -135,8 +134,8 @@ fn assert_plane_round_trips(plane: &LocalTangentPlane, reach_m: f64) {
             ellipsoid.frame()
         );
         let back = plane.from_ned(&round_tripped);
-        let geodetic_error_m = geodetic_to_body_fixed(&geodetic, &ellipsoid)
-            .distance_m(&geodetic_to_body_fixed(&back, &ellipsoid));
+        let geodetic_error_m = geodetic_to_body_fixed(&geodetic, ellipsoid)
+            .distance_m(&geodetic_to_body_fixed(&back, ellipsoid));
         assert!(
             geodetic_error_m < 1e-6,
             "geodetic round trip {geodetic_error_m} m"
@@ -163,8 +162,7 @@ fn lunar_and_martian_planes_round_trip_below_a_micrometer() {
         BodyEllipsoid::MARS_IAU,
     ] {
         for origin in origins {
-            let plane =
-                LocalTangentPlane::with_ellipsoid(origin, ellipsoid).expect("plausible origin");
+            let plane = LocalTangentPlane::new(origin, ellipsoid).expect("plausible origin");
             assert_eq!(plane.ellipsoid(), ellipsoid);
             assert_plane_round_trips(&plane, 50_000.0);
         }
@@ -174,8 +172,7 @@ fn lunar_and_martian_planes_round_trip_below_a_micrometer() {
 #[test]
 fn a_point_above_a_lunar_origin_is_pure_negative_down() {
     let origin = GeodeticPosition::new(0.2, -0.4, 0.0);
-    let plane = LocalTangentPlane::with_ellipsoid(origin, BodyEllipsoid::MOON_ME)
-        .expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin, BodyEllipsoid::MOON_ME).expect("plausible origin");
     let ned = plane.to_ned(&GeodeticPosition::new(0.2, -0.4, 250.0));
     assert!(ned.north_m.abs() < 1e-6 && ned.east_m.abs() < 1e-6);
     assert!((ned.down_m + 250.0).abs() < 1e-6);
@@ -184,8 +181,7 @@ fn a_point_above_a_lunar_origin_is_pure_negative_down() {
 #[test]
 fn a_lunar_northward_step_follows_the_lunar_radius() {
     let origin = GeodeticPosition::new(0.0, 0.0, 0.0);
-    let plane = LocalTangentPlane::with_ellipsoid(origin, BodyEllipsoid::MOON_ME)
-        .expect("plausible origin");
+    let plane = LocalTangentPlane::new(origin, BodyEllipsoid::MOON_ME).expect("plausible origin");
     let step_rad = 1e-3;
     let ned = plane.to_ned(&GeodeticPosition::new(step_rad, 0.0, 0.0));
     let chord_m = 2.0 * 1_737_400.0 * (0.5 * step_rad).sin();
@@ -201,9 +197,8 @@ fn a_lunar_northward_step_follows_the_lunar_radius() {
 fn the_same_coordinates_differ_between_bodies() {
     let origin = GeodeticPosition::new(0.3, 0.1, 0.0);
     let target = GeodeticPosition::new(0.301, 0.1, 0.0);
-    let earth = LocalTangentPlane::new(origin).expect("plausible origin");
-    let mars = LocalTangentPlane::with_ellipsoid(origin, BodyEllipsoid::MARS_IAU)
-        .expect("plausible origin");
+    let earth = LocalTangentPlane::new(origin, BodyEllipsoid::WGS84).expect("plausible origin");
+    let mars = LocalTangentPlane::new(origin, BodyEllipsoid::MARS_IAU).expect("plausible origin");
     let ratio = earth.to_ned(&target).north_m / mars.to_ned(&target).north_m;
     assert!((ratio - 1.88).abs() < 0.02, "{ratio}");
 }

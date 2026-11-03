@@ -6,10 +6,10 @@ use navigate_contract::{
     AltitudeConstraint, GeodeticPosition, GuidanceSetpoint, LateralReference, NedVelocity,
     SolutionQuality, Waypoint,
 };
-use navigate_geodesy::{cross_track_m, initial_bearing_rad, wgs84};
+use navigate_geodesy::{initial_bearing_rad, wgs84};
 
 use crate::config::VelocityGuidanceConfig;
-use crate::scenario::{CLOCK, deg, equator_leg, now, solution};
+use crate::scenario::{CLOCK, deg, equator_leg, id, now, solution};
 
 use super::guide_velocity;
 
@@ -83,7 +83,7 @@ fn right_of_track_corrects_northward_at_the_configured_gain() {
     )
     .expect("guides");
     let velocity = velocity_of(command.setpoint);
-    let cross_m = cross_track_m(&own_pos, &from, &to.position).expect("valid track");
+    let cross_m = wgs84::cross_track_m(&own_pos, &from, &to.position).expect("valid track");
     assert!(
         (cross_m - 4.0).abs() < 0.01,
         "south of an eastbound track is 4 m right: {cross_m}"
@@ -187,7 +187,7 @@ fn a_huge_cross_track_stays_within_the_horizontal_cap() {
 #[test]
 fn direct_to_is_pure_bearing_aligned_velocity() {
     let own_pos = deg(10.0, 20.0, 0.0);
-    let to = Waypoint::new("DCT".into(), deg(11.0, 21.0, 0.0));
+    let to = Waypoint::new(id("DCT"), deg(11.0, 21.0, 0.0));
     let own = solution(SolutionQuality::Good, own_pos, now());
     let config = VelocityGuidanceConfig::default();
     let command = guide_velocity(
@@ -274,8 +274,8 @@ fn the_approach_speed_floor_holds_at_the_waypoint() {
 #[test]
 fn above_the_profile_descends_and_below_it_climbs() {
     let (from, _) = equator_leg();
-    let to = Waypoint::new("END".into(), deg(0.0, 1.0, 0.0))
-        .with_altitude(AltitudeConstraint::At(100.0));
+    let to =
+        Waypoint::new(id("END"), deg(0.0, 1.0, 0.0)).with_altitude(AltitudeConstraint::At(100.0));
     let config = VelocityGuidanceConfig::default();
     let above = solution(SolutionQuality::Good, deg(0.0, 0.5, 101.0), now());
     let command = guide_velocity(
@@ -317,8 +317,8 @@ fn above_the_profile_descends_and_below_it_climbs() {
 #[test]
 fn the_vertical_rate_is_capped_both_ways() {
     let (from, _) = equator_leg();
-    let to = Waypoint::new("END".into(), deg(0.0, 1.0, 0.0))
-        .with_altitude(AltitudeConstraint::At(100.0));
+    let to =
+        Waypoint::new(id("END"), deg(0.0, 1.0, 0.0)).with_altitude(AltitudeConstraint::At(100.0));
     let config = VelocityGuidanceConfig::default();
     for (altitude_m, expected_mps) in [
         (1_000.0, config.max_vertical_mps),

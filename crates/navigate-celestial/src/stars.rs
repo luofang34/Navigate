@@ -7,8 +7,8 @@
 use crate::{
     AnalyticEphemeris, AnalyticError, Ephemeris, Epoch, civil_time, earth_rotation, observation,
 };
-use flamsteed::Catalog;
-use nalgebra::Vector3;
+use flamsteed::{Catalog, Star};
+use nalgebra::{Matrix3, Vector3};
 
 const LIGHT_SPEED_M_S: f64 = 299_792_458.0;
 
@@ -63,26 +63,81 @@ pub fn stars_ecef_tt(
     epoch: Epoch,
     faintest_v_magnitude: f64,
 ) -> Result<Vec<StarSight>, AnalyticError> {
-    // The ephemeris range check comes first.
-    let beta =
-        Vector3::from(AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s) / LIGHT_SPEED_M_S;
-    let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(epoch);
-    let years = epoch.to_tdb_centuries_since_j2000() * 100.0;
-    let stars = Catalog::bright_star_catalogue()
-        .brighter_than(faintest_v_magnitude)
-        .stars();
-    let mut sights = Vec::with_capacity(stars.len());
-    for star in stars {
-        let Some(hr) = star.hr() else { continue };
-        let apparent = observation::aberrate(Vector3::from(star.direction_at(years)), beta);
-        sights.push(StarSight {
-            hr,
-            direction: (to_earth_fixed * apparent).normalize().into(),
-            v_magnitude: star.v_magnitude,
-            b_minus_v: star.b_minus_v,
+    let apparent = Apparent::at(epoch)?;
+    Ok(selection(faintest_v_magnitude)
+        .stars()
+        .filter_map(|star| apparent.sight(star))
+        .collect())
+}
+
+/// The stars of [`stars_ecef_tt`], written into `out` without an
+/// allocation. The result is the number of stars written, brightest
+/// first, at the start of `out`. The rest of `out` keeps its values.
+///
+/// # Errors
+/// Returns an error for an epoch outside the range of
+/// [`AnalyticEphemeris`], and [`AnalyticError::BufferTooSmall`] when `out`
+/// cannot hold every selected star. Then the function writes nothing:
+/// a partial list would omit stars without notice.
+pub fn stars_ecef_tt_into(
+    epoch: Epoch,
+    faintest_v_magnitude: f64,
+    out: &mut [StarSight],
+) -> Result<usize, AnalyticError> {
+    let apparent = Apparent::at(epoch)?;
+    let catalog = selection(faintest_v_magnitude);
+    let needed = catalog.stars().filter(|star| star.hr().is_some()).count();
+    if needed > out.len() {
+        return Err(AnalyticError::BufferTooSmall {
+            needed,
+            capacity: out.len(),
         });
     }
-    Ok(sights)
+    let sights = catalog.stars().filter_map(|star| apparent.sight(star));
+    Ok(out
+        .iter_mut()
+        .zip(sights)
+        .map(|(slot, sight)| *slot = sight)
+        .count())
+}
+
+/// The embedded catalogue stars at least as bright as
+/// `faintest_v_magnitude`.
+fn selection(faintest_v_magnitude: f64) -> Catalog<'static> {
+    Catalog::bright_star_catalogue().brighter_than(faintest_v_magnitude)
+}
+
+/// The terms that turn a catalogue direction into an apparent Earth-fixed
+/// direction at one epoch.
+struct Apparent {
+    beta: Vector3<f64>,
+    to_earth_fixed: Matrix3<f64>,
+    years: f64,
+}
+
+impl Apparent {
+    /// The terms at `epoch`. The ephemeris range check comes first.
+    fn at(epoch: Epoch) -> Result<Self, AnalyticError> {
+        let velocity = AnalyticEphemeris.body_state(399, epoch)?.velocity_m_s;
+        Ok(Self {
+            beta: Vector3::from(velocity) / LIGHT_SPEED_M_S,
+            to_earth_fixed: earth_rotation::j2000_to_earth_fixed(epoch),
+            years: epoch.to_tdb_centuries_since_j2000() * 100.0,
+        })
+    }
+
+    /// The sight of `star`, or `None` for a star without an HR number.
+    fn sight(&self, star: Star) -> Option<StarSight> {
+        let hr = star.hr()?;
+        let apparent =
+            observation::aberrate(Vector3::from(star.direction_at(self.years)), self.beta);
+        Some(StarSight {
+            hr,
+            direction: (self.to_earth_fixed * apparent).normalize().into(),
+            v_magnitude: star.v_magnitude,
+            b_minus_v: star.b_minus_v,
+        })
+    }
 }
 
 #[cfg(test)]

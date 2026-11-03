@@ -3,7 +3,7 @@ use crate::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, ClockDomainId, Ellipsoid,
     FaultDetection, FrameId, GeodeticPosition, IntegrityAssessment, MonotonicNanos, NedVelocity,
     Redundancy, SensorClass, SolutionQuality, SolutionStamp, SourceComposition, SourceEpoch,
-    SymmetricCov3, WrappingSequence,
+    SpaceIntegrityAssessment, SpaceUncertainty, SymmetricCov3, WrappingSequence,
 };
 
 fn stamp() -> SolutionStamp {
@@ -26,7 +26,20 @@ fn integrity() -> IntegrityAssessment {
     )
 }
 
-fn solution() -> NavigationSolution {
+fn space_integrity() -> SpaceIntegrityAssessment {
+    SpaceIntegrityAssessment::new(
+        SolutionQuality::Good,
+        SourceComposition::of(SensorClass::Inertial),
+        Redundancy::None,
+        SpaceUncertainty::PrincipalAxes {
+            axes_1sigma_m: [10.0, 10.0, 10.0],
+            max_axis_1sigma_m: 10.0,
+        },
+        FaultDetection::Unavailable,
+    )
+}
+
+fn solution_on(ellipsoid: Ellipsoid) -> NavigationSolution {
     NavigationSolution::new(
         stamp(),
         GeodeticPosition::new(0.1, 0.2, 30.0),
@@ -35,15 +48,22 @@ fn solution() -> NavigationSolution {
         SymmetricCov3::from_diagonal(0.1, 0.1, 0.1),
         integrity(),
         SourceComposition::of(SensorClass::Gnss),
+        ellipsoid,
     )
 }
 
+fn solution() -> NavigationSolution {
+    solution_on(Ellipsoid::WGS84)
+}
+
 #[test]
-fn a_new_solution_is_on_wgs84_without_attitude() {
-    let solution = solution();
-    assert_eq!(solution.ellipsoid, Ellipsoid::WGS84);
-    assert_eq!(solution.attitude, None);
-    assert_eq!(solution.attitude_cov, None);
+fn a_new_solution_is_on_the_named_ellipsoid_without_attitude() {
+    for ellipsoid in [Ellipsoid::WGS84, Ellipsoid::MOON_PA, Ellipsoid::MARS_IAU] {
+        let solution = solution_on(ellipsoid);
+        assert_eq!(solution.ellipsoid, ellipsoid);
+        assert_eq!(solution.attitude, None);
+        assert_eq!(solution.attitude_cov, None);
+    }
 }
 
 #[test]
@@ -68,10 +88,19 @@ fn a_cartesian_solution_names_its_frame() {
         CartesianVelocity::new(0.0, 1_633.0, 0.0),
         SymmetricCov3::from_diagonal(100.0, 100.0, 100.0),
         SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
-        integrity(),
+        space_integrity(),
         SourceComposition::of(SensorClass::Inertial),
     );
     assert_eq!(solution.frame, FrameId::MOON_J2000);
+    assert_eq!(solution.integrity.uncertainty.max_axis_1sigma_m(), 10.0);
+    assert_eq!(solution.integrity.protection_radius_m, None);
+    assert_eq!(
+        solution
+            .integrity
+            .with_protection_radius(42.0)
+            .protection_radius_m,
+        Some(42.0)
+    );
     assert!(solution.frame.is_inertial());
     assert!(solution.position.is_finite());
     assert!(solution.velocity.is_finite());
@@ -89,4 +118,20 @@ fn cartesian_values_report_non_finite_components() {
     assert!(!CartesianPosition::new(0.0, 0.0, f64::INFINITY).is_finite());
     assert!(!CartesianVelocity::new(0.0, f64::NAN, 0.0).is_finite());
     assert!(CartesianVelocity::new(0.0, 0.0, 0.0).is_finite());
+}
+
+#[test]
+fn every_space_uncertainty_form_states_its_largest_axis() {
+    let rtn = SpaceUncertainty::OrbitalRtn {
+        radial_1sigma_m: 3.0,
+        along_track_1sigma_m: 12.0,
+        cross_track_1sigma_m: 5.0,
+        max_axis_1sigma_m: 12.5,
+    };
+    assert_eq!(rtn.max_axis_1sigma_m(), 12.5);
+    let axes = SpaceUncertainty::PrincipalAxes {
+        axes_1sigma_m: [9.0, 4.0, 1.0],
+        max_axis_1sigma_m: 9.0,
+    };
+    assert_eq!(axes.max_axis_1sigma_m(), 9.0);
 }

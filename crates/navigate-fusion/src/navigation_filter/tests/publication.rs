@@ -324,7 +324,8 @@ fn long_range_flight_reanchors_tangent_plane_without_losing_track() {
     // Fly 200 km north at 250 m/s in 1-second steps across 4 re-anchors.
     for step in 1_u32..=800 {
         let now_ms = u64::from(step) * 1_000;
-        let local = LocalTangentPlane::new(current).expect("valid");
+        let local =
+            LocalTangentPlane::new(current, navigate_geodesy::BodyEllipsoid::WGS84).expect("valid");
         current = local.from_ned(&NedOffset::new(250.0, 0.0, 0.0));
         let seq = step * 2 + 1;
         assert_accepted(f.ingest(&gnss_fix(1, seq, now_ms, current), t(now_ms)));
@@ -334,7 +335,7 @@ fn long_range_flight_reanchors_tangent_plane_without_losing_track() {
         ));
     }
     let final_sol = f.tick(t(800_000)).expect("solution after 200 km");
-    let residual = LocalTangentPlane::new(current)
+    let residual = LocalTangentPlane::new(current, navigate_geodesy::BodyEllipsoid::WGS84)
         .expect("valid")
         .to_ned(&final_sol.position);
     assert!(

@@ -10,7 +10,7 @@ use navigate_contract::{
     ClockDomainId, LateralReference, MonotonicNanos, NavigationSolution, SolutionQuality, Waypoint,
 };
 use navigate_geodesy::{
-    BodyEllipsoid, cross_track_from_course_on_m, cross_track_on_m, initial_bearing_rad,
+    BodyEllipsoid, cross_track_from_course_m, cross_track_m, initial_bearing_rad,
 };
 
 use crate::config::GuidanceConfig;
@@ -59,6 +59,7 @@ const fn quality_rank(quality: SolutionQuality) -> u8 {
 /// [`GuidanceRefusal::IntegrityBelowFloor`],
 /// [`GuidanceRefusal::ClockInversion`], [`GuidanceRefusal::SolutionStale`],
 /// [`GuidanceRefusal::ImplausibleEllipsoid`],
+/// [`GuidanceRefusal::EllipsoidMismatch`],
 /// [`GuidanceRefusal::VerticalUncertaintyExceeded`],
 /// then [`GuidanceRefusal::ImplausibleTarget`].
 pub(crate) fn admit_leg(
@@ -83,18 +84,18 @@ pub(crate) fn admit_leg(
     }
     if !leg_to.position.is_plausible() {
         return Err(GuidanceRefusal::ImplausibleTarget {
-            ident: leg_to.ident.clone(),
+            ident: leg_to.ident,
         });
     }
     // A course line needs one position and one direction, so it has no
     // two-endpoint degenerate case to refuse (NAV-LG-012).
     if let LateralReference::Course { course_rad } = reference {
         return Ok(AdmittedLeg {
-            cross_track_m: cross_track_from_course_on_m(
+            cross_track_m: cross_track_from_course_m(
                 &solution.position,
                 &leg_to.position,
                 course_rad,
-                &ellipsoid,
+                ellipsoid,
             ),
             course_rad,
             ellipsoid,
@@ -107,15 +108,10 @@ pub(crate) fn admit_leg(
     // Any track the geodesy layer refuses (endpoints below its
     // degenerate-track floor) cannot define a course, so the leg's
     // target is implausible as a guidance target.
-    let lateral_m = cross_track_on_m(
-        &solution.position,
-        track_start,
-        &leg_to.position,
-        &ellipsoid,
-    )
-    .map_err(|_| GuidanceRefusal::ImplausibleTarget {
-        ident: leg_to.ident.clone(),
-    })?;
+    let lateral_m = cross_track_m(&solution.position, track_start, &leg_to.position, ellipsoid)
+        .map_err(|_| GuidanceRefusal::ImplausibleTarget {
+            ident: leg_to.ident,
+        })?;
     Ok(AdmittedLeg {
         cross_track_m: lateral_m,
         course_rad: initial_bearing_rad(track_start, &leg_to.position),
@@ -125,8 +121,8 @@ pub(crate) fn admit_leg(
 
 /// Fail-closed solution admission: clock-domain agreement first (age
 /// arithmetic across domains is meaningless), then quality floor, then
-/// age against `now`, then the solution ellipsoid. The result is the
-/// admitted ellipsoid.
+/// age against `now`, then the solution ellipsoid and optional body check.
+/// The result is the admitted ellipsoid.
 fn admit_solution(
     solution: &NavigationSolution,
     now: MonotonicNanos,
@@ -157,12 +153,21 @@ fn admit_solution(
             bound: config.max_solution_age,
         });
     }
-    BodyEllipsoid::try_from_contract(solution.ellipsoid).map_err(|_| {
+    let body_ellipsoid = BodyEllipsoid::try_from_contract(solution.ellipsoid).map_err(|_| {
         GuidanceRefusal::ImplausibleEllipsoid {
             semi_major_axis_m: solution.ellipsoid.semi_major_axis_m,
             flattening: solution.ellipsoid.flattening,
         }
-    })
+    })?;
+    if let Some(expected_ellipsoid) = config.expected_ellipsoid
+        && solution.ellipsoid != expected_ellipsoid
+    {
+        return Err(GuidanceRefusal::EllipsoidMismatch {
+            expected: expected_ellipsoid,
+            got: solution.ellipsoid,
+        });
+    }
+    Ok(body_ellipsoid)
 }
 
 #[cfg(test)]

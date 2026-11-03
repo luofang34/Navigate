@@ -17,7 +17,7 @@ use crate::plan_set::PlanActivationError;
 /// A waypoint that declares none gets one by position in the fly order:
 /// the first waypoint runs from the present position, and every later
 /// waypoint runs on the great-circle track from the fix before it. This
-/// is the implicit model the executor already flies, now named.
+/// is the implicit model the executor flies, named explicitly.
 pub(crate) const fn resolve_path(index: usize, declared: Option<LegPath>) -> LegPath {
     match declared {
         Some(path) => path,
@@ -34,7 +34,7 @@ pub(crate) const fn resolve_path(index: usize, declared: Option<LegPath>) -> Leg
 /// terminator, and [`PlanActivationError::MagneticCourseUnsupported`]
 /// for a course declared against magnetic north, which needs a magnetic
 /// variation model this workspace does not have.
-pub(crate) fn screen_leg_paths(plan: &FlightPlan) -> Result<(), PlanActivationError> {
+pub(crate) fn screen_leg_paths(plan: &FlightPlan<'_>) -> Result<(), PlanActivationError> {
     for (index, waypoint) in plan.waypoints.iter().enumerate() {
         screen_one(plan, index, waypoint)?;
     }
@@ -42,7 +42,7 @@ pub(crate) fn screen_leg_paths(plan: &FlightPlan) -> Result<(), PlanActivationEr
 }
 
 fn screen_one(
-    plan: &FlightPlan,
+    plan: &FlightPlan<'_>,
     index: usize,
     waypoint: &Waypoint,
 ) -> Result<(), PlanActivationError> {
@@ -57,18 +57,18 @@ fn screen_one(
             reference: CourseReference::Magnetic,
             course_rad,
         } => Err(PlanActivationError::MagneticCourseUnsupported {
-            plan: plan.id.clone(),
+            plan: plan.id,
             index,
-            ident: waypoint.ident.clone(),
+            ident: waypoint.ident,
             course_rad,
         }),
         // Fail closed: the vocabulary is non-exhaustive, so a terminator
         // this crate has never seen is refused with the reserved ones
         // rather than admitted by an optimistic wildcard.
         other => Err(PlanActivationError::UnsupportedLegKind {
-            plan: plan.id.clone(),
+            plan: plan.id,
             index,
-            ident: waypoint.ident.clone(),
+            ident: waypoint.ident,
             path: other,
         }),
     }

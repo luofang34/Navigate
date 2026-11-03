@@ -1,12 +1,20 @@
 [package]
 name = "navigate-geodesy"
-description = "WGS84 geodesy: geodetic/ECEF/local-NED conversions, great-circle and cross-track geometry"
+description = "Multi-body geodesy: geodetic, body-fixed, local-NED, vertical datum, and small-body surface geometry"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = ["std"]
+# Float functions from the standard library.
+std = ["navigate-contract/std"]
+# Float functions from libm, for targets without the standard library.
+libm = ["dep:libm", "navigate-contract/libm"]
+
 [dependencies]
+libm = { version = "0.2.16", optional = true }
 navigate-contract = { workspace = true }
 thiserror = { workspace = true }
 

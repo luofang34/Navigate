@@ -3,13 +3,14 @@
 //!
 //! The contract crate deliberately carries no body-fixed type; this
 //! crate owns the frame because it owns the conversion math.
-//! [`EcefPosition`] is the name of the type on the Earth.
+//! [`crate::wgs84::EcefPosition`] is the name of the type on the Earth.
 
 use core::f64::consts::FRAC_PI_2;
 
 use navigate_contract::GeodeticPosition;
 
 use crate::ellipsoid::BodyEllipsoid;
+use crate::float_math::{atan2, hypot, sin_cos, sqrt};
 
 /// Below this ratio of the cylindrical radius to the semi-major axis, a
 /// position is on the polar axis. There the latitude is ±π/2 and the
@@ -29,9 +30,6 @@ pub struct BodyFixedPosition {
     pub z_m: f64,
 }
 
-/// A body-fixed position on the Earth.
-pub type EcefPosition = BodyFixedPosition;
-
 impl BodyFixedPosition {
     /// Builds a position from its components.
     #[must_use]
@@ -45,22 +43,14 @@ impl BodyFixedPosition {
         let dx = self.x_m - other.x_m;
         let dy = self.y_m - other.y_m;
         let dz = self.z_m - other.z_m;
-        (dx * dx + dy * dy + dz * dz).sqrt()
+        sqrt(dx * dx + dy * dy + dz * dz)
     }
-}
 
-/// Converts a WGS84 geodetic position to ECEF. Closed form, exact to
-/// floating-point rounding.
-#[must_use]
-pub fn geodetic_to_ecef(geodetic: &GeodeticPosition) -> EcefPosition {
-    geodetic_to_body_fixed(geodetic, &BodyEllipsoid::WGS84)
-}
-
-/// Converts an ECEF position to WGS84 geodetic coordinates with
-/// [`body_fixed_to_geodetic`].
-#[must_use]
-pub fn ecef_to_geodetic(ecef: &EcefPosition) -> GeodeticPosition {
-    body_fixed_to_geodetic(ecef, &BodyEllipsoid::WGS84)
+    /// The components as `[x, y, z]` in meters.
+    #[must_use]
+    pub const fn to_array(&self) -> [f64; 3] {
+        [self.x_m, self.y_m, self.z_m]
+    }
 }
 
 /// Converts a geodetic position on `ellipsoid` to the body-fixed frame
@@ -68,12 +58,12 @@ pub fn ecef_to_geodetic(ecef: &EcefPosition) -> GeodeticPosition {
 #[must_use]
 pub fn geodetic_to_body_fixed(
     geodetic: &GeodeticPosition,
-    ellipsoid: &BodyEllipsoid,
+    ellipsoid: BodyEllipsoid,
 ) -> BodyFixedPosition {
-    let (sin_lat, cos_lat) = geodetic.latitude_rad.sin_cos();
-    let (sin_lon, cos_lon) = geodetic.longitude_rad.sin_cos();
+    let (sin_lat, cos_lat) = sin_cos(geodetic.latitude_rad);
+    let (sin_lon, cos_lon) = sin_cos(geodetic.longitude_rad);
     let e2 = ellipsoid.first_eccentricity_squared();
-    let prime_vertical_m = ellipsoid.semi_major_axis_m() / (1.0 - e2 * sin_lat * sin_lat).sqrt();
+    let prime_vertical_m = ellipsoid.semi_major_axis_m() / sqrt(1.0 - e2 * sin_lat * sin_lat);
     let h = geodetic.altitude_m;
     BodyFixedPosition {
         x_m: (prime_vertical_m + h) * cos_lat * cos_lon,
@@ -110,26 +100,26 @@ pub fn geodetic_to_body_fixed(
 #[must_use]
 pub fn body_fixed_to_geodetic(
     pos: &BodyFixedPosition,
-    ellipsoid: &BodyEllipsoid,
+    ellipsoid: BodyEllipsoid,
 ) -> GeodeticPosition {
     let a = ellipsoid.semi_major_axis_m();
     let b = ellipsoid.semi_minor_axis_m();
-    let p = pos.x_m.hypot(pos.y_m);
-    let longitude_rad = pos.y_m.atan2(pos.x_m);
+    let p = hypot(pos.x_m, pos.y_m);
+    let longitude_rad = atan2(pos.y_m, pos.x_m);
     if p <= POLAR_AXIS_RATIO * a {
         let latitude_rad = if pos.z_m < 0.0 { -FRAC_PI_2 } else { FRAC_PI_2 };
         return GeodeticPosition::new(latitude_rad, longitude_rad, pos.z_m.abs() - b);
     }
 
-    let beta = (pos.z_m * a).atan2(p * b);
-    let first_pass = bowring_latitude_rad(p, pos.z_m, beta, ellipsoid);
-    let (sin_first, cos_first) = first_pass.sin_cos();
-    let refined_beta = ((1.0 - ellipsoid.flattening()) * sin_first).atan2(cos_first);
-    let latitude_rad = bowring_latitude_rad(p, pos.z_m, refined_beta, ellipsoid);
+    let beta = atan2(pos.z_m * a, p * b);
+    let first_pass = bowring_latitude_rad(p, pos.z_m, beta, &ellipsoid);
+    let (sin_first, cos_first) = sin_cos(first_pass);
+    let refined_beta = atan2((1.0 - ellipsoid.flattening()) * sin_first, cos_first);
+    let latitude_rad = bowring_latitude_rad(p, pos.z_m, refined_beta, &ellipsoid);
 
-    let (sin_lat, cos_lat) = latitude_rad.sin_cos();
+    let (sin_lat, cos_lat) = sin_cos(latitude_rad);
     let e2 = ellipsoid.first_eccentricity_squared();
-    let prime_vertical_m = a / (1.0 - e2 * sin_lat * sin_lat).sqrt();
+    let prime_vertical_m = a / sqrt(1.0 - e2 * sin_lat * sin_lat);
     let altitude_m = p * cos_lat + pos.z_m * sin_lat - a * a / prime_vertical_m;
 
     GeodeticPosition::new(latitude_rad, longitude_rad, altitude_m)
@@ -138,7 +128,7 @@ pub fn body_fixed_to_geodetic(
 /// One Bowring evaluation: geodetic latitude from the parametric
 /// latitude `beta` and the cylindrical coordinates `(p, z)`.
 fn bowring_latitude_rad(p: f64, z: f64, beta: f64, ellipsoid: &BodyEllipsoid) -> f64 {
-    let (sin_beta, cos_beta) = beta.sin_cos();
+    let (sin_beta, cos_beta) = sin_cos(beta);
     let numerator = z + ellipsoid.second_eccentricity_squared()
         * ellipsoid.semi_minor_axis_m()
         * sin_beta
@@ -149,7 +139,7 @@ fn bowring_latitude_rad(p: f64, z: f64, beta: f64, ellipsoid: &BodyEllipsoid) ->
         * cos_beta
         * cos_beta
         * cos_beta;
-    numerator.atan2(denominator)
+    atan2(numerator, denominator)
 }
 
 #[cfg(test)]
