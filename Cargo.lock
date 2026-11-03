@@ -5064,8 +5064,12 @@ name = "navigate-guidance"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "nalgebra 0.34.2",
+ "navigate-astrodynamics",
  "navigate-contract",
  "navigate-geodesy",
+ "navigate-route",
+ "navigate-trajectory",
  "thiserror 2.0.19",
 ]
 
@@ -5241,6 +5245,18 @@ dependencies = [
 name = "navigate-terrain-safety"
 version = "0.1.0"
 dependencies = [
+ "navigate-contract",
+ "navigate-geodesy",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "navigate-trajectory"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "nalgebra 0.34.2",
+ "navigate-astrodynamics",
  "navigate-contract",
  "navigate-geodesy",
  "thiserror 2.0.19",

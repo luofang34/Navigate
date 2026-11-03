@@ -1,5 +1,7 @@
 //! Admission floors guidance enforces before deriving a setpoint, and
-//! the limits each derivation shapes its setpoint within.
+//! the limits each derivation shapes its setpoint within. The surface
+//! floors and the space floors are separate types, because a Cartesian
+//! solution has no vertical uncertainty and no ellipsoid.
 
 use navigate_contract::{DurationNanos, Ellipsoid, SolutionQuality};
 
@@ -147,11 +149,68 @@ impl Default for VelocityGuidanceConfig {
     }
 }
 
+/// Admission floors of a solution in a Cartesian frame, for the space
+/// derivations [`crate::guide_burn`], [`crate::guide_rendezvous`],
+/// [`crate::guide_entry`], and [`crate::guide_powered_descent`].
+///
+/// [`crate::admit_space_solution`] enforces these floors, so that every
+/// space derivation refuses one solution identically.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct SpaceGuidanceConfig {
+    /// Minimum solution quality, under the ordering
+    /// `Good` > `Degraded` > `Unusable`. Defaults to
+    /// [`SolutionQuality::Degraded`].
+    pub minimum_quality: SolutionQuality,
+    /// Maximum solution age at guidance time. Defaults to one second.
+    pub max_solution_age: DurationNanos,
+    /// Maximum one-sigma position uncertainty along the largest
+    /// principal axis, in meters. Defaults to 100.0 m. A landing or a
+    /// docking sets a tighter bound.
+    pub max_position_1sigma_m: f64,
+}
+
+impl SpaceGuidanceConfig {
+    /// Default ceiling on the one-sigma position uncertainty in meters.
+    pub const DEFAULT_MAX_POSITION_1SIGMA_M: f64 = 100.0;
+
+    /// Builds a config from its parts.
+    #[must_use]
+    pub const fn new(
+        minimum_quality: SolutionQuality,
+        max_solution_age: DurationNanos,
+        max_position_1sigma_m: f64,
+    ) -> Self {
+        Self {
+            minimum_quality,
+            max_solution_age,
+            max_position_1sigma_m,
+        }
+    }
+
+    /// Sets the ceiling on the one-sigma position uncertainty in meters.
+    #[must_use]
+    pub const fn with_max_position_1sigma_m(mut self, max_position_1sigma_m: f64) -> Self {
+        self.max_position_1sigma_m = max_position_1sigma_m;
+        self
+    }
+}
+
+impl Default for SpaceGuidanceConfig {
+    fn default() -> Self {
+        Self::new(
+            SolutionQuality::Degraded,
+            DurationNanos::from_millis(1_000),
+            Self::DEFAULT_MAX_POSITION_1SIGMA_M,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use navigate_contract::{DurationNanos, SolutionQuality};
 
-    use super::{GuidanceConfig, VelocityGuidanceConfig};
+    use super::{GuidanceConfig, SpaceGuidanceConfig, VelocityGuidanceConfig};
 
     #[test]
     fn default_floor_is_degraded_and_one_second() {
@@ -159,6 +218,14 @@ mod tests {
         assert_eq!(config.minimum_quality, SolutionQuality::Degraded);
         assert_eq!(config.max_solution_age, DurationNanos::from_millis(1_000));
         assert!((config.max_vertical_1sigma_m - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn space_defaults_are_the_documented_values() {
+        let config = SpaceGuidanceConfig::default();
+        assert_eq!(config.minimum_quality, SolutionQuality::Degraded);
+        assert_eq!(config.max_solution_age, DurationNanos::from_millis(1_000));
+        assert!((config.max_position_1sigma_m - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]

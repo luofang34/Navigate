@@ -1,6 +1,6 @@
 [package]
 name = "navigate-guidance"
-description = "Lateral and vertical guidance from solution plus active leg to setpoints"
+description = "Surface, orbital, entry, and descent guidance from a solution plus a target to setpoints"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
@@ -8,12 +8,31 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["navigate-contract/std", "navigate-geodesy/std"]
-libm = ["dep:libm", "navigate-contract/libm", "navigate-geodesy/libm"]
+std = [
+    "nalgebra/std",
+    "navigate-astrodynamics/std",
+    "navigate-contract/std",
+    "navigate-geodesy/std",
+    "navigate-route/std",
+    "navigate-trajectory/std",
+]
+libm = [
+    "dep:libm",
+    "nalgebra/libm",
+    "navigate-astrodynamics/libm",
+    "navigate-contract/libm",
+    "navigate-geodesy/libm",
+    "navigate-route/libm",
+    "navigate-trajectory/libm",
+]
 
 [dependencies]
+nalgebra = { workspace = true }
+navigate-astrodynamics = { workspace = true }
 navigate-contract = { workspace = true, default-features = false }
 navigate-geodesy = { workspace = true, default-features = false }
+navigate-route = { workspace = true }
+navigate-trajectory = { workspace = true }
 libm = { version = "0.2.16", optional = true }
 thiserror = { workspace = true }
 

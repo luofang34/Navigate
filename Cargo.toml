@@ -10,6 +10,7 @@ members = [
     "crates/navigate-fusion",
     "crates/navigate-magnav",
     "crates/navigate-route",
+    "crates/navigate-trajectory",
     "crates/navigate-guidance",
     "crates/navigate-terrain-safety",
     "tools/navrun",
@@ -44,6 +45,7 @@ navigate-astrodynamics = { path = "crates/navigate-astrodynamics", default-featu
 navigate-fusion = { path = "crates/navigate-fusion", default-features = false }
 navigate-magnav = { path = "crates/navigate-magnav", default-features = false }
 navigate-route = { path = "crates/navigate-route", default-features = false }
+navigate-trajectory = { path = "crates/navigate-trajectory", default-features = false }
 navigate-guidance = { path = "crates/navigate-guidance", default-features = false }
 navigate-terrain-safety = { path = "crates/navigate-terrain-safety", default-features = false }
 thiserror = { version = "2.0.18", default-features = false }
