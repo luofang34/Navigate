@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn make(renderer: &GpuRenderer, pose: CameraPose) -> [f32; 64] {
     let mut p = [0.0; 64];
     let c = renderer.camera;
+    let frame = renderer.scene.frame;
     p[..8].copy_from_slice(&[
         c.width as f32,
         c.height as f32,
@@ -21,12 +22,12 @@ pub(super) fn make(renderer: &GpuRenderer, pose: CameraPose) -> [f32; 64] {
             p[12 + col * 4 + row] = rotation[(row, col)] as f32;
         }
     }
-    p[24..28].copy_from_slice(&renderer.imagery.projection(renderer.frame));
-    p[28..32].copy_from_slice(&renderer.terrain.projection(renderer.frame));
-    let (s, c) = renderer.frame.anchor()[0].to_radians().sin_cos();
+    p[24..28].copy_from_slice(&renderer.scene.imagery.projection(frame));
+    p[28..32].copy_from_slice(&renderer.scene.terrain.projection(frame));
+    let (s, c) = frame.anchor()[0].to_radians().sin_cos();
     p[32] = s as f32;
     p[33] = c as f32;
-    match renderer.frame {
+    match frame {
         LocalFrame::Wgs84Enu { .. } => {
             let a = navigate_geodesy::wgs84::SEMI_MAJOR_AXIS_M;
             let e2 = navigate_geodesy::wgs84::FIRST_ECCENTRICITY_SQUARED;

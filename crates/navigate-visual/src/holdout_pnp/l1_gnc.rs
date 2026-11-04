@@ -1,8 +1,8 @@
 //! Deterministic L1 IRLS and graduated non-convexity (GNC) pose solver with spatial holdout.
 
 use super::{
-    PoseCandidate, fit_pose_ransac, low_agl_relief_inlier_px, refine_pose_lm, scaled_inlier_px,
-    score_pose_candidate, spatial_holdout,
+    PoseCandidate, effective_spatial_holdout, fit_pose_ransac, low_agl_relief_inlier_px,
+    refine_pose_lm, scaled_inlier_px, score_pose_candidate,
     two_point::{solve_2pt_gravity_pose, solve_2pt_rot_at_eye, triad_rotation},
 };
 use nalgebra::{Matrix3, Matrix6, Rotation3, Vector3, Vector6};
@@ -129,7 +129,7 @@ impl TrainOptimizer<'_> {
 
 /// Fit and score a 6-DoF camera pose deterministically with L1 IRLS and GNC.
 ///
-/// This solver fits the pose on training correspondences outside [`spatial_holdout`].
+/// This solver fits the pose on training correspondences outside [`spatial_holdout`](super::spatial_holdout).
 /// It rejects translations larger than `5,000` metres from `initial_pose`.
 /// It then scores the pose on held-out grid cells.
 #[must_use]
@@ -148,7 +148,7 @@ pub fn fit_pose_l1_gnc(
     {
         return None;
     }
-    let held = spatial_holdout(image_pixels, size);
+    let held = effective_spatial_holdout(image_pixels, size);
     let train_idx: Vec<usize> = (0..world_points.len()).filter(|&i| !held[i]).collect();
     let hold_idx: Vec<usize> = (0..world_points.len()).filter(|&i| held[i]).collect();
     if train_idx.len() < 12 || hold_idx.is_empty() {
@@ -242,7 +242,7 @@ pub fn fit_pose_hybrid(
     let gnc =
         initial_pose.and_then(|init| fit_pose_l1_gnc(world_points, image_pixels, k, size, init));
     if gnc.as_ref().is_some_and(|c| {
-        c.score.geometry_accepted && (!steep_nadir_init || -c.rotation[(2, 2)] >= 0.85)
+        c.score.geometry_accepted && (!steep_nadir_init || -c.rotation[(2, 2)] >= 0.88)
     }) {
         return gnc;
     }
@@ -252,7 +252,7 @@ pub fn fit_pose_hybrid(
             let g_tilted_planar = steep_nadir_init
                 && !g.score.geometry_accepted
                 && -g.rotation[(2, 2)] < 0.94
-                && -r.rotation[(2, 2)] >= 0.95
+                && -r.rotation[(2, 2)] >= 0.94
                 && r.score.inliers + 5 >= g.score.inliers;
             if !g_tilted_planar
                 && super::candidate_priority(&g.score) >= super::candidate_priority(&r.score)

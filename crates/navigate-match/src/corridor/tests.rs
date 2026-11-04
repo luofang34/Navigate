@@ -374,3 +374,109 @@ fn corridor_tile_store_directory_culls_frustum_without_lru_self_eviction() -> Re
     assert!(reopened.resident_window_bytes() < 10 * 1024 * 1024);
     Ok(())
 }
+
+#[test]
+fn virtual_view_scale_similarity_is_resolution_invariant_800x600_vs_4032x3024()
+-> Result<(), MatchError> {
+    let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
+    let anchor = [300.0, 300.0, 120.0];
+    let eye = [300.0, 300.0, 980.0];
+    let mut features = SparseFeatures::empty();
+    let mut world = Vec::new();
+    let mut obs_dirs = Vec::new();
+    let mut cam_xs = Vec::new();
+    let mut footprints = Vec::new();
+    for i in 0..96_usize {
+        let gx = ((i % 12) as f64 / 12.0 - 0.45) * 500.0;
+        let gy = ((i / 12) as f64 / 8.0 - 0.45) * 500.0;
+        let w = [
+            anchor[0] + gx,
+            anchor[1] + gy,
+            anchor[2] + (i % 5) as f64 * 4.0,
+        ];
+        let ray = [eye[0] - w[0], eye[1] - w[1], eye[2] - w[2]];
+        let dist = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+        obs_dirs.push([
+            (ray[0] / dist) as f32,
+            (ray[1] / dist) as f32,
+            (ray[2] / dist) as f32,
+        ]);
+        cam_xs.push([0.0_f32, 1.0, 0.0]);
+        // Bank synthesized at model-space focal ~600 px (`ref_dist_m` in meters).
+        footprints.push(dist.round() as u16);
+        world.push(w);
+        features
+            .pixels
+            .push([(i % 12) as f64 * 40.0, (i / 12) as f64 * 40.0]);
+        features.model_pixels.push([0.0, 0.0]);
+        features.scores.push(0.95 - (i as f32) * 0.003);
+        features
+            .descriptors
+            .extend_from_slice(&unit_desc(9_000 + i));
+    }
+    let tile = CorridorTileEntry::from_landmarks(
+        CorridorTileKey {
+            tile_x: 0,
+            tile_y: 0,
+        },
+        anchor,
+        &projector,
+        &world,
+        (&obs_dirs, &cam_xs, &footprints),
+        &features,
+    )?;
+    let bank = CorridorLandmarkBank::new([3; 32], [4; 32], DEFAULT_KASHIN_SEED, 600.0, vec![tile])?;
+    let w2c = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0];
+    let cam_800 = VirtualViewCamera {
+        eye_enu: eye,
+        world_to_cam: w2c,
+        intrinsics: [620.0, 620.0, 400.0, 300.0],
+        image_size: [800, 600],
+        max_landmarks: 64,
+        min_cos_incidence: 0.50,
+        min_cos_orientation: 0.50,
+    };
+    let scale = 5.04;
+    let cam_4032 = VirtualViewCamera {
+        eye_enu: eye,
+        world_to_cam: w2c,
+        intrinsics: [620.0 * scale, 620.0 * scale, 400.0 * scale, 300.0 * scale],
+        image_size: [4032, 3024],
+        max_landmarks: 64,
+        min_cos_incidence: 0.50,
+        min_cos_orientation: 0.50,
+    };
+    let virt_800 = bank.project_virtual_view(&cam_800, &projector);
+    let virt_4032 = bank.project_virtual_view(&cam_4032, &projector);
+    assert!(
+        virt_800.world_points_enu.len() >= 48,
+        "expected rich virtual view recall, got {}",
+        virt_800.world_points_enu.len()
+    );
+    assert_eq!(virt_4032.world_points_enu, virt_800.world_points_enu);
+    assert_eq!(virt_4032.sign_bits, virt_800.sign_bits);
+    assert_eq!(virt_4032.kashin_i8, virt_800.kashin_i8);
+    Ok(())
+}
+
+#[test]
+fn in_memory_tile_store_evicts_beyond_max_resident_tiles() -> Result<(), MatchError> {
+    let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
+    let store =
+        super::CorridorTileStore::in_memory([5; 32], [6; 32], DEFAULT_KASHIN_SEED, 200.0, 4)?
+            .with_max_resident_tiles(6);
+    assert_eq!(store.max_resident_tiles(), 6);
+    for tx in 0..10 {
+        store.insert_tile(build_tile_landmarks(tx, 0, 200.0, 16, &projector), false)?;
+    }
+    assert_eq!(store.indexed_tile_count(), 6);
+    assert!(!store.has_tile(CorridorTileKey {
+        tile_x: 0,
+        tile_y: 0
+    }));
+    assert!(store.has_tile(CorridorTileKey {
+        tile_x: 9,
+        tile_y: 0
+    }));
+    Ok(())
+}

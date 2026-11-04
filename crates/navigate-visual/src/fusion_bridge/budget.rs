@@ -109,7 +109,11 @@ pub struct VisualAttitudeBudget {
 }
 
 impl VisualAttitudeBudget {
-    pub(crate) fn validate(&self) -> Result<(), VisualFusionError> {
+    /// Validate that `eye_to_body` is finite and that all angular allowances are positive.
+    ///
+    /// # Errors
+    /// Refuses a non-finite mounting rotation or a non-positive angular error term.
+    pub fn validate(&self) -> Result<(), VisualFusionError> {
         for (field, value) in [
             ("mounting_rad", self.mounting_rad),
             ("map_rad", self.map_rad),

@@ -92,6 +92,8 @@ mappings, and version pins without an independent consumer.
   feature enables fine-tuning.
 - `navigate-locate` contains the place index and the search plan
   (`place`).
+- `navigate-visual-flight` holds the real-time 30 Hz flight visual
+  engine, with the `navigate-visual-` prefix of the visual stack.
 - `navigate-match-kernels` stays a separate crate. The CubeCL `#[cube]`
   macro expands to `allow(clippy::all)`, and only that crate relaxes the
   lints for it.
@@ -117,11 +119,12 @@ mappings, and version pins without an independent consumer.
 - A host that renders lunar or Martian reference views supplies its own
   renderer, because `navigate-visual-render` reads Web Mercator Earth
   tiles only.
-- The visual stack has six crates: `navigate-visual`,
+- The visual stack has seven crates: `navigate-visual`,
   `navigate-visual-render`, `navigate-match`, `navigate-match-kernels`,
-  `navigate-locate`, and `navigate-locate-web`. Consumers use the module
-  paths `navigate_visual::session`, `navigate_visual::fusion_bridge`,
-  `navigate_match::segment`, and `navigate_locate::place`.
+  `navigate-locate`, `navigate-visual-flight`, and `navigate-locate-web`.
+  Consumers use the module paths `navigate_visual::session`,
+  `navigate_visual::fusion_bridge`, `navigate_match::segment`, and
+  `navigate_locate::place`.
 - Scripts and workflows name the packages `navigate-match` and
   `navigate-visual-model` and the directory `tests/e2e-corridor`.
 

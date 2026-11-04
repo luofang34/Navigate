@@ -15,12 +15,29 @@ use navigate_visual::PixelMatch;
 
 const MIN_EARLY_EXIT_MATCHES: usize = 16;
 const PAD_LOGIT_MASK: f32 = -1.0e9;
-const TOKEN_ALIGN: usize = if cfg!(debug_assertions) { 32 } else { 256 };
+
+/// Quantize `count` to a static token bucket (`512` or `1024` up to `1024` tokens).
+#[must_use]
+pub const fn quantize_static_token_bucket(count: usize) -> usize {
+    if cfg!(debug_assertions) && count <= 64 {
+        64
+    } else if count <= 512 {
+        512
+    } else if count <= 1024 {
+        1024
+    } else {
+        count.div_ceil(512) * 512
+    }
+}
+
+type PaddedQuerySlice<'a> = (&'a [f32], &'a [f32], &'a [f32], &'a [usize], &'a [[f64; 2]]);
 
 struct BatchRefSlot<'a> {
     out_idx: usize,
     pixels: &'a [[f64; 2]],
     indices: Vec<usize>,
+    kp: Vec<f32>,
+    desc: Vec<f32>,
 }
 
 impl LighterGlue {
@@ -60,7 +77,7 @@ impl LighterGlue {
             return Ok(Vec::new());
         }
         if let [single] = references
-            && (config.prune_after_layer.is_some() || config.exit_check_layers != 0)
+            && config.prune_after_layer.is_some()
         {
             return Ok(vec![
                 self.match_features_indexed_fast(single, query, config)
@@ -80,10 +97,7 @@ impl LighterGlue {
         let m = idx_q.len();
         let mut out: Vec<Option<(Vec<IndexedMatch>, FastMatchStats)>> =
             vec![None; references.len()];
-
         let mut slots = Vec::with_capacity(references.len());
-        let mut selected_refs = Vec::with_capacity(references.len());
-        let mut max_n = 0_usize;
 
         for (out_idx, &reference) in references.iter().enumerate() {
             let (kp_r, desc_r, idx_r) = select_input(reference, config.max_keypoints)?;
@@ -98,38 +112,21 @@ impl LighterGlue {
                     },
                 ));
             } else {
-                max_n = max_n.max(n);
                 slots.push(BatchRefSlot {
                     out_idx,
                     pixels: &reference.pixels,
                     indices: idx_r,
+                    kp: kp_r,
+                    desc: desc_r,
                 });
-                selected_refs.push((kp_r, desc_r));
             }
         }
 
-        let batch = slots.len();
-        if batch == 0 {
+        if slots.is_empty() {
             return Ok(out.into_iter().flatten().collect());
         }
 
-        let pad_n = max_n.div_ceil(TOKEN_ALIGN).max(1) * TOKEN_ALIGN;
-        let pad_m = m.div_ceil(TOKEN_ALIGN).max(1) * TOKEN_ALIGN;
-
-        let mut kp_batch = vec![0.0_f32; batch * pad_n * 2];
-        let mut desc_batch = vec![0.0_f32; batch * pad_n * INPUT_DIM];
-        let mut mask_a_vals = vec![0.0_f32; batch * pad_n];
-
-        for (b, ((kp_r, desc_r), slot)) in selected_refs.into_iter().zip(&slots).enumerate() {
-            let n = slot.indices.len();
-            kp_batch[b * pad_n * 2..b * pad_n * 2 + n * 2].copy_from_slice(&kp_r);
-            desc_batch[b * pad_n * INPUT_DIM..b * pad_n * INPUT_DIM + n * INPUT_DIM]
-                .copy_from_slice(&desc_r);
-            if n < pad_n {
-                mask_a_vals[b * pad_n + n..(b + 1) * pad_n].fill(PAD_LOGIT_MASK);
-            }
-        }
-
+        let pad_m = quantize_static_token_bucket(m);
         let mut kp_q_pad = vec![0.0_f32; pad_m * 2];
         let mut desc_q_pad = vec![0.0_f32; pad_m * INPUT_DIM];
         let mut mask_b_vals = vec![0.0_f32; pad_m];
@@ -139,19 +136,64 @@ impl LighterGlue {
             mask_b_vals[m..pad_m].fill(PAD_LOGIT_MASK);
         }
 
+        for chunk in slots.chunks(4) {
+            self.run_static_batch_chunk(
+                chunk,
+                (&kp_q_pad, &desc_q_pad, &mask_b_vals, &idx_q, &query.pixels),
+                (pad_m, m),
+                config,
+                &mut out,
+            )
+            .await?;
+        }
+        Ok(out.into_iter().flatten().collect())
+    }
+
+    async fn run_static_batch_chunk(
+        &self,
+        chunk: &[BatchRefSlot<'_>],
+        (kp_q_pad, desc_q_pad, mask_b_vals, idx_q, qry_pixels): PaddedQuerySlice<'_>,
+        (pad_m, m): (usize, usize),
+        config: &FastMatchConfig,
+        out: &mut [Option<(Vec<IndexedMatch>, FastMatchStats)>],
+    ) -> Result<(), MatchError> {
+        let batch = if chunk.len() == 1 { 1 } else { 4 };
+        let max_n = chunk.iter().map(|s| s.indices.len()).max().unwrap_or(1);
+        let pad_n = quantize_static_token_bucket(max_n);
+
+        let mut kp_batch = vec![0.0_f32; batch * pad_n * 2];
+        let mut desc_batch = vec![0.0_f32; batch * pad_n * INPUT_DIM];
+        let mut mask_a_vals = vec![PAD_LOGIT_MASK; batch * pad_n];
+
+        for (b, slot) in chunk.iter().enumerate() {
+            let n = slot.indices.len();
+            kp_batch[b * pad_n * 2..b * pad_n * 2 + n * 2].copy_from_slice(&slot.kp);
+            desc_batch[b * pad_n * INPUT_DIM..b * pad_n * INPUT_DIM + n * INPUT_DIM]
+                .copy_from_slice(&slot.desc);
+            mask_a_vals[b * pad_n..b * pad_n + n].fill(0.0);
+        }
+        for b in chunk.len()..batch {
+            mask_a_vals[b * pad_n] = 0.0;
+        }
+
         let a_key_mask = Some(upload(mask_a_vals, [batch, 1, pad_n], &self.device));
         let b_key_mask =
-            Some(upload(mask_b_vals, [1, 1, pad_m], &self.device).repeat_dim(0, batch));
+            Some(upload(mask_b_vals.to_vec(), [1, 1, pad_m], &self.device).repeat_dim(0, batch));
         let mut a =
             self.input_proj
                 .forward(upload(desc_batch, [batch, pad_n, INPUT_DIM], &self.device));
         let (cos_a, sin_a) =
             self.encoding(upload(kp_batch, [batch, pad_n, 2], &self.device), pad_n);
 
-        let b0 = self
-            .input_proj
-            .forward(upload(desc_q_pad, [1, pad_m, INPUT_DIM], &self.device));
-        let (cos_b0, sin_b0) = self.encoding(upload(kp_q_pad, [1, pad_m, 2], &self.device), pad_m);
+        let b0 = self.input_proj.forward(upload(
+            desc_q_pad.to_vec(),
+            [1, pad_m, INPUT_DIM],
+            &self.device,
+        ));
+        let (cos_b0, sin_b0) = self.encoding(
+            upload(kp_q_pad.to_vec(), [1, pad_m, 2], &self.device),
+            pad_m,
+        );
         let mut b_tok = b0.repeat_dim(0, batch);
         let cos_b = cos_b0.repeat_dim(0, batch);
         let sin_b = sin_b0.repeat_dim(0, batch);
@@ -179,13 +221,13 @@ impl LighterGlue {
                         &b_tok,
                         a_key_mask.as_ref(),
                         b_key_mask.as_ref(),
-                        &slots,
-                        (&idx_q, &query.pixels),
-                        (pad_n, pad_m, m),
+                        chunk,
+                        (idx_q, qry_pixels),
+                        (batch, pad_n, pad_m, m),
                         config.score_threshold,
                     )
                     .await?;
-                for (slot, matches) in slots.iter().zip(decoded) {
+                for (slot, matches) in chunk.iter().zip(decoded) {
                     if out[slot.out_idx].is_some() {
                         continue;
                     }
@@ -207,8 +249,8 @@ impl LighterGlue {
                         ));
                     }
                 }
-                if slots.iter().all(|s| out[s.out_idx].is_some()) {
-                    return Ok(out.into_iter().flatten().collect());
+                if chunk.iter().all(|s| out[s.out_idx].is_some()) {
+                    return Ok(());
                 }
             }
         }
@@ -219,13 +261,13 @@ impl LighterGlue {
                 &b_tok,
                 a_key_mask.as_ref(),
                 b_key_mask.as_ref(),
-                &slots,
-                (&idx_q, &query.pixels),
-                (pad_n, pad_m, m),
+                chunk,
+                (idx_q, qry_pixels),
+                (batch, pad_n, pad_m, m),
                 config.score_threshold,
             )
             .await?;
-        for (slot, matches) in slots.iter().zip(decoded) {
+        for (slot, matches) in chunk.iter().zip(decoded) {
             if out[slot.out_idx].is_none() {
                 out[slot.out_idx] = Some((
                     matches,
@@ -240,7 +282,7 @@ impl LighterGlue {
                 ));
             }
         }
-        Ok(out.into_iter().flatten().collect())
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -252,10 +294,9 @@ impl LighterGlue {
         b_key_mask: Option<&Tensor<3>>,
         slots: &[BatchRefSlot<'_>],
         (idx_q, qry_pixels): (&[usize], &[[f64; 2]]),
-        (pad_n, pad_m, m): (usize, usize, usize),
+        (batch, pad_n, pad_m, m): (usize, usize, usize, usize),
         threshold: f32,
     ) -> Result<Vec<Vec<IndexedMatch>>, MatchError> {
-        let batch = slots.len();
         let (scores, _, _) =
             self.assignment_with_logits(a.clone(), b.clone(), a_key_mask, b_key_mask);
         let (row_max, row_argmax) = scores.clone().max_dim_with_indices(2);
@@ -276,7 +317,7 @@ impl LighterGlue {
         let all_row_indices: Vec<i64> = ridx.iter::<i64>().collect();
         let all_col_indices: Vec<i64> = cidx.iter::<i64>().collect();
 
-        let mut results = Vec::with_capacity(batch);
+        let mut results = Vec::with_capacity(slots.len());
         for (item, slot) in slots.iter().enumerate() {
             let n = slot.indices.len();
             let r_off = item * pad_n;

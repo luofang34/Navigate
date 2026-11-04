@@ -61,6 +61,7 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 | `navigate-visual-render` | Terrain and orthoimagery reference renderer on CPU and `wgpu` |
 | `navigate-match` | Rust `LoFTR`, `XFeat`, `LighterGlue`, and `DINOv2` matchers across `burn` and optional `ort` runtimes. The `segment` module gives SegFormer-B0 occlusion masks, amortized homography warping, horizon estimation, propeller detection, and 4-class training on the same runtimes |
 | `navigate-locate` | Sans-IO single-photo pose search, pair/feature localizers, and real-time corridor tracking. The `place` module holds the Hilbert-sharded place index and the bounded region search plans |
+| `navigate-visual-flight` | Real-time 30 Hz flight visual engine in memory: borrowed pixel frames, bounded worker queues, shared GPU terrain views, multi-hypothesis anchor verification, and delayed-measurement covariance propagation on any body |
 | `navigate-locate-web` | Browser `wasm32` visual locator that uses WebNN with `burn` WebGPU and CPU fallback |
 | `navigate-recording` | Camera evidence, recording input and result types, and visual session processing |
 | `tools/visual-model` | `navigate-visual-model`: deterministic ONNX and checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` |

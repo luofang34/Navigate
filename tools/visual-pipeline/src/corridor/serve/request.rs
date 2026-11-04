@@ -9,7 +9,6 @@ use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Default, Deserialize)]
@@ -60,34 +59,17 @@ pub(super) struct ServeRequest {
 
 pub(super) struct PreparedServeRequest {
     pub track_opts: CorridorTrackOptions,
-    pub single_case: Option<[PhotoCase; 1]>,
-    pub output_dir: PathBuf,
-    pub temp_out: Option<PathBuf>,
+    pub single_case: Option<PhotoCase>,
+    pub persist_output: Option<PathBuf>,
 }
 
 impl ServeRequest {
     pub(super) fn into_prepared(
         self,
         base: &CorridorServeOptions,
-        requests_served: u64,
     ) -> Result<PreparedServeRequest, PipelineError> {
-        let mut temp_out: Option<PathBuf> = None;
-        let output_dir = match self.output {
-            Some(dir) => dir,
-            None => {
-                let stamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos());
-                let dir = std::env::temp_dir().join(format!(
-                    "navigate-corridor-serve-{}-{}-{}",
-                    std::process::id(),
-                    requests_served,
-                    stamp
-                ));
-                temp_out = Some(dir.clone());
-                dir
-            }
-        };
+        let persist_output = self.output.clone();
+        let output_dir = self.output.unwrap_or_default();
 
         let (dataset_dir, profile_path, single_case) = if let Some(ref img_path) = self.image {
             let parent = self
@@ -104,7 +86,6 @@ impl ServeRequest {
                     path: img_path.clone(),
                     source,
                 })?;
-            let sha = file_sha256(img_path)?;
             let (_, claims, _) = extract_photo_claims(img_path);
             let case_id = self.id.unwrap_or_else(|| {
                 img_path
@@ -127,7 +108,7 @@ impl ServeRequest {
             let case = PhotoCase {
                 id: case_id,
                 image: rel_img,
-                image_sha256: sha,
+                image_sha256: String::new(),
                 size: [w, h],
                 valid_mask,
                 mask_sha256,
@@ -138,7 +119,7 @@ impl ServeRequest {
                 sequence: Some(0),
                 time_s: Some(0.0),
             };
-            (parent, PathBuf::new(), Some([case]))
+            (parent, PathBuf::new(), Some(case))
         } else {
             let ds = self.dataset.ok_or_else(|| {
                 PipelineError::Invalid("request requires `image` or `dataset`".into())
@@ -178,7 +159,7 @@ impl ServeRequest {
             mask_policy: base.mask_policy.clone(),
             mask_interval: 10,
             mask_interval_s: None,
-            output_dir: output_dir.clone(),
+            output_dir,
             anchor_interval: 30,
             anchor_interval_s: None,
             anchor_uncertainty_m: None,
@@ -201,8 +182,7 @@ impl ServeRequest {
         Ok(PreparedServeRequest {
             track_opts,
             single_case,
-            output_dir,
-            temp_out,
+            persist_output,
         })
     }
 }

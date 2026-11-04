@@ -42,7 +42,7 @@ impl ContextSurface {
         };
         let eye_geo = self.primary.geodetic(eye);
         let ctx_eye = ctx.local(eye_geo[0], eye_geo[1], eye_geo[2]);
-        let r_ctx_to_pri = self.primary.enu_from_ecef * ctx.enu_from_ecef.transpose();
+        let r_ctx_to_pri = self.primary.enu_from_ecef() * ctx.enu_from_ecef().transpose();
         let w2c_ctx = world_to_cam * r_ctx_to_pri;
         let (crgb, cdepth, cpts) = ctx.render(ctx_eye, &w2c_ctx, k, size);
         let (w, h) = (size[0], size[1]);

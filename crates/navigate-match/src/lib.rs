@@ -35,19 +35,24 @@ pub use convert::loftr_from_checkpoint;
 pub use corridor::{
     ActiveTrackSet, CORRIDOR_MAGIC, CORRIDOR_SHARD_MAGIC, CORRIDOR_STORE_INDEX_MAGIC,
     CORRIDOR_VERSION, CorridorLandmarkBank, CorridorTileEntry, CorridorTileKey, CorridorTileStore,
-    DEFAULT_WINDOW_TILES, TrackMatchConfig, Tracked3dMatch, VirtualCorridorView, VirtualViewCamera,
+    DEFAULT_MAX_RESIDENT_TILES, DEFAULT_WINDOW_TILES, TrackMatchConfig, Tracked3dMatch,
+    VirtualCorridorView, VirtualViewCamera,
 };
 pub use dinov2::{DINOV2_WIDTH, Dinov2};
 pub use error::MatchError;
 pub use kashin::{
-    DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, PrecomputedMatch,
+    DEFAULT_KASHIN_SEED, HadamardProjector, KashinDescriptor, KashinScratch, PrecomputedMatch,
     PrecomputedReferenceBank, PrecomputedViewEntry, PreparedKashinQuery, ViewSketch,
+    kashin_screen_stats,
 };
-pub use lighterglue::{FastMatchConfig, FastMatchStats, IndexedMatch, LighterGlue};
+pub use lighterglue::{
+    FastMatchConfig, FastMatchStats, IndexedMatch, LighterGlue, ModelSessionMatcher, SparseMatcher,
+    StaticMatcherShape, quantize_static_token_bucket,
+};
 pub use loftr::{Correspondence, Loftr};
 pub use matcher::LoftrMatcher;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_engine::{NativeMlEngine, XFeatDenseSession};
+pub use native_engine::{NativeMlEngine, XFeatDenseSession, enable_persistent_gpu_cache};
 #[cfg(all(not(target_arch = "wasm32"), feature = "ort"))]
 pub use ort_session::{OrtProvider, OrtSession, init_ort_runtime};
 pub use staged::{BurnXFeatFeatures, XFeatLighterGlueMatcher};

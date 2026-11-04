@@ -5237,6 +5237,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-visual-flight"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "image",
+ "nalgebra 0.34.2",
+ "navigate-astrodynamics",
+ "navigate-contract",
+ "navigate-fusion",
+ "navigate-geodesy",
+ "navigate-locate",
+ "navigate-match",
+ "navigate-visual",
+ "navigate-visual-render",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "navigate-visual-model"
 version = "0.1.0"
 dependencies = [
@@ -5269,6 +5292,7 @@ dependencies = [
  "navigate-match",
  "navigate-recording",
  "navigate-visual",
+ "navigate-visual-flight",
  "navigate-visual-render",
  "pollster",
  "serde",

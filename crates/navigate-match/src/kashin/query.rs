@@ -14,6 +14,8 @@ pub struct PreparedKashinQuery {
     valid_indices: Vec<usize>,
     sign_bits: Vec<u64>,
     rotated: Vec<[f32; 64]>,
+    rotated_i8: Vec<[i8; 64]>,
+    q_inv_q28: Vec<i64>,
 }
 
 impl PreparedKashinQuery {
@@ -36,6 +38,8 @@ impl PreparedKashinQuery {
         let mut valid_indices = Vec::with_capacity(count);
         let mut sign_bits = Vec::with_capacity(count);
         let mut rotated = Vec::with_capacity(count);
+        let mut rotated_i8 = Vec::with_capacity(count);
+        let mut q_inv_q28 = Vec::with_capacity(count);
         let mut raw_bins = [0.0_f32; 128];
         let mut moments = [[0.0_f32; 64]; 4];
         let mut sketch_valid = 0usize;
@@ -45,9 +49,12 @@ impl PreparedKashinQuery {
                 continue;
             };
             let rot = projector.project(&unit);
+            let (q_i8, inv_q28) = quantize_query_i8(&rot);
             valid_indices.push(idx);
             sign_bits.push(sign_bits64(&rot));
             rotated.push(rot);
+            rotated_i8.push(q_i8);
+            q_inv_q28.push(inv_q28);
 
             let score = query.scores.get(idx).copied().unwrap_or(1.0);
             if score.is_finite() && score >= 0.0 {
@@ -77,6 +84,8 @@ impl PreparedKashinQuery {
             valid_indices,
             sign_bits,
             rotated,
+            rotated_i8,
+            q_inv_q28,
         })
     }
 
@@ -121,6 +130,30 @@ impl PreparedKashinQuery {
     pub fn rotated(&self) -> &[[f32; 64]] {
         &self.rotated
     }
+
+    /// Return pre-quantized `i8` rotated query descriptors aligned with [`Self::valid_indices`].
+    #[must_use]
+    pub fn rotated_i8(&self) -> &[[i8; 64]] {
+        &self.rotated_i8
+    }
+
+    pub(crate) fn q_inv_q28(&self) -> &[i64] {
+        &self.q_inv_q28
+    }
+}
+
+fn quantize_query_i8(rot: &[f32; 64]) -> ([i8; 64], i64) {
+    let mut out = [0_i8; 64];
+    let mut norm_sq = 0_u64;
+    for (dst, &val) in out.iter_mut().zip(rot) {
+        let qi = (val * 127.0).round().clamp(-127.0, 127.0) as i8;
+        *dst = qi;
+        let v = i64::from(qi);
+        norm_sq += (v * v) as u64;
+    }
+    let norm_q8 = (norm_sq << 16).isqrt().max(1);
+    let inv_q28 = ((1_i64 << 28) / (norm_q8 as i64)).max(1);
+    (out, inv_q28)
 }
 
 impl PrecomputedReferenceBank {

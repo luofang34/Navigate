@@ -1,21 +1,21 @@
 //! Sans-IO inter-frame visual odometry and warm 3D landmark tracking.
 
 mod odometry;
+mod planar_vo;
 mod session_ops;
 
-pub use odometry::{kabsch_3d, relative_rotation_ransac};
+pub use odometry::{ColdDeadReckonPrior, kabsch_3d, relative_rotation_ransac};
+pub use planar_vo::{WarmTrackAttempt, nadir_yaw_translation_ransac, try_warm_track};
 
 use super::{
     kinematics::{
-        KinematicState, TrackingSearchStrategy, VehicleDynamicsProfile,
-        can_update_vertical_velocity, match_tracks_kashin, orthonormalize_so3,
+        KinematicState, VehicleDynamicsProfile, can_update_vertical_velocity, orthonormalize_so3,
     },
     session::VisualCorridorSession,
 };
 use nalgebra::{Matrix3, Vector3};
-use navigate_match::{ActiveTrackSet, MatchError, PreparedKashinQuery, TrackMatchConfig};
-use navigate_visual::holdout_pnp::{PoseCandidate, fit_pose_hybrid, fit_pose_l1_gnc};
-use navigate_visual::session::MapCell;
+use navigate_match::{ActiveTrackSet, PreparedKashinQuery};
+use navigate_visual::{holdout_pnp::PoseCandidate, session::MapCell};
 use odometry::{estimate_derotated_pixel_flow, estimate_ground_vo_delta, match_interframe_top};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -36,17 +36,6 @@ pub struct OdometryStep {
     pub dt_s: f64,
     /// True when `eye_delta` came from a solved 3D world pose rather than cold ground `VO`.
     pub has_world_pose: bool,
-}
-
-/// Diagnostic summary of one warm 3D landmark solve attempt.
-#[derive(Clone, Debug)]
-pub struct WarmTrackAttempt {
-    /// Matching and PnP solver label.
-    pub method: &'static str,
-    /// Number of 3D-2D correspondences fed into PnP.
-    pub matched_landmarks: usize,
-    /// Unfiltered PnP candidate before inlier threshold gating.
-    pub candidate: Option<PoseCandidate>,
 }
 
 /// Sans-IO 3D landmark, visual odometry, session, and dead-reckoning tracker state machine.
@@ -85,8 +74,10 @@ pub struct CorridorTracker {
     pub kinematic: Option<KinematicState>,
     /// Count of inter-frame ground optical-flow matches on the current step.
     pub last_flow_vectors: usize,
-    /// Monotonic capture timestamp in nanoseconds for session and filter admission.
-    pub monotonic_time_ns: u64,
+    /// Most recent caller-supplied monotonic capture timestamp.
+    pub last_monotonic_ns: Option<navigate_contract::MonotonicNanos>,
+    /// Dead-reckoned search center maintained during cold acquisition (`prev_eye.is_none()`).
+    pub cold_prior: Option<ColdDeadReckonPrior>,
     /// Embedded visual session, fix source, navigation filter, and dual-path dead reckoner.
     pub corridor_session: Option<VisualCorridorSession>,
 }
@@ -119,8 +110,9 @@ impl CorridorTracker {
             prev_prior_enu: None,
             kinematic: None,
             last_flow_vectors: 0,
-            monotonic_time_ns: 1_000_000_000,
-            corridor_session: VisualCorridorSession::new().ok(),
+            last_monotonic_ns: None,
+            cold_prior: None,
+            corridor_session: None,
         }
     }
 
@@ -134,7 +126,7 @@ impl CorridorTracker {
         dt_s: f64,
         profile: &VehicleDynamicsProfile,
     ) {
-        self.frame_seq += 1;
+        self.frame_seq = self.frame_seq.wrapping_add(1);
         let base_rot = self.prev_rot.or(self.vo_rot).or(prior_rot_hint);
         let mut rot_step = Matrix3::identity();
         let mut matched_pairs = (Vec::new(), Vec::new());
@@ -145,11 +137,31 @@ impl CorridorTracker {
             let max_px = profile
                 .max_pixel_displacement(dt_s, fx, fy, nominal_agl_m)
                 .clamp(96.0, 400.0);
-            matched_pairs = match_interframe_top(prev_q, cur_q, 192, max_px);
-            if matched_pairs.0.len() >= 12
-                && let Some((r_delta, inliers)) =
+            let vo_cap = if self.prev_eye.is_some() && self.active_tracks.len() >= 96 {
+                96
+            } else {
+                192
+            };
+            matched_pairs = match_interframe_top(prev_q, cur_q, vo_cap, max_px);
+            let use_planar_nadir = base_rot.map_or(nominal_agl_m <= 250.0, |r| -r[(2, 2)] > 0.75);
+            let ransac_fit = if matched_pairs.0.len() >= 12 {
+                if use_planar_nadir {
+                    nadir_yaw_translation_ransac(&matched_pairs.0, &matched_pairs.1, k_render, 4.0)
+                        .or_else(|| {
+                            relative_rotation_ransac(
+                                &matched_pairs.0,
+                                &matched_pairs.1,
+                                k_render,
+                                4.0,
+                            )
+                        })
+                } else {
                     relative_rotation_ransac(&matched_pairs.0, &matched_pairs.1, k_render, 4.0)
-            {
+                }
+            } else {
+                None
+            };
+            if let Some((r_delta, inliers)) = ransac_fit {
                 let inl_n = inliers.iter().filter(|&&b| b).count();
                 let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
                 let min_cos = profile
@@ -197,6 +209,18 @@ impl CorridorTracker {
             estimate_derotated_pixel_flow(&matched_pairs.0, &matched_pairs.1, &rot_step, k_render);
         self.vo_rot = base_rot.map(|r| orthonormalize_so3(&(rot_step * r)));
         self.prev_rot_step = rot_step;
+        if self.prev_eye.is_none() {
+            self.advance_cold_prior(
+                eye_delta,
+                &rot_step,
+                derotated_flow_px,
+                k_render,
+                nominal_agl_m,
+                dt_s,
+                profile,
+                base_rot.is_some(),
+            );
+        }
         if self.pose_steps.len() >= MAX_ODOMETRY_STEPS {
             let _ = self.pose_steps.pop_front();
         }
@@ -289,6 +313,7 @@ impl CorridorTracker {
         self.prev_eye = Some(cand.eye);
         self.prev_rot = Some(cand.rotation);
         self.vo_rot = Some(cand.rotation);
+        self.cold_prior = None;
         self.prev_prepared = Some(prepared);
         self.time_since_accepted_pose_s = 0.0;
     }
@@ -378,16 +403,28 @@ impl CorridorTracker {
             ]
         };
         let mut pred_rot = self.prev_rot_step * prev_rot;
-        if let Some(prev_q) = &self.prev_prepared {
+        let already_stepped = self
+            .pose_steps
+            .back()
+            .is_some_and(|s| s.frame_seq == self.frame_seq);
+        if !already_stepped && let Some(prev_q) = &self.prev_prepared {
             let fx = k[(0, 0)];
             let fy = k[(1, 1)];
             let max_px = profile
                 .max_pixel_displacement(dt_s, fx, fy, 480.0)
                 .clamp(96.0, 400.0);
             let (px_a, px_b) = match_interframe_top(prev_q, cur_q, 192, max_px);
-            if px_a.len() >= 12
-                && let Some((r_delta, inliers)) = relative_rotation_ransac(&px_a, &px_b, k, 4.0)
-            {
+            let ransac_fit = if px_a.len() >= 12 {
+                if -prev_rot[(2, 2)] > 0.75 {
+                    nadir_yaw_translation_ransac(&px_a, &px_b, k, 4.0)
+                        .or_else(|| relative_rotation_ransac(&px_a, &px_b, k, 4.0))
+                } else {
+                    relative_rotation_ransac(&px_a, &px_b, k, 4.0)
+                }
+            } else {
+                None
+            };
+            if let Some((r_delta, inliers)) = ransac_fit {
                 let inl_n = inliers.iter().filter(|&&b| b).count();
                 let trace_cos = ((r_delta.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
                 let min_cos = profile
@@ -400,74 +437,6 @@ impl CorridorTracker {
         }
         Some((pred_eye, orthonormalize_so3(&pred_rot)))
     }
-}
-
-/// Match `tracks` against `prepared` and solve PnP around `pred`.
-///
-/// # Errors
-/// Returns [`MatchError`] when radius landmark projection or matching fails.
-pub fn try_warm_track(
-    tracks: &ActiveTrackSet,
-    prepared: &PreparedKashinQuery,
-    pred: ([f64; 3], Matrix3<f64>),
-    k_render: &Matrix3<f64>,
-    render_size: [u32; 2],
-    min_inliers: usize,
-    strategy: TrackingSearchStrategy,
-) -> Result<(WarmTrackAttempt, Option<PoseCandidate>), MatchError> {
-    let (world, px) = match strategy {
-        TrackingSearchStrategy::RadiusSearch { radius_px } => {
-            let cfg = TrackMatchConfig {
-                search_radius_px: radius_px as f32,
-                hamming_gate: 22,
-                min_dot: 0.64,
-                ratio_limit: 0.90,
-            };
-            let intrinsics = [
-                k_render[(0, 0)],
-                k_render[(1, 1)],
-                k_render[(0, 2)],
-                k_render[(1, 2)],
-            ];
-            let r = &pred.1;
-            let row_major = [
-                r[(0, 0)],
-                r[(0, 1)],
-                r[(0, 2)],
-                r[(1, 0)],
-                r[(1, 1)],
-                r[(1, 2)],
-                r[(2, 0)],
-                r[(2, 1)],
-                r[(2, 2)],
-            ];
-            let matches =
-                tracks.match_radius(prepared, pred.0, &row_major, intrinsics, render_size, &cfg)?;
-            let mut w = Vec::with_capacity(matches.len());
-            let mut p = Vec::with_capacity(matches.len());
-            for m in &matches {
-                w.push(m.world_point_enu);
-                p.push(m.query_pixel);
-            }
-            (w, p)
-        }
-        TrackingSearchStrategy::GlobalFrustumMatch => match_tracks_kashin(tracks, prepared, 384),
-    };
-    let cand = fit_pose_l1_gnc(&world, &px, k_render, render_size, pred)
-        .or_else(|| fit_pose_hybrid(&world, &px, k_render, render_size, Some(pred)));
-    let method = match strategy {
-        TrackingSearchStrategy::RadiusSearch { .. } => "kashin-3d-radius-track+l1-gnc",
-        TrackingSearchStrategy::GlobalFrustumMatch => "kashin-3d-global-frustum+l1-gnc",
-    };
-    let accepted = cand
-        .clone()
-        .filter(|c| c.score.geometry_accepted && c.score.inliers >= min_inliers);
-    let attempt = WarmTrackAttempt {
-        method,
-        matched_landmarks: world.len(),
-        candidate: cand,
-    };
-    Ok((attempt, accepted))
 }
 
 #[cfg(test)]

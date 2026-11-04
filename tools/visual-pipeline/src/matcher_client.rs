@@ -159,6 +159,7 @@ impl PipelineMatcher {
 }
 
 pub(crate) fn default_burn_device() -> (Device, EngineKind) {
+    navigate_match::enable_persistent_gpu_cache();
     #[cfg(any(feature = "wgpu", feature = "metal", feature = "cuda"))]
     {
         (Device::default(), EngineKind::BurnGpu)

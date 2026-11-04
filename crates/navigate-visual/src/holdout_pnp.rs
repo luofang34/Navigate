@@ -87,6 +87,49 @@ pub fn spatial_holdout(pixels: &[[f64; 2]], size: [u32; 2]) -> Vec<bool> {
         .collect()
 }
 
+/// Select [`spatial_holdout`] when `12 x 12` cell occupancy is balanced, or stratify `25%` across `4 x 4` sub-cells.
+#[must_use]
+pub(crate) fn effective_spatial_holdout(pixels: &[[f64; 2]], size: [u32; 2]) -> Vec<bool> {
+    let held = spatial_holdout(pixels, size);
+    let n = pixels.len();
+    if n < 8 {
+        return held;
+    }
+    let w = f64::from(size[0].max(1));
+    let h = f64::from(size[1].max(1));
+    let mut occ = [false; 144];
+    let mut occupied_cells = 0_usize;
+    for uv in pixels {
+        let gx = ((uv[0] / w) * f64::from(GRID_DIM)).floor().clamp(0.0, 11.0) as usize;
+        let gy = ((uv[1] / h) * f64::from(GRID_DIM)).floor().clamp(0.0, 11.0) as usize;
+        let idx = gy * 12 + gx;
+        if !occ[idx] {
+            occ[idx] = true;
+            occupied_cells += 1;
+        }
+    }
+    let hold_count = held.iter().filter(|&&v| v).count();
+    if occupied_cells > 18 && hold_count * 6 >= n && hold_count * 5 <= n * 2 {
+        return held;
+    }
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        let ca = ((pixels[a][0] / (w * 0.25)).floor().clamp(0.0, 3.0) as u8)
+            + 4 * ((pixels[a][1] / (h * 0.25)).floor().clamp(0.0, 3.0) as u8);
+        let cb = ((pixels[b][0] / (w * 0.25)).floor().clamp(0.0, 3.0) as u8)
+            + 4 * ((pixels[b][1] / (h * 0.25)).floor().clamp(0.0, 3.0) as u8);
+        ca.cmp(&cb)
+            .then_with(|| pixels[a][1].total_cmp(&pixels[b][1]))
+            .then_with(|| pixels[a][0].total_cmp(&pixels[b][0]))
+            .then_with(|| a.cmp(&b))
+    });
+    let mut out = vec![false; n];
+    for (rank, idx) in order.into_iter().enumerate() {
+        out[idx] = rank % 4 == 1;
+    }
+    out
+}
+
 /// Fit and score a 6-DoF camera pose from 3D-2D correspondences with RANSAC and spatial holdout.
 ///
 /// This function refines `[eye, rvec]` on training inliers only.
@@ -102,7 +145,7 @@ pub fn fit_pose_ransac(
     if world_points.len() != image_pixels.len() || world_points.len() < 16 {
         return None;
     }
-    let held = spatial_holdout(image_pixels, size);
+    let held = effective_spatial_holdout(image_pixels, size);
     let train_idx: Vec<usize> = (0..world_points.len()).filter(|&i| !held[i]).collect();
     let hold_idx: Vec<usize> = (0..world_points.len()).filter(|&i| held[i]).collect();
     if train_idx.len() < 12 || hold_idx.is_empty() {
@@ -126,6 +169,8 @@ pub fn fit_pose_ransac(
             ransac_px,
         )
     });
+    let mut best_grav_pose = initial_pose;
+    let mut best_grav_inliers = best_inliers;
 
     let trials = 96usize.min(train_idx.len() * 3);
     for t in 0..trials {
@@ -167,6 +212,10 @@ pub fn fit_pose_ransac(
                         k,
                         ransac_px,
                     );
+                    if count > best_grav_inliers {
+                        best_grav_inliers = count;
+                        best_grav_pose = Some((eye_g, rot_g));
+                    }
                     if count > best_inliers {
                         best_inliers = count;
                         best_pose = Some((eye_g, rot_g));
@@ -243,12 +292,18 @@ pub fn fit_pose_ransac(
         size,
         inlier_px,
     );
+    let steep_nadir_init = initial_pose.is_some_and(|(_, r0)| -r0[(2, 2)] > 0.90);
+    let grav_seed = if steep_nadir_init {
+        best_grav_pose.unwrap_or((init_best_eye, init_best_rot))
+    } else {
+        (init_best_eye, init_best_rot)
+    };
     Some(select_refined_ransac_candidate(
         world_points,
         image_pixels,
         &train_idx,
         &held,
-        (init_best_eye, init_best_rot),
+        grav_seed,
         cand_6dof,
         initial_pose,
         k,

@@ -148,6 +148,8 @@ impl XFeat {
         device: &Device,
         precision: XFeatPrecision,
     ) -> Result<Self, MatchError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::native_engine::enable_persistent_gpu_cache();
         if precision == XFeatPrecision::F16 && !Self::supports_f16(device) {
             return Err(MatchError::Device {
                 stage: "xfeat f16",
@@ -474,8 +476,15 @@ async fn read_back<const N: usize>(transaction: Transaction) -> Result<[Vec<f32>
                 stage: "xfeat read-back",
                 message: format!("{error:?}"),
             })?;
-    let values: Vec<Vec<f32>> = data.iter().map(|d| d.iter::<f32>().collect()).collect();
-    if values.iter().flatten().any(|v| !v.is_finite()) {
+    let values: Vec<Vec<f32>> = data
+        .iter()
+        .map(|d| {
+            d.as_slice::<f32>()
+                .map(<[f32]>::to_vec)
+                .unwrap_or_else(|_| d.iter::<f32>().collect())
+        })
+        .collect();
+    if values.iter().any(|vec| vec.iter().any(|v| !v.is_finite())) {
         return Err(MatchError::Output("non-finite dense XFeat output"));
     }
     <[_; N]>::try_from(values).map_err(|_| MatchError::Output("xfeat read-back count"))

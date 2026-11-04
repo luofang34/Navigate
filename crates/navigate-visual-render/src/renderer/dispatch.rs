@@ -3,14 +3,17 @@ use futures_channel::oneshot;
 use image::GrayImage;
 
 impl GpuRenderer {
-    pub(super) fn dispatch(&self) {
-        let mut encoder = self.device.create_command_encoder(&Default::default());
+    pub(super) fn dispatch(&self) -> wgpu::SubmissionIndex {
+        let mut encoder = self
+            .scene
+            .device
+            .create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("terrain reference"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.scene.pipeline);
             pass.set_bind_group(0, &self.bindings, &[]);
             pass.dispatch_workgroups(
                 self.camera.width.div_ceil(8),
@@ -19,10 +22,13 @@ impl GpuRenderer {
             );
         }
         encoder.copy_buffer_to_buffer(&self.output, 0, &self.readback, 0, self.output.size());
-        self.queue.submit([encoder.finish()]);
+        self.scene.queue.submit([encoder.finish()])
     }
 
-    pub(super) async fn read(&self) -> Result<(GrayImage, Vec<f32>), RenderError> {
+    pub(super) async fn read(
+        &self,
+        submission: wgpu::SubmissionIndex,
+    ) -> Result<(GrayImage, Vec<f32>), RenderError> {
         let (send, receive) = oneshot::channel();
         self.readback
             .slice(..)
@@ -30,7 +36,12 @@ impl GpuRenderer {
                 send.send(result).ok();
             });
         #[cfg(not(target_arch = "wasm32"))]
-        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        self.scene.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })?;
+        #[cfg(target_arch = "wasm32")]
+        let _ = submission;
         receive.await??;
         let mapped = self.readback.slice(..).get_mapped_range()?;
         let count = (self.camera.width as usize) * (self.camera.height as usize);

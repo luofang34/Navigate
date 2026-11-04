@@ -127,7 +127,8 @@ impl StageTerrainRenderer {
             {
                 let eye_geo = surface.primary.geodetic(q.eye);
                 let ctx_eye = ctx.local(eye_geo[0], eye_geo[1], eye_geo[2]);
-                let r_ctx_to_pri = surface.primary.enu_from_ecef * ctx.enu_from_ecef.transpose();
+                let r_ctx_to_pri =
+                    surface.primary.enu_from_ecef() * ctx.enu_from_ecef().transpose();
                 let w2c_ctx = q.rot * r_ctx_to_pri;
                 c_gpu
                     .render_view(ctx, ctx_eye, &w2c_ctx, q.k_render, q.render_size)

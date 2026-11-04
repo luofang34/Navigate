@@ -8,11 +8,13 @@
 mod bank;
 mod codec;
 pub(crate) mod query;
+mod screen;
 
 pub use bank::{
     BANK_MAGIC, BANK_VERSION, PrecomputedMatch, PrecomputedReferenceBank, PrecomputedViewEntry,
 };
 pub use query::PreparedKashinQuery;
+pub use screen::{KashinScratch, kashin_screen_stats};
 
 use crate::{MatchError, SparseFeatures};
 

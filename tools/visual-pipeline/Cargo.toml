@@ -12,10 +12,10 @@ path = "src/main.rs"
 
 [features]
 default = ["flex"]
-flex = ["navigate-match/flex"]
-wgpu = ["navigate-match/wgpu"]
-metal = ["navigate-match/metal"]
-cuda = ["navigate-match/cuda"]
+flex = ["navigate-match/flex", "navigate-visual-flight/flex"]
+wgpu = ["navigate-match/wgpu", "navigate-visual-flight/wgpu"]
+metal = ["navigate-match/metal", "navigate-visual-flight/metal"]
+cuda = ["navigate-match/cuda", "navigate-visual-flight/cuda"]
 
 [dependencies]
 navigate-contract.workspace = true
@@ -23,6 +23,7 @@ navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-visual = { workspace = true, features = ["serde", "fusion"] }
 navigate-visual-render.workspace = true
 navigate-locate = { workspace = true, features = ["serde"] }
+navigate-visual-flight.workspace = true
 navigate-fusion = { workspace = true, features = ["std"] }
 navigate-recording.workspace = true
 navigate-match = { workspace = true, features = ["ort", "optim"] }

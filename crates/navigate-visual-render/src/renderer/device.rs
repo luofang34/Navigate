@@ -44,19 +44,13 @@ pub(super) async fn create(
     ))
 }
 
-pub(super) async fn upload(
+pub(super) async fn upload_scene(
     scene: RenderScene,
-    camera: CameraModel,
-    limits: RenderLimits,
     bytes: usize,
     device: wgpu::Device,
     queue: wgpu::Queue,
     identity: String,
-) -> Result<GpuRenderer, RenderError> {
-    let output_bytes = u64::from(camera.width)
-        .checked_mul(u64::from(camera.height))
-        .and_then(|n| n.checked_mul(8))
-        .ok_or(RenderError::Invalid("output byte count overflow"))?;
+) -> Result<GpuScene, RenderError> {
     let maximum = device.limits();
     if [scene.imagery.layout, scene.terrain.layout]
         .iter()
@@ -65,55 +59,61 @@ pub(super) async fn upload(
                 .iter()
                 .any(|n| *n > maximum.max_texture_dimension_2d)
         })
-        || output_bytes > maximum.max_storage_buffer_binding_size
-        || camera.width.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
-        || camera.height.div_ceil(8) > maximum.max_compute_workgroups_per_dimension
     {
         return Err(RenderError::Invalid("scene exceeds selected GPU limits"));
     }
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let (image_texture, height_texture) = scene_textures(&device, &queue, &scene);
-    let (parameters, output, readback) = buffers(&device, output_bytes);
     let bind_layout = layout(&device);
-    let bindings = bindings(
-        &device,
-        &bind_layout,
-        &parameters,
-        &output,
-        &image_texture,
-        &height_texture,
-    );
     let pipeline = pipeline(&device, &bind_layout);
     if let Some(error) = scope.pop().await {
         return Err(error.into());
     }
-    let style_sha256 = compute_style_sha256(
-        scene.frame,
-        scene.imagery.layout,
-        scene.terrain.layout,
-        camera,
-        limits,
-    );
-    Ok(GpuRenderer {
+    Ok(GpuScene {
         device,
         queue,
         pipeline,
         bind_layout,
-        bindings,
         image_texture,
         height_texture,
-        parameters,
-        output,
-        readback,
-        camera,
         frame: scene.frame,
         map: scene.map,
         imagery: scene.imagery.layout,
         terrain: scene.terrain.layout,
+        identity,
+        resident_texture_bytes: bytes,
+    })
+}
+
+pub(super) fn create_viewport(
+    scene: Arc<GpuScene>,
+    camera: CameraModel,
+    limits: RenderLimits,
+    identity: String,
+) -> Result<GpuRenderer, RenderError> {
+    validate_camera_and_limits(camera, limits, scene.resident_texture_bytes)?;
+    let output_bytes = check_viewport_limits(&scene.device, camera)?;
+    let (parameters, output, readback) = buffers(&scene.device, output_bytes);
+    let bindings = bindings(
+        &scene.device,
+        &scene.bind_layout,
+        &parameters,
+        &output,
+        &scene.image_texture,
+        &scene.height_texture,
+    );
+    let style_sha256 =
+        compute_style_sha256(scene.frame, scene.imagery, scene.terrain, camera, limits);
+    Ok(GpuRenderer {
+        scene,
+        bindings,
+        parameters,
+        output,
+        readback,
+        camera,
         limits,
         identity,
         style_sha256,
-        resident_texture_bytes: bytes,
     })
 }
 

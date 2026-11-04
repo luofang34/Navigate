@@ -194,7 +194,7 @@ impl LighterGlue {
         config: &FastMatchConfig,
     ) -> Result<(Vec<IndexedMatch>, FastMatchStats), MatchError> {
         config.validate()?;
-        if config.prune_after_layer.is_none() && config.exit_check_layers == 0 {
+        if config.prune_after_layer.is_none() {
             return self
                 .match_batch_padded(&[reference], query, config)
                 .await?

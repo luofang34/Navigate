@@ -10,11 +10,13 @@
 //! - Mahalanobis innovation gating and vertical velocity update criteria.
 
 use nalgebra::{Matrix3, Matrix6, Translation3, UnitQuaternion};
-use navigate_visual::session::{
-    AnchorDecision, AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose,
-    RegionChange, ScaleSource, SegmentStart, SessionError, SessionEvent, SurfaceModel,
+use navigate_visual::{
+    CameraModel, LocalFrame, MapRevision,
+    session::{
+        AnchorDecision, AnchorObservation, ContinuityEpoch, FrameKey, MapReliability, Pose,
+        RegionChange, ScaleSource, SegmentStart, SessionError, SessionEvent, SurfaceModel,
+    },
 };
-use navigate_visual::{LocalFrame, MapRevision};
 use navigate_visual_pipeline::corridor::{
     AnchorWorkerState, DeadReckonPath, DualPathDeadReckoner, KinematicState, VisualCorridorSession,
     can_update_vertical_velocity,
@@ -23,6 +25,17 @@ use navigate_visual_pipeline::corridor::{
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+fn test_camera() -> CameraModel {
+    CameraModel {
+        width: 1920,
+        height: 1080,
+        fx: 1000.0,
+        fy: 1000.0,
+        cx: 960.0,
+        cy: 540.0,
+    }
+}
 
 fn make_test_anchor(frame: FrameKey, pos: [f64; 3]) -> Result<AnchorObservation, Box<dyn Error>> {
     let local_frame = LocalFrame::anchor_mercator(47.0, 11.0).map_err(|e| format!("{e:?}"))?;
@@ -149,7 +162,7 @@ fn test_dual_path_dead_reckoner_interval_clamping_and_coasting() -> TestResult {
 
 #[test]
 fn test_session_frame_registration_nominal_and_out_of_order() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
 
     // Register nominal frames with monotonic timestamps.
     session.register_frame(1_000_000_000)?;
@@ -174,7 +187,7 @@ fn test_session_frame_registration_nominal_and_out_of_order() -> TestResult {
 
 #[test]
 fn test_session_epoch_advancement_on_unobservable_scale() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     session.register_frame(100_000_000)?;
     session.register_frame(200_000_000)?;
 
@@ -206,7 +219,7 @@ fn test_session_epoch_advancement_on_unobservable_scale() -> TestResult {
 
 #[test]
 fn test_session_anchor_after_gap_reacquisition() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
 
     // Register frame 0 and submit initial anchor.
     session.register_frame(100_000_000)?;

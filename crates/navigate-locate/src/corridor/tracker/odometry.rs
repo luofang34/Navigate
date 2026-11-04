@@ -5,6 +5,62 @@ use crate::corridor::kinematics::{VehicleDynamicsProfile, orthonormalize_so3};
 use nalgebra::{Matrix3, Vector3};
 use navigate_match::PreparedKashinQuery;
 
+/// Dead-reckoned search center maintained during cold acquisition (`prev_eye.is_none()`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColdDeadReckonPrior {
+    /// Propagated search center `[east, north, up]` in `ENU` meters.
+    pub center_enu: [f64; 3],
+    /// External reference prior `[east, north, up]` in `ENU` meters at initialization.
+    pub anchor_prior_enu: [f64; 3],
+    /// Unrotated horizontal camera-frame displacement `[dx, dy, 0]` in meters when yaw is unknown.
+    pub cam_offset_m: [f64; 3],
+    /// Current horizontal search one-sigma radius in meters.
+    pub sigma_horiz_m: f64,
+    /// Initial horizontal search one-sigma radius in meters (`sigma_0`).
+    pub sigma_0_m: f64,
+    /// Hard cap on horizontal search radius in meters.
+    pub max_search_radius_m: f64,
+    /// Cumulative horizontal ground-odometry path length in meters.
+    pub cumulative_path_m: f64,
+    /// Propagated camera heading estimate in radians (`0..2*pi` clockwise from North).
+    pub yaw_est_rad: Option<f64>,
+}
+
+impl ColdDeadReckonPrior {
+    /// Construct a cold search prior centered at `center_enu` with initial `sigma_0_m`.
+    #[must_use]
+    pub fn new(
+        center_enu: [f64; 3],
+        sigma_0_m: f64,
+        max_search_radius_m: f64,
+        yaw_est_rad: Option<f64>,
+    ) -> Self {
+        let s0 = sigma_0_m.max(5.0);
+        let cap = max_search_radius_m.max(s0);
+        Self {
+            center_enu,
+            anchor_prior_enu: center_enu,
+            cam_offset_m: [0.0; 3],
+            sigma_horiz_m: s0,
+            sigma_0_m: s0,
+            max_search_radius_m: cap,
+            cumulative_path_m: 0.0,
+            yaw_est_rad,
+        }
+    }
+
+    /// Project the camera-frame cold drift into `ENU` for a candidate `world_to_cam` rotation.
+    #[must_use]
+    pub fn projected_eye_for_rotation(&self, world_to_cam: &Matrix3<f64>) -> [f64; 3] {
+        let off = world_to_cam.transpose() * Vector3::from(self.cam_offset_m);
+        [
+            self.center_enu[0] + off.x,
+            self.center_enu[1] + off.y,
+            self.center_enu[2] + off.z,
+        ]
+    }
+}
+
 /// Solve the orthogonal Procrustes rotation `R` (`b_i ≈ R * a_i`) with `3 x 3` SVD.
 #[must_use]
 pub fn kabsch_3d(rays_a: &[[f64; 3]], rays_b: &[[f64; 3]]) -> Option<Matrix3<f64>> {
@@ -276,7 +332,7 @@ pub(super) fn project_calibrated_flow_enu(
 impl CorridorTracker {
     /// Record an identity odometry placeholder when cold-frame feature extraction is skipped.
     pub fn record_skipped_odometry_step(&mut self, dt_s: f64) {
-        self.frame_seq += 1;
+        self.frame_seq = self.frame_seq.wrapping_add(1);
         self.last_flow_vectors = 0;
         self.prev_rot_step = Matrix3::identity();
         self.time_since_accepted_pose_s += dt_s.max(0.0);
@@ -325,5 +381,120 @@ impl CorridorTracker {
             }
         }
         (eye, rot)
+    }
+
+    /// Initialize or update the cold dead-reckoning search prior when `prev_eye` is absent.
+    pub fn set_cold_prior(&mut self, prior: ColdDeadReckonPrior) {
+        if self.prev_eye.is_none() {
+            self.cold_prior = Some(prior);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn advance_cold_prior(
+        &mut self,
+        eye_delta: [f64; 3],
+        rot_step: &Matrix3<f64>,
+        derotated_flow_px: Option<[f64; 2]>,
+        k_render: &Matrix3<f64>,
+        nominal_agl_m: f64,
+        dt_s: f64,
+        profile: &VehicleDynamicsProfile,
+        has_base_rot: bool,
+    ) {
+        let yaw_from_vo = self.vo_rot.and_then(|rot| {
+            let fwd = [rot[(2, 0)], rot[(2, 1)]];
+            let up = [-rot[(1, 0)], -rot[(1, 1)]];
+            let dir = if fwd[0].hypot(fwd[1]) >= 0.20 {
+                fwd
+            } else {
+                up
+            };
+            (dir[0].hypot(dir[1]) >= 1e-4)
+                .then(|| dir[0].atan2(dir[1]).rem_euclid(std::f64::consts::TAU))
+        });
+        if let Some(cp) = self.cold_prior.as_mut() {
+            if has_base_rot {
+                cp.center_enu[0] += eye_delta[0];
+                cp.center_enu[1] += eye_delta[1];
+                cp.center_enu[2] += eye_delta[2];
+                cp.cumulative_path_m += eye_delta[0].hypot(eye_delta[1]);
+            } else if let Some([du, dv]) = derotated_flow_px
+                && nominal_agl_m.is_finite()
+                && nominal_agl_m >= 15.0
+            {
+                let fx = k_render[(0, 0)].max(1e-6);
+                let fy = k_render[(1, 1)].max(1e-6);
+                let (_, clamp_gate) = profile.ground_vo_bounds(dt_s.max(1e-3));
+                let mut d_cam =
+                    Vector3::new(-nominal_agl_m * du / fx, -nominal_agl_m * dv / fy, 0.0);
+                let norm = d_cam.x.hypot(d_cam.y);
+                if norm > clamp_gate && norm > 1e-9 {
+                    d_cam *= clamp_gate / norm;
+                }
+                let next_c = rot_step * Vector3::from(cp.cam_offset_m) + d_cam;
+                cp.cam_offset_m = [next_c.x, next_c.y, 0.0];
+                cp.cumulative_path_m += d_cam.x.hypot(d_cam.y);
+            }
+            cp.sigma_horiz_m =
+                (cp.sigma_0_m + 0.20 * cp.cumulative_path_m).min(cp.max_search_radius_m);
+            if yaw_from_vo.is_some() {
+                cp.yaw_est_rad = yaw_from_vo;
+            }
+        }
+    }
+
+    /// Compute `(q_vo_enu_m2, path_len_m, turn_rad)` for a fix propagated from `sent_frame_seq`.
+    #[must_use]
+    pub fn compute_vo_propagation_covariance(
+        &self,
+        sent_frame_seq: usize,
+        init_rot: Matrix3<f64>,
+        k_render: &Matrix3<f64>,
+        agl_m: f64,
+        profile: &VehicleDynamicsProfile,
+    ) -> (Matrix3<f64>, f64, f64) {
+        let mut rot = init_rot;
+        let mut path_len_m = 0.0_f64;
+        let mut turn_rad = 0.0_f64;
+        let mut dt_total_s = 0.0_f64;
+        let mut elapsed_steps = 0_usize;
+        for step in &self.pose_steps {
+            if step.frame_seq > sent_frame_seq && step.frame_seq <= self.frame_seq {
+                elapsed_steps += 1;
+                dt_total_s += step.dt_s.max(0.0);
+                let trace_cos = ((step.rot_step.trace() - 1.0) * 0.5).clamp(-1.0, 1.0);
+                turn_rad += trace_cos.acos();
+                rot = orthonormalize_so3(&(step.rot_step * rot));
+                let delta = if step.has_world_pose {
+                    step.eye_delta
+                } else if let Some(flow) = step.derotated_flow_px
+                    && let Some(cal) =
+                        project_calibrated_flow_enu(flow, &rot, k_render, agl_m, step.dt_s, profile)
+                {
+                    cal
+                } else {
+                    step.eye_delta
+                };
+                path_len_m += delta[0].hypot(delta[1]);
+            }
+        }
+        if elapsed_steps == 0 && dt_total_s == 0.0 {
+            return (Matrix3::zeros(), 0.0, 0.0);
+        }
+        let eff_agl = agl_m.clamp(20.0, 1_500.0);
+        let sigma_h = (0.25_f64.powi(2)
+            + (0.12 * path_len_m).powi(2)
+            + (0.15 * eff_agl * turn_rad).powi(2)
+            + (0.8 * dt_total_s).powi(2))
+        .sqrt();
+        let sigma_v =
+            (0.25_f64.powi(2) + (0.06 * path_len_m).powi(2) + (0.5 * dt_total_s).powi(2)).sqrt();
+        let cov = Matrix3::from_diagonal(&Vector3::new(
+            sigma_h * sigma_h,
+            sigma_h * sigma_h,
+            sigma_v * sigma_v,
+        ));
+        (cov, path_len_m, turn_rad)
     }
 }

@@ -9,7 +9,7 @@
 
 use super::{
     DenseMaps, GRID_HEIGHT, GRID_WIDTH, PREPARE_HEIGHT, PREPARE_WIDTH, SparseFeatures,
-    XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat, decode, score::ScoredMaps,
+    XFEAT_INPUT_HEIGHT, XFEAT_INPUT_WIDTH, XFeat, decode,
 };
 use crate::{
     MatchError, input,
@@ -97,12 +97,21 @@ impl XFeat {
         {
             return Err(MatchError::Output("dense XFeat map dimensions mismatch"));
         }
-        let scores = decode::reference_scores(&maps.keypoint_logits, &maps.reliability);
-        let scored = ScoredMaps {
-            descriptors: maps.descriptors.clone(),
-            scores,
-        };
-        decode::decode(&scored, &prepared.inner, image, valid_mask, limit)
+        let peaks = decode::peaks_from_logits_grid(
+            &maps.keypoint_logits,
+            Some(&maps.reliability),
+            [XFEAT_INPUT_WIDTH, XFEAT_INPUT_HEIGHT],
+        );
+        decode::decode_peaks_grid(
+            &maps.descriptors,
+            peaks,
+            &prepared.inner,
+            [PREPARE_WIDTH, PREPARE_HEIGHT],
+            [XFEAT_INPUT_WIDTH, XFEAT_INPUT_HEIGHT],
+            image,
+            valid_mask,
+            limit,
+        )
     }
 }
 
@@ -274,9 +283,12 @@ where
         let prep_w = static_w.unwrap_or(PREPARE_WIDTH);
         let prep_h = static_h.unwrap_or(PREPARE_HEIGHT);
 
-        let prepared = input::prepare(image, [prep_w, prep_h])?;
-        let plane =
-            decode::normalize_resized_dims(&prepared.values, [prep_w, prep_h], [in_w, in_h]);
+        let mut prepared = input::prepare(image, [prep_w, prep_h])?;
+        let plane = decode::normalize_resized_owned(
+            std::mem::take(&mut prepared.values),
+            [prep_w, prep_h],
+            [in_w, in_h],
+        );
         let buffer = if channels == 3 {
             let mut rgb = Vec::with_capacity(3 * plane.len());
             for _ in 0..3 {
@@ -348,7 +360,7 @@ fn decode_session_outputs(
     };
     let grid_in_dims = [gw * 8, gh * 8];
     let cells = gh * gw;
-    let descriptors = desc_tensor.tensor.as_slice().to_vec();
+    let descriptors = desc_tensor.tensor.as_slice();
 
     let logits_opt = outputs
         .iter()
@@ -362,7 +374,7 @@ fn decode_session_outputs(
                 .filter(|t| t.tensor.as_slice().len() == 65 * cells)
         });
 
-    let scores = if let Some(logits_t) = logits_opt {
+    let peaks = if let Some(logits_t) = logits_opt {
         let rel = outputs
             .iter()
             .find(|t| {
@@ -372,24 +384,20 @@ fn decode_session_outputs(
                         && t.tensor.shape()[1] == 1
                         && t.tensor.as_slice().len() == cells)
             })
-            .map_or_else(|| vec![1.0_f32; cells], |t| t.tensor.as_slice().to_vec());
-        decode::reference_scores_grid(logits_t.tensor.as_slice(), &rel, grid_in_dims)
+            .map(|t| t.tensor.as_slice());
+        decode::peaks_from_logits_grid(logits_t.tensor.as_slice(), rel, grid_in_dims)
     } else if let Some(heat_full) = outputs
         .iter()
         .find(|t| !std::ptr::eq(*t, desc_tensor) && t.tensor.as_slice().len() == cells * 64)
     {
-        let rel = vec![1.0_f32; cells];
-        decode::scores_from_heatmap_grid(heat_full.tensor.as_slice(), &rel, grid_in_dims)
+        decode::peaks_from_heatmap_grid(heat_full.tensor.as_slice(), None, grid_in_dims)
     } else {
         return Err(MatchError::Output("missing dense XFeat keypoint output"));
     };
 
-    let scored = ScoredMaps {
+    decode::decode_peaks_grid(
         descriptors,
-        scores,
-    };
-    decode::decode_grid(
-        &scored,
+        peaks,
         prepared,
         prep_dims,
         grid_in_dims,

@@ -1,20 +1,14 @@
-//! Two-tier `25-30 Hz` temporal corridor tracker, session fusion, and windowed tile streaming.
+//! Thin CLI replay adapter routing `PhotoCase` datasets into [`FlightVisualEngine`].
 
-use super::{
-    CorridorTrackOptions,
-    admission::{
-        apply_case_overrides, estimate_lookahead_enu, prior_odometry_hint, write_corridor_report,
-    },
-    anchor_worker::{AnchorArrival, BackgroundAnchor},
-    latency::StageLatencies,
-    masking::{AmortizedMasker, MaskFrameTelemetry},
-    motion::{TrackState, advance_unsolved_prepared, record_odometry_step, update_motion_state},
-    serve::CorridorResidentResources,
+pub(crate) mod inputs;
+pub(crate) mod reporting;
+
+pub(crate) use inputs::{
+    apply_case_overrides, build_live_frame_input, build_search_opts, matcher_runtime_for_options,
+    mount_profile_for_dynamics,
 };
 
-mod lookahead;
-mod reporting;
-mod solve;
+use super::{CorridorTrackOptions, latency::StageLatencies};
 use crate::{
     PipelineError,
     json_file::write_json,
@@ -22,46 +16,57 @@ use crate::{
         estimate_intrinsics_with_estimator, focal::FocalLengthEstimator, load_case_mask,
         load_case_rgb, load_profile_cases, scale_k,
     },
-    surface::SurfaceGpuRenderer,
     testset::PhotoCase,
 };
-use image::imageops::{FilterType, colorops::grayscale};
-use lookahead::{
-    advance_case_timing_and_continuity, ensure_lookahead_tiles, init_tracker_session,
-    pace_if_realtime, poll_anchor_before_frame, spawn_corridor_workers,
+use inputs::{advance_monotonic_clock, pace_if_realtime};
+use navigate_match::DEFAULT_WINDOW_TILES;
+use navigate_visual_flight::{
+    ExecutionPolicy, FlightEngineConfig, FlightEngineResourcePaths, FlightEngineResources,
+    FlightVisualEngine, TrackingMode, tracking_render_size,
 };
-use navigate_match::{PreparedKashinQuery, SparseFeatures};
-use reporting::{RunSummaryParams, build_run_summary, record_frame_telemetry};
+use reporting::{
+    RunSummaryParams, build_run_summary, emit_corridor_case_report, format_anchor_arrival_json,
+    record_frame_telemetry,
+};
 use serde_json::{Value, json};
-use solve::{FrameSolveParams, solve_frame_pose, tracking_render_size};
-use std::{fs, sync::Mutex, time::Instant};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
-/// Localize and track sequential frames against a [`CorridorTileStore`](navigate_match::CorridorTileStore) (`corridor-track`).
+/// Localize and track sequential frames against a `CorridorTileStore` (`corridor-track`).
 ///
 /// # Errors
 ///
 /// Returns [`PipelineError`] when bank verification, masking, matching, or report writing fails.
 pub fn run_corridor_track(opts: &CorridorTrackOptions) -> Result<Value, PipelineError> {
-    let res = CorridorResidentResources::open_for_track(opts, false)?;
-    run_corridor_track_resident(opts, None, &res, None, None)
+    let matcher_rt = matcher_runtime_for_options(
+        opts.lighterglue_weights_path.as_deref(),
+        &opts.xfeat_runtime,
+    );
+    let resources = Arc::new(FlightEngineResources::open(&FlightEngineResourcePaths {
+        catalog_path: &opts.catalog_path,
+        corridor_bank_path: &opts.corridor_bank_path,
+        xfeat_weights_path: &opts.xfeat_weights_path,
+        xfeat_runtime: &opts.xfeat_runtime,
+        matcher_weights_path: opts.lighterglue_weights_path.as_deref(),
+        matcher_runtime: &matcher_rt,
+        dinov2_weights_path: opts.dinov2_weights_path.as_deref(),
+        place_index_path: opts.place_index_path.as_deref(),
+        max_resident_tiles: DEFAULT_WINDOW_TILES,
+        prewarm_gpu: false,
+    })?);
+    run_corridor_track_with_resources(opts, None, resources, Some(&opts.output_dir))
 }
 
-pub(super) fn run_corridor_track_resident(
+pub(crate) fn run_corridor_track_with_resources(
     opts: &CorridorTrackOptions,
     cases_override: Option<&[PhotoCase]>,
-    res: &CorridorResidentResources,
-    resident_gpu: Option<&Mutex<Option<SurfaceGpuRenderer>>>,
-    resident_masker: Option<&mut AmortizedMasker>,
+    resources: Arc<FlightEngineResources>,
+    persist_dir: Option<&Path>,
 ) -> Result<Value, PipelineError> {
-    let (surface, local_frame, store, projector, xfeat, lighterglue, search_tier_matcher) = (
-        &res.surface,
-        res.local_frame,
-        &res.store,
-        res.projector,
-        &res.xfeat,
-        &res.lighterglue,
-        &res.search_tier_matcher,
-    );
     let loaded_cases;
     let cases: &[PhotoCase] = if let Some(explicit) = cases_override {
         explicit
@@ -78,69 +83,108 @@ pub(super) fn run_corridor_track_resident(
         })
         .count();
     let use_bg = opts.background_refresh && effective_cases > 1;
-    let mut owned_masker: Option<AmortizedMasker> = None;
-    let masker: &mut AmortizedMasker = match resident_masker {
-        Some(rm) if !use_bg => rm,
-        _ => {
-            let seg_device = burn::tensor::Device::flex();
-            let mask_interval = opts
-                .mask_interval_s
-                .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
-            let m = AmortizedMasker::new(
-                opts.seg_model_dir.as_deref(),
-                &opts.mask_policy,
-                6,
-                mask_interval.max(1),
-                &seg_device,
-            )?;
-            owned_masker.insert(m)
+
+    if let Some(dir) = persist_dir {
+        fs::create_dir_all(dir).map_err(|source| PipelineError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        write_json(
+            &dir.join("run.json"),
+            &json!({ "catalog_sha256": resources.surface.catalog_sha256 }),
+        )?;
+    }
+
+    let first_eff = cases
+        .iter()
+        .find(|c| {
+            opts.only_cases
+                .as_ref()
+                .is_none_or(|allow| allow.contains(&c.id))
+        })
+        .or_else(|| cases.first())
+        .map(|c| apply_case_overrides(c, opts));
+    let focal_est = FocalLengthEstimator::default();
+    let init_rs = first_eff
+        .as_ref()
+        .map_or([800, 600], |c| tracking_render_size(c.size));
+    let init_k = first_eff.as_ref().map_or_else(
+        || nalgebra::Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0),
+        |c| {
+            let kf = estimate_intrinsics_with_estimator(c, &focal_est);
+            let sx = f64::from(init_rs[0]) / f64::from(c.size[0].max(1));
+            let sy = f64::from(init_rs[1]) / f64::from(c.size[1].max(1));
+            scale_k(&kf, sx, sy)
+        },
+    );
+    let init_prior_pose = first_eff
+        .as_ref()
+        .and_then(|c| c.prior.as_ref())
+        .and_then(|p| {
+            let pos = p.position.as_ref()?;
+            let dem = resources
+                .surface
+                .sample_dem(pos.latitude, pos.longitude)
+                .unwrap_or(0.0);
+            let alt = pos.altitude_m.unwrap_or(dem + 120.0).max(dem + 25.0);
+            let eye = resources.surface.local(pos.latitude, pos.longitude, alt);
+            let hdg = p.direction_deg.unwrap_or(0.0);
+            let rot =
+                resources
+                    .surface
+                    .camera_rotation(pos.latitude, pos.longitude, hdg, 55.0, 0.0);
+            Some((eye, rot))
+        });
+
+    let mask_interval = opts
+        .mask_interval_s
+        .map_or(opts.mask_interval, |s| ((s * 30.0).round() as usize).max(1));
+    let policy = if opts.pace_realtime {
+        ExecutionPolicy::LiveFlight
+    } else {
+        ExecutionPolicy::DeterministicReplay {
+            anchor_budget_ms: 200,
+            tile_budget_ms: 150,
         }
     };
-    fs::create_dir_all(&opts.output_dir).map_err(|source| PipelineError::Io {
-        path: opts.output_dir.clone(),
-        source,
-    })?;
-    write_json(
-        &opts.output_dir.join("run.json"),
-        &json!({ "catalog_sha256": surface.catalog_sha256 }),
-    )?;
+    let need_live_tiles = init_prior_pose.is_none_or(|(eye, _)| {
+        !resources
+            .store
+            .has_tile(resources.store.tile_key_at(eye[0], eye[1]))
+    });
+    let config = FlightEngineConfig {
+        policy,
+        dynamics_profile: opts.dynamics_profile,
+        search_opts: build_search_opts(opts),
+        seg_model_dir: opts.seg_model_dir.clone(),
+        mask_policy: opts.mask_policy.clone(),
+        mask_interval_frames: mask_interval.max(1),
+        anchor_interval_frames: opts.anchor_interval,
+        anchor_interval_s: opts.anchor_interval_s,
+        anchor_on_cell_boundary: opts.anchor_on_cell_boundary,
+        min_track_inliers: opts.min_track_inliers.max(24),
+        map_cell_m: opts.map_cell_m.clamp(50.0, 20_000.0),
+        background_workers: use_bg,
+        enable_live_tile_synth: true,
+        prewarm_tile_gpu: need_live_tiles,
+        init_render_size: init_rs,
+        init_k_render: init_k,
+        init_prior_pose,
+        attitude_budget: None,
+    };
 
-    let workers = spawn_corridor_workers(
-        surface,
-        store,
-        projector,
-        xfeat,
-        lighterglue.as_ref(),
-        search_tier_matcher.as_ref(),
-        cases,
-        opts,
-        (res.prewarmed, resident_gpu.is_some()),
-    )?;
-    let worker_gpu = workers.sync_gpu_renderer;
-    let sync_gpu_ref = resident_gpu.unwrap_or(&worker_gpu);
-    let tile_params = workers.tile_params;
-    let mut background_anchor = workers.background_anchor;
-    let mut tile_builder = workers.tile_builder;
-    let shader_warmup_ms = workers.shader_warmup_ms;
+    let mut engine = FlightVisualEngine::new(Arc::clone(&resources), config)?;
+    let mount = mount_profile_for_dynamics(&opts.dynamics_profile);
 
     let mut latencies = StageLatencies::default();
     let mut tile_build_ms = Vec::new();
-    let (mut sync_tiles_built, mut anchor_results) = (0_usize, Vec::new());
-    let (kp_limit, cell_m) = (
-        opts.query_keypoints.clamp(16, 4096),
-        opts.map_cell_m.clamp(50.0, 20_000.0),
-    );
-    let min_trk_inliers = opts.min_track_inliers.max(24);
-    let mut state = TrackState::new();
-    let mut focal_estimator = FocalLengthEstimator::default();
-    init_tracker_session(&mut state, cases, opts, &focal_estimator, cell_m)?;
-
-    let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
-    let (mut warm_tracked_frames, mut independent_fixes, mut seg_refreshes) =
-        (0_usize, 0_usize, 0_usize);
+    let mut anchor_results = Vec::new();
     let mut telemetry = Vec::new();
+    let (mut evaluated, mut accepted, mut acquiring_frames) = (0_usize, 0_usize, 0_usize);
+    let (mut warm_tracked_frames, mut seg_refreshes) = (0_usize, 0_usize);
     let mut pace_origin: Option<(f64, Instant)> = None;
-    let mut vo_accum_dt_s = 0.0_f64;
+    let mut prev_raw_time_s: Option<f64> = None;
+    let mut cur_monotonic_ns = 1_000_000_000_u64;
 
     for raw_case in cases {
         if let Some(allow) = &opts.only_cases
@@ -150,314 +194,111 @@ pub(super) fn run_corridor_track_resident(
         }
         evaluated += 1;
         pace_if_realtime(opts.pace_realtime, raw_case, &mut pace_origin);
-        let polled_outcome = poll_anchor_before_frame(
-            &mut background_anchor,
-            &mut focal_estimator,
-            opts.pace_realtime,
-            evaluated,
-            raw_case,
-            &state,
-        )?;
-        let case_t0 = Instant::now();
         let case = apply_case_overrides(raw_case, opts);
-
-        if let Some(lookahead) = estimate_lookahead_enu(surface, &state, &case) {
-            ensure_lookahead_tiles(
-                surface,
-                store,
-                &mut tile_builder,
-                sync_gpu_ref,
-                xfeat,
-                &projector,
-                tile_params,
-                lookahead,
-                &mut tile_build_ms,
-                &mut sync_tiles_built,
-            )?;
-        }
-
         let query_rgb = load_case_rgb(&opts.dataset_dir, &case.image)?;
         let disk_mask = (!case.valid_mask.is_empty())
             .then(|| load_case_mask(&opts.dataset_dir, &case.valid_mask, case.size))
             .transpose()?;
-
-        let k = estimate_intrinsics_with_estimator(&case, &focal_estimator);
-        let render_size = tracking_render_size(case.size);
-        let sx = f64::from(render_size[0]) / f64::from(case.size[0].max(1));
-        let sy = f64::from(render_size[1]) / f64::from(case.size[1].max(1));
-        let k_render = scale_k(&k, sx, sy);
-
-        let qry_small = image::imageops::resize(
-            &query_rgb,
-            render_size[0],
-            render_size[1],
-            FilterType::Triangle,
+        let stamp_ns = advance_monotonic_clock(
+            &case,
+            &mut prev_raw_time_s,
+            &mut cur_monotonic_ns,
+            evaluated == 1,
         );
-        let fallback_small = disk_mask.as_ref().map(|m| {
-            image::imageops::resize(m, render_size[0], render_size[1], FilterType::Nearest)
-        });
-        let est_rot_for_mask = state
-            .prev_rot
-            .or(state.vo_rot)
-            .map(|r| state.prev_rot_step * r);
-        let anchor_busy = polled_outcome.is_none()
-            && background_anchor
-                .as_ref()
-                .is_some_and(BackgroundAnchor::is_in_flight);
-        let allow_seg =
-            !(state.active_tracks.is_empty() && masker.has_usable_key(render_size) && anchor_busy);
-        let qry_gray = grayscale(&qry_small);
-        let (mask_small, mask_tel): (_, MaskFrameTelemetry) = masker
-            .mask_frame_with_luma_controlled(
-                &qry_small,
-                &qry_gray,
-                fallback_small.as_ref(),
-                est_rot_for_mask.as_ref(),
-                &k_render,
-                allow_seg,
-            )?;
-        seg_refreshes += usize::from(mask_tel.segformer_refreshed);
-        latencies.seg_refresh_ms.extend(mask_tel.segformer_ms);
+        let live_input = build_live_frame_input(
+            &opts.dataset_dir,
+            &case,
+            &query_rgb,
+            disk_mask.as_ref(),
+            mount,
+            (evaluated - 1) as u32,
+            stamp_ns,
+            &focal_est,
+        );
+
+        let (outcome, diag) = engine.process_frame_with_diagnostics(&live_input, &case.id)?;
+        let tel = &outcome.telemetry;
         if evaluated == 1
             && opts.pace_realtime
-            && mask_tel.segformer_refreshed
+            && tel.segformer_refreshed
             && let Some((_, ref mut wall0)) = pace_origin
         {
             *wall0 = Instant::now();
         }
-        let cold_paced_vo = opts.pace_realtime
-            && anchor_busy
-            && state.active_tracks.is_empty()
-            && state.prev_prepared.is_some();
-        let skip_cold_xfeat = cold_paced_vo && !evaluated.is_multiple_of(6);
-        let qry_kp_cap = if mask_tel.valid_fraction <= 0.0 || skip_cold_xfeat {
-            0
-        } else if cold_paced_vo {
-            kp_limit.min(256)
-        } else {
-            kp_limit
-        };
-        let (qry_feat, query_xfeat_ms) = if qry_kp_cap > 0 {
-            let t_xfeat = Instant::now();
-            let feat = xfeat.extract_masked(&qry_gray, Some(&mask_small), qry_kp_cap)?;
-            (feat, t_xfeat.elapsed().as_secs_f64() * 1000.0)
-        } else {
-            (SparseFeatures::empty(), 0.0)
-        };
-        let prepared = PreparedKashinQuery::from_features(&projector, &qry_feat)?;
-
-        let (obs_time_s, dt_s, discontinuous) = advance_case_timing_and_continuity(
-            surface,
-            &mut state,
-            &mut focal_estimator,
-            &case,
-            &opts.dynamics_profile,
-        );
-        if discontinuous {
-            vo_accum_dt_s = 0.0;
+        seg_refreshes += usize::from(tel.segformer_refreshed);
+        latencies.seg_refresh_ms.extend(tel.segformer_ms);
+        tile_build_ms.extend_from_slice(&diag.tile_build_ms);
+        for arr in &diag.anchor_arrivals {
+            latencies.anchor_ms.push(arr.anchor_ms);
+            anchor_results.push(format_anchor_arrival_json(arr));
         }
-        state
-            .observe_frame(obs_time_s, dt_s, &case.image_sha256, &case.id)
-            .map_err(PipelineError::Invalid)?;
-
-        let (prior_rot_hint, mut nominal_agl_m) =
-            prior_odometry_hint(surface, &state, &case, masker, &k_render);
-        if skip_cold_xfeat {
-            vo_accum_dt_s += dt_s.max(0.0);
-            state.record_skipped_odometry_step(dt_s);
-        } else {
-            let vo_dt_s = dt_s + std::mem::take(&mut vo_accum_dt_s);
-            record_odometry_step(
-                &mut state,
-                &prepared,
-                &k_render,
-                prior_rot_hint,
-                nominal_agl_m,
-                vo_dt_s,
-                &opts.dynamics_profile,
-            );
-        }
-
-        let arrived_anchor = polled_outcome.and_then(|outcome| {
-            let target_id = (!discontinuous).then_some(case.id.as_str());
-            let arr = AnchorArrival::apply_outcome(
-                &mut state,
-                &mut independent_fixes,
-                &mut latencies,
-                &mut anchor_results,
-                &surface.catalog_sha256,
-                (cell_m, dt_s),
-                local_frame,
-                &mut focal_estimator,
-                opts.dynamics_profile,
-                outcome,
-                target_id,
-            );
-            if discontinuous {
-                state.reset_discontinuous_track();
+        match tel.tracking_mode {
+            TrackingMode::WarmTrack => {
+                warm_tracked_frames += 1;
+                latencies
+                    .warm_track_ms
+                    .push(tel.mask_ms + tel.query_xfeat_ms + tel.solve_ms);
             }
-            arr
-        });
-
-        let had_arrived_anchor = arrived_anchor.is_some();
-        let k_after_arrival = estimate_intrinsics_with_estimator(&case, &focal_estimator);
-        let k_render_after_arrival = scale_k(&k_after_arrival, sx, sy);
-        if had_arrived_anchor {
-            (_, nominal_agl_m) =
-                prior_odometry_hint(surface, &state, &case, masker, &k_render_after_arrival);
-        }
-
-        let solve_params = FrameSolveParams {
-            surface,
-            store,
-            projector: &projector,
-            sync_gpu_renderer: sync_gpu_ref,
-            xfeat,
-            lighterglue: lighterglue.as_ref(),
-            search_tier_matcher: search_tier_matcher.as_deref(),
-            opts,
-            case: &case,
-            qry_feat: &qry_feat,
-            prepared: &prepared,
-            mask_small: &mask_small,
-            k: k_after_arrival,
-            k_render: k_render_after_arrival,
-            render_size,
-            masker,
-            local_frame,
-            nominal_agl_m,
-            dt_s,
-            cell_m,
-            min_trk_inliers,
-            arrived_anchor,
-        };
-        let outcome = solve_frame_pose(
-            solve_params,
-            &mut state,
-            &mut focal_estimator,
-            &mut background_anchor,
-            &mut independent_fixes,
-            &mut latencies,
-            &mut warm_tracked_frames,
-            &mut acquiring_frames,
-        )?;
-        let (best, admission, lg_layers, polish_rays, solve_ms, attempts_log) = (
-            outcome.best,
-            outcome.admission,
-            outcome.lg_layers,
-            outcome.polish_rays,
-            outcome.solve_ms,
-            outcome.attempts_log,
-        );
-
-        if let Some((_, _, ref cand)) = best
-            && cand.score.geometry_accepted
-        {
-            masker.note_solved_rotation(cand.rotation);
-            if outcome.used_arrived_anchor {
-                state.prev_prepared = Some(prepared);
-            } else if had_arrived_anchor {
-                state.snap_pose_preserving_velocity(cand, prepared);
-            } else {
-                update_motion_state(&mut state, cand, prepared, dt_s, &opts.dynamics_profile);
+            TrackingMode::AcquiringAnchor => {
+                acquiring_frames += 1;
             }
-        } else if !skip_cold_xfeat {
-            advance_unsolved_prepared(&mut state, prepared, dt_s, &opts.dynamics_profile);
+            TrackingMode::CorridorAnchor | TrackingMode::Unresolved if !use_bg => {
+                latencies.anchor_ms.push(tel.solve_ms);
+            }
+            _ => {}
         }
-        if use_bg && evaluated == 1 {
-            masker.enable_background_refresh()?;
-        }
-        let filter_snap = state.filter_snapshot(local_frame);
 
-        let total_case_ms = case_t0.elapsed().as_secs_f64() * 1000.0;
-        if admission.tracking_mode == "warm_track" {
-            latencies
-                .warm_track_ms
-                .push(mask_tel.mask_ms + query_xfeat_ms + solve_ms);
-        }
-        let is_accepted = best
-            .as_ref()
-            .is_some_and(|(_, _, c)| c.score.geometry_accepted);
         record_frame_telemetry(
             &mut telemetry,
             &case.id,
-            is_accepted,
-            xfeat.runtime_name(),
-            &admission,
-            &filter_snap,
-            state.active_tracks.len(),
-            store.cached_tile_count(),
-            store.resident_window_bytes(),
-            qry_feat.len(),
-            lg_layers,
-            polish_rays,
-            &mask_tel,
-            query_xfeat_ms,
-            solve_ms,
-            total_case_ms,
+            resources.xfeat.runtime_name(),
+            tel,
+            &diag.filter_snapshot,
         );
-
-        write_corridor_report(
-            &opts.output_dir,
-            surface,
+        let _ = emit_corridor_case_report(
+            persist_dir,
+            &resources.surface,
             &case.id,
-            &admission,
-            &filter_snap,
-            attempts_log,
-            best,
+            tel,
+            outcome.anchor_confidence,
+            &diag,
             &mut accepted,
         )?;
     }
 
-    if let Some(mut worker) = background_anchor.take() {
-        if let Some(outcome) = worker.wait_for_shutdown()? {
-            let default_dt = 1.0_f64 / 30.0;
-            let _ = AnchorArrival::apply_outcome(
-                &mut state,
-                &mut independent_fixes,
-                &mut latencies,
-                &mut anchor_results,
-                &surface.catalog_sha256,
-                (cell_m, default_dt),
-                local_frame,
-                &mut focal_estimator,
-                opts.dynamics_profile,
-                outcome,
-                None,
-            );
-        }
-        drop(worker);
+    let (drained_arrivals, drained_tile_ms) = engine.shutdown_drain()?;
+    for arr in &drained_arrivals {
+        latencies.anchor_ms.push(arr.anchor_ms);
+        anchor_results.push(format_anchor_arrival_json(arr));
     }
-    let final_filter_snap = state.filter_snapshot(local_frame);
-    let mut tiles_built_live = sync_tiles_built;
-    if let Some(mut tb) = tile_builder.take() {
-        tb.poll(&mut tile_build_ms)?;
-        tiles_built_live += tb.built_tiles();
-        drop(tb);
-    }
-    drop(owned_masker);
+    tile_build_ms.extend(drained_tile_ms);
+    let final_filter_snap = engine.filter_snapshot();
+    let out_label = persist_dir.map_or_else(
+        || PathBuf::new().display().to_string(),
+        |d| d.display().to_string(),
+    );
 
-    let summary = build_run_summary(RunSummaryParams {
+    Ok(build_run_summary(RunSummaryParams {
         evaluated,
         accepted,
         acquiring_frames,
         warm_tracked_frames,
-        independent_fixes,
+        independent_fixes: engine.independent_fixes(),
         seg_refreshes,
-        runtime_name: xfeat.runtime_name(),
-        indexed_tile_count: store.indexed_tile_count(),
-        cached_tile_count: store.cached_tile_count(),
-        resident_window_bytes: store.resident_window_bytes(),
-        tiles_built_live,
+        runtime_name: resources.xfeat.runtime_name(),
+        indexed_tile_count: resources.store.indexed_tile_count(),
+        cached_tile_count: resources.store.cached_tile_count(),
+        resident_window_bytes: resources.store.resident_window_bytes(),
+        shared_gpu_texture_bytes: resources.shared_gpu_texture_bytes(),
+        tiles_built_live: engine.tiles_built_live(),
         tile_build_ms: &tile_build_ms,
-        shader_warmup_ms,
-        output_dir: &opts.output_dir.display().to_string(),
+        shader_warmup_ms: engine.shader_warmup_ms(),
+        output_dir: &out_label,
         telemetry,
         background_refresh: opts.background_refresh,
         anchor_results,
         latencies: &latencies,
         filter_snap: &final_filter_snap,
-        locked_focal_px: focal_estimator.locked_focal_px,
-    });
-    Ok(summary)
+        locked_focal_px: engine.locked_focal_px(),
+    }))
 }

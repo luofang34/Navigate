@@ -11,8 +11,8 @@ mod track;
 
 pub use project::project_tiles_virtual_view;
 pub use store::{
-    CORRIDOR_SHARD_MAGIC, CORRIDOR_STORE_INDEX_MAGIC, CorridorTileStore, DEFAULT_WINDOW_TILES,
-    hilbert_tile_code,
+    CORRIDOR_SHARD_MAGIC, CORRIDOR_STORE_INDEX_MAGIC, CorridorTileStore,
+    DEFAULT_MAX_RESIDENT_TILES, DEFAULT_WINDOW_TILES, hilbert_tile_code,
 };
 pub use track::{ActiveTrackSet, TrackMatchConfig, Tracked3dMatch};
 

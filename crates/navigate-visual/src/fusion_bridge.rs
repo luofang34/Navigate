@@ -4,8 +4,11 @@
 //! [`navigate_fusion::Observation`] with a `PositionFix` value.
 //! [`visual_pose_observation`] converts it into a `VisualPose` value with the
 //! camera position and the vehicle body attitude (ADR-0020).
+//! [`position_fix_observation_propagated`] and
+//! [`visual_pose_observation_propagated`] add visual-odometry propagation
+//! covariances for delayed background map anchors that arrive on a later frame.
 //! [`navigate_fusion::InertialNavigationFilter`] applies a visual pose as one
-//! update of dimension six. [`VisualFixSource`] applies both conversions to
+//! update of dimension six. [`VisualFixSource`] applies these conversions to
 //! one capture stream and refuses repeated evidence and frames out of order.
 //!
 //! The host supplies the source identity, the clock domain, and a
@@ -47,7 +50,10 @@ pub use adapter::{
 };
 pub use budget::{VerticalDatum, VisualAttitudeBudget, VisualErrorBudget};
 pub use error::VisualFusionError;
-pub use observation::{position_fix_observation, visual_pose_observation};
+pub use observation::{
+    position_fix_observation, position_fix_observation_propagated, visual_pose_observation,
+    visual_pose_observation_propagated,
+};
 pub use prior::{FrameCapture, PropagationBudget, search_prior};
 
 pub use capture::{

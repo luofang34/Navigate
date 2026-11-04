@@ -1,11 +1,24 @@
 use super::*;
 use nalgebra::Matrix3;
-use navigate_visual::MapRevision;
-use navigate_visual::session::{ContinuityEpoch, FrameKey, Pose, ScaleSource, StreamId};
+use navigate_visual::{
+    CameraModel, MapRevision,
+    session::{ContinuityEpoch, FrameKey, Pose, ScaleSource, StreamId},
+};
+
+fn test_cam() -> CameraModel {
+    CameraModel {
+        width: 800,
+        height: 600,
+        fx: 620.0,
+        fy: 620.0,
+        cx: 400.0,
+        cy: 300.0,
+    }
+}
 
 #[test]
 fn test_session_register_frame_nominal() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     assert!(session.register_frame(1_000_000_000).is_ok());
@@ -20,7 +33,7 @@ fn test_session_register_frame_nominal() {
 
 #[test]
 fn test_session_rejects_out_of_order_and_duplicate_timestamps() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     assert!(session.register_frame(2_000_000_000).is_ok());
@@ -30,7 +43,7 @@ fn test_session_rejects_out_of_order_and_duplicate_timestamps() {
 
 #[test]
 fn test_session_apply_motion_seeded_map_points() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     assert!(session.register_frame(100_000_000).is_ok());
@@ -47,7 +60,7 @@ fn test_session_apply_motion_seeded_map_points() {
 
 #[test]
 fn test_session_refuses_unmetric_scale_and_advances_epoch() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     assert!(session.register_frame(100_000_000).is_ok());
@@ -88,7 +101,7 @@ fn test_dual_path_dead_reckoner_flow_vectors_inflation() {
 
 #[test]
 fn test_session_filter_ingest_test_fix() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     let accepted = session.ingest_test_fix(1_000_000_000, 47.0, 11.0, 500.0);
@@ -124,7 +137,7 @@ fn test_anchor_worker_state_reset() {
 
 #[test]
 fn test_submit_anchor_with_consensus_and_handle_relocation() {
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     session.handle_relocation([500.0, 200.0, 150.0], Matrix3::identity(), 0.5);
@@ -148,7 +161,7 @@ fn test_submit_anchor_with_consensus_and_handle_relocation() {
 #[test]
 fn test_submit_anchor_with_consensus_applies_policy() {
     use navigate_visual::session::AnchorPolicy;
-    let Ok(mut session) = VisualCorridorSession::new() else {
+    let Ok(mut session) = VisualCorridorSession::new(test_cam()) else {
         return;
     };
     let custom_policy = AnchorPolicy {

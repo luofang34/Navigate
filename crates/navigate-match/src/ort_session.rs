@@ -75,6 +75,7 @@ pub struct OrtSession {
     session: Session,
     primary_input: String,
     input_shape_hint: Vec<Option<usize>>,
+    input_specs: Vec<(String, Vec<Option<usize>>)>,
     output_names: Vec<String>,
 }
 
@@ -134,21 +135,27 @@ impl OrtSession {
                 stage: "ort commit",
                 message: format!("{}: {e}", onnx_path.display()),
             })?;
-        let first_input = session
+        let input_specs: Vec<(String, Vec<Option<usize>>)> = session
             .inputs()
-            .first()
-            .ok_or(MatchError::Output("ORT model declares no input tensors"))?;
-        let primary_input = first_input.name().to_owned();
-        let input_shape_hint = first_input
-            .dtype()
-            .tensor_shape()
-            .map(|shape| {
-                shape
-                    .iter()
-                    .map(|&d| (d > 0).then(|| usize::try_from(d).ok()).flatten())
-                    .collect()
+            .iter()
+            .map(|inp| {
+                let dims = inp
+                    .dtype()
+                    .tensor_shape()
+                    .map(|shape| {
+                        shape
+                            .iter()
+                            .map(|&d| (d > 0).then(|| usize::try_from(d).ok()).flatten())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (inp.name().to_owned(), dims)
             })
-            .unwrap_or_default();
+            .collect();
+        let (primary_input, input_shape_hint) = input_specs
+            .first()
+            .cloned()
+            .ok_or(MatchError::Output("ORT model declares no input tensors"))?;
         let output_names = session
             .outputs()
             .iter()
@@ -158,6 +165,7 @@ impl OrtSession {
             session,
             primary_input,
             input_shape_hint,
+            input_specs,
             output_names,
         })
     }
@@ -166,6 +174,12 @@ impl OrtSession {
     #[must_use]
     pub fn primary_input_name(&self) -> &str {
         &self.primary_input
+    }
+
+    /// Return all input tensor names and static dimension hints declared by the ONNX graph.
+    #[must_use]
+    pub fn input_specs(&self) -> &[(String, Vec<Option<usize>>)] {
+        &self.input_specs
     }
 
     /// Return the ordered output tensor names declared by the ONNX graph.

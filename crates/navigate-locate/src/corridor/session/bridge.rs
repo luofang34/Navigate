@@ -4,23 +4,23 @@ use super::VisualCorridorSession;
 use crate::corridor::plausibility::compute_fisher_geometry_covariance;
 use nalgebra::{Matrix3, Matrix6, Translation3, UnitQuaternion, Vector3};
 use navigate_contract::{
-    FaultDetection, IntegrityAssessment, MonotonicNanos, Redundancy, SolutionQuality,
+    ClockDomainId, FaultDetection, IntegrityAssessment, MonotonicNanos, Redundancy, SolutionQuality,
 };
-use navigate_fusion::IngestOutcome;
-use navigate_visual::fusion_bridge::EvidenceIndependence;
-use navigate_visual::session::{
-    AnchorDecision, AnchorObservation, AnchorPolicy, Calibration, CameraMount, FrameKey,
-    FusionEligibility, LensModel, MapCell, MapReliability, Pose, RegionChange, ScaleSource,
-    SessionConfig, SessionEvent, SurfaceModel, VerticalReference, VisualSession, from_camera,
-};
+use navigate_fusion::{FusionConfig, NavigationFilter};
+use navigate_geodesy::BodyEllipsoid;
 use navigate_visual::{
     CameraModel, CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision,
+    fusion_bridge::{VisualAttitudeBudget, VisualFix},
     holdout_pnp::PoseCandidate,
+    session::{
+        AnchorPolicy, Calibration, CameraMount, LensModel, Pose, ScaleSource, SessionConfig,
+        SessionEvent, VerticalReference, VisualSession,
+    },
 };
 use sha2::{Digest, Sha256};
 
 /// Summary of map-anchor admission and filter ingestion for one frame.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SessionAnchorReport {
     /// Fusion eligibility label for telemetry.
     pub fusion_eligibility: &'static str,
@@ -30,6 +30,10 @@ pub struct SessionAnchorReport {
     pub map_cell: Option<[i64; 2]>,
     /// Earlier frame identifier when the map cell was already visited.
     pub earlier_anchor_id: Option<String>,
+    /// Admitted fusion position fix or 6-DoF visual pose when ingested by the navigation filter.
+    pub visual_fix: Option<VisualFix>,
+    /// Propagation lag (`t_arrival - t_capture`) in nanoseconds (`0` for synchronous anchors).
+    pub capture_lag_ns: u64,
 }
 
 /// Snapshot of navigation filter integrity and trajectory revision counts.
@@ -201,6 +205,30 @@ impl VisualCorridorSession {
         intrinsics: CameraModel,
         shared_error_cell_m: f64,
     ) -> Result<(), String> {
+        let ellipsoid = self.ellipsoid;
+        let attitude_budget = self.attitude_budget;
+        self.configure_corridor_for_body(
+            intrinsics,
+            shared_error_cell_m,
+            ellipsoid,
+            attitude_budget,
+        )
+    }
+
+    /// Reconfigure calibration intrinsics, map-cell size, body ellipsoid, and attitude budget.
+    ///
+    /// # Errors
+    /// Returns an error string when calibration, anchor policy, or attitude budget validation fails.
+    pub fn configure_corridor_for_body(
+        &mut self,
+        intrinsics: CameraModel,
+        shared_error_cell_m: f64,
+        ellipsoid: BodyEllipsoid,
+        attitude_budget: Option<VisualAttitudeBudget>,
+    ) -> Result<(), String> {
+        if let Some(ref att) = attitude_budget {
+            att.validate().map_err(|e| format!("{e:?}"))?;
+        }
         let calib = Calibration {
             intrinsics,
             lens: LensModel::Undistorted {
@@ -217,6 +245,8 @@ impl VisualCorridorSession {
             ..AnchorPolicy::default()
         };
         self.session = VisualSession::new(cfg, calib).map_err(|e| format!("{e:?}"))?;
+        self.ensure_ellipsoid(ellipsoid);
+        self.attitude_budget = attitude_budget;
         self.next_seq = 0;
         self.current_epoch = navigate_visual::session::ContinuityEpoch(0);
         self.prev_registered_key = None;
@@ -229,6 +259,18 @@ impl VisualCorridorSession {
         self.trajectory_revisions = 0;
         self.last_capture_ns = 0;
         Ok(())
+    }
+
+    pub(super) fn ensure_ellipsoid(&mut self, ellipsoid: BodyEllipsoid) {
+        if self.ellipsoid != ellipsoid {
+            self.ellipsoid = ellipsoid;
+            self.filter = NavigationFilter::new_for_ellipsoid(
+                FusionConfig::default(),
+                ClockDomainId::new(1),
+                ellipsoid,
+            );
+            self.dead_reckoner.clear_filter_solution();
+        }
     }
 
     /// Derive a unique 64-hex evidence digest for one processed frame.
@@ -269,7 +311,7 @@ impl VisualCorridorSession {
             .iter()
             .filter(|ev| matches!(ev, SessionEvent::TrajectoryRevised(_)))
             .count();
-        self.trajectory_revisions += added;
+        self.trajectory_revisions = self.trajectory_revisions.saturating_add(added);
         added
     }
 
@@ -333,158 +375,5 @@ impl VisualCorridorSession {
             self.advance_epoch();
         }
         let _ = self.drain_session_events();
-    }
-
-    /// Submit a solved [`PoseCandidate`] anchor to `VisualSession`, `VisualFixSource`, and `NavigationFilter`.
-    ///
-    /// # Errors
-    /// Returns an error string when anchor submission fails.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_anchor_candidate(
-        &mut self,
-        cand: &PoseCandidate,
-        local_frame: LocalFrame,
-        catalog_sha256: &str,
-        cell_m: f64,
-        case_id: &str,
-        backend: &str,
-    ) -> Result<SessionAnchorReport, String> {
-        let need_auto_frame = match self.last_registered_key {
-            None => true,
-            Some(k) => self.frame_case_ids.contains_key(&k),
-        };
-        if need_auto_frame {
-            let next_ns = self
-                .last_capture_ns
-                .max(1_000_000_000)
-                .saturating_add(33_333_333);
-            let seq = self.next_seq;
-            let auto_sha = self.unique_frame_digest("", case_id, seq);
-            self.register_frame_with_digest(next_ns, &auto_sha)?;
-        }
-        let key = self
-            .last_registered_key
-            .ok_or_else(|| "no registered frame for anchor".to_owned())?;
-        let sha = self
-            .last_registered_sha256
-            .clone()
-            .ok_or_else(|| "no registered digest for anchor".to_owned())?;
-        let t_ns = self.last_capture_ns.max(1);
-        self.frame_case_ids.insert(key, case_id.to_owned());
-
-        let estimate = build_estimate_from_candidate(
-            cand,
-            local_frame,
-            catalog_sha256,
-            &sha,
-            key.index,
-            t_ns,
-            backend,
-        );
-        let reliability = MapReliability {
-            horizontal_m: 1.5,
-            vertical_m: 2.0,
-            imagery_age_years: None,
-            age_growth_m_per_year: 0.1,
-            unknown_age_years: 2.0,
-            surface: SurfaceModel::BareEarth {
-                max_object_height_m: 15.0,
-            },
-            change: RegionChange::Unknown,
-        };
-        let anchor = AnchorObservation::from_estimate(key, &estimate, reliability);
-        let cur_pose = from_camera(&estimate.pose);
-        let decision = self
-            .session
-            .submit_anchor(anchor)
-            .map_err(|e| format!("{e:?}"))?;
-        let _ = self.drain_session_events();
-
-        let cell = MapCell {
-            map_manifest_sha256: catalog_sha256.to_owned(),
-            east: (cand.eye[0] / cell_m).floor() as i64,
-            north: (cand.eye[1] / cell_m).floor() as i64,
-        };
-        let coords = Some([cell.east, cell.north]);
-
-        match decision {
-            AnchorDecision::Accepted { eligibility } => {
-                self.last_odom_frame = Some((key, sha, cur_pose));
-                match eligibility {
-                    FusionEligibility::Independent => {
-                        let ind =
-                            EvidenceIndependence::ValidatedIndependent.restricted_by(&eligibility);
-                        let ingested = self.fix_source.convert(&estimate, ind).is_ok_and(|fix| {
-                            self.filter
-                                .ingest(&fix.observation, MonotonicNanos::from_nanos(t_ns))
-                                == IngestOutcome::Accepted
-                        });
-                        Ok(SessionAnchorReport {
-                            fusion_eligibility: "independent",
-                            independent_ekf_fix: ingested,
-                            map_cell: coords,
-                            earlier_anchor_id: None,
-                        })
-                    }
-                    FusionEligibility::SharedMapError { earlier, .. } => {
-                        let earlier_id = self.frame_case_ids.get(&earlier).cloned();
-                        Ok(SessionAnchorReport {
-                            fusion_eligibility: "shared_map_cell",
-                            independent_ekf_fix: false,
-                            map_cell: coords,
-                            earlier_anchor_id: earlier_id,
-                        })
-                    }
-                    FusionEligibility::Untracked => Ok(SessionAnchorReport {
-                        fusion_eligibility: "untracked",
-                        independent_ekf_fix: false,
-                        map_cell: coords,
-                        earlier_anchor_id: None,
-                    }),
-                }
-            }
-            AnchorDecision::Relocated { .. } => {
-                self.last_odom_frame = Some((key, sha, cur_pose));
-                self.handle_relocation(cand.eye, cand.rotation, 0.0);
-                let ingested = self
-                    .fix_source
-                    .convert(&estimate, EvidenceIndependence::ValidatedIndependent)
-                    .is_ok_and(|fix| {
-                        self.filter
-                            .ingest(&fix.observation, MonotonicNanos::from_nanos(t_ns))
-                            == IngestOutcome::Accepted
-                    });
-                Ok(SessionAnchorReport {
-                    fusion_eligibility: "relocated",
-                    independent_ekf_fix: ingested,
-                    map_cell: coords,
-                    earlier_anchor_id: None,
-                })
-            }
-            AnchorDecision::SameViewpoint => {
-                self.last_odom_frame = Some((key, sha, cur_pose));
-                let earlier_id = self.find_earlier_case_id_other_than(key);
-                Ok(SessionAnchorReport {
-                    fusion_eligibility: "shared_map_cell",
-                    independent_ekf_fix: false,
-                    map_cell: coords,
-                    earlier_anchor_id: earlier_id,
-                })
-            }
-            AnchorDecision::Rejected(_) => Ok(SessionAnchorReport {
-                fusion_eligibility: "awaiting_consensus",
-                independent_ekf_fix: false,
-                map_cell: coords,
-                earlier_anchor_id: None,
-            }),
-        }
-    }
-
-    fn find_earlier_case_id_other_than(&self, current: FrameKey) -> Option<String> {
-        self.frame_case_ids
-            .iter()
-            .rev()
-            .find(|(k, _)| **k != current)
-            .map(|(_, id)| id.clone())
     }
 }

@@ -106,26 +106,49 @@ pub(crate) fn score_pose_candidate(
     let support_frac = (cells.len() as f64) / f64::from(GRID_DIM * GRID_DIM);
     let total_inliers = train_inliers + hold_inliers;
 
-    let min_sparse_inliers = if hold_count <= 6 { 30 } else { 26 };
+    let tight_total = tight_train_inliers + tight_hold_inliers;
+    let tight_hold_frac = (tight_hold_inliers as f64) / (hold_count.max(1) as f64);
+    let subwindow_tight = relief_ratio <= 1.05
+        && tight_total >= 24
+        && tight_hold_inliers >= 5
+        && tight_hold_frac >= 0.50
+        && hold_median <= base_inlier_px
+        && train_rms <= 0.72 * base_inlier_px;
+    let min_sparse_inliers = if subwindow_tight {
+        24
+    } else if hold_count <= 6 {
+        30
+    } else {
+        26
+    };
     let base_hold_floor = if hold_count >= 5 { 4 } else { 2 };
     let base_min_hold = 8
         .min((hold_count * 2 / 5).max(base_hold_floor))
         .min(hold_count);
-    let tight_total = tight_train_inliers + tight_hold_inliers;
-    let tight_hold_frac = (tight_hold_inliers as f64) / (hold_count.max(1) as f64);
     let tight_min_train = 24.min(
         tight_total
             .saturating_sub(tight_hold_inliers.max(base_min_hold))
             .max(12),
     );
     let tight_min_hold_frac = if tight_total >= 64 { 0.32 } else { 0.40 };
+    let min_tight_cells = if (tight_total >= 26
+        && tight_hold_inliers >= 10
+        && tight_hold_frac >= 0.65
+        && hold_median <= 0.65 * base_inlier_px
+        && train_rms <= 0.65 * base_inlier_px)
+        || subwindow_tight
+    {
+        3
+    } else {
+        6
+    };
     let tight_accepted = tight_total >= min_sparse_inliers
         && tight_train_inliers >= tight_min_train
         && tight_hold_inliers >= base_min_hold
         && tight_hold_frac >= tight_min_hold_frac
         && hold_median <= 1.5 * base_inlier_px
         && pos_frac >= 0.98
-        && tight_cells.len() >= 6;
+        && tight_cells.len() >= min_tight_cells;
 
     let used_px = base_inlier_px
         .max(train_rms * 1.12)
@@ -135,6 +158,10 @@ pub(crate) fn score_pose_candidate(
     let scaled_min_inliers = (26.0 * used_ratio.sqrt()).ceil() as usize;
     let strong_sparse_relief = (train_rms <= base_inlier_px * 1.12 && hold_frac >= 0.55)
         || (hold_frac >= 0.75 && hold_inliers >= 10);
+    let dense_verified_relief = total_inliers >= 38
+        && train_rms <= base_inlier_px * 1.15
+        && hold_frac >= 0.45
+        && hold_median <= eff_inlier_px;
     let min_total_inliers = if relief_ratio > 1.5 {
         if strong_sparse_relief {
             min_sparse_inliers
@@ -151,7 +178,7 @@ pub(crate) fn score_pose_candidate(
     } else {
         5
     };
-    let min_hold = if relief_ratio > 1.5 && !strong_sparse_relief {
+    let min_hold = if relief_ratio > 1.5 && !strong_sparse_relief && !dense_verified_relief {
         12.min((hold_count * 3 / 5).max(min_hold_floor))
             .min(hold_count)
     } else {
@@ -159,6 +186,8 @@ pub(crate) fn score_pose_candidate(
     };
     let min_cells = if relief_ratio > 1.5 && strong_sparse_relief {
         6
+    } else if dense_verified_relief {
+        8
     } else if used_ratio > 1.5 && total_inliers >= 40 {
         10
     } else if relief_ratio > 1.5 && hold_frac >= 0.60 {

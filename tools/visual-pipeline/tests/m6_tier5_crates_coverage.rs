@@ -14,7 +14,8 @@ use navigate_visual::session::{
     RelativeMotion, ScaleSource, SessionError, StreamId, SurfaceModel,
 };
 use navigate_visual::{
-    CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision, SearchTier,
+    CameraModel, CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision,
+    SearchTier,
 };
 use navigate_visual_pipeline::corridor::{
     KinematicState, VisualCorridorSession,
@@ -30,6 +31,17 @@ use navigate_visual_pipeline::corridor::{
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+fn test_camera() -> CameraModel {
+    CameraModel {
+        width: 1920,
+        height: 1080,
+        fx: 1000.0,
+        fy: 1000.0,
+        cx: 960.0,
+        cy: 540.0,
+    }
+}
 
 fn test_map() -> MapRevision {
     MapRevision {
@@ -107,7 +119,7 @@ fn step_session(
 
 #[test]
 fn test_consensus_conflicting_anchors_tie_and_outvoting() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     let scale = ScaleSource::SeededMapPoints { map: test_map() };
 
     // Initial accepted anchor A0 at [1000.0, 1000.0, 100.0] on frame 0
@@ -175,7 +187,7 @@ fn test_consensus_conflicting_anchors_tie_and_outvoting() -> TestResult {
 
 #[test]
 fn test_continuity_epoch_rollover_and_cross_epoch_isolation() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     assert_eq!(session.current_epoch, ContinuityEpoch(0));
 
     session.register_frame(1_000_000_000)?;
@@ -223,7 +235,7 @@ fn test_continuity_epoch_rollover_and_cross_epoch_isolation() -> TestResult {
 
 #[test]
 fn test_scale_source_switching_and_unknown_degradation() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     let map = test_map();
 
     session.register_frame(1_000_000_000)?;

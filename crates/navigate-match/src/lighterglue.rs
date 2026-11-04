@@ -5,8 +5,11 @@
 //! (`input_dim = 64`, `descriptor_dim = 96`, `num_heads = 1`).
 mod batch;
 mod fast;
+mod matcher;
 
+pub use batch::quantize_static_token_bucket;
 pub use fast::{FastMatchConfig, FastMatchStats, IndexedMatch};
+pub use matcher::{ModelSessionMatcher, SparseMatcher, StaticMatcherShape};
 
 use crate::{
     MatchError, SparseFeatures, Weights,
@@ -228,6 +231,8 @@ impl LighterGlue {
     /// Returns [`MatchError`] when any tensor is missing, has an unexpected shape,
     /// or remains unused.
     pub fn load(mut weights: Weights, device: &Device) -> Result<Self, MatchError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::native_engine::enable_persistent_gpu_cache();
         let input_proj = Linear::load(
             &mut weights,
             "net.input_proj",

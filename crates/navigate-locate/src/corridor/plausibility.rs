@@ -447,7 +447,17 @@ pub fn is_plausible_candidate<S: CorridorTerrain + ?Sized>(
     if !verify_prior_bounding(cand.eye, prior, trust_prior, config.prior_sigma_scale) {
         return false;
     }
-    cand.score.image_support_fraction >= 0.025
+    let min_support = if cand.score.inliers >= 26
+        && cand.score.holdout_count >= 10
+        && cand.score.holdout_inlier_fraction >= 0.60
+        && cand.score.holdout_median_px <= 5.6
+        && cand.score.train_rms_px <= 3.5
+    {
+        0.020
+    } else {
+        0.025
+    };
+    cand.score.image_support_fraction >= min_support
 }
 
 #[cfg(test)]

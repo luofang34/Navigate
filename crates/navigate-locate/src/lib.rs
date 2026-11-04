@@ -28,9 +28,9 @@ mod workflow;
 pub use area::{TileGrid, tile_xy};
 pub use candidates::{Candidate, LookAt, angles, look_at, orientation};
 pub use corridor::{
-    AnchorWorkerState, CorridorTracker, DeadReckonEstimate, DeadReckonPath, DualPathDeadReckoner,
-    KinematicState, OdometryStep, TrackingSearchStrategy, VehicleDynamicsProfile,
-    VisualCorridorSession, WarmTrackAttempt,
+    AnchorWorkerState, ColdDeadReckonPrior, CorridorTracker, DeadReckonEstimate, DeadReckonPath,
+    DualPathDeadReckoner, KinematicState, OdometryStep, TrackingSearchStrategy,
+    VehicleDynamicsProfile, VisualCorridorSession, WarmTrackAttempt,
 };
 pub use error::LocateError;
 #[cfg(feature = "http")]

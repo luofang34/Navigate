@@ -1,12 +1,14 @@
 //! Conversion of one visual estimate into one fusion observation.
 
+use nalgebra::Matrix3;
 use navigate_contract::{ClockDomainId, SourceEpoch, SourceId};
 use navigate_fusion::Observation;
 use std::collections::{HashSet, VecDeque};
 
 use crate::fusion_bridge::{
     VisualAttitudeBudget, VisualErrorBudget, VisualFusionError, position_fix_observation,
-    visual_pose_observation,
+    position_fix_observation_propagated, visual_pose_observation,
+    visual_pose_observation_propagated,
 };
 use crate::{Estimate, MapRevision};
 
@@ -34,6 +36,8 @@ pub struct VisualFix {
     pub map: MapRevision,
     /// Evidence digest of the frame.
     pub observation_sha256: String,
+    /// Propagation lag (`t_arrival - t_capture`) in nanoseconds (`0` for synchronous fixes).
+    pub capture_lag_ns: u64,
 }
 
 /// Host assessment of shared errors between this fix and the filter state.
@@ -55,6 +59,7 @@ impl EvidenceIndependence {
     /// sessions, other map revisions, and other sources in the filter. Anchors
     /// that share a map cell with an earlier anchor, and anchors that the
     /// ledger could not track, become `Unknown`.
+    #[must_use]
     pub fn restricted_by(self, label: &crate::session::FusionEligibility) -> Self {
         match label {
             crate::session::FusionEligibility::Independent => self,
@@ -132,9 +137,53 @@ impl VisualFixSource {
         estimate: &Estimate,
         independence: EvidenceIndependence,
     ) -> Result<VisualFix, VisualFusionError> {
-        self.admit(estimate, independence, |estimate, identity, budget| {
-            position_fix_observation(estimate, identity, budget)
-        })
+        self.admit_at(
+            estimate,
+            independence,
+            estimate.stamp.capture_time_ns,
+            position_fix_observation,
+        )
+    }
+
+    /// Convert a delayed background anchor that was propagated to `arrival_time_ns`.
+    ///
+    /// Adds `q_vo_enu_m2` before rotating into north, east, down axes, stamps
+    /// the output [`Observation`] at `arrival_time_ns`, and declares the
+    /// body-fixed frame of the visual frame.
+    ///
+    /// # Errors
+    /// Refuses negative lag, a zero horizontal propagation covariance when
+    /// `arrival_time_ns > capture_time_ns`, non-monotonic arrival timestamps,
+    /// repeated evidence, or unusable covariances.
+    pub fn convert_propagated(
+        &mut self,
+        estimate: &Estimate,
+        independence: EvidenceIndependence,
+        arrival_time_ns: u64,
+        arrival_sequence: u64,
+        q_vo_enu_m2: &Matrix3<f64>,
+    ) -> Result<VisualFix, VisualFusionError> {
+        if arrival_time_ns < estimate.stamp.capture_time_ns {
+            return Err(VisualFusionError::FrameOrder {
+                previous_ns: estimate.stamp.capture_time_ns,
+                received_ns: arrival_time_ns,
+            });
+        }
+        self.admit_at(
+            estimate,
+            independence,
+            arrival_time_ns,
+            |estimate, identity, budget| {
+                position_fix_observation_propagated(
+                    estimate,
+                    identity,
+                    budget,
+                    arrival_time_ns,
+                    arrival_sequence,
+                    q_vo_enu_m2,
+                )
+            },
+        )
     }
 
     /// Convert one accepted visual estimate into a six-degree-of-freedom visual pose
@@ -153,15 +202,67 @@ impl VisualFixSource {
         independence: EvidenceIndependence,
         attitude_budget: &VisualAttitudeBudget,
     ) -> Result<VisualFix, VisualFusionError> {
-        self.admit(estimate, independence, |estimate, identity, budget| {
-            visual_pose_observation(estimate, identity, budget, attitude_budget)
-        })
+        self.admit_at(
+            estimate,
+            independence,
+            estimate.stamp.capture_time_ns,
+            |estimate, identity, budget| {
+                visual_pose_observation(estimate, identity, budget, attitude_budget)
+            },
+        )
     }
 
-    fn admit(
+    /// Convert a delayed background anchor into a six-degree-of-freedom visual pose
+    /// propagated to `arrival_time_ns`.
+    ///
+    /// # Errors
+    /// Refuses negative lag, a zero propagation covariance when
+    /// `arrival_time_ns > capture_time_ns`, an invalid attitude budget, and all
+    /// conditions of [`Self::convert_propagated`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "propagated 6-DOF pose conversion takes estimate, independence, attitude budget, arrival stamp, and position/attitude VO covariances"
+    )]
+    pub fn convert_pose_propagated(
         &mut self,
         estimate: &Estimate,
         independence: EvidenceIndependence,
+        attitude_budget: &VisualAttitudeBudget,
+        arrival_time_ns: u64,
+        arrival_sequence: u64,
+        q_vo_enu_m2: &Matrix3<f64>,
+        q_vo_att_rad2: &Matrix3<f64>,
+    ) -> Result<VisualFix, VisualFusionError> {
+        if arrival_time_ns < estimate.stamp.capture_time_ns {
+            return Err(VisualFusionError::FrameOrder {
+                previous_ns: estimate.stamp.capture_time_ns,
+                received_ns: arrival_time_ns,
+            });
+        }
+        self.admit_at(
+            estimate,
+            independence,
+            arrival_time_ns,
+            |estimate, identity, budget| {
+                visual_pose_observation_propagated(
+                    estimate,
+                    identity,
+                    budget,
+                    attitude_budget,
+                    arrival_time_ns,
+                    arrival_sequence,
+                    q_vo_enu_m2,
+                    q_vo_att_rad2,
+                )
+            },
+        )
+    }
+
+    fn admit_at(
+        &mut self,
+        estimate: &Estimate,
+        independence: EvidenceIndependence,
+        stamp_time_ns: u64,
         build: impl FnOnce(
             &Estimate,
             &VisualSourceIdentity,
@@ -171,14 +272,15 @@ impl VisualFixSource {
         if independence != EvidenceIndependence::ValidatedIndependent {
             return Err(VisualFusionError::UnknownCorrelation);
         }
-        self.check_order(estimate)?;
+        self.check_order_at(&estimate.observation_sha256, stamp_time_ns)?;
         let observation = build(estimate, &self.identity, &self.budget)?;
-        self.last = Some(estimate.stamp.capture_time_ns);
+        self.last = Some(stamp_time_ns);
         self.record_digest(estimate.observation_sha256.clone());
         Ok(VisualFix {
             observation,
             map: estimate.map.clone(),
             observation_sha256: estimate.observation_sha256.clone(),
+            capture_lag_ns: stamp_time_ns.saturating_sub(estimate.stamp.capture_time_ns),
         })
     }
 
@@ -192,19 +294,19 @@ impl VisualFixSource {
         self.admitted_order.push_back(digest);
     }
 
-    fn check_order(&self, estimate: &Estimate) -> Result<(), VisualFusionError> {
-        if self.admitted.contains(&estimate.observation_sha256) {
+    fn check_order_at(&self, sha256: &str, received_ns: u64) -> Result<(), VisualFusionError> {
+        if self.admitted.contains(sha256) {
             return Err(VisualFusionError::RepeatedEvidence {
-                observation_sha256: estimate.observation_sha256.clone(),
+                observation_sha256: sha256.to_owned(),
             });
         }
         let Some(previous_ns) = self.last else {
             return Ok(());
         };
-        if estimate.stamp.capture_time_ns <= previous_ns {
+        if received_ns <= previous_ns {
             return Err(VisualFusionError::FrameOrder {
                 previous_ns,
-                received_ns: estimate.stamp.capture_time_ns,
+                received_ns,
             });
         }
         Ok(())
