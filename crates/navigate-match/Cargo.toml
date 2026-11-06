@@ -10,13 +10,14 @@ publish.workspace = true
 default = ["flex"]
 # Runtimes. The burn device that the host supplies selects one of the compiled runtimes.
 flex = ["burn/flex"]
-wgpu = ["burn/wgpu", "gpu"]
+wgpu = ["burn/wgpu", "gpu", "gpu-persistence"]
 webgpu = ["burn/webgpu", "gpu"]
-metal = ["burn/metal", "gpu"]
-vulkan = ["burn/vulkan", "gpu"]
-cuda = ["burn/cuda", "gpu"]
+metal = ["burn/metal", "gpu", "gpu-persistence"]
+vulkan = ["burn/vulkan", "gpu", "gpu-persistence"]
+cuda = ["burn/cuda", "gpu", "gpu-persistence"]
 # CubeCL kernels for the GPU runtimes; the runtime features enable it.
 gpu = ["dep:burn-cubecl", "dep:cubecl", "dep:navigate-match-kernels"]
+gpu-persistence = ["burn-cubecl/persistence", "cubecl/persistence"]
 # Optional ONNX Runtime dense session on native and embedded Linux targets.
 ort = ["dep:ort"]
 # SegFormer fine-tuning and NPZ archives in the segment module.

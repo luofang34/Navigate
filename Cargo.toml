@@ -22,6 +22,7 @@ members = [
     "crates/navigate-locate",
     "crates/navigate-locate-web",
     "crates/navigate-visual-render",
+    "crates/navigate-visual-flight",
     "tools/visual-pipeline",
     "tests/e2e-corridor",
 ]
@@ -48,6 +49,7 @@ navigate-celestial = { path = "crates/navigate-celestial" }
 navigate-recording = { path = "crates/navigate-recording" }
 navigate-visual = { path = "crates/navigate-visual", default-features = false }
 navigate-visual-render = { path = "crates/navigate-visual-render" }
+navigate-visual-flight = { path = "crates/navigate-visual-flight", default-features = false }
 navigate-match = { path = "crates/navigate-match", default-features = false }
 navigate-match-kernels = { path = "crates/navigate-match-kernels" }
 navigate-locate = { path = "crates/navigate-locate" }

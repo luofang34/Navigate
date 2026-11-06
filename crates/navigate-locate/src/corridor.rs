@@ -35,6 +35,6 @@ pub use session::{
     FilterIntegritySnapshot, SessionAnchorReport, VisualCorridorSession,
 };
 pub use tracker::{
-    CorridorTracker, OdometryStep, WarmTrackAttempt, kabsch_3d, relative_rotation_ransac,
-    try_warm_track,
+    ColdDeadReckonPrior, CorridorTracker, OdometryStep, WarmTrackAttempt, kabsch_3d,
+    relative_rotation_ransac, try_warm_track,
 };

@@ -1,5 +1,6 @@
 //! Visual session lifecycle, filter fix admission, and dual-path dead reckoning.
 
+mod anchor_ingest;
 pub mod bridge;
 mod dead_reckon;
 mod worker;
@@ -22,8 +23,10 @@ use navigate_contract::{
 use navigate_fusion::{
     FusionConfig, IngestOutcome, NavigationFilter, Observation, ObservationValue,
 };
+use navigate_geodesy::BodyEllipsoid;
 use navigate_visual::fusion_bridge::{
-    EvidenceIndependence, VerticalDatum, VisualErrorBudget, VisualFixSource, VisualSourceIdentity,
+    EvidenceIndependence, VerticalDatum, VisualAttitudeBudget, VisualErrorBudget, VisualFixSource,
+    VisualSourceIdentity,
 };
 use navigate_visual::session::{
     AnchorDecision, AnchorObservation, AnchorPolicy, Calibration, CameraMount, CaptureTime,
@@ -41,6 +44,12 @@ pub struct VisualCorridorSession {
     pub fix_source: VisualFixSource,
     /// Tangent-plane navigation filter.
     pub filter: NavigationFilter,
+    /// Reference body ellipsoid of `filter`.
+    pub ellipsoid: BodyEllipsoid,
+    /// Optional mounting and attitude budget for 6-DoF [`ObservationValue::VisualPose`] emission.
+    pub attitude_budget: Option<VisualAttitudeBudget>,
+    pub(super) identity: VisualSourceIdentity,
+    pub(super) error_budget: VisualErrorBudget,
     /// Next frame sequence index.
     pub next_seq: u64,
     /// Current visual continuity epoch.
@@ -68,20 +77,13 @@ pub struct VisualCorridorSession {
 }
 
 impl VisualCorridorSession {
-    /// Create a visual corridor session with standard calibration and error budgets.
+    /// Create a visual corridor session with explicit camera `intrinsics` and standard error budgets.
     ///
     /// # Errors
     /// Returns an error string when session or fix-source initialization fails.
-    pub fn new() -> Result<Self, String> {
+    pub fn new(intrinsics: CameraModel) -> Result<Self, String> {
         let calib = Calibration {
-            intrinsics: CameraModel {
-                width: 1920,
-                height: 1080,
-                fx: 1000.0,
-                fy: 1000.0,
-                cx: 960.0,
-                cy: 540.0,
-            },
+            intrinsics,
             lens: LensModel::Undistorted {
                 residual_rms_px: 0.2,
             },
@@ -106,12 +108,21 @@ impl VisualCorridorSession {
             vertical_datum_m: 0.5,
         };
         let fix_source = VisualFixSource::new(identity, budget).map_err(|e| format!("{e:?}"))?;
-        let filter = NavigationFilter::new(FusionConfig::default(), ClockDomainId::new(1));
+        let ellipsoid = BodyEllipsoid::WGS84;
+        let filter = NavigationFilter::new_for_ellipsoid(
+            FusionConfig::default(),
+            ClockDomainId::new(1),
+            ellipsoid,
+        );
         let dead_reckoner = DualPathDeadReckoner::new([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
         Ok(Self {
             session,
             fix_source,
             filter,
+            ellipsoid,
+            attitude_budget: None,
+            identity,
+            error_budget: budget,
             next_seq: 0,
             current_epoch: ContinuityEpoch(0),
             prev_registered_key: None,
@@ -127,12 +138,15 @@ impl VisualCorridorSession {
         })
     }
 
-    /// Create a visual corridor session with a custom [`AnchorPolicy`].
+    /// Create a visual corridor session with explicit `intrinsics` and a custom [`AnchorPolicy`].
     ///
     /// # Errors
     /// Returns an error string when initialization or policy validation fails.
-    pub fn with_anchor_policy(policy: AnchorPolicy) -> Result<Self, String> {
-        let mut session = Self::new()?;
+    pub fn with_anchor_policy(
+        intrinsics: CameraModel,
+        policy: AnchorPolicy,
+    ) -> Result<Self, String> {
+        let mut session = Self::new(intrinsics)?;
         session
             .session
             .set_anchor_policy(policy)
@@ -159,7 +173,7 @@ impl VisualCorridorSession {
     /// # Errors
     /// Returns an error string when the timestamp is duplicate or out of order.
     pub fn register_frame(&mut self, t_ns: u64) -> Result<(), String> {
-        let sha = format!("{:064x}", self.next_seq + 1);
+        let sha = format!("{:064x}", self.next_seq.wrapping_add(1));
         self.register_frame_with_digest(t_ns, &sha)
     }
 
@@ -186,7 +200,7 @@ impl VisualCorridorSession {
         self.session
             .observe_frame(record)
             .map_err(|e| format!("{e:?}"))?;
-        self.next_seq += 1;
+        self.next_seq = self.next_seq.wrapping_add(1);
         self.prev_registered_key = self.last_registered_key;
         self.last_registered_key = Some(key);
         self.prev_registered_sha256 = self.last_registered_sha256.take();
@@ -197,7 +211,7 @@ impl VisualCorridorSession {
 
     /// Advance the continuity epoch after track loss or unobservable scale.
     pub fn advance_epoch(&mut self) {
-        self.current_epoch = ContinuityEpoch(self.current_epoch.0 + 1);
+        self.current_epoch = ContinuityEpoch(self.current_epoch.0.wrapping_add(1));
         self.last_odom_frame = None;
     }
 
@@ -229,11 +243,11 @@ impl VisualCorridorSession {
         let from_sha = self
             .prev_registered_sha256
             .clone()
-            .unwrap_or_else(|| format!("{:064x}", from_key.index + 1));
+            .unwrap_or_else(|| format!("{:064x}", from_key.index.wrapping_add(1)));
         let to_sha = self
             .last_registered_sha256
             .clone()
-            .unwrap_or_else(|| format!("{:064x}", to_key.index + 1));
+            .unwrap_or_else(|| format!("{:064x}", to_key.index.wrapping_add(1)));
 
         let motion = RelativeMotion {
             from: from_key,
@@ -315,6 +329,7 @@ impl VisualCorridorSession {
             .submit_anchor(anchor)
             .map_err(|e| format!("{e:?}"))?;
         let _ = self.drain_session_events();
+        self.ensure_ellipsoid(estimate.frame.reference_ellipsoid());
         match decision {
             AnchorDecision::Accepted { eligibility } => {
                 let ind = EvidenceIndependence::ValidatedIndependent.restricted_by(&eligibility);
@@ -372,7 +387,7 @@ impl VisualCorridorSession {
     pub fn ingest_test_fix(&mut self, t_ns: u64, lat_deg: f64, lon_deg: f64, alt_m: f64) -> bool {
         let pos = GeodeticPosition::new(lat_deg.to_radians(), lon_deg.to_radians(), alt_m);
         let seq = self.next_seq;
-        self.next_seq += 1;
+        self.next_seq = self.next_seq.wrapping_add(1);
         let stamp = ObservationStamp::new(
             SourceId::new(1),
             SourceEpoch::new(0),
@@ -388,7 +403,8 @@ impl VisualCorridorSession {
             stamp,
             value,
             SourceComposition::of(SensorClass::VisualLandmark),
-        );
+        )
+        .with_frame(self.ellipsoid.frame());
         let outcome = self.filter.ingest(&obs, MonotonicNanos::from_nanos(t_ns));
         outcome == IngestOutcome::Accepted
     }

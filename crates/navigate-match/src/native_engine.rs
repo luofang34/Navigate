@@ -210,3 +210,14 @@ impl AsyncImageMatcher for NativeMlEngine {
         }
     }
 }
+
+/// Enable disk-backed CubeCL shader compilation caching before opening a GPU device.
+pub fn enable_persistent_gpu_cache() {
+    #[cfg(feature = "gpu-persistence")]
+    {
+        use cubecl::config::{CubeClRuntimeConfig, RuntimeConfig};
+        let mut cfg = CubeClRuntimeConfig::default();
+        cfg.compilation.cache = true;
+        let _ = CubeClRuntimeConfig::try_set(cfg);
+    }
+}

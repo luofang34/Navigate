@@ -178,7 +178,7 @@ orthometric terrain height.
 
 ## The visual stack (ADR-0020)
 
-Six crates hold the visual stack:
+Seven crates hold the visual stack:
 
 - `navigate-visual` gives camera poses from map reference views. Its
   `session` module keeps continuous odometry and map anchors for one
@@ -191,6 +191,12 @@ Six crates hold the visual stack:
 - `navigate-match-kernels` holds the CubeCL kernels of the matchers.
 - `navigate-locate` finds the pose of one photo or of a flight corridor.
   Its `place` module holds the place index and the search plan.
+- `navigate-visual-flight` runs real-time 30 Hz visual corridor tracking in
+  memory. It reads borrowed pixel buffers without disk I/O. Bounded worker
+  queues run background map-anchor searches and live tile synthesis. The
+  engine checks competing spatial basins before it accepts a lock. It also
+  propagates delayed anchor covariances into `VisualFix` outputs on any body
+  ellipsoid.
 - `navigate-locate-web` runs the locate pipeline in a browser Web Worker.
 
 A visual frame (`LocalFrame`) declares the axes of every camera pose. The

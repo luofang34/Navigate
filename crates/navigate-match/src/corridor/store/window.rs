@@ -1,8 +1,14 @@
 //! Frustum-aware spatial window selection and LRU eviction for [`super::CorridorTileStore`].
 
-use super::{MAX_RESIDENT_WINDOW_BYTES, StoreInner, TileAabb};
-use crate::corridor::{
-    CorridorTileEntry, CorridorTileKey, VirtualViewCamera, codec::aabb_overlaps_frustum,
+#[cfg(not(target_arch = "wasm32"))]
+use super::disk::read_shard_file;
+use super::{BackingSource, MAX_RESIDENT_WINDOW_BYTES, StoreInner, TileAabb};
+use crate::{
+    MatchError,
+    corridor::{
+        CorridorTileEntry, CorridorTileKey, VirtualViewCamera,
+        codec::{aabb_overlaps_frustum, tile_overlaps_frustum},
+    },
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -160,4 +166,98 @@ pub(super) fn touch_lru(
         };
         let _ = inner.cache_entries.remove(&evicted);
     }
+}
+
+pub(super) fn insert_in_memory_lru(
+    entries: &mut HashMap<CorridorTileKey, Arc<CorridorTileEntry>>,
+    order: &mut VecDeque<CorridorTileKey>,
+    indexed_keys: &mut std::collections::BTreeSet<CorridorTileKey>,
+    known_bounds: &mut HashMap<CorridorTileKey, TileAabb>,
+    cache_order: &mut VecDeque<CorridorTileKey>,
+    cache_entries: &mut HashMap<CorridorTileKey, Arc<CorridorTileEntry>>,
+    (key, tile, max_resident_tiles): (CorridorTileKey, Arc<CorridorTileEntry>, usize),
+) {
+    let cap = max_resident_tiles.max(1);
+    promote_key(order, key);
+    let _ = entries.insert(key, tile);
+    let _ = indexed_keys.insert(key);
+    while entries.len() > cap {
+        let Some(evicted) = order.pop_front() else {
+            break;
+        };
+        let _ = entries.remove(&evicted);
+        let _ = indexed_keys.remove(&evicted);
+        let _ = known_bounds.remove(&evicted);
+        if cache_entries.remove(&evicted).is_some()
+            && let Some(pos) = cache_order.iter().position(|&k| k == evicted)
+        {
+            let _ = cache_order.remove(pos);
+        }
+    }
+}
+
+pub(super) fn resolve_window_tiles_inner(
+    guard: &mut StoreInner,
+    candidates: Vec<CorridorTileKey>,
+    tile_size_m: f32,
+    max_cached_tiles: usize,
+    cam: &VirtualViewCamera,
+) -> Result<Vec<Arc<CorridorTileEntry>>, MatchError> {
+    let mut active_tiles = Vec::with_capacity(candidates.len());
+    let s = f64::from(tile_size_m.max(10.0));
+    let mut pinned_bytes = 0_usize;
+    let mut pinned_count = 0_usize;
+    for key in candidates {
+        if let Some(cached) = guard.cache_entries.get(&key).cloned() {
+            if !tile_overlaps_frustum(&cached, cam) {
+                continue;
+            }
+            let tb = tile_bytes(&cached);
+            if pinned_count == 0
+                || (pinned_count < max_cached_tiles
+                    && pinned_bytes + tb <= MAX_RESIDENT_WINDOW_BYTES)
+            {
+                promote_key(&mut guard.cache_order, key);
+                pinned_bytes += tb;
+                pinned_count += 1;
+            }
+            active_tiles.push(cached);
+            continue;
+        }
+        if !guard.known_bounds.contains_key(&key)
+            && let Some([z_min, z_max]) = guard.z_span
+            && !estimated_key_overlaps_frustum(key, s, [z_min, z_max], cam)
+        {
+            continue;
+        }
+        let loaded = match &mut guard.backing {
+            BackingSource::InMemory { entries, order } => {
+                let found = entries.get(&key).cloned();
+                if found.is_some() {
+                    promote_key(order, key);
+                }
+                found
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            BackingSource::Directory(dir) => read_shard_file(dir, key)?.map(Arc::new),
+        };
+        if let Some(tile) = loaded {
+            record_store_bounds(guard, key, &tile);
+            if !tile_overlaps_frustum(&tile, cam) {
+                continue;
+            }
+            let tb = tile_bytes(&tile);
+            if pinned_count == 0
+                || (pinned_count < max_cached_tiles
+                    && pinned_bytes + tb <= MAX_RESIDENT_WINDOW_BYTES)
+            {
+                touch_lru(guard, key, Arc::clone(&tile), max_cached_tiles);
+                pinned_bytes += tb;
+                pinned_count += 1;
+            }
+            active_tiles.push(tile);
+        }
+    }
+    active_tiles.sort_by_key(|t| (t.tile_y, t.tile_x));
+    Ok(active_tiles)
 }

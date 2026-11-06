@@ -39,14 +39,36 @@ pub(crate) fn prepare(
     let x0 = (width as f64 - f64::from(iw) * scale) / 2.0;
     let y0 = (height as f64 - f64::from(ih) * scale) / 2.0;
     let mut values = vec![0.0; width * height];
-    for py in 0..height {
-        for px in 0..width {
-            let sx = (px as f64 - x0 + 0.5) / scale - 0.5;
-            let sy = (py as f64 - y0 + 0.5) / scale - 0.5;
-            if sx < -0.5 || sy < -0.5 || sx >= f64::from(iw) - 0.5 || sy >= f64::from(ih) - 0.5 {
+    if (scale - 1.0).abs() < 1e-12 && x0.fract() == 0.0 && y0.fract() == 0.0 {
+        let ox = x0 as isize;
+        let oy = y0 as isize;
+        let raw = image.as_raw();
+        let iw_u = iw as usize;
+        for sy in 0..(ih as usize) {
+            let py = oy + (sy as isize);
+            if py < 0 || (py as usize) >= height {
                 continue;
             }
-            values[py * width + px] = bilinear(image, sx, sy) as f32;
+            let src_row = &raw[sy * iw_u..(sy + 1) * iw_u];
+            let dst_row = &mut values[(py as usize) * width..(py as usize + 1) * width];
+            for (sx, &px) in src_row.iter().enumerate() {
+                let dx = ox + (sx as isize);
+                if dx >= 0 && (dx as usize) < width {
+                    dst_row[dx as usize] = (f64::from(px) / 255.0) as f32;
+                }
+            }
+        }
+    } else {
+        for py in 0..height {
+            for px in 0..width {
+                let sx = (px as f64 - x0 + 0.5) / scale - 0.5;
+                let sy = (py as f64 - y0 + 0.5) / scale - 0.5;
+                if sx < -0.5 || sy < -0.5 || sx >= f64::from(iw) - 0.5 || sy >= f64::from(ih) - 0.5
+                {
+                    continue;
+                }
+                values[py * width + px] = bilinear(image, sx, sy) as f32;
+            }
         }
     }
     Ok(InputImage {

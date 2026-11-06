@@ -1,6 +1,7 @@
 //! Milestone 6 Tier 5 dead-reckoning, session relocation, and focal-sweep coverage tests.
 
 use nalgebra::Matrix3;
+use navigate_visual::CameraModel;
 use navigate_visual_pipeline::{
     corridor::{
         AnchorWorkerState, DeadReckonPath, DualPathDeadReckoner, can_update_vertical_velocity,
@@ -11,6 +12,17 @@ use navigate_visual_pipeline::{
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+fn test_camera() -> CameraModel {
+    CameraModel {
+        width: 1920,
+        height: 1080,
+        fx: 1000.0,
+        fy: 1000.0,
+        cx: 960.0,
+        cy: 540.0,
+    }
+}
 
 #[test]
 fn test_tier5_dead_reckoning_dynamic_path_transitions() -> TestResult {
@@ -47,7 +59,7 @@ fn test_tier5_dead_reckoning_dynamic_path_transitions() -> TestResult {
 
 #[test]
 fn test_tier5_session_relocation_and_vertical_velocity_gating() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
 
     // Relocation with positive dt_s recomputes velocity.
     let eye1 = [500.0, 600.0, 100.0];

@@ -67,7 +67,7 @@ impl<'a> ClipSpec<'a> {
             dynamics: VehicleDynamicsProfile::fixed_wing(),
             min_accepted: 3,
             max_pos_offset_m: 4500.0,
-            auto_catalog_zoom: None,
+            auto_catalog_zoom: Some((16, 13, 4500.0)),
             runtime_override: None,
             pace_realtime: false,
         }
@@ -450,11 +450,19 @@ pub(super) fn execute_real_corridor_clip(
         spec.file_name,
         spec.pace_realtime
     )?;
-    assert!(
-        seg_refreshes >= 1,
-        "{}: Segformer never executed",
-        spec.file_name
-    );
+    if spec.dynamics.max_speed_mps >= 40.0 {
+        assert!(
+            seg_refreshes >= 1,
+            "{}: Segformer never executed on fixed-wing clip",
+            spec.file_name
+        );
+    } else {
+        assert_eq!(
+            seg_refreshes, 0,
+            "{}: Segformer should stay bypassed on rotary gimbal mount",
+            spec.file_name
+        );
+    }
     assert!(
         accepted >= spec.min_accepted,
         "{}: accepted={accepted} < {} ({summary})",

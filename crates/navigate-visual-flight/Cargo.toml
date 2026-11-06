@@ -1,0 +1,38 @@
+[package]
+name = "navigate-visual-flight"
+description = "Zero-disk-IO real-time visual localization and 30 Hz corridor engine for flight navigation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["flex"]
+flex = ["navigate-match/flex", "burn/flex"]
+wgpu = ["navigate-match/wgpu", "burn/wgpu"]
+metal = ["navigate-match/metal", "burn/metal"]
+cuda = ["navigate-match/cuda", "burn/cuda"]
+
+[dependencies]
+navigate-contract.workspace = true
+navigate-geodesy = { workspace = true, features = ["std"] }
+navigate-visual = { workspace = true, features = ["serde", "fusion"] }
+navigate-visual-render.workspace = true
+navigate-locate = { workspace = true, features = ["serde"] }
+navigate-match = { workspace = true, features = ["ort", "optim"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
+image = { workspace = true, features = ["png", "jpeg"] }
+nalgebra = { workspace = true, features = ["std"] }
+pollster = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = { workspace = true, features = ["std"] }
+tracing.workspace = true
+
+[dev-dependencies]
+navigate-astrodynamics.workspace = true
+navigate-fusion = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

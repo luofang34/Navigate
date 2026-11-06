@@ -101,7 +101,7 @@ pub fn compose_amortized_u8(
     #[cfg(target_arch = "wasm32")]
     let workers = 1usize;
     #[cfg(not(target_arch = "wasm32"))]
-    let workers = if total >= 120_000 {
+    let workers = if total >= 1_500_000 {
         std::thread::available_parallelism()
             .map(|n| n.get().min(8))
             .unwrap_or(1)

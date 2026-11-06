@@ -430,3 +430,41 @@ fn hardware_set_camera_updates_intrinsics_and_resizes_without_texture_reupload()
             .all(|d| (*d - 1000.0).abs() < 0.003)
     );
 }
+
+#[test]
+fn shared_gpu_scene_supports_independent_viewports() {
+    let gpu_scene = Arc::new(
+        pollster::block_on(GpuScene::new(
+            scene(LocalFrame::anchor_mercator(0.0, 0.0).unwrap()),
+            limits().scene_bytes,
+        ))
+        .unwrap(),
+    );
+    let mut vp_fg =
+        GpuViewport::from_scene_with_label(Arc::clone(&gpu_scene), camera(), limits(), "fg")
+            .unwrap();
+    let alt_cam = CameraModel {
+        width: 32,
+        height: 48,
+        fx: 60.0,
+        fy: 60.0,
+        cx: 15.5,
+        cy: 23.5,
+    };
+    let mut vp_bg =
+        GpuViewport::from_scene_with_label(Arc::clone(&gpu_scene), alt_cam, limits(), "bg")
+            .unwrap();
+    assert_eq!(Arc::strong_count(&gpu_scene), 3);
+    assert_eq!(
+        vp_fg.resident_texture_bytes(),
+        gpu_scene.resident_texture_bytes()
+    );
+    let pose = CameraPose {
+        position: Vector3::new(0.0, 0.0, 1000.0),
+        orientation: UnitQuaternion::identity(),
+    };
+    let view_fg = vp_fg.render_blocking(pose).unwrap();
+    let view_bg = vp_bg.render_blocking(pose).unwrap();
+    assert_eq!(view_fg.image.dimensions(), (48, 40));
+    assert_eq!(view_bg.image.dimensions(), (32, 48));
+}

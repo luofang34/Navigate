@@ -1,6 +1,6 @@
 //! Fusion observations from one visual estimate: a position fix or a visual pose.
 //!
-//! Both builders declare the body-fixed frame of the reference ellipsoid of the
+//! Each builder declares the body-fixed frame of the reference ellipsoid of the
 //! visual frame (ADR-0013). An estimate in a [`LocalFrame::BodyTangentEnu`] frame
 //! on the Moon gives a lunar observation, so a lunar filter can admit it.
 
@@ -34,15 +34,55 @@ pub fn position_fix_observation(
     identity: &VisualSourceIdentity,
     budget: &VisualErrorBudget,
 ) -> Result<Observation, VisualFusionError> {
-    budget.validate()?;
-    let position = geodetic_position(estimate, budget)?;
-    let covariance = ned_covariance(estimate, budget)?;
-    Ok(stamped(
+    position_fix_observation_propagated(
         estimate,
         identity,
+        budget,
+        estimate.stamp.capture_time_ns,
+        estimate.stamp.sequence,
+        &Matrix3::zeros(),
+    )
+}
+
+/// Build a position fix for a delayed anchor propagated to `arrival_time_ns`.
+///
+/// The builder adds `q_vo_enu_m2` in frame axes before it rotates the covariance
+/// into north, east, down axes. It stamps the observation at `arrival_time_ns`
+/// and declares the body-fixed frame of [`LocalFrame::reference_ellipsoid`].
+///
+/// # Errors
+/// Refuses negative lag, a zero horizontal propagation covariance when
+/// `arrival_time_ns > capture_time_ns`, and all conditions of
+/// [`position_fix_observation`].
+pub fn position_fix_observation_propagated(
+    estimate: &Estimate,
+    identity: &VisualSourceIdentity,
+    budget: &VisualErrorBudget,
+    arrival_time_ns: u64,
+    arrival_sequence: u64,
+    q_vo_enu_m2: &Matrix3<f64>,
+) -> Result<Observation, VisualFusionError> {
+    if arrival_time_ns < estimate.stamp.capture_time_ns {
+        return Err(VisualFusionError::FrameOrder {
+            previous_ns: estimate.stamp.capture_time_ns,
+            received_ns: arrival_time_ns,
+        });
+    }
+    budget.validate()?;
+    let require_vo = arrival_time_ns > estimate.stamp.capture_time_ns;
+    if !is_valid_vo_cov(q_vo_enu_m2, require_vo) {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
+    let position = geodetic_position(estimate, budget)?;
+    let covariance = position_covariance(estimate, budget, q_vo_enu_m2, 2.0)?;
+    Ok(stamped_at(
+        estimate,
+        identity,
+        arrival_time_ns,
+        arrival_sequence,
         ObservationValue::PositionFix {
             position,
-            covariance,
+            covariance: to_cov3(&covariance),
         },
     ))
 }
@@ -70,10 +110,58 @@ pub fn visual_pose_observation(
     budget: &VisualErrorBudget,
     attitude_budget: &VisualAttitudeBudget,
 ) -> Result<Observation, VisualFusionError> {
+    visual_pose_observation_propagated(
+        estimate,
+        identity,
+        budget,
+        attitude_budget,
+        estimate.stamp.capture_time_ns,
+        estimate.stamp.sequence,
+        &Matrix3::zeros(),
+        &Matrix3::zeros(),
+    )
+}
+
+/// Build a six-degree-of-freedom visual pose propagated to `arrival_time_ns`.
+///
+/// The builder adds `q_vo_enu_m2` in frame axes and `q_vo_att_rad2` in camera
+/// axes before it transforms and scales both covariance blocks. It stamps the
+/// observation at `arrival_time_ns` and declares the body-fixed frame of
+/// [`LocalFrame::reference_ellipsoid`].
+///
+/// # Errors
+/// Refuses negative lag, a zero propagation covariance when
+/// `arrival_time_ns > capture_time_ns`, and all conditions of
+/// [`visual_pose_observation`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "propagated 6-DOF pose observation takes estimate, identity, position/attitude budgets, arrival stamp, and position/attitude VO covariances"
+)]
+pub fn visual_pose_observation_propagated(
+    estimate: &Estimate,
+    identity: &VisualSourceIdentity,
+    budget: &VisualErrorBudget,
+    attitude_budget: &VisualAttitudeBudget,
+    arrival_time_ns: u64,
+    arrival_sequence: u64,
+    q_vo_enu_m2: &Matrix3<f64>,
+    q_vo_att_rad2: &Matrix3<f64>,
+) -> Result<Observation, VisualFusionError> {
+    if arrival_time_ns < estimate.stamp.capture_time_ns {
+        return Err(VisualFusionError::FrameOrder {
+            previous_ns: estimate.stamp.capture_time_ns,
+            received_ns: arrival_time_ns,
+        });
+    }
     budget.validate()?;
     attitude_budget.validate()?;
+    let require_vo = arrival_time_ns > estimate.stamp.capture_time_ns;
+    if !is_valid_vo_cov(q_vo_enu_m2, require_vo) || !is_valid_att_vo_cov(q_vo_att_rad2, require_vo)
+    {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
     let position = geodetic_position(estimate, budget)?;
-    let position_cov = position_covariance(estimate, budget, 4.0)?;
+    let position_cov = position_covariance(estimate, budget, q_vo_enu_m2, 4.0)?;
     let ned_from_eye = ned_from_frame(estimate)? * estimate.pose.orientation;
     let body_to_ned = ned_from_eye * attitude_budget.eye_to_body.inverse();
     let rotation = ned_from_eye.to_rotation_matrix().into_inner();
@@ -81,7 +169,8 @@ pub fn visual_pose_observation(
         .geometry_covariance
         .fixed_view::<3, 3>(3, 3)
         .into_owned();
-    let geometric = rotation * eye * rotation.transpose();
+    let eye_total = eye + q_vo_att_rad2;
+    let geometric = rotation * eye_total * rotation.transpose();
     if (geometric - geometric.transpose()).norm() > 1e-12 || !usable(&geometric) {
         return Err(VisualFusionError::InvalidCovariance);
     }
@@ -91,9 +180,11 @@ pub fn visual_pose_observation(
         return Err(VisualFusionError::InvalidCovariance);
     }
     let q = body_to_ned.quaternion();
-    Ok(stamped(
+    Ok(stamped_at(
         estimate,
         identity,
+        arrival_time_ns,
+        arrival_sequence,
         ObservationValue::VisualPose {
             position,
             position_covariance: to_cov3(&position_cov),
@@ -103,7 +194,7 @@ pub fn visual_pose_observation(
     ))
 }
 
-/// The geodetic camera position, with the vertical datum applied.
+/// Geodetic camera position with the declared vertical datum applied.
 fn geodetic_position(
     estimate: &Estimate,
     budget: &VisualErrorBudget,
@@ -127,17 +218,19 @@ fn geodetic_position(
     Ok(geodetic)
 }
 
-/// The observation stamp of the estimate frame and its declared body-fixed frame.
-fn stamped(
+/// Observation stamp at `(stamp_time_ns, stamp_sequence)` with the body-fixed frame.
+fn stamped_at(
     estimate: &Estimate,
     identity: &VisualSourceIdentity,
+    stamp_time_ns: u64,
+    stamp_sequence: u64,
     value: ObservationValue,
 ) -> Observation {
     let stamp = ObservationStamp::new(
         identity.source,
         identity.epoch,
-        WrappingSequence::new(low_bits(estimate.stamp.sequence)),
-        MonotonicNanos::from_nanos(estimate.stamp.capture_time_ns),
+        WrappingSequence::new(low_bits(stamp_sequence)),
+        MonotonicNanos::from_nanos(stamp_time_ns),
         identity.clock,
     );
     Observation::new(
@@ -148,12 +241,12 @@ fn stamped(
     .with_frame(estimate.frame.reference_ellipsoid().frame())
 }
 
-/// The low 32 bits keep the wrap order of a wrapping 64-bit frame sequence.
+/// Low 32 bits keep the wrap order of a wrapping 64-bit frame sequence.
 fn low_bits(sequence: u64) -> u32 {
     u32::try_from(sequence & u64::from(u32::MAX)).unwrap_or(u32::MAX)
 }
 
-/// The rotation from the frame axes to the local north, east, down axes at the camera.
+/// Rotation from the frame axes to the local north, east, down axes at the camera.
 fn ned_from_frame(estimate: &Estimate) -> Result<UnitQuaternion<f64>, VisualFusionError> {
     let [lat, lon, _] = estimate.frame.geodetic(estimate.pose.position);
     let local_to_frame = estimate
@@ -166,25 +259,28 @@ fn ned_from_frame(estimate: &Estimate) -> Result<UnitQuaternion<f64>, VisualFusi
     Ok(enu_to_ned * local_to_frame.inverse())
 }
 
-/// The position fix covariance in north, east, down axes.
+/// Position fix covariance in north, east, down axes.
+#[cfg(test)]
 pub(super) fn ned_covariance(
     estimate: &Estimate,
     budget: &VisualErrorBudget,
 ) -> Result<SymmetricCov3, VisualFusionError> {
-    position_covariance(estimate, budget, 2.0).map(|ned| to_cov3(&ned))
+    position_covariance(estimate, budget, &Matrix3::zeros(), 2.0).map(|ned| to_cov3(&ned))
 }
 
-/// Rotate the image-geometry position covariance from frame axes (east,
-/// north, up) into north, east, down, scale it, and add the declared budget.
+/// Rotate the image-geometry position covariance from frame axes into north,
+/// east, down, scale it, and add the declared budget.
 fn position_covariance(
     estimate: &Estimate,
     budget: &VisualErrorBudget,
+    q_vo_enu_m2: &Matrix3<f64>,
     geometric_scale: f64,
 ) -> Result<Matrix3<f64>, VisualFusionError> {
-    let enu: Matrix3<f64> = estimate
+    let enu_geom: Matrix3<f64> = estimate
         .geometry_covariance
         .fixed_view::<3, 3>(0, 0)
         .into_owned();
+    let enu = enu_geom + q_vo_enu_m2;
     let axes = ned_from_frame(estimate)?.to_rotation_matrix().into_inner();
     let geometric = axes * enu * axes.transpose();
     if (geometric - geometric.transpose()).norm() > 1e-9 || !usable(&geometric) {
@@ -192,9 +288,6 @@ fn position_covariance(
     }
     let point_displacement_m = estimate.frame.model_error_m(estimate.pose.position);
     let (horizontal, vertical) = budget.variances_m2(point_displacement_m);
-    // Bound E[(G + B)(G + B)^T] in Loewner order without independence assumptions:
-    // (a + b + c)^2 <= 2 a^2 + 4 b^2 + 4 c^2 keeps horizontal and vertical budgets
-    // strictly separated onto their own axes.
     let external = Matrix3::from_diagonal(&Vector3::new(
         8.0 * horizontal,
         8.0 * horizontal,
@@ -205,6 +298,26 @@ fn position_covariance(
         return Err(VisualFusionError::InvalidCovariance);
     }
     Ok(ned)
+}
+
+fn is_valid_vo_cov(q: &Matrix3<f64>, require_positive: bool) -> bool {
+    if !q.iter().all(|v| v.is_finite()) || (q - q.transpose()).norm() > 1e-9 {
+        return false;
+    }
+    if q.symmetric_eigen().eigenvalues.iter().any(|v| *v < -1e-12) {
+        return false;
+    }
+    !require_positive || (q[(0, 0)] + q[(1, 1)]) > 0.0
+}
+
+fn is_valid_att_vo_cov(q: &Matrix3<f64>, require_positive: bool) -> bool {
+    if !q.iter().all(|v| v.is_finite()) || (q - q.transpose()).norm() > 1e-12 {
+        return false;
+    }
+    if q.symmetric_eigen().eigenvalues.iter().any(|v| *v < -1e-12) {
+        return false;
+    }
+    !require_positive || q.trace() > 0.0
 }
 
 /// Whether a covariance is finite and positive semidefinite.

@@ -58,3 +58,19 @@ pub enum PipelineError {
     #[error("pipeline validation failed: {0}")]
     Invalid(String),
 }
+
+impl From<navigate_visual_flight::FlightVisualError> for PipelineError {
+    fn from(err: navigate_visual_flight::FlightVisualError) -> Self {
+        use navigate_visual_flight::FlightVisualError as F;
+        match err {
+            F::Io { path, source } => Self::Io { path, source },
+            F::Json { context, source } => Self::Json { context, source },
+            F::Image { path, source } => Self::Image { path, source },
+            F::Match(m) => Self::Match(m),
+            F::Segment(s) => Self::Segment(s),
+            F::Visual(v) => Self::Visual(v),
+            F::Render(r) => Self::Render(r),
+            other => Self::Invalid(other.to_string()),
+        }
+    }
+}

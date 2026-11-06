@@ -406,8 +406,8 @@ fn t1_26_01_file_line_count_limit() -> TestResult {
         .and_then(Path::parent)
         .ok_or("no repository root")?;
     let files = [
-        "tools/visual-pipeline/src/corridor/nadir.rs",
-        "tools/visual-pipeline/src/surface/gpu.rs",
+        "crates/navigate-visual-flight/src/nadir.rs",
+        "crates/navigate-visual-flight/src/surface/gpu.rs",
         "tools/visual-pipeline/src/stages/seeds.rs",
         "tools/visual-pipeline/src/xfeat_runtime.rs",
     ];

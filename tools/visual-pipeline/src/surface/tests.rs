@@ -1,4 +1,6 @@
 use super::*;
+use image::{Rgb, RgbImage};
+use nalgebra::{Matrix3, Vector3};
 
 fn intrinsics(width: u32, height: u32, focal: f64) -> Matrix3<f64> {
     Matrix3::new(
@@ -53,8 +55,8 @@ fn mixed_shoreline_surface() -> Surface {
                     }
                 }
             }
-            surface.imagery_tiles.insert((tx, ty), img);
-            surface.dem_tiles.insert((tx, ty), elev);
+            surface.imagery_tiles_mut().insert((tx, ty), img);
+            surface.dem_tiles_mut().insert((tx, ty), elev);
         }
     }
     surface.min_elev_m = 120.0;
@@ -248,7 +250,7 @@ fn from_catalog_rejects_missing_imagery_tiles_when_catalog_is_nonempty() {
         panic!("missing imagery tiles must fail closed");
     };
     assert!(
-        matches!(err, PipelineError::Invalid(_)),
+        matches!(err, navigate_visual_flight::FlightVisualError::Invalid(_)),
         "unexpected error: {err:?}"
     );
 }

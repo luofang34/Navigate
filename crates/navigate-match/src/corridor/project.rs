@@ -12,7 +12,7 @@ use crate::{
     kashin::{try_normalize64, unpack_kashin_i8},
 };
 
-type ProjectedCand = (f32, f32, usize, usize, usize, [f64; 2], [f64; 3]);
+type ProjectedCand = (f32, f32, usize, usize, usize, [f64; 2], [f64; 2], [f64; 3]);
 
 /// Project visible 3D landmarks from `tiles` into `cam` to synthesize a [`VirtualCorridorView`].
 #[must_use]
@@ -43,14 +43,22 @@ fn project_tiles_virtual_view_opt<'a>(
     }
     let wf = f64::from(w);
     let hf = f64::from(h);
+    let model_scale = (800.0 / wf).min(576.0 / hf);
+    let fx_model = fx * model_scale;
+    let scale = (800.0 / wf).min(600.0 / hf);
+    let nms_scale = scale.min(1.0);
+    let pad_x = (800.0 - wf * scale) * 0.5;
+    let pad_y = (600.0 - hf * scale) * 0.5;
+    let ox = pad_x + (scale - 1.0) * 0.5;
+    let oy = pad_y + (scale - 1.0) * 0.5;
     let live_cam_x = [
         cam.world_to_cam[0],
         cam.world_to_cam[1],
         cam.world_to_cam[2],
     ];
-    let zw = (w.div_ceil(8)).max(1) as usize;
-    let zh = (h.div_ceil(8)).max(1) as usize;
-    let mut min_depth = vec![f32::INFINITY; zw * zh];
+    let zw = 100_usize;
+    let zh = 75_usize;
+    let mut min_depth = [f32::INFINITY; 100 * 75];
     let mut visible_tiles = 0_usize;
     let mut tile_refs: Vec<&'a CorridorTileEntry> = Vec::new();
     let mut cands: Vec<ProjectedCand> = Vec::new();
@@ -90,7 +98,10 @@ fn project_tiles_virtual_view_opt<'a>(
             if !(0.0..wf).contains(&u_px) || !(0.0..hf).contains(&v_px) {
                 continue;
             }
-            let z_cell = ((v_px as u32 >> 3) as usize) * zw + ((u_px as u32 >> 3) as usize);
+            let gx = (u_px * nms_scale).clamp(0.0, 799.999);
+            let gy = (v_px * nms_scale).clamp(0.0, 599.999);
+            let z_cell = ((gy as u32 >> 3) as usize).min(zh - 1) * zw
+                + ((gx as u32 >> 3) as usize).min(zw - 1);
             let depth_f = pc[2] as f32;
             if depth_f < min_depth[z_cell] {
                 min_depth[z_cell] = depth_f;
@@ -108,7 +119,8 @@ fn project_tiles_virtual_view_opt<'a>(
             if cos_ori < cam.min_cos_orientation {
                 continue;
             }
-            let Some(scale_sim) = scale_similarity(tile.ref_dist_m[l_idx], v, fx, is_nadir) else {
+            let Some(scale_sim) = scale_similarity(tile.ref_dist_m[l_idx], v, fx_model, is_nadir)
+            else {
                 continue;
             };
             let sal = f32::from(tile.scores_u8[l_idx]) / 255.0;
@@ -119,7 +131,16 @@ fn project_tiles_virtual_view_opt<'a>(
             };
             let view_sim = cos_ray.max(0.05).powi(3) * eff_ori.powi(4);
             let prio = view_sim * scale_sim * (0.25 + 0.75 * sal);
-            cands.push((prio, depth_f, z_cell, t_idx, l_idx, [u_px, v_px], world));
+            cands.push((
+                prio,
+                depth_f,
+                z_cell,
+                t_idx,
+                l_idx,
+                [u_px, v_px],
+                [gx, gy],
+                world,
+            ));
         }
     }
 
@@ -130,12 +151,9 @@ fn project_tiles_virtual_view_opt<'a>(
             .then_with(|| a.4.cmp(&b.4))
     });
 
-    let scale = (800.0 / wf).min(600.0 / hf);
-    let ox = (800.0 - wf * scale) * 0.5 + (scale - 1.0) * 0.5;
-    let oy = (600.0 - hf * scale) * 0.5 + (scale - 1.0) * 0.5;
     let keep_cap = cam.max_landmarks.min(cands.len());
-    let nw = (w.div_ceil(4)).max(1) as usize;
-    let nh = (h.div_ceil(4)).max(1) as usize;
+    let nw = 200_usize;
+    let nh = 150_usize;
     let mut nms_grid: Vec<Option<[f64; 2]>> = vec![None; nw * nh];
     let mut region_counts = [0_usize; 64];
     let region_quota = (cam.max_landmarks / 32).max(8);
@@ -164,8 +182,10 @@ fn project_tiles_virtual_view_opt<'a>(
                 break;
             }
             let px = cand_item.5;
-            let n_cell = ((px[1] as u32 >> 2) as usize) * nw + ((px[0] as u32 >> 2) as usize);
-            if nms_grid[n_cell].is_some() || has_nearby_pixel(&nms_grid, nw, nh, px, 16.0) {
+            let mpx = cand_item.6;
+            let n_cell = ((mpx[1] as u32 >> 2) as usize).min(nh - 1) * nw
+                + ((mpx[0] as u32 >> 2) as usize).min(nw - 1);
+            if nms_grid[n_cell].is_some() || has_nearby_pixel(&nms_grid, nw, nh, mpx, 16.0) {
                 continue;
             }
             if enforce_quota {
@@ -178,12 +198,15 @@ fn project_tiles_virtual_view_opt<'a>(
                 }
                 region_counts[reg] += 1;
             }
-            nms_grid[n_cell] = Some(px);
+            nms_grid[n_cell] = Some(mpx);
+            let model_px = [
+                (px[0] * scale + ox).clamp(0.0, 799.999),
+                (px[1] * scale + oy).clamp(0.0, 599.999),
+            ];
             push_virtual_landmark(
                 &mut out,
                 tile_refs[cand_item.3],
-                cand_item,
-                (scale, ox, oy),
+                (cand_item.0, cand_item.4, px, model_px, cand_item.7),
                 projector,
             );
         }
@@ -195,15 +218,14 @@ fn project_tiles_virtual_view_opt<'a>(
 fn push_virtual_landmark(
     out: &mut VirtualCorridorView,
     tile: &CorridorTileEntry,
-    (prio, _, _, _, l_idx, px, world): ProjectedCand,
-    (scale, ox, oy): (f64, f64, f64),
+    (prio, l_idx, px, mpx, world): (f32, usize, [f64; 2], [f64; 2], [f64; 3]),
     projector: Option<&HadamardProjector>,
 ) {
     let code = tile.kashin_i8[l_idx];
     out.features.pixels.push(px);
     out.features
         .model_pixels
-        .push([(px[0] * scale + ox) as f32, (px[1] * scale + oy) as f32]);
+        .push([mpx[0] as f32, mpx[1] as f32]);
     out.features.scores.push(prio);
     if let Some(proj) = projector {
         let unit = try_normalize64(&unpack_kashin_i8(&code)).unwrap_or([0.0; 64]);

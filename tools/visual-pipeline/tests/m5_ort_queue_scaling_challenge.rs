@@ -463,16 +463,16 @@ fn challenge_milestone5_file_length_limits() -> TestResult {
         .ok_or("cannot find repo root")?;
 
     let touched_files = [
-        "tools/visual-pipeline/src/surface/gpu/atlas.rs",
-        "tools/visual-pipeline/src/surface/gpu.rs",
-        "tools/visual-pipeline/src/corridor/nadir.rs",
+        "crates/navigate-visual-flight/src/surface/gpu/atlas.rs",
+        "crates/navigate-visual-flight/src/surface/gpu.rs",
+        "crates/navigate-visual-flight/src/nadir.rs",
         "tools/visual-pipeline/src/corridor.rs",
         "tools/visual-pipeline/src/corridor/anchor.rs",
-        "tools/visual-pipeline/src/corridor/tile_builder.rs",
+        "crates/navigate-visual-flight/src/tile_builder.rs",
         "tools/visual-pipeline/src/stages/seeds.rs",
         "crates/navigate-match/src/ort_session.rs",
         "tools/visual-pipeline/src/xfeat_runtime.rs",
-        "tools/visual-pipeline/src/corridor/background.rs",
+        "crates/navigate-visual-flight/src/worker.rs",
         "tools/visual-pipeline/tests/m5_ort_queue_scaling_challenge.rs",
     ];
 

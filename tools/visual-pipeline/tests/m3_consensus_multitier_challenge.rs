@@ -16,8 +16,8 @@ use navigate_visual::session::{
     AnchorObservation, FrameKey, MapReliability, Pose, RegionChange, ScaleSource, SurfaceModel,
 };
 use navigate_visual::{
-    CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision, SearchConfig,
-    SearchPrior, SearchTier,
+    CameraModel, CameraPose, Estimate, EstimateQuality, FrameStamp, LocalFrame, MapRevision,
+    SearchConfig, SearchPrior, SearchTier,
 };
 use navigate_visual_pipeline::corridor::{
     AnchorWorkerState, VisualCorridorSession,
@@ -30,6 +30,17 @@ use navigate_visual_pipeline::corridor::{
 use std::error::Error;
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+fn test_camera() -> CameraModel {
+    CameraModel {
+        width: 1920,
+        height: 1080,
+        fx: 1000.0,
+        fy: 1000.0,
+        cx: 960.0,
+        cy: 540.0,
+    }
+}
 
 fn test_map() -> MapRevision {
     MapRevision {
@@ -97,7 +108,7 @@ fn make_test_estimate(
 
 #[test]
 fn test_consensus_relocation_full_lifecycle() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     let scale = ScaleSource::SeededMapPoints { map: test_map() };
 
     // Register initial frame 0 at t = 1.0s
@@ -165,7 +176,7 @@ fn test_consensus_relocation_full_lifecycle() -> TestResult {
 
 #[test]
 fn test_consensus_relocation_sub_five_meter_separation_remains_pending() -> TestResult {
-    let mut session = VisualCorridorSession::new()?;
+    let mut session = VisualCorridorSession::new(test_camera())?;
     let scale = ScaleSource::SeededMapPoints { map: test_map() };
 
     session.register_frame(1_000_000_000)?;
@@ -443,25 +454,19 @@ fn test_dinov2_canvas_mapping_descriptor_and_ranking() -> TestResult {
     assert!(descriptor_from_tokens_and_canvas(&bad_tokens, &canvas).is_err());
 
     // 3. Cosine similarity ranking
-    let query_desc = Descriptor {
-        values: {
-            let mut v = vec![0.0; 384];
-            v[0] = 1.0;
-            v
-        },
-    };
+    let mut query_vals = vec![0.0; 384];
+    query_vals[0] = 1.0;
+    let query_desc = Descriptor { values: query_vals };
 
     let rec_match = Record {
         centre: [47.0, 11.0],
         descriptor: query_desc.values.clone(),
     };
+    let mut ortho_vals = vec![0.0; 384];
+    ortho_vals[1] = 1.0;
     let rec_ortho = Record {
         centre: [400.0, 11.0],
-        descriptor: {
-            let mut v = vec![0.0; 384];
-            v[1] = 1.0;
-            v
-        },
+        descriptor: ortho_vals,
     };
     let rec_close = Record {
         centre: [47.0001, 11.0001],

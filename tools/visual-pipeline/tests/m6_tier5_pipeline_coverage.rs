@@ -420,7 +420,9 @@ fn test_tier5_gpu_queue_isolation_and_camera_reconfiguration() -> TestResult {
 
         // Invalid intrinsics must return error without panic.
         let bad_k = Matrix3::zeros();
-        let err = renderer.render_view(&surface, eye, &rot, &bad_k, size1);
+        let err = renderer
+            .render_view(&surface, eye, &rot, &bad_k, size1)
+            .map_err(PipelineError::from);
         assert!(matches!(err, Err(PipelineError::Invalid(_))));
     }
     Ok(())

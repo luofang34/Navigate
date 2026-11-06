@@ -240,7 +240,11 @@ pub fn run_realtime_bank_match(opts: &BankMatchOptions) -> Result<Value, Pipelin
         .count();
     let t_warmup = Instant::now();
     if effective_cases > 8 {
-        let _ = xfeat.warmup(lighterglue.as_ref())?;
+        let _ = xfeat.warmup(
+            lighterglue
+                .as_ref()
+                .map(|lg| lg as &dyn navigate_match::SparseMatcher),
+        )?;
     }
     let init_gpu = opts
         .polish
