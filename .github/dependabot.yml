@@ -1,5 +1,6 @@
-# Keeps the pinned workflow actions current. Each pin is a full commit SHA with its
-# release tag in a comment; Dependabot updates both.
+# Dependabot updates the pinned workflow actions and the Cargo dependencies
+# every week. Each action pin is a full commit SHA with its release tag in a
+# comment.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,3 +12,16 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: ci
+
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /crates/flamsteed/qemu-arm
+      - /crates/flamsteed/qemu-riscv
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+    commit-message:
+      prefix: build

@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -14,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' && github.head_ref || '' }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -21,6 +26,21 @@ jobs:
           components: rustfmt, clippy
           # The no_std targets are the RP2350 Arm and RISC-V cores and the RP2040.
           targets: wasm32-unknown-unknown, thumbv8m.main-none-eabihf, riscv32imac-unknown-none-elf, thumbv6m-none-eabi
+
+      - name: Format Rust sources on Dependabot pull requests
+        if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
+        run: |
+          cargo fmt --all
+          for harness in qemu-riscv qemu-arm; do
+            cargo fmt --manifest-path "crates/flamsteed/$harness/Cargo.toml"
+          done
+
+      - name: Commit formatted Rust sources on Dependabot pull requests
+        if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
+        uses: stefanzweifel/git-auto-commit-action@d0b01107b5db882071f96de5dd4b54961ea93f4c # v7.2.1
+        with:
+          commit_message: "style: format Rust sources with rustfmt"
+          file_pattern: "*.rs"
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
