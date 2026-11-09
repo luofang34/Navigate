@@ -98,3 +98,91 @@ fn crop_resize_preserves_rays_with_nonuniform_scale_and_offcentre_principal_poin
             .is_err()
     );
 }
+
+/// A small deterministic generator, so the agreement tests replay.
+struct Lcg(u64);
+
+impl Lcg {
+    fn unit(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1_u64 << 53) as f64
+    }
+
+    fn symmetric(&mut self, half: f64) -> f64 {
+        (self.unit() * 2.0 - 1.0) * half
+    }
+
+    fn pose(&mut self) -> CameraPose {
+        let axis = Vector3::new(
+            self.symmetric(3.0),
+            self.symmetric(3.0),
+            self.symmetric(3.0),
+        );
+        CameraPose {
+            position: Vector3::new(
+                self.symmetric(5000.0),
+                self.symmetric(5000.0),
+                self.symmetric(2000.0),
+            ),
+            orientation: UnitQuaternion::from_scaled_axis(axis),
+        }
+    }
+}
+
+fn agreement_camera() -> CameraModel {
+    CameraModel {
+        width: 800,
+        height: 600,
+        fx: 610.0,
+        fy: 640.0,
+        cx: 401.3,
+        cy: 297.8,
+    }
+}
+
+#[test]
+fn intrinsics_round_trip_is_lossless() {
+    let camera = agreement_camera();
+    let intrinsics = navigate_camera::Intrinsics::from(camera);
+    assert_eq!(CameraModel::from(intrinsics), camera);
+    assert_eq!(intrinsics.matrix()[(0, 2)], camera.cx);
+}
+
+#[test]
+fn pose_round_trip_keeps_position_and_rotation() {
+    let mut rng = Lcg(7);
+    for _ in 0..200 {
+        let pose = rng.pose();
+        let back = CameraPose::from(navigate_camera::OpticalPose::from(pose));
+        assert_eq!(back.position, pose.position);
+        assert!(back.orientation.angle_to(&pose.orientation) < 1e-12);
+    }
+}
+
+#[test]
+fn optical_projection_agrees_with_gl_projection() {
+    let camera = agreement_camera();
+    let intrinsics = navigate_camera::Intrinsics::from(camera);
+    let mut rng = Lcg(42);
+    for _ in 0..500 {
+        let pose = rng.pose();
+        let optical = navigate_camera::OpticalPose::from(pose);
+        let pixel = Vector2::new(rng.symmetric(600.0) + 400.0, rng.symmetric(450.0) + 300.0);
+        let depth = 1.0 + rng.unit() * 8000.0;
+        let front = camera.unproject(&pose, pixel, depth);
+        let optical_front = optical.unproject(&intrinsics, &pixel, depth);
+        assert!((front - optical_front).norm() < 1e-9 * depth.max(1.0) * 10.0);
+        let gl = camera.project(&pose, front).expect("point is in front");
+        let ours = optical
+            .project(&intrinsics, &front)
+            .expect("point is in front");
+        assert!((gl - ours).norm() < 1e-6, "{gl} != {ours}");
+        assert!((ours - pixel).norm() < 1e-6);
+        let behind = camera.unproject(&pose, pixel, -depth);
+        assert!(camera.project(&pose, behind).is_none());
+        assert!(optical.project(&intrinsics, &behind).is_none());
+    }
+}

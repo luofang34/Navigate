@@ -4,6 +4,7 @@
 //! East-North-Up (ENU) ground tiles. At runtime, [`CorridorLandmarkBank::project_virtual_view`]
 //! projects visible 3D landmarks into any live camera pose and intrinsics without rendering.
 
+mod camera;
 mod codec;
 mod project;
 mod store;

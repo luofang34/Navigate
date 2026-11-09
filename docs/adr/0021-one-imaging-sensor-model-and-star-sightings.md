@@ -76,6 +76,11 @@ percentile stretch. It is the automatic gain control (AGC) for matchers
 that accept 8-bit gray only. The stretch is a function of the image only,
 so a replay gives the same pixels.
 
+`navigate_visual_flight::LiveFrameInput` has a `band` field. `Segformer`
+learned visible colours only. Thus a frame outside the visible band does
+not use the semantic sky mask. The static mask and the propeller mask
+stay.
+
 ### Star sightings
 
 `navigate-startrack` is a new crate. It makes fusion observations from a

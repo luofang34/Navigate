@@ -31,6 +31,8 @@ pub use engine::{
 };
 pub use error::FlightVisualError;
 pub use masking::{AmortizedMasker, MaskFrameTelemetry, NIGHT_BYPASS_LUMA_P50};
+/// The spectral band of a live frame (ADR-0021).
+pub use navigate_camera::SpectralBand;
 pub use navigate_visual::fusion_bridge::VisualAttitudeBudget;
 pub use pixels::{median_luma_u8, prepare_tracking_buffers, tracking_render_size};
 pub use place_loader::{load_place_records, load_search_tier_matcher};

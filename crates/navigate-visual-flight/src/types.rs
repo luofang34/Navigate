@@ -2,8 +2,11 @@
 
 use image::GrayImage;
 use nalgebra::{Matrix3, UnitQuaternion};
+use navigate_camera::SpectralBand;
 use navigate_contract::{GeodeticPosition, ObservationStamp};
 use navigate_visual::fusion_bridge::VisualFix;
+
+mod convert;
 
 /// Scheduling policy for background map-anchor and tile-synthesis workers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +208,9 @@ pub struct LiveFrameInput<'a> {
     pub stamp: ObservationStamp,
     /// Borrowed image pixels (`Gray8`, `Nv12YPlane`, or `Rgb8`).
     pub pixels: FramePixels<'a>,
+    /// Spectral band of the camera. Only a visible frame runs the
+    /// visible-trained `Segformer` semantic mask.
+    pub band: SpectralBand,
     /// Optional static binary valid-pixel mask (`255` = valid, `0` = occluded).
     pub static_valid_mask: Option<&'a GrayImage>,
     /// Camera intrinsics and calibration confidence.
@@ -402,3 +408,6 @@ pub struct FlightFrameOutcome {
     /// Fixed-size zero-allocation frame telemetry.
     pub telemetry: FrameTelemetry,
 }
+
+#[cfg(test)]
+mod tests;

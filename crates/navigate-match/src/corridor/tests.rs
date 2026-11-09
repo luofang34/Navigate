@@ -12,7 +12,7 @@ fn unit_desc(seed: usize) -> [f32; 64] {
     try_normalize64(&raw).expect("non-zero synthetic descriptor")
 }
 
-fn build_tile_landmarks(
+pub(super) fn build_tile_landmarks(
     tx: i32,
     ty: i32,
     tile_size_m: f64,

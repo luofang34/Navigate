@@ -16,7 +16,7 @@ use navigate_contract::{
 };
 use navigate_visual_flight::{
     AttitudePrior, CalibrationMode, CameraIntrinsics, CameraMountProfile, FramePixels,
-    LiveFrameInput, MatcherRuntimeConfig, SearchPrior, anchor::AnchorSearchOpts,
+    LiveFrameInput, MatcherRuntimeConfig, SearchPrior, SpectralBand, anchor::AnchorSearchOpts,
 };
 use std::{
     path::Path,
@@ -243,6 +243,7 @@ pub(crate) fn build_live_frame_input<'a>(
             height: h,
             stride: (w as usize) * 3,
         },
+        band: SpectralBand::Visible,
         static_valid_mask: static_mask,
         intrinsics,
         mount,

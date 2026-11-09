@@ -11,6 +11,7 @@ pub use kashin_match::{
 };
 
 use nalgebra::{Matrix3, Vector3};
+use navigate_camera::{CameraError, OpticalPose};
 use navigate_match::ActiveTrackSet;
 use navigate_visual::session::MapCell;
 use std::collections::BTreeMap;
@@ -172,6 +173,29 @@ impl KinematicState {
             pos_cov_enu_m2: Matrix3::identity() * 1.0,
             att_sigma_rad: 0.01,
         }
+    }
+
+    /// A kinematic state at rest from an optical pose in local `ENU` axes.
+    #[must_use]
+    pub fn from_optical_pose(pose: &OpticalPose) -> Self {
+        Self::new(pose.eye.into(), *pose.world_to_cam.matrix())
+    }
+
+    /// The camera pose in local `ENU` axes. The camera axes are `+X` right,
+    /// `+Y` down, and `+Z` forward.
+    ///
+    /// # Errors
+    /// Refuses a `rot_world_to_cam` that is not a proper rotation, and a
+    /// value that is not finite.
+    pub fn optical_pose(&self) -> Result<OpticalPose, CameraError> {
+        let mut rows = [0.0; 9];
+        for (slot, value) in rows
+            .iter_mut()
+            .zip(self.rot_world_to_cam.transpose().iter())
+        {
+            *slot = *value;
+        }
+        OpticalPose::from_row_major(self.eye_enu, rows)
     }
 
     /// Predict the camera position after interval `dt_s`.

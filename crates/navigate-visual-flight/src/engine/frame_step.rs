@@ -80,8 +80,9 @@ impl FlightVisualEngine {
                     est_rot_for_mask.as_ref(),
                     is_coreml,
                 ));
-        let allow_seg =
-            !throttle_warm_seg && !(self.masker.has_usable_key(render_size) && anchor_busy);
+        let allow_seg = !throttle_warm_seg
+            && !(self.masker.has_usable_key(render_size) && anchor_busy)
+            && crate::masking::runs_semantic_mask(frame.band);
         let need_rgb = self.masker.needs_rgb_for_step(
             frame.mount.has_airframe_occlusion,
             render_size,
@@ -103,6 +104,7 @@ impl FlightVisualEngine {
             &k_render,
             allow_seg,
             skip_prop,
+            frame.band,
         )?;
 
         let (qry_feat, query_xfeat_ms, skip_cold_xfeat) = self.extract_query_features(

@@ -1,0 +1,18 @@
+[package]
+name = "navigate-startrack"
+description = "Star camera sightings: star detection, catalogue identification with an attitude prior, q-method attitude, and line-of-sight observations"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+nalgebra = { workspace = true, features = ["std"] }
+navigate-camera = { workspace = true, features = ["std"] }
+navigate-celestial = { workspace = true }
+navigate-contract = { workspace = true, features = ["std"] }
+navigate-fusion = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

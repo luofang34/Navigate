@@ -7,6 +7,7 @@ use image::{
     imageops::{FilterType, colorops::grayscale, resize},
 };
 use nalgebra::Matrix3;
+use navigate_camera::SpectralBand;
 pub use navigate_match::segment::amortized::MaskFrameTelemetry;
 use navigate_match::segment::{
     MaskPolicy, PropellerDetector, Segformer,
@@ -18,6 +19,8 @@ use navigate_match::segment::{
 use std::{path::Path, time::Instant};
 
 mod refresh;
+#[cfg(test)]
+mod tests;
 
 use refresh::{KeyLayers, Refresher};
 
@@ -135,13 +138,17 @@ impl AmortizedMasker {
             k,
             allow_refresh,
             false,
+            SpectralBand::Visible,
         )
     }
 
     /// Compute the binary valid-terrain mask and skip propeller morphology when `skip_propeller` is true.
+    ///
+    /// A frame outside the visible band skips `Segformer` as a night frame does,
+    /// because the model learned visible colours only.
     #[expect(
         clippy::too_many_arguments,
-        reason = "live flight masking accepts mount flag, optional RGB, luma, static mask, attitude, intrinsics, refresh gate, and propeller bypass"
+        reason = "live flight masking accepts mount flag, optional RGB, luma, static mask, attitude, intrinsics, refresh gate, propeller bypass, and spectral band"
     )]
     pub(crate) fn mask_frame_flight_fast(
         &mut self,
@@ -153,6 +160,7 @@ impl AmortizedMasker {
         k: &Matrix3<f64>,
         allow_refresh: bool,
         skip_propeller: bool,
+        band: SpectralBand,
     ) -> Result<(GrayImage, MaskFrameTelemetry, u8), FlightVisualError> {
         let t0 = Instant::now();
         let (w, h) = luma.dimensions();
@@ -184,10 +192,10 @@ impl AmortizedMasker {
             let cnt = occ.iter().filter(|&&b| b).count();
             (occ, cnt)
         };
-        let is_night = luma_p50 < NIGHT_BYPASS_LUMA_P50;
+        let skip_semantic = luma_p50 < NIGHT_BYPASS_LUMA_P50 || !runs_semantic_mask(band);
         let mut step = refresh::RefreshStep::default();
 
-        if !is_night && let Some(seg) = &mut self.seg {
+        if !skip_semantic && let Some(seg) = &mut self.seg {
             step = seg.step(
                 &mut self.key,
                 [w, h],
@@ -198,7 +206,7 @@ impl AmortizedMasker {
             )?;
         }
 
-        let (raw_mask, valid_count) = if !is_night && self.key.usable([w, h]) {
+        let (raw_mask, valid_count) = if !skip_semantic && self.key.usable([w, h]) {
             let (composed, cnt) = compose_amortized_u8(
                 [w, h],
                 &self.key.airframe_keep,
@@ -408,6 +416,12 @@ impl AmortizedMasker {
             k,
         )
     }
+}
+
+/// Whether the visible-trained `Segformer` applies to a frame in `band`.
+#[must_use]
+pub fn runs_semantic_mask(band: SpectralBand) -> bool {
+    band == SpectralBand::Visible
 }
 
 fn empty_mask_telemetry() -> MaskFrameTelemetry {
