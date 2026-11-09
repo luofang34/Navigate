@@ -227,3 +227,80 @@ fn a_streak_is_kept_with_its_length_and_a_long_trail_is_not() {
     // Close double stars merge into one longer group.
     assert!(lengths[lengths.len() / 2] < 2.0, "{lengths:?}");
 }
+
+/// The nearest centroid to `source`, if it is within 3 pixels.
+fn nearest<'a>(stars: &'a [StarCentroid], source: &Source) -> Option<&'a StarCentroid> {
+    stars
+        .iter()
+        .filter(|c| (c.pixel - source.pixel).norm() < 3.0)
+        .min_by(|a, b| {
+            (a.pixel - source.pixel)
+                .norm()
+                .total_cmp(&(b.pixel - source.pixel).norm())
+        })
+}
+
+#[test]
+fn the_centroid_covariance_predicts_the_scatter_of_the_centroids() {
+    let all = sources(&catalogue(RENDER_MAGNITUDE), &truth());
+    let stars = isolated(&all, 12.0);
+    let config = DetectConfig {
+        electrons_per_count: 2.0,
+        ..DetectConfig::default()
+    };
+    // Each star's squared error over its predicted variance, pooled over
+    // the stars of 30 images; the pooled mean is 1 for a matching model.
+    let (mut normalized, mut count) = (0.0, 0_u32);
+    let mut dim_over_bright = Vec::new();
+    for seed in 1..=30_u64 {
+        let data = crate::synthetic::render_with_shot_noise(&stars, 5.0, 2.0, seed);
+        let found = detect_stars(&view(&data), &config).expect("detect");
+        let mut sigmas = Vec::new();
+        for source in &stars {
+            let Some(star) = nearest(&found, source).filter(|c| !c.saturated) else {
+                continue;
+            };
+            let error = star.pixel - source.pixel;
+            let information = star.covariance_px2.try_inverse().expect("inverse");
+            normalized += error.dot(&(information * error)) / 2.0;
+            count += 1;
+            sigmas.push((source.flux, star.covariance_px2.trace().sqrt()));
+        }
+        sigmas.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if let (Some(dim), Some(bright)) = (sigmas.first(), sigmas.last()) {
+            dim_over_bright.push(dim.1 / bright.1);
+        }
+    }
+    let mean = normalized / f64::from(count);
+    assert!(count > 100, "{count} centroids");
+    // The PSF sampling bias of about 0.004 px adds a little to the noise.
+    assert!(
+        (0.7..1.5).contains(&mean),
+        "normalized squared error {mean}"
+    );
+    assert!(dim_over_bright.iter().all(|r| *r > 1.0));
+}
+
+#[test]
+fn a_streak_is_uncertain_along_its_length() {
+    let rate = nalgebra::Vector3::new(0.0, 3.0_f64.to_radians(), 0.0);
+    let catalogue = catalogue(crate::synthetic::CATALOGUE_MAGNITUDE);
+    let points = crate::synthetic::streak_sources(&catalogue, &truth(), rate, 0.1);
+    let data = render(&points, 5.0, 23);
+    let stars = detect_stars(&view(&data), &DetectConfig::default()).expect("detect");
+    let ratios: Vec<f64> = stars
+        .iter()
+        .filter(|s| s.length_px > 10.0)
+        .map(|s| {
+            let eigen = s.covariance_px2.symmetric_eigenvalues();
+            eigen.max() / eigen.min()
+        })
+        .collect();
+    assert!(ratios.len() >= 5);
+    // A uniform line of 15 px over a point spread of 1.3 px; a close
+    // double star merged into one group is rounder, so take the median.
+    let mut sorted = ratios.clone();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    assert!(median > 5.0, "{ratios:?}");
+}

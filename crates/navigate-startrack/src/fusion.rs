@@ -25,25 +25,35 @@ use crate::{AttitudeSolution, StarTrackError};
 /// the star direction at the middle of the exposure. `frame` is the
 /// ECEF frame of the filter, for example the frame of its WGS84 ellipsoid.
 ///
-/// The camera mount alignment error is common to all stars of one image.
-/// The caller includes it in `angular_variance_rad2` or estimates it.
+/// The angular variance of star `i` is its
+/// [`crate::StarMatch::direction_sigma_rad`] squared plus
+/// `mount_variance_rad2`. The camera mount alignment error is common to all
+/// stars of one image; the caller gives its variance there, or zero when
+/// the filter estimates it.
 ///
 /// # Errors
-/// Refuses a variance that is not finite and positive.
+/// Refuses a mount variance that is not finite and non-negative, and a star
+/// whose variance is not finite and positive.
 pub fn line_of_sight_observations(
     solution: &AttitudeSolution,
     stamp: ObservationStamp,
     frame: FrameId,
-    angular_variance_rad2: f64,
+    mount_variance_rad2: f64,
 ) -> Result<Vec<Observation>, StarTrackError> {
-    if !(angular_variance_rad2.is_finite() && angular_variance_rad2 > 0.0) {
+    if !(mount_variance_rad2.is_finite() && mount_variance_rad2 >= 0.0) {
         return Err(StarTrackError::Invalid {
-            field: "angular variance",
+            field: "mount variance",
         });
     }
     let mut stamp = stamp;
     let mut observations = Vec::with_capacity(solution.matches.len());
     for star in &solution.matches {
+        let angular_variance_rad2 = star.direction_sigma_rad.powi(2) + mount_variance_rad2;
+        if !(angular_variance_rad2.is_finite() && angular_variance_rad2 > 0.0) {
+            return Err(StarTrackError::Invalid {
+                field: "star direction variance",
+            });
+        }
         let value = ObservationValue::LineOfSight {
             measured_body_unit: star.body_unit.normalize().into(),
             reference: LineOfSightReference::InertialDirection {
