@@ -42,7 +42,8 @@ the filter share error, and the update is not independent.
 ### One camera model crate
 
 `navigate-camera` is a new leaf crate. It is `no_std` and does not
-allocate. It depends only on `nalgebra` and `navigate-contract`. It holds
+allocate. It depends on `nalgebra`, `navigate-contract`, `navigate-geodesy`
+(for the float functions), and `thiserror`. It holds
 the one description of an imaging sensor:
 
 - `Intrinsics`: a pinhole camera. Pixel centres have integer coordinates.
