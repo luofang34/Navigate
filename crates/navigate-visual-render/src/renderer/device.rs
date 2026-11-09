@@ -128,7 +128,7 @@ pub(super) fn compute_style_sha256(
     let mut hash = Sha256::new();
     hash.update(include_str!("terrain.wgsl"));
     hash.update(style.as_bytes());
-    format!("{:x}", hash.finalize())
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {

@@ -9,8 +9,8 @@ publish = false
 
 [dependencies]
 flamsteed = { path = "..", default-features = false, features = ["libm", "all-stars"] }
-riscv-rt = "0.16"
-riscv = { version = "0.15", features = ["critical-section-single-hart"] }
+riscv-rt = "0.18"
+riscv = { version = "0.16", features = ["critical-section-single-hart"] }
 semihosting = { version = "0.1", features = ["stdio"] }
 panic-halt = "1"
 

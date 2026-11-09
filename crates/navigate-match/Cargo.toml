@@ -31,7 +31,7 @@ burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"]
 cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }
 navigate-match-kernels = { workspace = true, optional = true }
 safetensors = { version = "0.8.0", default-features = false, features = ["std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 half = "2.7.1"
 image = { workspace = true, features = ["png", "jpeg"] }
 nalgebra = { workspace = true, features = ["std"] }
@@ -44,8 +44,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-22", "load-dynamic", "coreml", "cuda", "tensorrt"], optional = true }
-pollster = "0.3"
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-22", "load-dynamic", "coreml", "cuda", "tensorrt"], optional = true }
+pollster = "1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
@@ -58,7 +58,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
-pollster = "0.3"
+pollster = "1.0"
 tempfile = "3"
 tracing-subscriber.workspace = true
 

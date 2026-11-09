@@ -2,6 +2,7 @@
 # Full local quality gate. CI runs the same steps; run this before pushing.
 set -euo pipefail
 cd "$(dirname "$0")"
+export RUST_MIN_STACK="${RUST_MIN_STACK:-8388608}"
 
 echo "== structure checks =="
 ./scripts/check-structure.sh

@@ -21,5 +21,9 @@ pub fn file_sha256(path: &Path) -> Result<String, PipelineError> {
 pub fn bytes_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

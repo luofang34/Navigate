@@ -126,7 +126,7 @@ fn recenter(filter: &mut InertialNavigationFilter) {
 
 /// IMU samples to 20 s with the recentering at 10 s. `fix_now_ms` is the
 /// arrival time of the fix acquired at 5 s.
-fn run(fix_now_ms: u64) -> (InertialNavigationFilter, InertialCore) {
+fn run(fix_now_ms: u64) -> InertialNavigationFilter {
     let mut filter = space_filter();
     for k in 1..=20_u32 {
         let at_ms = u64::from(k) * 1_000;
@@ -138,14 +138,19 @@ fn run(fix_now_ms: u64) -> (InertialNavigationFilter, InertialCore) {
             assert_accepted(filter.ingest(&earth_fix(1, 5_000), t(at_ms)));
         }
     }
-    let state = *core(&filter);
-    (filter, state)
+    filter
+}
+
+fn run_core(fix_now_ms: u64) -> InertialCore {
+    *core(&run(fix_now_ms))
 }
 
 #[test]
 fn a_delayed_fix_replays_through_the_change_of_frame() {
-    let (_, in_order) = run(5_000);
-    let (mut delayed_filter, delayed) = run(12_000);
+    let in_order = run_core(5_000);
+    let no_fix = run_core(u64::MAX);
+    let mut delayed_filter = run(12_000);
+    let delayed = *core(&delayed_filter);
     assert_eq!(delayed.regime.frame(), FrameId::MOON_J2000);
     let scale = in_order.nominal.p.norm();
     assert!((in_order.nominal.p - delayed.nominal.p).norm() < 1e-9 * scale);
@@ -153,7 +158,6 @@ fn a_delayed_fix_replays_through_the_change_of_frame() {
     assert!(in_order.nominal.q.angle_to(&delayed.nominal.q) < 1e-12);
     assert!((in_order.p - delayed.p).abs().max() < 1e-9 * in_order.p.abs().max());
     // The fix moved the state: without it the final state differs.
-    let (_, no_fix) = run(u64::MAX);
     assert!((no_fix.nominal.p - in_order.nominal.p).norm() > 1.0);
     // A fix in the frame of the Earth after the change is refused.
     let late = earth_fix(2, 20_000);

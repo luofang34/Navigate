@@ -60,8 +60,8 @@ navigate-locate = { path = "crates/navigate-locate" }
 navigate-locate-web = { path = "crates/navigate-locate-web" }
 navigate-visual-pipeline = { path = "tools/visual-pipeline" }
 navrun = { path = "tools/navrun" }
-thiserror = { version = "2.0.18", default-features = false }
-nalgebra = { version = "0.34.1", default-features = false }
+thiserror = { version = "2.0.21", default-features = false }
+nalgebra = { version = "0.35.0", default-features = false }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 image = { version = "0.25.10", default-features = false }

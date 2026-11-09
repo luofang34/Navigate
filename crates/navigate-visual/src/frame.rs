@@ -44,7 +44,7 @@ impl Frame {
             hash.update(value.to_le_bytes());
         }
         hash.update(self.image.as_raw());
-        format!("{hash:x}", hash = hash.finalize())
+        hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 

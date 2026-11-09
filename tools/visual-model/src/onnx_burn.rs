@@ -210,7 +210,10 @@ fn check_digest(bytes: &[u8], expected: &'static str) -> Result<(), Error> {
     if bytes.len() > 64 * 1024 * 1024 {
         return Err(Error::Invalid("model size"));
     }
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if actual != expected {
         return Err(Error::Digest { actual, expected });
     }
