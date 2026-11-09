@@ -92,7 +92,7 @@ fn earth_j2000_central() -> CentralBodyGravity {
 fn moon_body() -> PointMassBody {
     PointMassBody {
         naif_id: 301,
-        gm_m3_per_s2: 4.904_869_5e12,
+        gm_m3_per_s2: 4.902_800_122_445_3e12,
         position_in_frame_m: [384_400_000.0, 0.0, 0.0],
     }
 }

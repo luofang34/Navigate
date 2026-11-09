@@ -95,3 +95,18 @@ fn an_implausible_body_is_refused() {
     };
     assert!(!spinning.is_plausible());
 }
+
+/// The lunar constants are those of the GRAIL GRGM1200A field: its `μ`, and
+/// its `C̄₂₀` at the 1738 km reference radius, which fixes `J2·R²`.
+#[test]
+fn moon_gravity_is_grgm1200a() {
+    const GRGM1200A_GM_M3_PER_S2: f64 = 4.902_800_122_445_3e12;
+    const GRGM1200A_C20_NORMALIZED: f64 = -9.088_433_934_742_43e-5;
+    const GRGM1200A_RADIUS_M: f64 = 1_738_000.0;
+    let moon = PlanetaryBody::MOON_PA;
+    let radius = moon.ellipsoid.semi_major_axis_m();
+    let j2_r2 = -GRGM1200A_C20_NORMALIZED * 5.0_f64.sqrt() * GRGM1200A_RADIUS_M.powi(2);
+    assert!(((moon.j2 * radius * radius) / j2_r2 - 1.0).abs() < 1e-9);
+    assert!((moon.gm_m3_per_s2 / GRGM1200A_GM_M3_PER_S2 - 1.0).abs() < 1e-12);
+    assert_eq!(PlanetaryBody::MOON_ME.j2, moon.j2);
+}
