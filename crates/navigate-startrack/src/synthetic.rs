@@ -128,6 +128,19 @@ impl Noise {
 
 /// A 16-bit image of `sources` with Gaussian noise of `noise_sigma` counts.
 pub(crate) fn render(sources: &[Source], noise_sigma: f64, seed: u64) -> Vec<u16> {
+    render_with_shot_noise(sources, noise_sigma, f64::INFINITY, seed)
+}
+
+/// A 16-bit image of `sources` with read noise of `read_sigma` counts and
+/// the shot noise of the whole signal, background included, for a gain of
+/// `electrons_per_count`: the variance of a pixel of `v` counts is
+/// `read_sigma² + v/electrons_per_count`.
+pub(crate) fn render_with_shot_noise(
+    sources: &[Source],
+    read_sigma: f64,
+    electrons_per_count: f64,
+    seed: u64,
+) -> Vec<u16> {
     let n = SIZE as usize;
     let mut image = vec![BACKGROUND; n * n];
     let reach = (6.0 * PSF_SIGMA_PX).ceil() as i64;
@@ -144,8 +157,9 @@ pub(crate) fn render(sources: &[Source], noise_sigma: f64, seed: u64) -> Vec<u16
     image
         .iter()
         .map(|v| {
-            let value = if noise_sigma > 0.0 {
-                v + noise_sigma * noise.normal()
+            let sigma = (read_sigma * read_sigma + v / electrons_per_count).sqrt();
+            let value = if sigma > 0.0 {
+                v + sigma * noise.normal()
             } else {
                 *v
             };
@@ -192,7 +206,22 @@ pub(crate) fn pipeline(noise_sigma: f64, seed: u64, extra: &[Source]) -> Pipelin
 
 /// Detection, identification in `mode`, and the solution of `data`.
 pub(crate) fn run(data: &[u16], mode: IdentifyMode<'_>) -> Result<Pipeline, StarTrackError> {
-    let centroids = detect_stars(&view(data), &DetectConfig::default())?;
+    run_with(
+        data,
+        mode,
+        &DetectConfig::default(),
+        &SolveConfig::default(),
+    )
+}
+
+/// [`run`] with the detection and solution settings `detect` and `solve`.
+pub(crate) fn run_with(
+    data: &[u16],
+    mode: IdentifyMode<'_>,
+    detect: &DetectConfig,
+    solve: &SolveConfig,
+) -> Result<Pipeline, StarTrackError> {
+    let centroids = detect_stars(&view(data), detect)?;
     let catalogue = catalogue(CATALOGUE_MAGNITUDE);
     let (imager, mount) = (imager(), mount());
     let matches = identify_stars(
@@ -203,14 +232,7 @@ pub(crate) fn run(data: &[u16], mode: IdentifyMode<'_>) -> Result<Pipeline, Star
         &catalogue,
         &IdentifyConfig::default(),
     )?;
-    let solution = solve_attitude(
-        &matches,
-        &centroids,
-        &imager,
-        &mount,
-        &catalogue,
-        &SolveConfig::default(),
-    )?;
+    let solution = solve_attitude(&matches, &centroids, &imager, &mount, &catalogue, solve)?;
     Ok(Pipeline {
         centroids,
         catalogue,

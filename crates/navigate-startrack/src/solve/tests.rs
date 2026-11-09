@@ -1,11 +1,11 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::*;
-use crate::IdentifyMode;
 use crate::synthetic::{
     CATALOGUE_MAGNITUDE, RENDER_MAGNITUDE, catalogue, imager, mount, pair_table, pipeline, prior,
-    render, run, streak_sources, truth,
+    render, render_with_shot_noise, run, run_with, streak_sources, truth,
 };
+use crate::{DetectConfig, IdentifyMode};
 
 const ARCSEC: f64 = std::f64::consts::PI / (180.0 * 3600.0);
 
@@ -17,6 +17,7 @@ fn pair(body: Vector3<f64>, attitude: &UnitQuaternion<f64>) -> StarMatch {
         body_unit,
         ecef_unit: attitude * body_unit,
         separation_rad: 0.0,
+        direction_sigma_rad: ARCSEC,
     }
 }
 
@@ -96,12 +97,12 @@ fn fewer_than_three_stars_is_an_error() {
 fn an_outlier_is_removed() {
     let run = pipeline(5.0, 5, &[]);
     let mut centroids = run.centroids.clone();
-    // Move one matched centroid by 4 pixels: it stays inside the second
-    // gate and fails the residual test.
+    // Move one matched centroid by 1 pixel, many of its own deviations: a
+    // wide second gate keeps it, and the residual test removes it.
     let moved = run.solution.matches[0].centroid_index;
-    centroids[moved].pixel.x += 4.0;
+    centroids[moved].pixel.x += 1.0;
     let config = SolveConfig {
-        rematch_gate_sigmas: 50.0,
+        rematch_gate_sigmas: 400.0,
         ..SolveConfig::default()
     };
     let solution = solve_attitude(
@@ -141,4 +142,58 @@ fn a_streaked_image_solves_to_the_mid_exposure_attitude() {
         assert!(with_prior < 10.0, "{deg_per_s} °/s: {with_prior} arcsec");
         assert!(lost < 10.0, "{deg_per_s} °/s: {lost} arcsec");
     }
+}
+
+/// The mean attitude NEES of `seeds` images with read and shot noise, a
+/// gain of 2 e⁻/count, and the body rate `deg_per_s`, for the centroid
+/// floor `floor_px`.
+fn mean_nees(floor_px: f64, deg_per_s: f64, seeds: u64) -> f64 {
+    let gain = 2.0;
+    let detect = DetectConfig {
+        electrons_per_count: gain,
+        ..DetectConfig::default()
+    };
+    let solve = SolveConfig {
+        min_centroid_sigma_px: floor_px,
+        ..SolveConfig::default()
+    };
+    let axis = Vector3::new(0.8, -0.5, 0.33).normalize();
+    let sources = streak_sources(
+        &catalogue(RENDER_MAGNITUDE),
+        &truth(),
+        axis * deg_per_s.to_radians(),
+        0.1,
+    );
+    let one_degree = 1.0_f64.to_radians();
+    let nees: Vec<f64> = (1..=seeds)
+        .map(|seed| {
+            let data = render_with_shot_noise(&sources, 5.0, gain, seed);
+            let mode = IdentifyMode::Prior(prior(one_degree, one_degree));
+            let run = run_with(&data, mode, &detect, &solve).expect("solve");
+            let error = (run.solution.ecef_from_body.inverse() * truth()).scaled_axis();
+            let information = run
+                .solution
+                .covariance_body_rad2
+                .try_inverse()
+                .expect("inverse");
+            error.dot(&(information * error))
+        })
+        .collect();
+    nees.iter().sum::<f64>() / nees.len() as f64
+}
+
+/// The covariance follows the noise of each star: with a floor at the
+/// sampling error of the point spread function, the mean NEES of a still
+/// and of a streaked image is near its 3 degrees of freedom, and the
+/// default floor stays on the safe side.
+#[test]
+fn the_attitude_covariance_is_consistent_with_the_pixel_noise() {
+    const SEEDS: u64 = 24;
+    // The mean of 24 χ²(3) draws has a deviation of 0.5.
+    for deg_per_s in [0.0, 3.0] {
+        let nees = mean_nees(0.005, deg_per_s, SEEDS);
+        assert!((1.0..4.5).contains(&nees), "{deg_per_s} °/s: NEES {nees}");
+    }
+    let nees = mean_nees(SolveConfig::default().min_centroid_sigma_px, 0.0, SEEDS);
+    assert!((0.3..3.0).contains(&nees), "default floor: NEES {nees}");
 }

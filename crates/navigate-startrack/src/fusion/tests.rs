@@ -51,10 +51,14 @@ fn filter() -> InertialNavigationFilter {
 #[test]
 fn line_of_sight_observations_carry_the_star_directions() {
     let run = pipeline(5.0, 9, &[]);
-    let sigma = run.solution.direction_sigma_rad;
-    let observations =
-        line_of_sight_observations(&run.solution, stamp(u32::MAX), earth_frame(), sigma * sigma)
-            .expect("observations");
+    let mount_variance = 1e-10;
+    let observations = line_of_sight_observations(
+        &run.solution,
+        stamp(u32::MAX),
+        earth_frame(),
+        mount_variance,
+    )
+    .expect("observations");
     assert_eq!(observations.len(), run.solution.matches.len());
     for (i, (obs, star)) in observations.iter().zip(&run.solution.matches).enumerate() {
         assert_eq!(obs.stamp.sequence.get(), u32::MAX.wrapping_add(i as u32));
@@ -80,10 +84,13 @@ fn line_of_sight_observations_carry_the_star_directions() {
             star.body_unit.normalize()
         );
         assert_eq!(Vector3::from(direction_in_frame_unit), star.ecef_unit);
-        assert_eq!(angular_variance_rad2, sigma * sigma);
+        assert_eq!(
+            angular_variance_rad2,
+            star.direction_sigma_rad.powi(2) + mount_variance
+        );
     }
     assert!(matches!(
-        line_of_sight_observations(&run.solution, stamp(0), earth_frame(), 0.0),
+        line_of_sight_observations(&run.solution, stamp(0), earth_frame(), -1e-12),
         Err(StarTrackError::Invalid { .. })
     ));
 }
@@ -91,10 +98,8 @@ fn line_of_sight_observations_carry_the_star_directions() {
 #[test]
 fn a_surface_filter_accepts_the_star_lines_of_sight() {
     let run = pipeline(5.0, 9, &[]);
-    let sigma = run.solution.direction_sigma_rad;
-    let observations =
-        line_of_sight_observations(&run.solution, stamp(1), earth_frame(), sigma * sigma)
-            .expect("observations");
+    let observations = line_of_sight_observations(&run.solution, stamp(1), earth_frame(), 0.0)
+        .expect("observations");
     let mut filter = filter();
     for obs in &observations {
         assert_eq!(filter.ingest(obs, AT), IngestOutcome::Accepted);
