@@ -432,5 +432,9 @@ fn file_sha256(path: &Path) -> Result<String, SegmentError> {
     })?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }

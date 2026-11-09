@@ -11,7 +11,10 @@ pub fn prepare(bytes: &[u8], count: usize, compact: bool) -> Result<Vec<u8>, Err
     if bytes.len() > 64 * 1024 * 1024 || !(32..=4096).contains(&count) {
         return Err(Error::Invalid("model size or feature count"));
     }
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     // The export's named subgraph is a recipe contract, not a general ONNX rewrite rule.
     if actual != INPUT_SHA256 {
         return Err(Error::Digest {

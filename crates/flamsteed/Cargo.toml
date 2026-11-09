@@ -2,8 +2,8 @@
 name = "flamsteed"
 description = "Bright stars and their motion in space, from public-domain catalogue data, with no I/O"
 version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
+edition = "2024"
+rust-version = "1.95"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/luofang34/Navigate"
 readme = "README.md"
@@ -42,7 +42,24 @@ nightly = []
 libm = { version = "0.2.16", optional = true }
 
 [dev-dependencies]
-thiserror.workspace = true
+thiserror = { version = "2.0.21", default-features = false }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "forbid"
+
+[lints.clippy]
+unwrap_used = "forbid"
+expect_used = "forbid"
+panic = "forbid"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "forbid"
+exit = "forbid"
+mem_forget = "forbid"
+get_unwrap = "forbid"
+let_underscore_must_use = "forbid"
+let_underscore_future = "forbid"
+await_holding_lock = "forbid"
+disallowed_types = "forbid"
+disallowed_macros = "forbid"

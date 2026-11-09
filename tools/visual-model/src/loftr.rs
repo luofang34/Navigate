@@ -20,7 +20,10 @@ pub fn prepare(bytes: &[u8], batch: Option<usize>) -> Result<Vec<u8>, Error> {
     if batch.is_some_and(|n| !(1..=1024).contains(&n)) {
         return Err(Error::Invalid("LoFTR fine batch must be 1 through 1024"));
     }
-    let digest = format!("{:x}", Sha256::digest(bytes));
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if digest != SOURCE {
         return Err(Error::Digest {
             actual: digest,

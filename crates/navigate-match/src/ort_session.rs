@@ -8,6 +8,7 @@ use crate::{
     traits::{EngineKind, HostTensor, ModelInference, NamedTensor},
 };
 use ort::{
+    environment::Environment,
     ep,
     session::{Session, builder::AutoDevicePolicy},
     value::TensorRef,
@@ -17,7 +18,7 @@ use std::{
     sync::OnceLock,
 };
 
-static ORT_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+static ORT_INIT: OnceLock<Result<Environment, String>> = OnceLock::new();
 
 /// Execution provider selection for [`OrtSession`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,13 +62,18 @@ pub fn init_ort_runtime(explicit_dylib: Option<&Path>) -> Result<(), MatchError>
     let outcome = ORT_INIT.get_or_init(|| {
         let builder = ort::init_from(&resolved)
             .map_err(|e| format!("load ONNX Runtime {}: {e}", resolved.display()))?;
-        let _ = builder.with_telemetry(false).commit();
-        Ok(())
+        builder
+            .with_telemetry(false)
+            .build()
+            .map_err(|e| format!("init ONNX Runtime {}: {e}", resolved.display()))
     });
-    outcome.clone().map_err(|message| MatchError::Device {
-        stage: "ort init",
-        message,
-    })
+    outcome
+        .as_ref()
+        .map(|_| ())
+        .map_err(|message| MatchError::Device {
+            stage: "ort init",
+            message: message.clone(),
+        })
 }
 
 /// Fixed-shape ONNX Runtime graph session implementing [`ModelInference`].
@@ -117,7 +123,14 @@ impl OrtSession {
                 message: err.to_string(),
             }
         }
-        let session = Session::builder()
+        let env = ORT_INIT
+            .get()
+            .and_then(|res| res.as_ref().ok())
+            .ok_or_else(|| MatchError::Device {
+                stage: "ort session builder",
+                message: "ONNX Runtime environment is not initialized".into(),
+            })?;
+        let session = Session::builder(env)
             .map_err(|e| dev_err("ort session builder", e))?
             .with_auto_device(AutoDevicePolicy::Default)
             .map_err(|e| dev_err("ort auto device", e))?

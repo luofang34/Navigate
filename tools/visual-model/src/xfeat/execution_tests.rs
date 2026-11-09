@@ -10,7 +10,7 @@ fn dense_recipe_matches_original_model_intermediates() -> Result<(), Box<dyn std
     let runtime = std::env::var_os("NAVIGATE_TEST_ORT").ok_or("set NAVIGATE_TEST_ORT")?;
     let model = std::env::var_os("NAVIGATE_XFEAT_MODEL").ok_or("set NAVIGATE_XFEAT_MODEL")?;
     let input = std::env::var_os("NAVIGATE_XFEAT_INPUT").ok_or("set NAVIGATE_XFEAT_INPUT")?;
-    ort::init_from(runtime)?.commit();
+    let env = ort::init_from(runtime)?.build()?;
     let bytes = std::fs::read(model)?;
     let prepared = prepare(&bytes)?;
     let mut original = ModelProto::decode(bytes.as_slice())?;
@@ -22,7 +22,7 @@ fn dense_recipe_matches_original_model_intermediates() -> Result<(), Box<dyn std
         .collect();
     let baseline = original.encode_to_vec();
     let load = |bytes: &[u8]| -> ort::Result<Session> {
-        Session::builder()?
+        Session::builder(&env)?
             .with_auto_device(AutoDevicePolicy::Default)?
             .with_intra_threads(4)?
             .commit_from_memory(bytes)
@@ -73,12 +73,12 @@ fn grayscale_recipe_matches_repeated_grayscale_activations()
 -> Result<(), Box<dyn std::error::Error>> {
     let runtime = std::env::var_os("NAVIGATE_TEST_ORT").ok_or("set NAVIGATE_TEST_ORT")?;
     let model = std::env::var_os("NAVIGATE_XFEAT_MODEL").ok_or("set NAVIGATE_XFEAT_MODEL")?;
-    ort::init_from(runtime)?.commit();
+    let env = ort::init_from(runtime)?.build()?;
     let bytes = std::fs::read(model)?;
-    let mut rgb = Session::builder()?
+    let mut rgb = Session::builder(&env)?
         .with_intra_threads(4)?
         .commit_from_memory(&prepare_channels(&bytes, 3)?)?;
-    let mut gray = Session::builder()?
+    let mut gray = Session::builder(&env)?
         .with_intra_threads(4)?
         .commit_from_memory(&prepare_channels(&bytes, 1)?)?;
     let values: Vec<f32> = (0..480_000).map(|i| (i % 251) as f32 / 250.0).collect();
@@ -106,7 +106,7 @@ fn double_resolution_matches_unfolded_source_intermediates()
 -> Result<(), Box<dyn std::error::Error>> {
     let runtime = std::env::var_os("NAVIGATE_TEST_ORT").ok_or("set NAVIGATE_TEST_ORT")?;
     let model = std::env::var_os("NAVIGATE_XFEAT_MODEL").ok_or("set NAVIGATE_XFEAT_MODEL")?;
-    ort::init_from(runtime)?.commit();
+    let env = ort::init_from(runtime)?.build()?;
     let bytes = std::fs::read(model)?;
     let prepared = prepare_scaled(&bytes, 1, true)?;
     let mut original = ModelProto::decode(bytes.as_slice())?;
@@ -116,10 +116,10 @@ fn double_resolution_matches_unfolded_source_intermediates()
         .iter()
         .map(|(name, _, c)| graph::value(name, 1, &[1, *c, 148, 200]))
         .collect();
-    let mut old = Session::builder()?
+    let mut old = Session::builder(&env)?
         .with_intra_threads(4)?
         .commit_from_memory(&original.encode_to_vec())?;
-    let mut new = Session::builder()?
+    let mut new = Session::builder(&env)?
         .with_intra_threads(4)?
         .commit_from_memory(&prepared)?;
     let values: Vec<f32> = (0..1_920_000).map(|i| (i % 251) as f32 / 250.0).collect();
