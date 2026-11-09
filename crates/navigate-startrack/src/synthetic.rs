@@ -11,9 +11,12 @@ use navigate_celestial::{Epoch, StarSight};
 use navigate_contract::GeodeticPosition;
 use navigate_fusion::inertial::ned_to_body_fixed_dcm;
 
+use std::sync::OnceLock;
+
 use crate::{
-    AttitudePrior, AttitudeSolution, DetectConfig, IdentifyConfig, SolveConfig, StarCentroid,
-    StarMatch, catalogue_ecef, detect_stars, identify_stars, solve_attitude,
+    AttitudePrior, AttitudeSolution, DetectConfig, IdentifyConfig, IdentifyMode, PairCatalogue,
+    SolveConfig, StarCentroid, StarMatch, StarTrackError, catalogue_ecef, detect_stars,
+    identify_stars, solve_attitude,
 };
 
 /// Image side in pixels.
@@ -183,20 +186,23 @@ pub(crate) fn pipeline(noise_sigma: f64, seed: u64, extra: &[Source]) -> Pipelin
     let mut sources = sources(&catalogue(RENDER_MAGNITUDE), &truth());
     sources.extend_from_slice(extra);
     let data = render(&sources, noise_sigma, seed);
-    let centroids = detect_stars(&view(&data), &DetectConfig::default()).expect("detect");
-    let catalogue = catalogue(CATALOGUE_MAGNITUDE);
     let one_degree = 1.0_f64.to_radians();
-    let prior = prior(one_degree, one_degree);
+    run(&data, IdentifyMode::Prior(prior(one_degree, one_degree))).expect("pipeline")
+}
+
+/// Detection, identification in `mode`, and the solution of `data`.
+pub(crate) fn run(data: &[u16], mode: IdentifyMode<'_>) -> Result<Pipeline, StarTrackError> {
+    let centroids = detect_stars(&view(data), &DetectConfig::default())?;
+    let catalogue = catalogue(CATALOGUE_MAGNITUDE);
     let (imager, mount) = (imager(), mount());
     let matches = identify_stars(
         &centroids,
         &imager,
         &mount,
-        Some(&prior),
+        mode,
         &catalogue,
         &IdentifyConfig::default(),
-    )
-    .expect("identify");
+    )?;
     let solution = solve_attitude(
         &matches,
         &centroids,
@@ -204,12 +210,76 @@ pub(crate) fn pipeline(noise_sigma: f64, seed: u64, extra: &[Source]) -> Pipelin
         &mount,
         &catalogue,
         &SolveConfig::default(),
-    )
-    .expect("solve");
-    Pipeline {
+    )?;
+    Ok(Pipeline {
         centroids,
         catalogue,
         matches,
         solution,
+    })
+}
+
+/// The pair table of the identification catalogue for the diagonal field
+/// of view, made once for all tests.
+pub(crate) fn pair_table() -> &'static PairCatalogue {
+    static TABLE: OnceLock<PairCatalogue> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        PairCatalogue::new(
+            &catalogue(CATALOGUE_MAGNITUDE),
+            28.5_f64.to_radians(),
+            CATALOGUE_MAGNITUDE,
+        )
+        .expect("pair table")
+    })
+}
+
+/// A uniformly distributed attitude from `seed`.
+pub(crate) fn random_attitude(seed: u64) -> UnitQuaternion<f64> {
+    let mut noise = Noise(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1));
+    let q = nalgebra::Quaternion::new(
+        noise.normal(),
+        noise.normal(),
+        noise.normal(),
+        noise.normal(),
+    );
+    UnitQuaternion::from_quaternion(q)
+}
+
+/// The point sources of the catalogue stars during an exposure of
+/// `exposure_s` seconds with the body rate `rate_body_rad_s`. The attitude
+/// at the middle of the exposure is `mid`, and it selects the stars. Each
+/// star becomes a line of samples less than 0.2 pixel apart.
+pub(crate) fn streak_sources(
+    catalogue: &[StarSight],
+    mid: &UnitQuaternion<f64>,
+    rate_body_rad_s: Vector3<f64>,
+    exposure_s: f64,
+) -> Vec<Source> {
+    let k = imager().intrinsics;
+    let travel_px = rate_body_rad_s.norm() * exposure_s * k.fx;
+    let steps = (travel_px / 0.2).ceil().max(1.0) as usize;
+    let selected = sources(catalogue, mid);
+    let directions: Vec<(Source, Vector3<f64>)> = selected
+        .iter()
+        .filter_map(|s| {
+            let star = catalogue.iter().find(|c| c.hr == s.hr)?;
+            Some((*s, Vector3::from(star.direction)))
+        })
+        .collect();
+    let mut out = Vec::with_capacity(directions.len() * steps);
+    for step in 0..steps {
+        let t = ((step as f64 + 0.5) / steps as f64 - 0.5) * exposure_s;
+        let attitude = mid * UnitQuaternion::from_scaled_axis(rate_body_rad_s * t);
+        let cam_from_ecef = mount().cam_from_body * attitude.inverse();
+        for (source, direction) in &directions {
+            if let Some(pixel) = k.project(&(cam_from_ecef * direction)) {
+                out.push(Source {
+                    pixel,
+                    flux: source.flux / steps as f64,
+                    ..*source
+                });
+            }
+        }
     }
+    out
 }

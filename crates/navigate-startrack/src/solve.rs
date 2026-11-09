@@ -179,7 +179,7 @@ fn set_residuals(matches: &mut [StarMatch], attitude: &UnitQuaternion<f64>) {
 /// `z = Σ e × b`, the eigenvector `(q, q₄)` of the largest eigenvalue of
 /// `K = [[S − s·I, z], [zᵀ, s]]` gives `R = (q₄² − |q|²)·I + 2·q·qᵀ −
 /// 2·q₄·[q×]`. That is the active rotation of the quaternion `(q₄, −q)`.
-fn davenport(matches: &[StarMatch]) -> Result<UnitQuaternion<f64>, StarTrackError> {
+pub(crate) fn davenport(matches: &[StarMatch]) -> Result<UnitQuaternion<f64>, StarTrackError> {
     let b: Matrix3<f64> = matches
         .iter()
         .map(|m| m.ecef_unit * m.body_unit.transpose())
