@@ -96,3 +96,69 @@ fn gray16_view_is_refused_with_the_agc_hint() {
     let err = FramePixels::try_from(view).unwrap_err();
     assert!(err.to_string().contains("to_gray8_percentile"), "{err}");
 }
+
+/// Asserts the angles of `prior` in degrees.
+fn assert_angles(prior: &AttitudePrior, roll_deg: f64, pitch_deg: f64, yaw_deg: f64) {
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    assert!(close(prior.roll_rad.to_degrees(), roll_deg), "{prior:?}");
+    assert!(close(prior.pitch_rad.to_degrees(), pitch_deg), "{prior:?}");
+    let yaw = prior.yaw_rad.expect("yaw").to_degrees();
+    assert!(close(yaw, yaw_deg), "{prior:?}");
+}
+
+/// `ned_from_body` from aerospace roll, pitch, and yaw in degrees.
+fn body(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> nalgebra::UnitQuaternion<f64> {
+    nalgebra::UnitQuaternion::from_euler_angles(
+        roll_deg.to_radians(),
+        pitch_deg.to_radians(),
+        yaw_deg.to_radians(),
+    )
+}
+
+#[test]
+fn the_camera_prior_applies_the_mount() {
+    let prior = |ned_from_body, mount: &CameraMountProfile| {
+        AttitudePrior::from_body_attitude(&ned_from_body, mount, 0.01, 0.02, None)
+    };
+    let oblique = CameraMountProfile::fixed_wing_oblique(20.0_f64.to_radians());
+    assert_angles(&prior(body(0.0, 0.0, 30.0), &oblique), 0.0, 20.0, 30.0);
+    // Nose up 5°: the camera looks 15° down.
+    assert_angles(&prior(body(0.0, 5.0, 30.0), &oblique), 0.0, 15.0, 30.0);
+    let forward = CameraMountProfile::fixed_wing_oblique(0.0);
+    assert_angles(&prior(body(15.0, 0.0, 300.0), &forward), 15.0, 0.0, 300.0);
+    // A vertical axis takes its heading from the image top, the nose.
+    let nadir = CameraMountProfile::rotary_gimbal_nadir();
+    assert_angles(&prior(body(0.0, 0.0, 70.0), &nadir), 0.0, 90.0, 70.0);
+}
+
+/// The engine's camera axes `(right, down, forward)` in NED for a heading,
+/// a depression, and a roll in radians, from `Surface::camera_rotation` at
+/// the origin of the surface, where its east, north, up axes are local.
+fn engine_axes(h: f64, d: f64, r: f64) -> [nalgebra::Vector3<f64>; 3] {
+    let surface = crate::Surface::synthetic(39.0, -75.5, 0.0, image::RgbImage::new(4, 4));
+    let rotation =
+        surface.camera_rotation(39.0, -75.5, h.to_degrees(), d.to_degrees(), r.to_degrees());
+    let ned = |row: usize| {
+        let enu = rotation.row(row).transpose();
+        nalgebra::Vector3::new(enu.y, enu.x, -enu.z)
+    };
+    [ned(0), ned(1), ned(2)]
+}
+
+#[test]
+fn the_camera_prior_inverts_the_engine_camera_rotation() {
+    let mount = CameraMountProfile::fixed_wing_oblique(35.0_f64.to_radians());
+    for (h, d, r) in [
+        (10.0, 30.0, -20.0),
+        (200.0, -10.0, 45.0),
+        (355.0, 80.0, 5.0),
+    ] {
+        let [right, down, fwd] =
+            engine_axes(f64::to_radians(h), f64::to_radians(d), f64::to_radians(r));
+        let ned_from_cam = nalgebra::Rotation3::from_basis_unchecked(&[right, down, fwd]);
+        let ned_from_body =
+            nalgebra::UnitQuaternion::from_rotation_matrix(&ned_from_cam) * mount.cam_from_body;
+        let prior = AttitudePrior::from_body_attitude(&ned_from_body, &mount, 0.01, 0.02, None);
+        assert_angles(&prior, r, d, h);
+    }
+}
