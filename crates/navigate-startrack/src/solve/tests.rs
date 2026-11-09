@@ -1,7 +1,11 @@
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::*;
-use crate::synthetic::{CATALOGUE_MAGNITUDE, catalogue, imager, mount, pipeline, truth};
+use crate::IdentifyMode;
+use crate::synthetic::{
+    CATALOGUE_MAGNITUDE, RENDER_MAGNITUDE, catalogue, imager, mount, pair_table, pipeline, prior,
+    render, run, streak_sources, truth,
+};
 
 const ARCSEC: f64 = std::f64::consts::PI / (180.0 * 3600.0);
 
@@ -112,4 +116,29 @@ fn an_outlier_is_removed() {
     assert!(solution.rejected_outliers >= 1);
     assert!(solution.matches.iter().all(|m| m.centroid_index != moved));
     assert!(truth().angle_to(&solution.ecef_from_body) < 10.0 * ARCSEC);
+}
+
+/// The attitude error at the middle of an exposure of 0.1 s with the body
+/// rate `deg_per_s` about a tilted axis, with and without a prior.
+fn streak_error_arcsec(deg_per_s: f64, mode: IdentifyMode<'_>) -> f64 {
+    let axis = Vector3::new(0.8, -0.5, 0.33).normalize();
+    let rate = axis * deg_per_s.to_radians();
+    let points = streak_sources(&catalogue(RENDER_MAGNITUDE), &truth(), rate, 0.1);
+    let data = render(&points, 5.0, 13);
+    let result = run(&data, mode).expect("solved");
+    truth().angle_to(&result.solution.ecef_from_body) / ARCSEC
+}
+
+#[test]
+fn a_streaked_image_solves_to_the_mid_exposure_attitude() {
+    let one_degree = 1.0_f64.to_radians();
+    for deg_per_s in [0.0, 1.0, 5.0] {
+        let with_prior = streak_error_arcsec(
+            deg_per_s,
+            IdentifyMode::Prior(prior(one_degree, one_degree)),
+        );
+        let lost = streak_error_arcsec(deg_per_s, IdentifyMode::LostInSpace(pair_table()));
+        assert!(with_prior < 10.0, "{deg_per_s} °/s: {with_prior} arcsec");
+        assert!(lost < 10.0, "{deg_per_s} °/s: {lost} arcsec");
+    }
 }

@@ -23,10 +23,13 @@ fn centroid_errors(sources: &[Source], stars: &[StarCentroid], min_flux: f64) ->
         .collect()
 }
 
-/// Whether two sources are closer than `px`, so their images merge.
+/// The sources farther than `px` from each other source and from the
+/// image edge, so their images do not merge or leave the image.
 fn isolated(sources: &[Source], px: f64) -> Vec<Source> {
+    let inner = px..f64::from(SIZE) - 1.0 - px;
     sources
         .iter()
+        .filter(|a| inner.contains(&a.pixel.x) && inner.contains(&a.pixel.y))
         .filter(|a| {
             sources
                 .iter()
@@ -180,4 +183,47 @@ fn invalid_settings_are_refused() {
             Err(StarTrackError::Invalid { .. })
         ));
     }
+}
+
+#[test]
+fn a_streak_is_kept_with_its_length_and_a_long_trail_is_not() {
+    // 5 °/s about the body pitch axis for 0.1 s moves each star 0.5°.
+    let rate = nalgebra::Vector3::new(0.0, 5.0_f64.to_radians(), 0.0);
+    let catalogue = catalogue(crate::synthetic::CATALOGUE_MAGNITUDE);
+    let points = crate::synthetic::streak_sources(&catalogue, &truth(), rate, 0.1);
+    let data = render(&points, 5.0, 17);
+    let stars = detect_stars(&view(&data), &DetectConfig::default()).expect("detect");
+    let expected = 0.5_f64.to_radians() * crate::synthetic::imager().intrinsics.fx;
+    // A streak that leaves the image is shorter.
+    let inner = 30.0..f64::from(SIZE) - 30.0;
+    let bright: Vec<&StarCentroid> = stars
+        .iter()
+        .filter(|s| s.flux > 1.0e4 && inner.contains(&s.pixel.x) && inner.contains(&s.pixel.y))
+        .collect();
+    assert!(bright.len() >= 5);
+    for star in &bright {
+        assert!(
+            (star.length_px - expected).abs() < 0.1 * expected,
+            "length {} px, travel {expected} px",
+            star.length_px
+        );
+    }
+    let short = DetectConfig {
+        max_length_px: 0.5 * expected,
+        ..DetectConfig::default()
+    };
+    let kept = detect_stars(&view(&data), &short).expect("detect");
+    assert!(kept.iter().all(|s| s.length_px <= 0.5 * expected));
+    assert!(kept.len() < stars.len());
+    // Stars without motion have almost no length.
+    let still = render(&sources(&catalogue, &truth()), 5.0, 17);
+    let round = detect_stars(&view(&still), &DetectConfig::default()).expect("detect");
+    let mut lengths: Vec<f64> = round
+        .iter()
+        .filter(|s| s.flux > 1.0e4)
+        .map(|s| s.length_px)
+        .collect();
+    lengths.sort_by(f64::total_cmp);
+    // Close double stars merge into one longer group.
+    assert!(lengths[lengths.len() / 2] < 2.0, "{lengths:?}");
 }

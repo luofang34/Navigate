@@ -88,10 +88,28 @@ stay.
 star camera image:
 
 1. Detection finds bright pixel groups above the local background and
-   gives intensity-weighted centroids.
-2. Identification projects the catalogue of `navigate-celestial` through an
-   attitude prior. It matches each centroid to the nearest predicted star
-   inside a gate. A match must be unique in both directions.
+   gives intensity-weighted centroids. A body rotation during the
+   exposure makes each star a streak. Detection keeps a streak up to a
+   maximum length. The centroid of a streak is the star direction at the
+   middle of the exposure. Thus the observation stamp is the mid-exposure
+   instant. Detection drops a group that touches the image edge, because
+   its centroid moves toward the image centre.
+2. Identification has two modes:
+   - With an attitude prior, it projects the catalogue of
+     `navigate-celestial` through the prior. It matches each centroid to
+     the nearest predicted star inside a gate. A match must be unique in
+     both directions. A check of the angles between matched stars removes
+     wrong matches.
+   - Without an attitude prior (lost-in-space), it uses a `PairCatalogue`:
+     the catalogue star pairs closer than the diagonal field of view,
+     sorted by their angle. The host makes this table once. For each frame,
+     a pyramid search takes a triangle of bright centroids and finds the
+     catalogue triangles with the same side angles by binary search. A
+     catalogue triangle must have the same handedness, so a mirror image
+     of the sky does not match. A fourth centroid must confirm one unique
+     catalogue triangle. The attitude of this pyramid then acts as a prior
+     for the first mode. When no triangle gives a unique confirmed pyramid,
+     identification returns an error.
 3. The attitude solution uses the Davenport q-method on the matched pairs.
 4. Each matched star becomes one `ObservationValue::LineOfSight` with
    `LineOfSightReference::InertialDirection`. The direction is the apparent
@@ -107,8 +125,9 @@ An `AttitudeFix` in local NED axes needs a position. The crate gives it
 only through a function that takes the position as an argument. The
 function documentation states the shared error.
 
-Identification without an attitude prior (lost-in-space) is not part of
-this decision. Without a prior the crate returns an error.
+The pyramid search is bounded. It uses a fixed number of the brightest
+centroids, and it does not use a triangle with too many catalogue
+candidates. The pair table holds at most `MAX_PAIRS` pairs.
 
 ### Resource cost
 
@@ -120,6 +139,7 @@ a clock. The host measures time and memory around each call.
 - A host converts its camera once into `navigate-camera` types.
 - Visible, LWIR, and star cameras share one mount and one projection.
 - `navigate-celestial` gets its first user in the workspace.
-- A star camera without an attitude prior gives no observations.
+- A star camera gives observations without an attitude prior. The host
+  keeps one `PairCatalogue` for its camera and magnitude limit.
 - Lens distortion has a model. The visual matchers still need undistorted
   images. The host can use `Distortion` to remove distortion.

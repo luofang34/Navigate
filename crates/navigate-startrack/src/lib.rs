@@ -4,9 +4,9 @@
 //!
 //! 1. [`detect_stars`] finds bright pixel groups above the local background
 //!    and gives intensity-weighted [`StarCentroid`]s.
-//! 2. [`identify_stars`] projects the catalogue through an
-//!    [`AttitudePrior`] and gives the [`StarMatch`]es. Identification
-//!    without a prior (lost-in-space) is not supported.
+//! 2. [`identify_stars`] gives the [`StarMatch`]es. It projects the
+//!    catalogue through an [`AttitudePrior`], or without a prior it finds
+//!    the stars from their geometry in a [`PairCatalogue`].
 //! 3. [`solve_attitude`] finds the rotation from the body axes to the
 //!    Earth-centred, Earth-fixed (ECEF) axes with the Davenport q-method.
 //!    The result is an [`AttitudeSolution`].
@@ -23,6 +23,7 @@ mod detect;
 mod error;
 mod fusion;
 mod identify;
+mod pairs;
 mod solve;
 #[cfg(test)]
 mod synthetic;
@@ -31,5 +32,6 @@ pub use catalogue::catalogue_ecef;
 pub use detect::{DetectConfig, StarCentroid, detect_stars};
 pub use error::StarTrackError;
 pub use fusion::{attitude_fix_local_ned, line_of_sight_observations};
-pub use identify::{AttitudePrior, IdentifyConfig, StarMatch, identify_stars};
+pub use identify::{AttitudePrior, IdentifyConfig, IdentifyMode, StarMatch, identify_stars};
+pub use pairs::{MAX_PAIRS, PairCatalogue};
 pub use solve::{AttitudeSolution, SolveConfig, solve_attitude};

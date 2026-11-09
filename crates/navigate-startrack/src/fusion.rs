@@ -20,7 +20,9 @@ use crate::{AttitudeSolution, StarTrackError};
 ///
 /// Observation `i` has the stamp `stamp` with the sequence advanced `i`
 /// times, because the filter admits each sequence of a source only once.
-/// All observations have the acquisition time of `stamp`. `frame` is the
+/// All observations have the acquisition time of `stamp`. That time must
+/// be the middle of the exposure: under a body rotation each centroid is
+/// the star direction at the middle of the exposure. `frame` is the
 /// ECEF frame of the filter, for example the frame of its WGS84 ellipsoid.
 ///
 /// The camera mount alignment error is common to all stars of one image.

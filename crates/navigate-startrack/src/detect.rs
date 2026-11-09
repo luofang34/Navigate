@@ -6,6 +6,12 @@
 //! [`DetectConfig::grow_sigmas`] deviations above the background. The
 //! lower growth threshold keeps more of the faint wings of the point
 //! spread function, which decreases the centroid bias.
+//!
+//! A body rotation during the exposure makes each star a streak. The
+//! detection keeps a streak up to [`DetectConfig::max_length_px`]. The
+//! intensity-weighted centre of a streak of uniform speed is the star
+//! direction at the middle of the exposure. Thus the stamp of the
+//! observations of an image must be the mid-exposure instant.
 
 mod background;
 
@@ -34,6 +40,13 @@ pub struct DetectConfig {
     /// Most pixels of a star. A larger group, such as a planet disc or a
     /// lit cloud, is not a star.
     pub max_pixels: usize,
+    /// Longest streak in pixels, from [`StarCentroid::length_px`]. A longer
+    /// group, such as a satellite trail or an image edge, is not a star.
+    pub max_length_px: f64,
+    /// Whether a group that touches the image edge is dropped. Part of such
+    /// a group is outside the image, so its centroid moves toward the
+    /// image centre. A streak makes this error large.
+    pub drop_edge_groups: bool,
     /// Most pixel groups in one image. More groups give
     /// [`StarTrackError::TooManyComponents`].
     pub max_components: usize,
@@ -47,7 +60,9 @@ impl Default for DetectConfig {
             grow_sigmas: 2.0,
             min_noise_counts: 0.5,
             min_pixels: 2,
-            max_pixels: 400,
+            max_pixels: 2048,
+            max_length_px: 64.0,
+            drop_edge_groups: true,
             max_components: 4096,
         }
     }
@@ -68,6 +83,12 @@ pub struct StarCentroid {
     /// Whether a pixel of the group is at the full scale of the sensor. The
     /// centroid of a saturated star has a larger error.
     pub saturated: bool,
+    /// Length of the streak in pixels. It is `√(12·(λ₁ − λ₂))` for the
+    /// eigenvalues `λ₁ ≥ λ₂` of the intensity-weighted covariance of the
+    /// group: the length of a uniform line, with the width of the point
+    /// spread function removed. A star without motion has a length near
+    /// zero.
+    pub length_px: f64,
 }
 
 /// The sums of one pixel group.
@@ -76,8 +97,12 @@ struct Moments {
     weight: f64,
     weighted_x: f64,
     weighted_y: f64,
+    weighted_xx: f64,
+    weighted_yy: f64,
+    weighted_xy: f64,
     count: usize,
     peak: f64,
+    touches_edge: bool,
 }
 
 /// The stars of `image`, brightest first.
@@ -129,18 +154,12 @@ pub fn detect_stars(
             });
         }
         let moments = field.grow(seed, config.grow_sigmas, &mut visited, &mut stack);
-        if (config.min_pixels..=config.max_pixels).contains(&moments.count) && moments.weight > 0.0
+        let size_ok = (config.min_pixels..=config.max_pixels).contains(&moments.count);
+        if let Some(star) = moments.centroid(full_scale).filter(|_| size_ok)
+            && star.length_px <= config.max_length_px
+            && !(config.drop_edge_groups && moments.touches_edge)
         {
-            stars.push(StarCentroid {
-                pixel: Vector2::new(
-                    moments.weighted_x / moments.weight,
-                    moments.weighted_y / moments.weight,
-                ),
-                flux: moments.weight,
-                pixel_count: moments.count,
-                peak: moments.peak,
-                saturated: moments.peak >= full_scale - 0.5,
-            });
+            stars.push(star);
         }
     }
     stars.sort_by(|a, b| b.flux.total_cmp(&a.flux));
@@ -164,7 +183,8 @@ fn validate(config: &DetectConfig) -> Result<(), StarTrackError> {
             field: "background tile or noise floor",
         });
     }
-    if config.min_pixels == 0 || config.min_pixels > config.max_pixels {
+    let length_ok = config.max_length_px.is_finite() && config.max_length_px >= 0.0;
+    if config.min_pixels == 0 || config.min_pixels > config.max_pixels || !length_ok {
         return Err(StarTrackError::Invalid {
             field: "star pixel count limits",
         });
@@ -189,6 +209,29 @@ fn samples_of(image: &ImageView<'_>) -> (Vec<f32>, f64) {
         }
     }
     (samples, full_scale)
+}
+
+impl Moments {
+    /// The centroid of the group, or `None` for a group without weight.
+    fn centroid(&self, full_scale: f64) -> Option<StarCentroid> {
+        if self.weight <= 0.0 {
+            return None;
+        }
+        let (mx, my) = (self.weighted_x / self.weight, self.weighted_y / self.weight);
+        let sxx = self.weighted_xx / self.weight - mx * mx;
+        let syy = self.weighted_yy / self.weight - my * my;
+        let sxy = self.weighted_xy / self.weight - mx * my;
+        // λ₁ − λ₂ of the 2×2 covariance.
+        let spread = ((sxx - syy).powi(2) + 4.0 * sxy * sxy).sqrt();
+        Some(StarCentroid {
+            pixel: Vector2::new(mx, my),
+            flux: self.weight,
+            pixel_count: self.count,
+            peak: self.peak,
+            saturated: self.peak >= full_scale - 0.5,
+            length_px: (12.0 * spread).sqrt(),
+        })
+    }
 }
 
 /// The samples of an image with their background.
@@ -232,8 +275,12 @@ impl Field<'_> {
             moments.weight += weight;
             moments.weighted_x += weight * x as f64;
             moments.weighted_y += weight * y as f64;
+            moments.weighted_xx += weight * (x * x) as f64;
+            moments.weighted_yy += weight * (y * y) as f64;
+            moments.weighted_xy += weight * (x * y) as f64;
             moments.count = moments.count.saturating_add(1);
             moments.peak = moments.peak.max(raw);
+            moments.touches_edge |= x == 0 || y == 0 || x + 1 == self.width || y + 1 == self.height;
             for neighbour in self.neighbours(x, y) {
                 let fresh = visited.get(neighbour).is_some_and(|v| !v);
                 if fresh && self.excess(neighbour) > grow_sigmas {

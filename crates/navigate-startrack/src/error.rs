@@ -19,10 +19,18 @@ pub enum StarTrackError {
         /// The name of the value.
         field: &'static str,
     },
-    /// Identification needs an attitude prior. Identification without a
-    /// prior (lost-in-space) is not supported.
-    #[error("lost-in-space identification without an attitude prior is not supported")]
-    LostInSpaceUnsupported,
+    /// Identification without an attitude prior found no unique star
+    /// pattern. Too few stars, false stars, or a mirrored image can cause
+    /// this.
+    #[error("the star pattern has no unique catalogue identification")]
+    NotIdentified,
+    /// The pair table has more pairs than the limit. Use a smaller angle or
+    /// a brighter magnitude limit.
+    #[error("the star pair table has more than {limit} pairs")]
+    TooManyPairs {
+        /// The limit.
+        limit: usize,
+    },
     /// The image has more pixel groups above the threshold than the limit.
     /// A bright object, such as the Sun, the Moon, or a lit sky, can cause
     /// this.

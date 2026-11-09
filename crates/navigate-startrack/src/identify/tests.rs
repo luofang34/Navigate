@@ -2,8 +2,8 @@ use nalgebra::Vector2;
 
 use super::*;
 use crate::synthetic::{
-    CATALOGUE_MAGNITUDE, RENDER_MAGNITUDE, Source, catalogue, imager, mount, pipeline, prior,
-    render, sources, truth, view,
+    CATALOGUE_MAGNITUDE, RENDER_MAGNITUDE, Source, catalogue, imager, mount, pair_table, pipeline,
+    prior, render, sources, truth, view,
 };
 use crate::{DetectConfig, detect_stars};
 
@@ -35,7 +35,7 @@ fn a_one_degree_prior_error_identifies_the_true_stars() {
         &centroids,
         &imager(),
         &mount(),
-        Some(&prior(one_degree, one_degree)),
+        IdentifyMode::Prior(prior(one_degree, one_degree)),
         &catalogue(CATALOGUE_MAGNITUDE),
         &IdentifyConfig::default(),
     )
@@ -50,20 +50,36 @@ fn a_one_degree_prior_error_identifies_the_true_stars() {
 }
 
 #[test]
-fn identification_without_a_prior_is_lost_in_space() {
+fn identification_without_a_prior_finds_the_true_stars() {
+    let (sources, centroids) = detected();
+    let matches = identify_stars(
+        &centroids,
+        &imager(),
+        &mount(),
+        IdentifyMode::LostInSpace(pair_table()),
+        &catalogue(CATALOGUE_MAGNITUDE),
+        &IdentifyConfig::default(),
+    )
+    .expect("identify");
+    assert!(matches.len() >= 8, "{} matches", matches.len());
+    for m in &matches {
+        let centroid = &centroids[m.centroid_index];
+        assert_eq!(true_hr(&sources, &centroid.pixel), Some(m.hr));
+    }
+}
+
+#[test]
+fn a_zero_prior_deviation_is_refused() {
     let (_, centroids) = detected();
     let result = identify_stars(
         &centroids,
         &imager(),
         &mount(),
-        None,
+        IdentifyMode::Prior(prior(0.0, 0.0)),
         &catalogue(CATALOGUE_MAGNITUDE),
         &IdentifyConfig::default(),
     );
-    assert!(matches!(
-        result,
-        Err(StarTrackError::LostInSpaceUnsupported)
-    ));
+    assert!(matches!(result, Err(StarTrackError::Invalid { .. })));
 }
 
 #[test]
@@ -109,7 +125,7 @@ fn pair_consistency_removes_a_wrong_match() {
         &centroids,
         &imager(),
         &mount(),
-        Some(&prior(one_degree, one_degree)),
+        IdentifyMode::Prior(prior(one_degree, one_degree)),
         &catalogue(CATALOGUE_MAGNITUDE),
         &IdentifyConfig::default(),
     )
@@ -135,7 +151,7 @@ fn invalid_settings_are_refused() {
         &centroids,
         &imager(),
         &mount(),
-        Some(&prior(0.0, 0.01)),
+        IdentifyMode::Prior(prior(0.0, 0.01)),
         &catalogue(CATALOGUE_MAGNITUDE),
         &bad,
     );
