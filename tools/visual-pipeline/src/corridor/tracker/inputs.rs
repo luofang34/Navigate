@@ -49,9 +49,15 @@ pub(crate) fn matcher_runtime_for_options(
     }
 }
 
+/// Depression below the nose of the window camera of the fixed-wing photo
+/// cases. The tracker takes the camera attitude from the horizon, so the
+/// mount rotation only describes the camera; the occlusion flag is what the
+/// tracker reads.
+const FIXED_WING_CAMERA_DEPRESSION_DEG: f64 = 45.0;
+
 pub(crate) fn mount_profile_for_dynamics(profile: &VehicleDynamicsProfile) -> CameraMountProfile {
     if profile.max_speed_mps >= 40.0 {
-        CameraMountProfile::fixed_wing_oblique()
+        CameraMountProfile::fixed_wing_oblique(FIXED_WING_CAMERA_DEPRESSION_DEG.to_radians())
     } else {
         CameraMountProfile::rotary_gimbal_nadir()
     }

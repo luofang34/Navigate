@@ -2,6 +2,8 @@
 
 use nalgebra::{Rotation3, UnitQuaternion, Vector3};
 
+use navigate_geodesy::float_math::{cos, sin};
+
 use crate::OpticalPose;
 
 /// The installation of a camera on a body with forward, right, and down
@@ -31,6 +33,21 @@ impl CameraMount {
     pub fn nadir() -> Self {
         // Camera +X = body right, +Y = body aft (-X), +Z = body down.
         Self::from_axes(Vector3::y(), -Vector3::x(), Vector3::z())
+    }
+
+    /// A camera at the body reference point that looks forward and down by
+    /// `depression_rad` below the body's forward axis, with the image right
+    /// along the body's right. Zero is [`Self::forward`], and a right angle
+    /// is [`Self::nadir`].
+    #[must_use]
+    pub fn depressed(depression_rad: f64) -> Self {
+        let (sin, cos) = (sin(depression_rad), cos(depression_rad));
+        // Camera +Z = forward and down; +Y = +Z × +X.
+        Self::from_axes(
+            Vector3::y(),
+            Vector3::new(-sin, 0.0, cos),
+            Vector3::new(cos, 0.0, sin),
+        )
     }
 
     /// A camera at the body reference point that looks up, with the image

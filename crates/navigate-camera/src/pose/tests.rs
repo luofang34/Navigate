@@ -74,6 +74,21 @@ fn forward_and_zenith_mounts_look_along_their_axes() {
 }
 
 #[test]
+fn a_depressed_mount_spans_forward_to_nadir() {
+    let same =
+        |a: &CameraMount, b: &CameraMount| a.cam_from_body.angle_to(&b.cam_from_body) < 1e-12;
+    assert!(same(&CameraMount::depressed(0.0), &CameraMount::forward()));
+    assert!(same(
+        &CameraMount::depressed(core::f64::consts::FRAC_PI_2),
+        &CameraMount::nadir()
+    ));
+    let thirty = 30.0_f64.to_radians();
+    let axis = CameraMount::depressed(thirty).camera_to_body(&Vector3::z());
+    let expected = Vector3::new(thirty.cos(), 0.0, thirty.sin());
+    assert!((axis - expected).norm() < 1e-12);
+}
+
+#[test]
 fn lever_arm_moves_the_eye_in_world_axes() {
     let yaw = UnitQuaternion::from_euler_angles(0.0, 0.0, core::f64::consts::FRAC_PI_2);
     let mount = CameraMount::forward().with_lever_arm(Vector3::new(2.0, 0.0, 0.0));

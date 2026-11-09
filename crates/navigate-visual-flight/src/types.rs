@@ -2,10 +2,11 @@
 
 use image::GrayImage;
 use nalgebra::{Matrix3, UnitQuaternion};
-use navigate_camera::SpectralBand;
+use navigate_camera::{CameraMount, SpectralBand};
 use navigate_contract::{GeodeticPosition, ObservationStamp};
 use navigate_visual::fusion_bridge::VisualFix;
 
+mod attitude;
 mod convert;
 
 /// Scheduling policy for background map-anchor and tile-synthesis workers.
@@ -157,28 +158,35 @@ pub struct CameraMountProfile {
 }
 
 impl CameraMountProfile {
-    /// Unobstructed rotary-wing gimbal mount (`has_airframe_occlusion = false`).
+    /// Unobstructed rotary-wing gimbal mount that looks down with the
+    /// image top toward the nose, as [`CameraMount::nadir`]
+    /// (`has_airframe_occlusion = false`).
     #[must_use]
     pub fn rotary_gimbal_nadir() -> Self {
         Self {
-            cam_from_body: UnitQuaternion::identity(),
+            cam_from_body: CameraMount::nadir().cam_from_body,
             has_airframe_occlusion: false,
             platform: PlatformKind::RotaryGimbal,
         }
     }
 
-    /// Fixed-wing oblique mount (`has_airframe_occlusion = true`).
+    /// Fixed-wing mount that looks forward and down by `depression_rad`
+    /// below the body's forward axis, as [`CameraMount::depressed`]
+    /// (`has_airframe_occlusion = true`).
     #[must_use]
-    pub fn fixed_wing_oblique() -> Self {
+    pub fn fixed_wing_oblique(depression_rad: f64) -> Self {
         Self {
-            cam_from_body: UnitQuaternion::identity(),
+            cam_from_body: CameraMount::depressed(depression_rad).cam_from_body,
             has_airframe_occlusion: true,
             platform: PlatformKind::FixedWing,
         }
     }
 }
 
-/// Optional IMU or gimbal attitude prior at frame capture time.
+/// Optional IMU or gimbal attitude prior of the camera at frame capture
+/// time. The angles are those of the camera, not of the body: a host with a
+/// body attitude makes the prior with [`AttitudePrior::from_body_attitude`],
+/// which applies [`CameraMountProfile::cam_from_body`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AttitudePrior {
     /// Camera roll angle in radians (`0.0` = level horizon).
