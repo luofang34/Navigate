@@ -432,6 +432,7 @@ fn hardware_set_camera_updates_intrinsics_and_resizes_without_texture_reupload()
 }
 
 #[test]
+#[ignore = "requires a hardware GPU"]
 fn shared_gpu_scene_supports_independent_viewports() {
     let gpu_scene = Arc::new(
         pollster::block_on(GpuScene::new(
