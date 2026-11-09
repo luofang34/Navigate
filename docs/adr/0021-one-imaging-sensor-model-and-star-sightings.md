@@ -113,6 +113,11 @@ star camera image:
      catalogue triangle. The attitude of this pyramid then acts as a prior
      for the first mode. When no triangle gives a unique confirmed pyramid,
      identification returns an error.
+   - `StarTracker` chooses the mode of each frame. It uses the prior of
+     the host only while it holds a lock and the prior is narrow. It uses
+     lost-in-space at the start, after a configured number of frames in a
+     row without a solution, and for a wide prior. A prior that drifted
+     during a gap therefore cannot keep the tracker from recovering.
 3. The attitude solution uses the Davenport q-method on the matched pairs,
    with a weight of `1/σᵢ²` for the direction deviation of each star. The
    deviation adds a floor for the errors of the model, such as the lens
