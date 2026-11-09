@@ -20,6 +20,7 @@ echo "== bare-metal no_std (core navigation crates) =="
 for target in thumbv8m.main-none-eabihf riscv32imac-unknown-none-elf; do
     for crate in \
         navigate-contract \
+        navigate-camera \
         navigate-geodesy \
         navigate-astrodynamics \
         navigate-fusion \

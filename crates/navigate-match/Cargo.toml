@@ -25,6 +25,7 @@ optim = ["burn/optim", "dep:rand", "dep:zip"]
 
 [dependencies]
 navigate-visual.workspace = true
+navigate-camera = { workspace = true, features = ["std"] }
 burn = { version = "0.22.1", default-features = false, features = ["std", "extension"] }
 burn-cubecl = { version = "0.22.1", default-features = false, features = ["std"], optional = true }
 cubecl = { version = "0.11.3", default-features = false, features = ["std"], optional = true }

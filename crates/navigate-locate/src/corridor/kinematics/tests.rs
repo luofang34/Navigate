@@ -74,3 +74,25 @@ fn vertical_velocity_gate_rules() {
     assert!(can_update_vertical_velocity(5, 48));
     assert!(!can_update_vertical_velocity(11, 47));
 }
+
+#[test]
+fn optical_pose_round_trips_through_kinematic_state() {
+    let rotation = nalgebra::Rotation3::from_euler_angles(0.3, -1.1, 2.2);
+    let pose = OpticalPose::new(Vector3::new(410.0, -75.5, 1_230.0), rotation);
+    let state = KinematicState::from_optical_pose(&pose);
+    assert_eq!(state.eye_enu, [410.0, -75.5, 1_230.0]);
+    assert_eq!(state.rot_world_to_cam, *rotation.matrix());
+    assert_eq!(state.vel_enu_mps, [0.0; 3]);
+    let back = state.optical_pose().unwrap();
+    assert_eq!(back, pose);
+    let world = Vector3::new(500.0, 20.0, 0.0);
+    let camera = state.rot_world_to_cam * (world - Vector3::from(state.eye_enu));
+    assert!((back.to_camera(&world) - camera).norm() < 1e-9);
+}
+
+#[test]
+fn optical_pose_refuses_a_matrix_that_is_not_a_rotation() {
+    let mut state = KinematicState::new([0.0; 3], Matrix3::identity());
+    state.rot_world_to_cam[(2, 2)] = -1.0;
+    assert!(state.optical_pose().is_err());
+}

@@ -4788,6 +4788,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-camera"
+version = "0.1.0"
+dependencies = [
+ "nalgebra 0.35.0",
+ "navigate-contract",
+ "navigate-geodesy",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "navigate-celestial"
 version = "0.1.0"
 dependencies = [
@@ -4856,6 +4866,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "nalgebra 0.35.0",
+ "navigate-camera",
  "navigate-contract",
  "navigate-fusion",
  "navigate-geodesy",
@@ -4916,6 +4927,7 @@ dependencies = [
  "image",
  "js-sys",
  "nalgebra 0.35.0",
+ "navigate-camera",
  "navigate-match-kernels",
  "navigate-visual",
  "ort",
@@ -4967,6 +4979,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-startrack"
+version = "0.1.0"
+dependencies = [
+ "nalgebra 0.35.0",
+ "navigate-camera",
+ "navigate-celestial",
+ "navigate-contract",
+ "navigate-fusion",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "navigate-terrain-safety"
 version = "0.1.0"
 dependencies = [
@@ -4999,6 +5023,7 @@ dependencies = [
  "kornia-algebra",
  "lambda-twist",
  "nalgebra 0.35.0",
+ "navigate-camera",
  "navigate-contract",
  "navigate-fusion",
  "navigate-geodesy",
@@ -5018,6 +5043,7 @@ dependencies = [
  "image",
  "nalgebra 0.35.0",
  "navigate-astrodynamics",
+ "navigate-camera",
  "navigate-contract",
  "navigate-fusion",
  "navigate-geodesy",

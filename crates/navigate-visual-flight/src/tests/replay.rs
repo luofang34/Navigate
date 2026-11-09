@@ -245,6 +245,7 @@ fn deterministic_replay_is_bit_identical_under_worker_jitter() -> Result<(), Str
                     height: 300,
                     stride: 400 * 3,
                 },
+                band: navigate_camera::SpectralBand::Visible,
                 static_valid_mask: None,
                 intrinsics: intr,
                 mount: CameraMountProfile::rotary_gimbal_nadir(),
@@ -368,6 +369,7 @@ fn strided_nv12_downsampling_night_bypass_quadrant_rotation_and_clock_guards() -
             height: 48,
             stride: 64,
         },
+        band: navigate_camera::SpectralBand::Visible,
         static_valid_mask: None,
         intrinsics: CameraIntrinsics {
             width: 64,

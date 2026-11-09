@@ -4,6 +4,7 @@ use nalgebra::{UnitQuaternion, Vector2, Vector3};
 
 use crate::VisualError;
 
+mod convert;
 mod transform;
 
 /// Pinhole intrinsics for an image with lens distortion removed.

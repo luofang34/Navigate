@@ -15,6 +15,7 @@ gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
 navigate-contract.workspace = true
+navigate-camera = { workspace = true, features = ["std"] }
 navigate-fusion = { workspace = true, features = ["std"], optional = true }
 navigate-geodesy = { workspace = true, features = ["std"] }
 sha2 = "0.11"

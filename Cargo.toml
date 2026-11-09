@@ -3,7 +3,9 @@ resolver = "3"
 members = [
     "crates/eclipse-canon",
     "crates/flamsteed",
+    "crates/navigate-camera",
     "crates/navigate-celestial",
+    "crates/navigate-startrack",
     "crates/navigate-contract",
     "crates/navigate-geodesy",
     "crates/navigate-astrodynamics",
@@ -45,7 +47,9 @@ navigate-route = { path = "crates/navigate-route", default-features = false }
 navigate-trajectory = { path = "crates/navigate-trajectory", default-features = false }
 navigate-guidance = { path = "crates/navigate-guidance", default-features = false }
 navigate-terrain-safety = { path = "crates/navigate-terrain-safety", default-features = false }
+navigate-camera = { path = "crates/navigate-camera", default-features = false }
 navigate-celestial = { path = "crates/navigate-celestial" }
+navigate-startrack = { path = "crates/navigate-startrack" }
 navigate-recording = { path = "crates/navigate-recording" }
 navigate-visual = { path = "crates/navigate-visual", default-features = false }
 navigate-visual-render = { path = "crates/navigate-visual-render" }

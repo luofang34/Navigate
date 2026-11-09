@@ -356,6 +356,7 @@ fn polar_lunar_flight_engine_emits_visual_pose_for_inertial_filter() -> Result<(
                     height: 600,
                     stride: 800 * 3,
                 },
+                band: navigate_camera::SpectralBand::Visible,
                 static_valid_mask: None,
                 intrinsics: CameraIntrinsics {
                     width: 800,
