@@ -71,6 +71,16 @@ platform (such as Pilotage) that owns sessions, authority, and displays.
 `docs/DESIGN.md` is the orientation map; `docs/adr/` holds the decision
 records.
 
+## Book and textbook (work in progress)
+
+> ⚠️ **Work in progress (WIP) — experimental draft.**
+>
+> The book [*Navigate: Principles and Architecture of Modern Integrated Navigation*](https://luofang34.github.io/Navigate/) (source in [`docs/src/SUMMARY.md`](docs/src/SUMMARY.md)) is an active work in progress. Chapters, mathematical derivations, and citations are incomplete and subject to change without notice. Do not use it to operate a real vehicle or in any safety-critical context.
+
+Read the online book at **<https://luofang34.github.io/Navigate/>**, or build it locally from [`docs/book.toml`](docs/book.toml) with `mdbook build docs`.
+
+The book is written by **Fang Luo (Sokoly Research)** and is licensed under [Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/).
+
 `navigate-celestial` takes position and velocity in metres and metres per TDB
 second. Each state has a NAIF origin, a NAIF orientation, and a time scale.
 The crate is an opt-in dependency. Other navigation crates do not depend on it.
@@ -97,6 +107,9 @@ release build. CI runs the same gates.
 
 ## Licence
 
-Navigate is free software under the GNU Affero General Public License,
-version 3 or later. Refer to [LICENSE](LICENSE). Some files keep their own
-notices, for example `crates/navigate-celestial/LICENSE-ERFA`.
+Navigate source code is free software under the GNU Affero General Public
+License, version 3 or later. Refer to [LICENSE](LICENSE). Some files keep their
+own notices, for example `crates/navigate-celestial/LICENSE-ERFA`.
+
+The Navigate book in `docs/src/` is © Fang Luo, Sokoly Research, and is
+licensed under [Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/).
