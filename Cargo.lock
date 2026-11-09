@@ -5014,6 +5014,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-camera"
+version = "0.1.0"
+dependencies = [
+ "nalgebra 0.34.2",
+ "navigate-contract",
+ "navigate-geodesy",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "navigate-celestial"
 version = "0.1.0"
 dependencies = [
