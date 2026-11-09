@@ -30,7 +30,7 @@ fn earth_env() -> SpaceEnvironment {
             },
             third_bodies: ThirdBodySet::from_slice(&[PointMassBody {
                 naif_id: 301,
-                gm_m3_per_s2: 4.904_869_5e12,
+                gm_m3_per_s2: 4.902_800_122_445_3e12,
                 position_in_frame_m: MOON_POSITION_M,
             }])
             .expect("one body"),
@@ -43,8 +43,8 @@ fn moon_env() -> SpaceEnvironment {
         FrameId::MOON_J2000,
         SpaceGravityModel::MultiBody {
             central: CentralBodyGravity {
-                gm_m3_per_s2: 4.904_869_5e12,
-                j2: 2.032_3e-4,
+                gm_m3_per_s2: 4.902_800_122_445_3e12,
+                j2: 2.033_639_490e-4,
                 equatorial_radius_m: 1_737_400.0,
                 pole_unit_in_frame: [0.0, 0.0, 1.0],
             },
@@ -215,7 +215,7 @@ fn an_environment_update_keeps_the_frame() {
     if let SpaceGravityModel::MultiBody { third_bodies, .. } = &mut moved.gravity {
         *third_bodies = ThirdBodySet::from_slice(&[PointMassBody {
             naif_id: 301,
-            gm_m3_per_s2: 4.904_869_5e12,
+            gm_m3_per_s2: 4.902_800_122_445_3e12,
             position_in_frame_m: [380_000_000.0, 40_000_000.0, 0.0],
         }])
         .expect("one body");

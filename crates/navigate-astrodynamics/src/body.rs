@@ -35,11 +35,14 @@ impl PlanetaryBody {
         rotation_rate_rad_per_s: 7.292_115e-5,
     };
 
-    /// The Moon in the principal axis frame.
+    /// The Moon in the principal axis frame, with the GRAIL GRGM1200A
+    /// field: `μ` from the model, and `J2 = −√5·C̄₂₀` taken from the model's
+    /// 1738 km reference radius to the 1737.4 km radius of the ellipsoid,
+    /// as `J2·R²` is invariant.
     pub const MOON_PA: Self = Self {
         ellipsoid: BodyEllipsoid::MOON_PA,
-        gm_m3_per_s2: 4.904_869_5e12,
-        j2: 2.032_3e-4,
+        gm_m3_per_s2: 4.902_800_122_445_3e12,
+        j2: 2.033_639_490e-4,
         rotation_rate_rad_per_s: 2.661_699_5e-6,
     };
 

@@ -98,12 +98,13 @@ fn two_nearest<'a>(
 /// Each measured direction with the nearest candidate inside `gate_rad`.
 /// The match must be unique in both directions. When a second candidate is
 /// inside the gate, the nearest distance must be at most `ratio` times the
-/// second distance.
+/// second distance. Each match gets `direction_sigma_rad`.
 pub(crate) fn match_nearest(
     measured: &[Option<Vector3<f64>>],
     candidates: &[Candidate],
     gate_rad: f64,
     ratio: f64,
+    direction_sigma_rad: f64,
 ) -> Vec<StarMatch> {
     let accept = |first: f64, second: f64| {
         first < gate_rad && (second >= gate_rad || first <= ratio * second)
@@ -129,6 +130,7 @@ pub(crate) fn match_nearest(
                 body_unit: *ray,
                 ecef_unit: candidate.ecef_unit,
                 separation_rad: first,
+                direction_sigma_rad,
             })
         })
         .collect()

@@ -4,8 +4,17 @@
 //! identification. Then it matches all centroids again with the solved
 //! attitude and a tight gate, removes the residual outliers one at a
 //! time, and solves again.
+//!
+//! Each star has its own direction deviation `σᵢ`: the largest axis of
+//! [`StarCentroid::covariance_px2`], with a floor for the errors of the
+//! model, over the focal length, with the catalogue error. The q-method
+//! weights each star by `1/σᵢ²`, and the outlier test reads each residual
+//! in its own `σᵢ`. The covariance keeps the shape of each centroid
+//! covariance `Cᵢ`, which a streak makes long: it is `(Σ Hᵢᵀ·Cᵢ⁻¹·Hᵢ)⁻¹`,
+//! with `Hᵢ` the change of the pinhole pixel of star `i` with a rotation
+//! of the body axes.
 
-use nalgebra::{Matrix3, Matrix4, Quaternion, SymmetricEigen, UnitQuaternion};
+use nalgebra::{Matrix2, Matrix3, Matrix4, Quaternion, SymmetricEigen, UnitQuaternion};
 use navigate_camera::{CameraMount, ImagerModel};
 use navigate_celestial::StarSight;
 
@@ -15,8 +24,14 @@ use crate::{StarCentroid, StarMatch, StarTrackError, identify};
 /// The settings of [`solve_attitude`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveConfig {
-    /// One standard deviation of a centroid on each image axis in pixels.
-    pub centroid_sigma_px: f64,
+    /// Smallest standard deviation of a centroid on each image axis in
+    /// pixels. It holds the errors that the pixel noise does not, such as
+    /// the sampling of the point spread function and the calibration of
+    /// the lens, and adds to the noise of the centroid in quadrature.
+    pub min_centroid_sigma_px: f64,
+    /// The same floor for a saturated star, whose flat core biases the
+    /// centroid.
+    pub saturated_centroid_sigma_px: f64,
     /// One standard deviation of a catalogue direction in radians.
     pub catalogue_sigma_rad: f64,
     /// Gate radius of the second match in standard deviations of a
@@ -35,7 +50,8 @@ pub struct SolveConfig {
 impl Default for SolveConfig {
     fn default() -> Self {
         Self {
-            centroid_sigma_px: 0.3,
+            min_centroid_sigma_px: 0.02,
+            saturated_centroid_sigma_px: 0.3,
             catalogue_sigma_rad: 5.0e-6,
             rematch_gate_sigmas: 6.0,
             ambiguity_ratio: 0.5,
@@ -52,13 +68,15 @@ pub struct AttitudeSolution {
     /// axes at the acquisition time.
     pub ecef_from_body: UnitQuaternion<f64>,
     /// Covariance of the body-axis rotation vector in radians²:
-    /// `σ²·(Σ (I − b·bᵀ))⁻¹` over the measured body directions `b`. The
+    /// `(Σ Hᵢᵀ·Cᵢ⁻¹·Hᵢ)⁻¹` over the stars, with `Cᵢ` the centroid
+    /// covariance with its floor and the catalogue error in pixels², and
+    /// `Hᵢ` the pinhole Jacobian of the pixel of star `i` with respect to
+    /// the rotation vector. The lens distortion is left out of `Hᵢ`. The
     /// true attitude is `ecef_from_body · exp(δθ)`.
     pub covariance_body_rad2: Matrix3<f64>,
-    /// One standard deviation `σ` of a measured direction in radians.
-    pub direction_sigma_rad: f64,
     /// The stars of the solution. [`StarMatch::separation_rad`] is the
-    /// residual angle at the solved attitude.
+    /// residual angle at the solved attitude, and
+    /// [`StarMatch::direction_sigma_rad`] the deviation of the star.
     pub matches: Vec<StarMatch>,
     /// Root mean square of the residual angles in radians.
     pub rms_residual_rad: f64,
@@ -89,12 +107,18 @@ pub fn solve_attitude(
     validate(config)?;
     enough(matches.len(), config)?;
     let first = davenport(matches)?;
-    let sigma =
-        identify::ray_sigma_rad(imager, config.centroid_sigma_px).hypot(config.catalogue_sigma_rad);
-    let gate = config.rematch_gate_sigmas * sigma;
+    let sigmas: Vec<f64> = centroids
+        .iter()
+        .map(|c| direction_sigma_rad(c, imager, config))
+        .collect();
+    let widest = sigmas.iter().copied().fold(0.0_f64, f64::max);
+    let gate = config.rematch_gate_sigmas * widest;
     let measured = identify::body_rays(centroids, imager, mount);
     let predicted = predicted_in_view(catalogue, imager, mount, &first, gate);
-    let mut matched = match_nearest(&measured, &predicted, gate, config.ambiguity_ratio);
+    let mut matched = match_nearest(&measured, &predicted, gate, config.ambiguity_ratio, widest);
+    for m in &mut matched {
+        m.direction_sigma_rad = sigmas.get(m.centroid_index).copied().unwrap_or(widest);
+    }
     enough(matched.len(), config)?;
     let mut attitude = davenport(&matched)?;
     let mut rejected_outliers = 0_usize;
@@ -103,9 +127,10 @@ pub fn solve_attitude(
         let worst = matched
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.separation_rad.total_cmp(&b.separation_rad));
+            .map(|(index, m)| (index, m.separation_rad / m.direction_sigma_rad))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b));
         match worst {
-            Some((index, m)) if m.separation_rad > config.outlier_sigmas * sigma => {
+            Some((index, normalized)) if normalized > config.outlier_sigmas => {
                 matched.remove(index);
                 rejected_outliers = rejected_outliers.saturating_add(1);
                 enough(matched.len(), config)?;
@@ -114,19 +139,13 @@ pub fn solve_attitude(
             _ => break,
         }
     }
-    let information: Matrix3<f64> = matched
-        .iter()
-        .map(|m| Matrix3::identity() - m.body_unit * m.body_unit.transpose())
-        .sum();
-    let covariance = information
-        .try_inverse()
-        .ok_or(StarTrackError::Degenerate)?
-        * (sigma * sigma);
+    let covariance = information(&matched, centroids, imager, mount, config)
+        .and_then(|i| i.try_inverse())
+        .ok_or(StarTrackError::Degenerate)?;
     let sum_sq: f64 = matched.iter().map(|m| m.separation_rad.powi(2)).sum();
     Ok(AttitudeSolution {
         ecef_from_body: attitude,
         covariance_body_rad2: covariance,
-        direction_sigma_rad: sigma,
         rms_residual_rad: (sum_sq / matched.len() as f64).sqrt(),
         matches: matched,
         rejected_outliers,
@@ -135,7 +154,8 @@ pub fn solve_attitude(
 
 fn validate(config: &SolveConfig) -> Result<(), StarTrackError> {
     let positive = [
-        config.centroid_sigma_px,
+        config.min_centroid_sigma_px,
+        config.saturated_centroid_sigma_px,
         config.rematch_gate_sigmas,
         config.outlier_sigmas,
     ]
@@ -163,6 +183,65 @@ fn enough(found: usize, config: &SolveConfig) -> Result<(), StarTrackError> {
     }
 }
 
+/// The information of the body-axis rotation vector from `matched`:
+/// `Σ Hᵢᵀ·Cᵢ⁻¹·Hᵢ` with `Hᵢ = J·R·[bᵢ×]`, where `J` is the pinhole
+/// Jacobian at the camera ray of star `i` and `R` the rotation from the
+/// body axes into the camera axes. `None` for a star behind the camera or
+/// a singular `Cᵢ`.
+fn information(
+    matched: &[StarMatch],
+    centroids: &[StarCentroid],
+    imager: &ImagerModel,
+    mount: &CameraMount,
+    config: &SolveConfig,
+) -> Option<Matrix3<f64>> {
+    let k = &imager.intrinsics;
+    let cam_from_body = mount.cam_from_body.to_rotation_matrix();
+    let catalogue = Matrix2::from_diagonal(&nalgebra::Vector2::new(
+        (config.catalogue_sigma_rad * k.fx).powi(2),
+        (config.catalogue_sigma_rad * k.fy).powi(2),
+    ));
+    matched.iter().try_fold(Matrix3::zeros(), |sum, m| {
+        let centroid = centroids.get(m.centroid_index)?;
+        let floor = centroid_floor_px(centroid, config);
+        let c = centroid.covariance_px2 + Matrix2::identity() * floor * floor + catalogue;
+        let ray = cam_from_body * m.body_unit;
+        if ray.z <= 0.0 {
+            return None;
+        }
+        let (x, y, z) = (ray.x / ray.z, ray.y / ray.z, ray.z);
+        let projection =
+            nalgebra::Matrix2x3::new(k.fx / z, 0.0, -k.fx * x / z, 0.0, k.fy / z, -k.fy * y / z);
+        let h = projection * cam_from_body.matrix() * m.body_unit.cross_matrix();
+        Some(sum + h.transpose() * c.try_inverse()? * h)
+    })
+}
+
+/// The centroid floor of `centroid` in pixels: the errors of the model that
+/// the pixel noise does not hold.
+fn centroid_floor_px(centroid: &StarCentroid, config: &SolveConfig) -> f64 {
+    if centroid.saturated {
+        config.saturated_centroid_sigma_px
+    } else {
+        config.min_centroid_sigma_px
+    }
+}
+
+/// One standard deviation of the measured direction of `centroid` in
+/// radians, with the catalogue error.
+fn direction_sigma_rad(centroid: &StarCentroid, imager: &ImagerModel, config: &SolveConfig) -> f64 {
+    let floor = centroid_floor_px(centroid, config);
+    let noise = largest_eigenvalue(&centroid.covariance_px2).max(0.0).sqrt();
+    identify::ray_sigma_rad(imager, noise.hypot(floor)).hypot(config.catalogue_sigma_rad)
+}
+
+/// The largest eigenvalue of a symmetric 2×2 matrix.
+fn largest_eigenvalue(m: &Matrix2<f64>) -> f64 {
+    let mean = 0.5 * (m[(0, 0)] + m[(1, 1)]);
+    let half_difference = 0.5 * (m[(0, 0)] - m[(1, 1)]);
+    mean + half_difference.hypot(m[(0, 1)])
+}
+
 /// Sets the separation of each match to its residual angle at `attitude`.
 fn set_residuals(matches: &mut [StarMatch], attitude: &UnitQuaternion<f64>) {
     let body_from_ecef = attitude.inverse();
@@ -172,17 +251,26 @@ fn set_residuals(matches: &mut [StarMatch], attitude: &UnitQuaternion<f64>) {
 }
 
 /// The rotation `R` from the body axes into the ECEF axes that minimizes
-/// `Σ |e − R·b|²` over the matched pairs (Wahba's problem), from the
-/// Davenport q-method.
+/// `Σ wᵢ·|e − R·b|²` over the matched pairs (Wahba's problem), from the
+/// Davenport q-method. The weight of a pair is `1/σ²` of its
+/// [`StarMatch::direction_sigma_rad`], scaled so that the largest weight
+/// is one.
 ///
-/// With `B = Σ e·bᵀ`, `S = B + Bᵀ`, `s = tr B`, and
+/// With `B = Σ wᵢ·e·bᵀ`, `S = B + Bᵀ`, `s = tr B`, and
 /// `z = Σ e × b`, the eigenvector `(q, q₄)` of the largest eigenvalue of
 /// `K = [[S − s·I, z], [zᵀ, s]]` gives `R = (q₄² − |q|²)·I + 2·q·qᵀ −
 /// 2·q₄·[q×]`. That is the active rotation of the quaternion `(q₄, −q)`.
 pub(crate) fn davenport(matches: &[StarMatch]) -> Result<UnitQuaternion<f64>, StarTrackError> {
+    let tightest = matches
+        .iter()
+        .map(|m| m.direction_sigma_rad)
+        .fold(f64::INFINITY, f64::min);
+    if !(tightest.is_finite() && tightest > 0.0) {
+        return Err(StarTrackError::Degenerate);
+    }
     let b: Matrix3<f64> = matches
         .iter()
-        .map(|m| m.ecef_unit * m.body_unit.transpose())
+        .map(|m| m.ecef_unit * m.body_unit.transpose() * (tightest / m.direction_sigma_rad).powi(2))
         .sum();
     let s = b + b.transpose();
     let trace = b.trace();

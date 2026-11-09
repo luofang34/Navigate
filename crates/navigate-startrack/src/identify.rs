@@ -104,6 +104,11 @@ pub struct StarMatch {
     /// Angle in radians between the measured direction and the direction
     /// that the attitude of the matching step predicts.
     pub separation_rad: f64,
+    /// One standard deviation of the measured direction in radians, with
+    /// the catalogue error, as the step that made the match models it.
+    /// [`crate::solve_attitude`] gives each star its own value from
+    /// [`crate::StarCentroid::covariance_px2`].
+    pub direction_sigma_rad: f64,
 }
 
 /// How [`identify_stars`] finds the first matches.
@@ -189,7 +194,13 @@ impl Scene<'_> {
             &prior.ecef_from_body,
             gate,
         );
-        let matches = match_nearest(self.measured, &predicted, gate, self.config.ambiguity_ratio);
+        let matches = match_nearest(
+            self.measured,
+            &predicted,
+            gate,
+            self.config.ambiguity_ratio,
+            self.ray_sigma,
+        );
         consistent_pairs(
             matches,
             std::f64::consts::SQRT_2 * self.config.pair_sigmas * self.ray_sigma,
@@ -246,6 +257,7 @@ impl Scene<'_> {
             body_unit: (*self.measured.get(centroid)?)?,
             ecef_unit: Vector3::from(sight.direction).normalize(),
             separation_rad: 0.0,
+            direction_sigma_rad: self.ray_sigma,
         })
     }
 }

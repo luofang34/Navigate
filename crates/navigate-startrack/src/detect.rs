@@ -7,6 +7,20 @@
 //! lower growth threshold keeps more of the faint wings of the point
 //! spread function, which decreases the centroid bias.
 //!
+//! The centroid is the weighted centre of a fixed window: the group with a
+//! margin of [`DetectConfig::window_margin_px`] pixels around it, with the
+//! signed background-subtracted values as weights. A centroid of the
+//! thresholded group alone moves when noise lifts a wing pixel over the
+//! threshold or drops it under, which is not linear in the noise. In the
+//! window the centroid is linear in each pixel, so the first-order
+//! propagation of the pixel noise is its covariance:
+//! [`StarCentroid::covariance_px2`] = `Σ (pᵢ − c)(pᵢ − c)ᵀ·Var(wᵢ) / W²`.
+//! The noise of a pixel is the background noise of its tile plus the shot
+//! noise of its signal, `σ² + w/g` in counts² for a signal `w` and a gain
+//! `g` of [`DetectConfig::electrons_per_count`]. A streak spreads its
+//! pixels along its length, so the covariance is larger along the streak
+//! than across it.
+//!
 //! A body rotation during the exposure makes each star a streak. The
 //! detection keeps a streak up to [`DetectConfig::max_length_px`]. The
 //! intensity-weighted centre of a streak of uniform speed is the star
@@ -14,12 +28,14 @@
 //! observations of an image must be the mid-exposure instant.
 
 mod background;
+mod window;
 
-use nalgebra::Vector2;
+use nalgebra::{Matrix2, Vector2};
 use navigate_camera::{ImageView, Pixels};
 
 use crate::StarTrackError;
 use background::BackgroundGrid;
+use window::Window;
 
 /// The settings of [`detect_stars`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +66,12 @@ pub struct DetectConfig {
     /// Most pixel groups in one image. More groups give
     /// [`StarTrackError::TooManyComponents`].
     pub max_components: usize,
+    /// Photo-electrons per sensor count, for the shot noise of the signal.
+    /// A value below the true gain overstates the shot noise, so the
+    /// default of one is conservative for a sensor with a larger gain.
+    pub electrons_per_count: f64,
+    /// Margin in pixels around a group that the centroid window adds.
+    pub window_margin_px: u32,
 }
 
 impl Default for DetectConfig {
@@ -64,6 +86,8 @@ impl Default for DetectConfig {
             max_length_px: 64.0,
             drop_edge_groups: true,
             max_components: 4096,
+            electrons_per_count: 1.0,
+            window_margin_px: 2,
         }
     }
 }
@@ -71,10 +95,11 @@ impl Default for DetectConfig {
 /// One star image in the raw (distorted) image.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StarCentroid {
-    /// Intensity-weighted centre in pixels, with the pixel convention of
-    /// [`navigate_camera::Intrinsics`].
+    /// Weighted centre of the centroid window in pixels, with the pixel
+    /// convention of [`navigate_camera::Intrinsics`].
     pub pixel: Vector2<f64>,
-    /// Sum of the background-subtracted values in sensor counts.
+    /// Sum of the background-subtracted values of the centroid window in
+    /// sensor counts.
     pub flux: f64,
     /// Pixels in the group.
     pub pixel_count: usize,
@@ -89,6 +114,10 @@ pub struct StarCentroid {
     /// spread function removed. A star without motion has a length near
     /// zero.
     pub length_px: f64,
+    /// Covariance of [`Self::pixel`] in pixels² from the noise of the
+    /// pixels of the centroid window. It does not hold the errors of the model, such
+    /// as the sampling of the point spread function or a saturated core.
+    pub covariance_px2: Matrix2<f64>,
 }
 
 /// The sums of one pixel group.
@@ -140,6 +169,8 @@ pub fn detect_stars(
     };
     let mut visited = vec![false; samples.len()];
     let mut stack = Vec::new();
+    let mut group = Vec::new();
+    let mut window = Window::new(samples.len());
     let mut components = 0_usize;
     let mut stars = Vec::new();
     for seed in 0..samples.len() {
@@ -153,11 +184,21 @@ pub fn detect_stars(
                 limit: config.max_components,
             });
         }
-        let moments = field.grow(seed, config.grow_sigmas, &mut visited, &mut stack);
+        let moments = field.grow(
+            seed,
+            config.grow_sigmas,
+            &mut visited,
+            &mut stack,
+            &mut group,
+        );
         let size_ok = (config.min_pixels..=config.max_pixels).contains(&moments.count);
-        if let Some(star) = moments.centroid(full_scale).filter(|_| size_ok)
-            && star.length_px <= config.max_length_px
-            && !(config.drop_edge_groups && moments.touches_edge)
+        let keep = |star: &StarCentroid| {
+            size_ok
+                && star.length_px <= config.max_length_px
+                && !(config.drop_edge_groups && moments.touches_edge)
+        };
+        if let Some(shape) = moments.shape(full_scale).filter(keep)
+            && let Some(star) = window.centroid(&field, &group, &visited, config, shape)
         {
             stars.push(star);
         }
@@ -176,11 +217,15 @@ fn validate(config: &DetectConfig) -> Result<(), StarTrackError> {
             field: "detection thresholds",
         });
     }
+    let gain_ok = config.electrons_per_count.is_finite() && config.electrons_per_count > 0.0;
+    let margin_ok = config.window_margin_px <= config.tile_px;
     if config.tile_px == 0
         || !(config.min_noise_counts > 0.0 && config.min_noise_counts.is_finite())
+        || !gain_ok
+        || !margin_ok
     {
         return Err(StarTrackError::Invalid {
-            field: "background tile or noise floor",
+            field: "background tile, noise floor, gain, or window margin",
         });
     }
     let length_ok = config.max_length_px.is_finite() && config.max_length_px >= 0.0;
@@ -212,8 +257,10 @@ fn samples_of(image: &ImageView<'_>) -> (Vec<f32>, f64) {
 }
 
 impl Moments {
-    /// The centroid of the group, or `None` for a group without weight.
-    fn centroid(&self, full_scale: f64) -> Option<StarCentroid> {
+    /// The star of the group with its intensity-weighted centre, before the
+    /// centroid window refines the centre, the flux, and the covariance.
+    /// A group without weight gives `None`.
+    fn shape(&self, full_scale: f64) -> Option<StarCentroid> {
         if self.weight <= 0.0 {
             return None;
         }
@@ -230,6 +277,7 @@ impl Moments {
             peak: self.peak,
             saturated: self.peak >= full_scale - 0.5,
             length_px: (12.0 * spread).sqrt(),
+            covariance_px2: Matrix2::zeros(),
         })
     }
 }
@@ -252,16 +300,23 @@ impl Field<'_> {
             .map_or(f64::NEG_INFINITY, |v| (f64::from(*v) - level) / sigma)
     }
 
-    /// Marks the 8-connected group of `seed` above `grow_sigmas` as visited
-    /// and gives its sums.
+    /// The raw value of the pixel at `index` in counts.
+    fn raw(&self, index: usize) -> f64 {
+        self.samples.get(index).map_or(0.0, |v| f64::from(*v))
+    }
+
+    /// Marks the 8-connected group of `seed` above `grow_sigmas` as visited,
+    /// puts its pixel indices in `group`, and gives its sums.
     fn grow(
         &self,
         seed: usize,
         grow_sigmas: f64,
         visited: &mut [bool],
         stack: &mut Vec<usize>,
+        group: &mut Vec<usize>,
     ) -> Moments {
         let mut moments = Moments::default();
+        group.clear();
         stack.clear();
         stack.push(seed);
         if let Some(v) = visited.get_mut(seed) {
@@ -269,9 +324,9 @@ impl Field<'_> {
         }
         while let Some(index) = stack.pop() {
             let (x, y) = (index % self.width, index / self.width);
-            let (level, _) = self.grid.at(x, y);
-            let raw = self.samples.get(index).map_or(0.0, |v| f64::from(*v));
-            let weight = (raw - level).max(0.0);
+            group.push(index);
+            let raw = self.raw(index);
+            let weight = (raw - self.grid.at(x, y).0).max(0.0);
             moments.weight += weight;
             moments.weighted_x += weight * x as f64;
             moments.weighted_y += weight * y as f64;

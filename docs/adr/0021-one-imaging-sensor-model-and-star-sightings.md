@@ -87,8 +87,11 @@ stay.
 `navigate-startrack` is a new crate. It makes fusion observations from a
 star camera image:
 
-1. Detection finds bright pixel groups above the local background and
-   gives intensity-weighted centroids. A body rotation during the
+1. Detection finds bright pixel groups above the local background. The
+   centroid is the weighted centre of a fixed window around each group,
+   so it is linear in the pixel noise. The first-order propagation of the
+   read, background, and shot noise of each pixel gives the covariance of
+   each centroid. A body rotation during the
    exposure makes each star a streak. Detection keeps a streak up to a
    maximum length. The centroid of a streak is the star direction at the
    middle of the exposure. Thus the observation stamp is the mid-exposure
@@ -115,11 +118,16 @@ star camera image:
      lost-in-space at the start, after a configured number of frames in a
      row without a solution, and for a wide prior. A prior that drifted
      during a gap therefore cannot keep the tracker from recovering.
-3. The attitude solution uses the Davenport q-method on the matched pairs.
+3. The attitude solution uses the Davenport q-method on the matched pairs,
+   with a weight of `1/σᵢ²` for the direction deviation of each star. The
+   deviation adds a floor for the errors of the model, such as the lens
+   calibration, to the centroid covariance. The attitude covariance uses
+   the full centroid covariance through the pinhole Jacobian, so a streak
+   constrains the attitude less along its length than across it.
 4. Each matched star becomes one `ObservationValue::LineOfSight` with
-   `LineOfSightReference::InertialDirection`. The direction is the apparent
-   star direction in Earth-centred, Earth-fixed (ECEF) axes at the
-   acquisition time.
+   `LineOfSightReference::InertialDirection` and the variance of that star.
+   The direction is the apparent star direction in Earth-centred,
+   Earth-fixed (ECEF) axes at the acquisition time.
 
 `LineOfSight` needs no vehicle position, so the star camera stays an
 independent source. The inertial filter gets the position information
