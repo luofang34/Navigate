@@ -19,6 +19,17 @@ fn intrinsics_convert_both_ways_without_loss() {
 }
 
 #[test]
+fn scaling_keeps_pixel_centres_where_the_resampler_puts_them() {
+    let model = Intrinsics::centred(1600, 1200, 1.0).unwrap();
+    let live = CameraIntrinsics::from_intrinsics(model, CalibrationMode::Calibrated);
+    let scaled = live.scaled_to([400, 300]);
+    let expected = model.resized([400, 300]).unwrap();
+    assert_eq!(Intrinsics::from(scaled), expected);
+    // The optical axis of a centred camera stays on the image centre.
+    assert!((scaled.cx - 199.5).abs() < 1e-12 && (scaled.cy - 149.5).abs() < 1e-12);
+}
+
+#[test]
 fn mount_profile_keeps_the_frd_to_optical_rotation() {
     let mount = CameraMount::nadir().with_lever_arm(nalgebra::Vector3::new(1.0, 0.0, 0.5));
     let profile = CameraMountProfile::from_camera_mount(&mount, true, PlatformKind::FixedWing);

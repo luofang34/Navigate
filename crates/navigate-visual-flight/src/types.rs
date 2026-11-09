@@ -112,7 +112,12 @@ impl CameraIntrinsics {
         Matrix3::new(self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0)
     }
 
-    /// Scale intrinsics to a target `[width, height]` resolution using corner-origin coordinates.
+    /// Scale intrinsics to a target `[width, height]` resolution.
+    ///
+    /// Pixel centres have integer coordinates, as in
+    /// `navigate_camera::Intrinsics::resized` and in the frame resampling of
+    /// `prepare_tracking_buffers`, so the principal point maps as
+    /// `(c + 0.5)·s − 0.5`.
     #[must_use]
     pub fn scaled_to(self, target: [u32; 2]) -> Self {
         let sx = f64::from(target[0].max(1)) / f64::from(self.width.max(1));
@@ -122,8 +127,8 @@ impl CameraIntrinsics {
             height: target[1].max(1),
             fx: self.fx * sx,
             fy: self.fy * sy,
-            cx: self.cx * sx,
-            cy: self.cy * sy,
+            cx: (self.cx + 0.5) * sx - 0.5,
+            cy: (self.cy + 0.5) * sy - 0.5,
             calibration_confidence: self.calibration_confidence,
         }
     }
