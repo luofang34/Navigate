@@ -18,6 +18,7 @@ flamsteed.workspace = true
 anise = { version = "0.10.6", default-features = false, optional = true }
 hifitime = "4.3.1"
 nalgebra = { workspace = true, features = ["std"] }
+navigate-astrodynamics = { workspace = true, features = ["std"] }
 navigate-contract.workspace = true
 thiserror.workspace = true
 

@@ -31,6 +31,8 @@ mod float_math;
 pub mod force_model;
 pub mod frame_rotation;
 pub mod gravity;
+#[cfg(any(feature = "std", test))]
+pub mod spk;
 pub mod srp;
 pub mod time_scales;
 
