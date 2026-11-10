@@ -1,6 +1,6 @@
 use crate::{
-    AnalyticEphemeris, AnalyticError, Correction, Epoch, FrameId, ObservationError, State,
-    civil_time, earth_rotation, observe_body,
+    AnalyticEphemeris, AnalyticError, Correction, Ephemeris, Epoch, FrameId, ObservationError,
+    State, civil_time, earth_rotation, observe_body,
 };
 use nalgebra::Vector3;
 
@@ -104,7 +104,7 @@ pub fn sun_ecef_tt(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
-    sight(SUN, SUN_RADIUS_M, epoch, observer_ecef_m)
+    sun_ecef_tt_with(&AnalyticEphemeris, epoch, observer_ecef_m)
 }
 
 /// The apparent Moon at the instant `epoch`, without a civil reading.
@@ -120,7 +120,61 @@ pub fn moon_ecef_tt(
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
 ) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
-    sight(MOON, MOON_RADIUS_M, epoch, observer_ecef_m)
+    moon_ecef_tt_with(&AnalyticEphemeris, epoch, observer_ecef_m)
+}
+
+/// The apparent Sun from an Earth-fixed observer at the civil reading `epoch`,
+/// evaluated with `provider`.
+///
+/// # Errors
+/// Returns an error if `provider` rejects the epoch or frame, or for a
+/// non-finite observer position.
+pub fn sun_ecef_with<P: Ephemeris>(
+    provider: &P,
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<P::Error>> {
+    sun_ecef_tt_with(provider, civil_time(epoch).terrestrial, observer_ecef_m)
+}
+
+/// The apparent Moon from an Earth-fixed observer at the civil reading `epoch`,
+/// evaluated with `provider`.
+///
+/// # Errors
+/// Returns an error if `provider` rejects the epoch or frame, or for a
+/// non-finite observer position.
+pub fn moon_ecef_with<P: Ephemeris>(
+    provider: &P,
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<P::Error>> {
+    moon_ecef_tt_with(provider, civil_time(epoch).terrestrial, observer_ecef_m)
+}
+
+/// The apparent Sun at the instant `epoch`, evaluated with `provider`.
+///
+/// # Errors
+/// Returns an error if `provider` rejects the epoch or frame, or for a
+/// non-finite observer position.
+pub fn sun_ecef_tt_with<P: Ephemeris>(
+    provider: &P,
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<P::Error>> {
+    sight(provider, SUN, SUN_RADIUS_M, epoch, observer_ecef_m)
+}
+
+/// The apparent Moon at the instant `epoch`, evaluated with `provider`.
+///
+/// # Errors
+/// Returns an error if `provider` rejects the epoch or frame, or for a
+/// non-finite observer position.
+pub fn moon_ecef_tt_with<P: Ephemeris>(
+    provider: &P,
+    epoch: Epoch,
+    observer_ecef_m: Option<[f64; 3]>,
+) -> Result<EarthFixedSight, ObservationError<P::Error>> {
+    sight(provider, MOON, MOON_RADIUS_M, epoch, observer_ecef_m)
 }
 
 /// The subsolar point from the geocentric apparent Sun.
@@ -136,24 +190,20 @@ pub fn subsolar_point(epoch: Epoch) -> Result<SubsolarPoint, ObservationError<An
     })
 }
 
-fn sight(
+fn sight<P: Ephemeris>(
+    provider: &P,
     body: i32,
     radius_m: f64,
     epoch: Epoch,
     observer_ecef_m: Option<[f64; 3]>,
-) -> Result<EarthFixedSight, ObservationError<AnalyticError>> {
+) -> Result<EarthFixedSight, ObservationError<P::Error>> {
     let observer = State {
         position_m: observer_ecef_m.unwrap_or([0.0; 3]),
         velocity_m_s: [0.0; 3],
         epoch,
         frame: FrameId::EARTH_ITRF93,
     };
-    let sight = observe_body(
-        &AnalyticEphemeris,
-        observer,
-        body,
-        Correction::VacuumReception,
-    )?;
+    let sight = observe_body(provider, observer, body, Correction::VacuumReception)?;
     let to_earth_fixed = earth_rotation::j2000_to_earth_fixed(sight.received_at);
     let direction = to_earth_fixed * Vector3::from(sight.direction);
     Ok(EarthFixedSight {
