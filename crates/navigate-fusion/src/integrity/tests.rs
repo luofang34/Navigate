@@ -9,7 +9,7 @@ use navigate_contract::{
 };
 
 use crate::config::FusionConfig;
-use crate::provenance::ProvenanceLedger;
+use crate::provenance::{ConstrainedState, ProvenanceLedger};
 
 use super::{derive, derive_space, space_uncertainty};
 
@@ -135,6 +135,7 @@ fn a_gate_rejection_storm_degrades_good_quality_until_an_observation_admits() {
     ledger.commit(
         &first,
         SourceComposition::of(SensorClass::Gnss),
+        ConstrainedState::POSITION,
         now,
         config.assessment_window,
     );
@@ -154,7 +155,7 @@ fn a_gate_rejection_storm_degrades_good_quality_until_an_observation_admits() {
     );
 
     for _ in 0..config.max_consecutive_gate_rejections {
-        ledger.record_gate_rejection();
+        ledger.record_gate_rejection(ConstrainedState::POSITION);
     }
     assert_eq!(
         derive(&ledger, now, 1.0, 1.0, &config).quality,
@@ -162,6 +163,27 @@ fn a_gate_rejection_storm_degrades_good_quality_until_an_observation_admits() {
     );
     assert_eq!(
         derive_space(&ledger, now, leo_uncertainty, &config).quality,
+        SolutionQuality::Degraded
+    );
+
+    // An admitted attitude update does NOT clear a position rejection storm.
+    let attitude_time = MonotonicNanos::from_nanos(1_250_000_000);
+    let attitude_admission = ObservationStamp::new(
+        SourceId::new(2),
+        SourceEpoch::new(1),
+        WrappingSequence::new(1),
+        attitude_time,
+        clock,
+    );
+    ledger.commit(
+        &attitude_admission,
+        SourceComposition::of(SensorClass::Celestial),
+        ConstrainedState::ATTITUDE,
+        attitude_time,
+        config.assessment_window,
+    );
+    assert_eq!(
+        derive(&ledger, attitude_time, 1.0, 1.0, &config).quality,
         SolutionQuality::Degraded
     );
 
@@ -176,6 +198,7 @@ fn a_gate_rejection_storm_degrades_good_quality_until_an_observation_admits() {
     ledger.commit(
         &second,
         SourceComposition::of(SensorClass::Gnss),
+        ConstrainedState::POSITION,
         next_time,
         config.assessment_window,
     );

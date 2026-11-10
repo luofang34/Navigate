@@ -137,11 +137,44 @@ is `#![no_std]` and does not allocate.
 reads it. A solution in the wrong frame, or with a position uncertainty
 over the configured bound, gives a typed refusal. The space setpoints
 are a thrust vector, an entry bank angle, and a Cartesian velocity.
-`step_mission` sequences the phases of one mission. A reentry goes from
-an orbital coast through a deorbit burn and an entry corridor to the
-legs of a route. A landing goes from an orbital coast through a powered
-descent to touchdown. The mission state is `Copy` and holds the bank
-state of the entry inline.
+`step_mission` sequences the phases of one mission for standalone
+guidance evaluation. A reentry goes from an orbital coast through a
+deorbit burn and an entry corridor to the legs of a route. A landing
+goes from an orbital coast through a powered descent to touchdown. The
+mission state is `Copy` and holds the bank state of the entry inline.
+
+### System boundary with Pilotage and Aviate
+
+`Navigate`, `Pilotage`, and `Aviate` split guidance, mission control,
+and flight stabilization into three layers:
+
+- **`Navigate` (outer-loop navigation and trajectory guidance, `f64`)**:
+  Computes global and relative state solutions (`NavigationSolution`,
+  `CartesianSolution`). Checks solution integrity
+  (`admit_space_solution`). Evaluates outer-loop trajectory laws (`L1`,
+  `glideslope`, `path_track`, `burn`, `rendezvous`, `entry`,
+  `powered_descent`). Outputs `GuidanceSetpoint` values (`Position`,
+  `Velocity`, `DeviationTracking`, `ThrustVector`, `EntryBank`,
+  `CartesianVelocity`). For spacecraft SAS target-relative modes
+  (`Prograde`, `Retrograde`, `Radial`, `Normal`, `Target`), `Navigate`
+  supplies the inertial reference vectors. `Navigate` does not hold
+  actuator mixers, inner-loop rate PIDs, or operator approval state.
+- **`Pilotage` (operator intent, fenced authority, and phase sequencing)**:
+  Owns authority leases, operator proposals, approvals, command
+  receipts, phase deadlines, and abort cleanup (`pilotage-mission-core`).
+  In operational missions, `Pilotage` drives phase transitions and
+  projects `GuidanceSetpoint` values into inner-loop flight commands.
+  `navigate-guidance::step_mission` is a stateless guidance helper for
+  standalone trajectory evaluation and closed-loop simulation. It does
+  not replace `Pilotage` receipt-gated sequencing.
+- **`Aviate` (inner-loop flight control and actuator allocation, `f32`)**:
+  Runs the 1 kHz `#![no_std]` attitude, angular-rate, envelope-limit,
+  proper-acceleration-limit, and actuator-allocation loops (`mc`, `fw`,
+  `vtol`, `spacecraft`). In the `spacecraft` feature, `Aviate` runs the
+  SAS inner loop (`KillRot`, `HoldAttitude`, `DirectionLock`,
+  `EntryBank`), allocates attitude torque between reaction wheels and
+  rotational RCS, and drives 3-axis CG translational RCS from body
+  velocity errors.
 
 ## Core crate topology (ADR-0016)
 

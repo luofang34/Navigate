@@ -276,6 +276,42 @@ fn attitude_fixes_and_visual_poses_update_the_attitude() {
     );
 }
 
+#[test]
+fn attitude_fix_does_not_clear_degradation_from_rejected_position_fixes() {
+    let mut filter = surface_filter(
+        InertialConfig::default(),
+        PlanetaryBody::EARTH_WGS84,
+        earth_origin(),
+    );
+    let plane = navigate_geodesy::LocalTangentPlane::new(earth_origin(), BodyEllipsoid::WGS84)
+        .expect("plausible");
+    let far_position = plane.from_ned(&NedOffset::new(5_000.0, 0.0, 0.0));
+    let limit = filter.config().fusion.max_consecutive_gate_rejections;
+    for seq in 1..=limit {
+        let out = filter.ingest(&position_fix(seq, 0, far_position), t(0));
+        assert!(matches!(
+            out,
+            IngestOutcome::Rejected(RejectionReason::InnovationGate { .. })
+        ));
+    }
+    assert_eq!(
+        filter.tick(t(0)).expect("initialized").integrity.quality,
+        SolutionQuality::Degraded
+    );
+    // An admitted attitude observation must NOT mask the unresolved position divergence.
+    assert_accepted(filter.ingest(&attitude_fix(1, 0, UnitQuaternion::identity()), t(0)));
+    assert_eq!(
+        filter.tick(t(0)).expect("initialized").integrity.quality,
+        SolutionQuality::Degraded
+    );
+    // Only a position-constraining recovery observation restores Good quality.
+    assert_accepted(filter.ingest(&position_fix(limit + 1, 0, earth_origin()), t(0)));
+    assert_eq!(
+        filter.tick(t(0)).expect("initialized").integrity.quality,
+        SolutionQuality::Good
+    );
+}
+
 /// Runs a script of IMU samples and one fix and returns the core.
 fn run_script(events: &[(bool, u64, u64, usize)]) -> crate::inertial::estimate::InertialCore {
     let config = InertialConfig {
