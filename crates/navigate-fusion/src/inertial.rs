@@ -200,21 +200,26 @@ impl InertialNavigationFilter {
     /// goes through the history.
     pub fn ingest(&mut self, obs: &Observation, now: MonotonicNanos) -> IngestOutcome {
         let result = self.admit(obs, now);
-        self.outcome(result, Some(obs.value.kind()))
+        self.outcome(
+            result,
+            Some((obs.value.kind(), obs.value.constrained_state())),
+        )
     }
 
     fn outcome(
         &mut self,
         result: Result<(), RejectionReason>,
-        kind: Option<MeasurementKind>,
+        measurement: Option<(MeasurementKind, crate::provenance::ConstrainedState)>,
     ) -> IngestOutcome {
         match result {
             Ok(()) => IngestOutcome::Accepted,
             Err(reason) => {
                 self.rejections.record(&reason);
-                if let (RejectionReason::InnovationGate { .. }, Some(kind)) = (&reason, kind) {
+                if let (RejectionReason::InnovationGate { .. }, Some((kind, constrained))) =
+                    (&reason, measurement)
+                {
                     self.stats.record_gate_rejection(kind);
-                    self.ledger.record_gate_rejection();
+                    self.ledger.record_gate_rejection(constrained);
                 }
                 IngestOutcome::Rejected(reason)
             }
@@ -261,7 +266,13 @@ impl InertialNavigationFilter {
             self.stats.record_admitted(kind, nis);
         }
         let window = self.config.fusion.assessment_window;
-        self.ledger.commit(&obs.stamp, obs.composition, now, window);
+        self.ledger.commit(
+            &obs.stamp,
+            obs.composition,
+            obs.value.constrained_state(),
+            now,
+            window,
+        );
         Ok(())
     }
 

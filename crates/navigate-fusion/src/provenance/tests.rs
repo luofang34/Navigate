@@ -3,7 +3,7 @@ use navigate_contract::{
     SourceEpoch, SourceId, WrappingSequence,
 };
 
-use super::{MAX_SOURCES, MAX_WINDOW_ADMISSIONS, ProvenanceLedger};
+use super::{ConstrainedState, MAX_SOURCES, MAX_WINDOW_ADMISSIONS, ProvenanceLedger};
 use crate::rejection::RejectionReason;
 
 fn stamp(source: u32, sequence: u32, at_ns: u64) -> ObservationStamp {
@@ -25,7 +25,7 @@ fn a_full_source_table_refuses_a_new_source_and_keeps_the_known_ones() {
     for source in 0..MAX_SOURCES as u32 {
         let first = stamp(source, 0, 1);
         assert_eq!(ledger.check_source_ordering(&first), Ok(()));
-        ledger.commit(&first, gnss, now, window);
+        ledger.commit(&first, gnss, ConstrainedState::POSITION, now, window);
     }
     let newcomer = stamp(MAX_SOURCES as u32, 0, 1);
     assert_eq!(
@@ -56,6 +56,7 @@ fn a_full_window_drops_its_oldest_admission() {
         ledger.commit(
             &stamp(index % 4, index / 4, at.as_nanos()),
             composition,
+            ConstrainedState::POSITION,
             at,
             window,
         );

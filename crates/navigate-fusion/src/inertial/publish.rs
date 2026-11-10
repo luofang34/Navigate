@@ -11,6 +11,7 @@ use super::models::vehicle_level;
 use super::nominal::{ATT, POS, VEL, to_contract};
 use crate::integrity;
 use crate::kalman::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
+use navigate_astrodynamics::GravityField;
 use navigate_contract::{IntegrityAssessment, SpaceIntegrityAssessment};
 
 impl InertialNavigationFilter {
@@ -77,7 +78,8 @@ impl InertialNavigationFilter {
         let vel_cov = core.p.fixed_view::<3, 3>(VEL, VEL).into_owned();
         let c = x.c_b_to_f();
         let att_cov = c * core.p.fixed_view::<3, 3>(ATT, ATT) * c.transpose();
-        let uncertainty = integrity::space_uncertainty(x.p, x.v, pos_cov);
+        let v_inertial = x.v + core.regime.frame_rotation().cross(&x.p);
+        let uncertainty = integrity::space_uncertainty(x.p, v_inertial, pos_cov);
         let integrity = self.assess_space(uncertainty, now);
         let stamp = self.next_stamp(now);
         Some(

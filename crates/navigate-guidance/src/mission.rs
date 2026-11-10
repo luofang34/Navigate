@@ -18,6 +18,17 @@
 //! changes in the step that meets its trigger, and that step also gives
 //! the command of the new phase when the new phase reads the same
 //! solution.
+//!
+//! # Boundary with Pilotage and Aviate
+//!
+//! [`step_mission`] is a stateless guidance-phase helper for standalone
+//! trajectory evaluation and simulation harnesses. Operational missions
+//! that require fenced authority leases, operator approval gates, command
+//! receipts, phase deadlines, or abort cleanup sequence phases in
+//! `pilotage-mission-core`, call [`guide_burn`], [`guide_entry`],
+//! [`guide_powered_descent`], or [`guide`] for the active phase, and
+//! project the resulting [`GuidanceSetpoint`] into `Aviate` inner-loop
+//! commands.
 
 use navigate_contract::{
     CartesianSolution, ClockDomainId, FrameId, GuidanceCommand, GuidanceSetpoint, MonotonicNanos,

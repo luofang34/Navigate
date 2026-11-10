@@ -292,3 +292,66 @@ fn implausible_changes_are_refused_and_counted() {
     assert_eq!(initialized.frame(), FrameId::EARTH_J2000);
     assert_eq!(core(&initialized).regime.env, earth_inertial());
 }
+
+#[test]
+fn orbital_rtn_uncertainty_is_frame_invariant_between_rotating_and_inertial_frames() {
+    use navigate_contract::{CartesianPosition, CartesianVelocity, SpaceUncertainty};
+
+    let rotating = SpaceEnvironment::from_body(PlanetaryBody::EARTH_WGS84);
+    let omega = Vector3::new(0.0, 0.0, PlanetaryBody::EARTH_WGS84.rotation_rate_rad_per_s);
+    let r_rot = Vector3::new(7_000_000.0, 0.0, 0.0);
+    let v_inertial_in_rot = Vector3::new(0.0, 0.0, 1_500.0);
+    let v_rot = v_inertial_in_rot - omega.cross(&r_rot);
+
+    let mut filter =
+        InertialNavigationFilter::new_space(InertialConfig::default(), CLOCK, rotating);
+    filter
+        .initialize_space(
+            CartesianPosition::new(r_rot.x, r_rot.y, r_rot.z),
+            CartesianVelocity::new(v_rot.x, v_rot.y, v_rot.z),
+            identity_attitude(),
+            SymmetricCov3::from_diagonal(9.0, 4.0, 100.0),
+            SymmetricCov3::from_diagonal(1.0, 1.0, 1.0),
+            SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-6),
+            t(0),
+            gnss(),
+        )
+        .expect("plausible");
+
+    let sol_rot = filter.tick_space(t(0)).expect("initialized");
+    let to_inertial = FrameChange::between_environments(
+        &rotating,
+        earth_inertial(),
+        None,
+        [0.0; 3],
+        [0.0; 3],
+        rotating_to_inertial(EARTH_ANGLE_RAD),
+    );
+    filter.change_frame(to_inertial, t(0)).expect("valid");
+    let sol_inertial = filter.tick_space(t(0)).expect("initialized");
+
+    match (
+        sol_rot.integrity.uncertainty,
+        sol_inertial.integrity.uncertainty,
+    ) {
+        (
+            SpaceUncertainty::OrbitalRtn {
+                radial_1sigma_m: r1,
+                along_track_1sigma_m: t1,
+                cross_track_1sigma_m: n1,
+                ..
+            },
+            SpaceUncertainty::OrbitalRtn {
+                radial_1sigma_m: r2,
+                along_track_1sigma_m: t2,
+                cross_track_1sigma_m: n2,
+                ..
+            },
+        ) => {
+            assert!((r1 - 3.0).abs() < 1e-12 && (r1 - r2).abs() < 1e-12);
+            assert!((t1 - 10.0).abs() < 1e-12 && (t1 - t2).abs() < 1e-12);
+            assert!((n1 - 2.0).abs() < 1e-12 && (n1 - n2).abs() < 1e-12);
+        }
+        other => panic!("expected OrbitalRtn in both frames, got {other:?}"),
+    }
+}

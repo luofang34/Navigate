@@ -101,7 +101,7 @@ law reads a `StateVector` and a target, and gives one command or one
 - `guide_powered_descent` reads the gravity from the `PlanetaryBody` of
   the plan, at the position of the solution.
 
-### Mission phases
+### Mission phases and system boundary
 
 `step_mission` reads a `MissionState`, a `MissionProfile`, and one
 `MissionInput`. It gives the next state and the command of the phase.
@@ -118,6 +118,27 @@ The state is `Copy` and holds the `EntryState` inline.
   reads. The host publishes the solution in that frame.
 - An input of the wrong kind gives `PhaseInputMismatch`. A phase that
   is not in the profile gives `PhaseNotInProfile`.
+
+Across the flight stack, the boundary is:
+
+- **`Navigate` (`f64` outer-loop guidance)**: `navigate-trajectory` and
+  `navigate-guidance` compute trajectory errors and check solution
+  integrity (`admit_space_solution`). They emit `GuidanceSetpoint`
+  (`ThrustVector`, `EntryBank`, `CartesianVelocity`, `Velocity`,
+  `DeviationTracking`). `step_mission` is a pure phase-evaluation
+  helper for standalone trajectory evaluation and simulation harnesses.
+- **`Pilotage` (intent, authority, and operational phase sequencing)**:
+  `pilotage-mission-core` owns operator proposals, approvals, fenced
+  authority leases, command receipts, phase deadlines, and abort
+  cleanup. Operational missions sequence phases in `Pilotage`. They call
+  `Navigate` for the phase guidance law and project the
+  `GuidanceSetpoint` into the inner-loop flight controller command.
+- **`Aviate` (`f32` inner-loop flight control)**: Tracks the projected
+  attitude, angular-rate, thrust-vector, entry-bank, or body-velocity
+  command at 1 kHz. It runs the spacecraft SAS loop, enforces
+  proper-acceleration and flight-envelope limits, and allocates
+  actuators (`mc`, `fw`, `vtol`, `spacecraft`, including reaction wheels
+  and 6-DOF RCS).
 
 `navigate-guidance` depends on `navigate-route`, `navigate-trajectory`,
 and `navigate-astrodynamics`.

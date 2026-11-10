@@ -38,6 +38,27 @@ pub(crate) struct AdmittedContribution {
     admitted_at: MonotonicNanos,
 }
 
+/// Bitmask of the state components that an observation directly constrains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConstrainedState(u8);
+
+impl ConstrainedState {
+    /// Vertical position (`[1]`).
+    pub(crate) const VERTICAL_POSITION: Self = Self(1 << 1);
+    /// Full 3D position (`Horizontal | Vertical`, `[0, 1]`).
+    pub(crate) const POSITION: Self = Self((1 << 0) | (1 << 1));
+    /// Translational velocity (`[2]`).
+    pub(crate) const VELOCITY: Self = Self(1 << 2);
+    /// Vehicle attitude (`[3]`).
+    pub(crate) const ATTITUDE: Self = Self(1 << 3);
+    /// Full 6-DoF pose (`Position | Attitude`, `[0, 1, 3]`).
+    pub(crate) const POSE: Self = Self((1 << 0) | (1 << 1) | (1 << 3));
+
+    const fn contains_bit(self, bit: usize) -> bool {
+        (self.0 & (1_u8 << bit)) != 0
+    }
+}
+
 /// The admission bookkeeping of one filter epoch.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProvenanceLedger {
@@ -48,9 +69,10 @@ pub(crate) struct ProvenanceLedger {
     // the assessment window.
     epoch_composition: SourceComposition,
     pub(crate) last_admitted_at: Option<MonotonicNanos>,
-    // Innovation-gate refusals since the last admitted aiding
-    // observation.
-    gate_rejection_streak: u32,
+    // Per-component innovation-gate refusals since the last admitted
+    // observation that constrained that state component (`[horizontal_pos,
+    // vertical_pos, velocity, attitude]`).
+    gate_rejection_streaks: [u32; 4],
 }
 
 impl Default for ProvenanceLedger {
@@ -60,7 +82,7 @@ impl Default for ProvenanceLedger {
             admitted: [None; MAX_WINDOW_ADMISSIONS],
             epoch_composition: SourceComposition::empty(),
             last_admitted_at: None,
-            gate_rejection_streak: 0,
+            gate_rejection_streaks: [0; 4],
         }
     }
 }
@@ -72,19 +94,28 @@ impl ProvenanceLedger {
         self.admitted = [None; MAX_WINDOW_ADMISSIONS];
         self.epoch_composition = SourceComposition::empty();
         self.last_admitted_at = None;
-        self.gate_rejection_streak = 0;
+        self.gate_rejection_streaks = [0; 4];
     }
 
-    /// The innovation-gate refusals since the last admitted aiding
-    /// observation of this filter epoch.
+    /// The largest consecutive innovation-gate refusal streak across
+    /// constrained state components in this filter epoch.
     pub(crate) const fn gate_rejection_streak(&self) -> u32 {
-        self.gate_rejection_streak
+        const fn max_u32(a: u32, b: u32) -> u32 {
+            if a >= b { a } else { b }
+        }
+        let [h, v, vel, att] = self.gate_rejection_streaks;
+        max_u32(max_u32(h, v), max_u32(vel, att))
     }
 
-    /// Records one innovation-gate refusal. The streak saturates: a wrap
-    /// to 0 would report the longest storm as no storm.
-    pub(crate) fn record_gate_rejection(&mut self) {
-        self.gate_rejection_streak = self.gate_rejection_streak.saturating_add(1);
+    /// Records one innovation-gate refusal on the state components
+    /// constrained by the refused observation. Each streak saturates: a
+    /// wrap to 0 would report the longest storm as no storm.
+    pub(crate) fn record_gate_rejection(&mut self, constrained: ConstrainedState) {
+        for (bit, streak) in self.gate_rejection_streaks.iter_mut().enumerate() {
+            if constrained.contains_bit(bit) {
+                *streak = streak.saturating_add(1);
+            }
+        }
     }
 
     /// The union of every admitted composition in this filter epoch.
@@ -156,11 +187,13 @@ impl ProvenanceLedger {
     }
 
     /// Records an admitted aiding observation: the source track, the
-    /// window entry, the provenance, and the silence reference.
+    /// window entry, the provenance, the silence reference, and recovery
+    /// of the state components that this observation constrains.
     pub(crate) fn commit(
         &mut self,
         stamp: &ObservationStamp,
         composition: SourceComposition,
+        constrained: ConstrainedState,
         now: MonotonicNanos,
         window: DurationNanos,
     ) {
@@ -180,7 +213,11 @@ impl ProvenanceLedger {
             *target = Some(entry);
         }
         self.last_admitted_at = Some(now);
-        self.gate_rejection_streak = 0;
+        for (bit, streak) in self.gate_rejection_streaks.iter_mut().enumerate() {
+            if constrained.contains_bit(bit) {
+                *streak = 0;
+            }
+        }
     }
 
     /// Records an admitted sample of the propagation sensor. The sample
@@ -211,7 +248,7 @@ impl ProvenanceLedger {
     pub(crate) fn initialize(&mut self, composition: SourceComposition, at: MonotonicNanos) {
         self.epoch_composition = self.epoch_composition.union(composition);
         self.last_admitted_at = Some(at);
-        self.gate_rejection_streak = 0;
+        self.gate_rejection_streaks = [0; 4];
     }
 
     pub(crate) fn prune_window(&mut self, now: MonotonicNanos, window: DurationNanos) {

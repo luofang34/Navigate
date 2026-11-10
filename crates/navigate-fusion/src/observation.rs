@@ -339,6 +339,38 @@ impl ObservationValue {
                 | Self::MagneticAnomaly { .. }
         )
     }
+
+    /// Which state components (`HorizontalPosition`, `VerticalPosition`,
+    /// `Velocity`, `Attitude`) this measurement directly constrains.
+    pub(crate) const fn constrained_state(&self) -> crate::provenance::ConstrainedState {
+        use crate::provenance::ConstrainedState;
+        match self {
+            Self::PositionFix { .. }
+            | Self::Range { .. }
+            | Self::MagneticAnomaly { .. }
+            | Self::Pseudorange { .. }
+            | Self::TwoWayRange { .. }
+            | Self::CartesianPositionFix { .. }
+            | Self::CartesianRange { .. } => ConstrainedState::POSITION,
+            Self::Altitude { .. } | Self::TerrainClearance { .. } => {
+                ConstrainedState::VERTICAL_POSITION
+            }
+            Self::VelocityFix { .. }
+            | Self::PseudorangeRate { .. }
+            | Self::TwoWayRangeRate { .. }
+            | Self::CartesianVelocityFix { .. } => ConstrainedState::VELOCITY,
+            Self::AttitudeFix { .. }
+            | Self::LineOfSight {
+                reference: LineOfSightReference::InertialDirection { .. },
+                ..
+            } => ConstrainedState::ATTITUDE,
+            Self::VisualPose { .. }
+            | Self::LineOfSight {
+                reference: LineOfSightReference::TargetPosition { .. },
+                ..
+            } => ConstrainedState::POSE,
+        }
+    }
 }
 
 /// One observation offered to the filter: a stamped, covariance-bearing

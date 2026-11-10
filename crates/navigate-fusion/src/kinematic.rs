@@ -122,7 +122,8 @@ impl NavigationFilter {
                 self.rejections.record(&reason);
                 if matches!(reason, RejectionReason::InnovationGate { .. }) {
                     self.stats.record_gate_rejection(obs.value.kind());
-                    self.ledger.record_gate_rejection();
+                    self.ledger
+                        .record_gate_rejection(obs.value.constrained_state());
                 }
                 IngestOutcome::Rejected(reason)
             }
@@ -231,6 +232,7 @@ impl NavigationFilter {
         self.ledger.commit(
             &obs.stamp,
             obs.composition,
+            obs.value.constrained_state(),
             now,
             self.config.assessment_window,
         );
