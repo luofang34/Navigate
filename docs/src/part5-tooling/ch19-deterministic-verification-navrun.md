@@ -5,7 +5,7 @@ Unit tests verify individual equations in isolation, but integration failures of
 ## Technical names
 
 - **Closed-loop scenario** is a deterministic simulation in which guidance setpoints drive a simulated vehicle state, synthetic sensors generate stamped `Observation`s from that state, and the filter's output feeds back into route execution and guidance.
-- **Bit-identical replay** is the guarantee that running the same scenario script twice produces identical floating-point state trajectories, rejection counters, and sequence events.
+- **Bit-identical replay** is the guarantee that running the same scenario script on the same target architecture and toolchain (or across bare-metal `#![no_std]` targets using the software `libm` transcendental backend with identical IEEE 754 rounding and no hardware FMA contraction differences) produces bitwise-identical floating-point trajectories, rejection counters, and sequence events, while cross-OS `std` builds agree within tight floating-point tolerances (Chapter 3).
 
 ## Architecture of `navrun`
 

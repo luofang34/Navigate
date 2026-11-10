@@ -11,6 +11,7 @@
 - **[Sola2017]** J. Solà, "Quaternion kinematics for the error-state Kalman filter," *arXiv preprint arXiv:1711.02508*, 2017.
 - **[VanLoan1978]** C. F. Van Loan, "Computing integrals involving the matrix exponential," *IEEE Transactions on Automatic Control*, vol. 23, no. 3, pp. 395–404, 1978.
 - **[Bowring1985]** B. R. Bowring, "The accuracy of geodetic latitude and height equations," *Survey Review*, vol. 28, no. 218, pp. 202–206, 1985.
+- **[Karney2013]** C. F. F. Karney, "Algorithms for geodesics," *Journal of Geodesy*, vol. 87, no. 1, pp. 43–55, 2013.
 
 ## 2. Nonlinear Filtering, Marginalized Particle Filters, and Magnetic Anomaly Navigation
 

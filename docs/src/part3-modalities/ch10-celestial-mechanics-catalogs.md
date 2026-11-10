@@ -22,11 +22,11 @@ A celestial sight measures the angle of a star or solar system body relative to 
 
 ### Linear 3D space motion and binary orbits (`flamsteed`)
 
-Given a star's catalog right ascension $\alpha_0$, declination $\delta_0$, parallax $\varpi$, proper motion $(\mu_{\alpha*}, \mu_\delta)$, and radial velocity $v_r$ at epoch J2000, `flamsteed` constructs the initial barycentric position $\mathbf{r}_0$ and space velocity $\mathbf{v}$ and propagates the star on a straight line in 3D space over $t$ Julian years (TT) from J2000:
+Given a star's catalog right ascension $\alpha_0$, declination $\delta_0$, parallax $\varpi$, proper motion $(\mu_{\alpha*}, \mu_\delta)$, and radial velocity $v_r$ at epoch J2000 (`[Hoffleit1991]`), `flamsteed` constructs the initial barycentric position $\mathbf{r}_0$ and space velocity $\mathbf{v}$ and propagates the star on a straight line in 3D space over $t$ Julian years (TT) from J2000:
 
 $$\mathbf{u}(t) = \frac{\mathbf{r}_0 + \mathbf{v}\,t}{\|\mathbf{r}_0 + \mathbf{v}\,t\|}$$
 
-For 133 bright stars in binary systems with Sixth Catalog of Orbits of Visual Binary Stars (ORB6) elements, `Star::component_direction_at` solves Kepler's equation $M = E - e\sin E$ and projects the Thiele–Innes orbital offset onto the tangent plane to give the position of the primary luminous component.
+For 133 bright stars in binary systems with Sixth Catalog of Orbits of Visual Binary Stars (ORB6, `[Hartkopf2001]`) elements, `Star::component_direction_at` solves Kepler's equation $M = E - e\sin E$ and projects the Thiele–Innes orbital offset onto the tangent plane to give the position of the primary luminous component.
 
 ### Reception light-time iteration and relativistic aberration (`navigate-celestial`)
 
@@ -46,7 +46,7 @@ To transform apparent celestial directions into `EARTH_ITRF` (`sun_ecef`, `moon_
 
 How can an embedded analytic ephemeris be verified over thousands of years without external SPICE files? A solar or lunar eclipse occurs only when the Sun, the Moon, and the Earth align to within a fraction of a degree.
 
-`eclipse-canon` embeds all **11,898 solar eclipses** and **12,064 lunar eclipses** from the NASA Five Millennium Canon of Espenak and Meeus ($-1999$ to $+3000$). The release gate (`cargo test --release -p navigate-celestial --test eclipse_canon`) tests `AnalyticEphemeris` (fitted to JPL DE431) against every eclipse in the 5,000-year canon. In the modern era, `AnalyticEphemeris` matches JPL DE431 for the Sun and the Moon to within **0.3 arcseconds**.
+`eclipse-canon` embeds all **11,898 solar eclipses** and **12,064 lunar eclipses** from the NASA Five Millennium Canon of Espenak and Meeus ($-1999$ to $+3000$, `[Espenak2006]`). The release gate (`cargo test --release -p navigate-celestial --test eclipse_canon`) tests `AnalyticEphemeris` (fitted to JPL DE431, `[Folkner2014]`) against every eclipse in the 5,000-year canon. In the modern era, `AnalyticEphemeris` matches JPL DE431 for the Sun and the Moon to within **0.3 arcseconds**.
 
 ## 4. Implementation in `Navigate`
 

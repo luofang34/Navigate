@@ -26,6 +26,7 @@ Because Mars has $38\%$ of Earth's gravity, an aircraft at the same speed and ba
 
 - **`TurnType::FlyBy`:** Sequences to the next leg early at distance $d_{\text{lead}}$ before the waypoint.
 - **`TurnType::FlyOver` and terminal waypoints:** Sequence only inside the capture radius `capture_radius_m`.
+- **Zero-wind vs. wind-triangle assumption:** The expression $R_{\text{turn}} = V_g^2 / (g \tan\phi_{\max})$ holds exactly when wind is zero ($\mathbf{v}_w = \mathbf{0}$, so groundspeed $V_g$ equals true airspeed $V_a$) or when the inner loop regulates ground-track curvature directly. Under a steady wind vector $\mathbf{v}_w$ ($\mathbf{v}_g = \mathbf{v}_a + \mathbf{v}_w$) at a fixed air-mass bank limit $\phi_{\max}$, the ground trajectory is a trochoid whose worst-case tailwind ground turn radius expands to $(V_a + \|\mathbf{v}_w\|)^2 / (g \tan\phi_{\max})$. When operating in strong winds relative to airspeed, callers should pass an upper-bounded groundspeed or apply a conservative bank-angle margin in `ExecutionConfig`.
 
 ## 2. Surface guidance laws and integrity gating (`navigate-guidance`)
 
@@ -48,3 +49,11 @@ Both `guide` and `guide_velocity` validate the incoming `NavigationSolution` thr
 - `solution.integrity.quality` is below `GuidanceConfig::min_quality` (`InsufficientQuality`).
 - The solution timestamp is older than `max_solution_age` (`StaleSolution`) or lies in the future (`FutureSolution`).
 - The clock domain (`ClockDomainMismatch`) or reference ellipsoid (`EllipsoidMismatch`) does not match the guidance configuration.
+
+### Cross-layer fail-safe contract with `Pilotage` and `Aviate`
+
+An aircraft or spacecraft in flight cannot halt in place when `navigate-guidance` returns `Err(GuidanceRefusal)`. In the three-layer architecture (`Navigate`, `Pilotage`, `Aviate`), `Err(GuidanceRefusal)` is an explicit mode-transition trigger rather than an unhandled exception:
+
+1. **`Navigate` (`navigate-guidance`)** refuses to compute a cross-track or velocity setpoint from a stale or degraded position estimate, preventing corrupted navigation states from commanding hard bank angles into terrain.
+2. **`Pilotage` (mission and procedure supervision)** catches `GuidanceRefusal`, records the cause (`StaleSolution` vs. `InsufficientQuality`), and selects the appropriate contingency response—such as switching `PlanSet` to `PlanRole::Contingency` or `PlanRole::LostComm`, or commanding a safe climb/loiter escalation.
+3. **`Aviate` (inner-loop flight control)** drops back to an inertial/air-data stabilization mode that does not depend on global position (for example, wings-level attitude hold, constant barometric altitude hold, or constant-heading dead-reckoning) until `Navigate` restores an admissible `SolutionQuality`.

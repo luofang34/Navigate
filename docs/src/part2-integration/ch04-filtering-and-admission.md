@@ -1,12 +1,13 @@
 # Chapter 4: Bayesian Filtering and the Admission Funnel
 
-A recursive Bayesian filter maintains a probability distribution over the vehicle state $\mathbf{x}_k$ at step $k$. When the dynamics and measurement models are linear (or locally linearized) with Gaussian noise, the Kalman filter updates the state estimate $\hat{\mathbf{x}}$ and its error covariance $\mathbf{P}$. In real operations, sensors also emit corrupted packets, out-of-range variances, stale timestamps, and physical outliers. `navigate-fusion` places a nine-stage admission funnel in front of the Kalman update so that bad data cannot corrupt the state (ADR-0003, ADR-0012, ADR-0014).
+A recursive Bayesian filter maintains a probability distribution over the vehicle state $\mathbf{x}_k$ at step $k$. When the dynamics and measurement models are linear (or locally linearized) with Gaussian noise, the Kalman filter updates the state estimate $\hat{\mathbf{x}}$ and its error covariance $\mathbf{P}$ `[Crassidis2011]`. In real operations, sensors also emit corrupted packets, out-of-range variances, stale timestamps, and physical outliers. `navigate-fusion` places a nine-stage admission funnel in front of the Kalman update so that bad data cannot corrupt the state (ADR-0003, ADR-0012, ADR-0014).
 
 ## Technical names
 
 - **Innovation** (or measurement residual) $\mathbf{y}$ is the difference between a measured value $\mathbf{z}$ and the value $\mathbf{h}(\hat{\mathbf{x}}^-)$ predicted from the propagated state.
 - **Innovation covariance** $\mathbf{S}$ is the sum of the projected state covariance $\mathbf{H}\mathbf{P}^-\mathbf{H}^\top$ and the measurement noise covariance $\mathbf{R}$.
 - **Normalized Innovation Squared (NIS)** is the scalar Mahalanobis distance squared $\gamma = \mathbf{y}^\top \mathbf{S}^{-1} \mathbf{y}$.
+- **Gate-conditioned NIS** is the conditional expectation $\mathbb{E}[\gamma \mid \gamma \le \tau]$ of innovations that pass a $\chi^2$ threshold $\tau$.
 - **Information ratio** $\eta$ is the dimensionless ratio of prior state variance along a measurement gradient to measurement noise variance.
 
 ## The discrete Kalman recursion and Joseph-form update
@@ -57,14 +58,25 @@ If any check fails, the filter increments the matching field in `RejectionCounte
 6. **Per-source sequence ordering (`SequenceRegression`, `SourceEpochMismatch`, `SourceTableFull`)**: The filter tracks up to `MAX_SOURCES` sources. Within a `SourceEpoch`, a `WrappingSequence` regression indicates a duplicate or reordered packet.
 7. **Frame match (`FrameMismatch`)**: The declared `FrameId` of the observation must match the active filter frame at the observation's acquisition time.
 8. **Model admissibility (`LinearizationRegionExceeded`, `UninformativeGradient`)**: Nonlinear map models check that the state uncertainty lies inside the linearization radius and that the information ratio $\eta = (\mathbf{g}^\top \mathbf{P}_{\text{pos}} \mathbf{g}) / R$ exceeds `min_information_ratio` (ADR-0012).
-9. **Chi-square innovation gate (`InnovationGateRejected`)**: The filter computes the NIS $\gamma = \mathbf{y}^\top \mathbf{S}^{-1} \mathbf{y}$ and compares it against the $\chi^2$ threshold for the measurement dimension (1-DOF `scalar_gate_chi2`, 2-DOF `line_of_sight_gate_chi2`, 3-DOF position/velocity gates, or 6-DOF `pose_gate_chi2`).
+9. **Chi-square innovation gate (`InnovationGateRejected`)**: The filter computes the NIS $\gamma = \mathbf{y}^\top \mathbf{S}^{-1} \mathbf{y}$ and compares it against the $\chi^2$ threshold $\tau$ for the measurement dimension $m$ (1-DOF `scalar_gate_chi2`, 2-DOF `line_of_sight_gate_chi2`, 3-DOF position/velocity gates, or 6-DOF `pose_gate_chi2`).
 
-## Innovation statistics (`InnovationStats`)
+## Innovation statistics (`InnovationStats`) and gate-truncation bias
 
 `navigate-fusion` maintains `InnovationStats` for each `MeasurementKind`:
 
 - Total admitted observations (`admitted_count`).
-- Running mean NIS (`mean_nis`) and most recent NIS (`last_nis`).
-- Consecutive innovation-gate rejections (`consecutive_gate_rejections`).
+- Running mean NIS of admitted observations (`mean_nis`) and most recent admitted NIS (`last_nis`).
+- Consecutive innovation-gate rejections since the last admitted observation of that kind (`consecutive_gate_rejections`).
 
-In a well-tuned filter with dimension $m$, the expected value of `mean_nis` is $m$. When `consecutive_gate_rejections` reaches the configured limit, the integrity engine degrades the solution quality so that downstream guidance knows the filter is rejecting aiding updates.
+### Unconditional versus gate-conditioned NIS expectation
+
+Under linear-Gaussian assumptions with a correctly specified model, the **unconditional** pre-gate NIS $\gamma$ follows a central $\chi^2_m$ distribution with mean $\mathbb{E}[\gamma] = m$. However, because `InnovationStats::mean_nis` includes only observations that **passed** the innovation gate ($\gamma \le \tau$), `mean_nis` is an estimator of the **truncated $\chi^2_m$ mean**:
+
+$$\mathbb{E}[\gamma \mid \gamma \le \tau] = m\,\frac{F_{\chi^2_{m+2}}(\tau)}{F_{\chi^2_m}(\tau)} < m$$
+
+where $F_{\chi^2_k}(\cdot)$ is the cumulative distribution function of the central chi-square distribution with $k$ degrees of freedom:
+
+- For a tight $95\%$ gate on a 2-DOF measurement ($m = 2$, $\tau = 5.991$), the expected admitted NIS is $\mathbb{E}[\gamma \mid \gamma \le 5.991] \approx 1.685$, not $2.0$.
+- For the wider $99.9\%$ gates used as defaults in `FusionConfig` (for example, $m = 2, \tau = 13.82$), the truncation bias is small ($\mathbb{E}[\gamma \mid \gamma \le 13.82] \approx 1.985$), whereas a tighter gate requires comparing `mean_nis` against the truncated reference value above rather than $m$.
+
+When `consecutive_gate_rejections` on any constrained state sub-channel (`ConstrainedState`) reaches `max_consecutive_gate_rejections`, the integrity engine degrades the solution quality to `SolutionQuality::Degraded` (Chapter 3).

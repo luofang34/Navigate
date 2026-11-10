@@ -1,22 +1,22 @@
 # Chapter 5: Strapdown Inertial Navigation and the 22-State Unified ESKF
 
-A kinematic filter cannot integrate inertial sensors, cannot apply attitude-dependent measurements, and cannot transition from a launch pad on a rotating planet to an interplanetary orbit. `InertialNavigationFilter` in `navigate-fusion::inertial` solves these problems with a unified 22-state Error-State Kalman Filter (ESKF) formulated in one body-centered Cartesian frame (ADR-0014, ADR-0017, ADR-0018).
+A kinematic filter cannot integrate inertial sensors, cannot apply attitude-dependent measurements, and cannot transition from a launch pad on a rotating planet to an interplanetary orbit. `InertialNavigationFilter` in `navigate-fusion::inertial` addresses these requirements with a unified 22-state Error-State Kalman Filter (ESKF) formulated in one body-centered Cartesian frame `[Savage2000, Sola2017]` (ADR-0014, ADR-0017, ADR-0018).
 
 ## Technical names
 
 - **Nominal state** is the high-rate full nonlinear kinematic state integrated by the strapdown mechanization or orbital force model.
 - **Error state** $\delta\mathbf{x}$ is the small perturbation between the true state and the nominal state, estimated by the linear Kalman recursion.
-- **Right attitude perturbation** $\delta\boldsymbol{\theta} \in \mathbb{R}^3$ is an attitude error vector expressed in body FRD axes such that $\mathbf{C}_{\text{true}} = \mathbf{C}_{\text{nom}}\exp([\delta\boldsymbol{\theta}\times])$.
-- **Coning and sculling** are high-rate non-commutative rotation and rotation-thrust coupling effects captured in pre-integrated `ImuIncrement` samples.
+- **Right attitude perturbation** $\delta\boldsymbol{\theta} \in \mathbb{R}^3$ is an attitude error vector expressed in body FRD axes such that $\mathbf{C}_{\text{true}} = \mathbf{C}_{\text{nom}}\exp([\delta\boldsymbol{\theta}\times])$ `[Sola2017]`.
+- **Coning and sculling** are high-rate non-commutative rotation and rotation-thrust coupling effects captured in pre-integrated `ImuIncrement` samples `[Savage2000]`.
 - **First-order Gauss–Markov (FOGM) bias** (`FogmBias`) is a colored noise process $\dot{b} = -b/\tau + w$ with time constant $\tau$ and stationary variance $\sigma^2$.
 
 ## Why one body-centered Cartesian frame?
 
-Many inertial navigation systems maintain a surface filter in a local tangent plane or in geodetic coordinates $(\varphi, \lambda, h)$, and switch to a separate Cartesian filter in orbit. That split creates three defects:
+Many inertial navigation architectures maintain a surface filter in a local tangent plane or in geodetic coordinates $(\varphi, \lambda, h)$, and switch to a separate Cartesian filter in orbit. That split introduces three difficulties:
 
-1. Geodetic mechanization equations divide by $\cos\varphi$ and fail at the geographic poles.
+1. Spherical/geodetic mechanization equations divide by $\cos\varphi$ and become singular at the geographic poles.
 2. Tangent-plane filters accumulate curvature errors away from the anchor and require periodic re-anchoring.
-3. Switching filters during ascent or atmospheric entry requires ad-hoc covariance handoffs.
+3. Switching filters during ascent or atmospheric entry requires covariance handoffs across incompatible state representations.
 
 `InertialNavigationFilter` keeps its nominal position $\mathbf{p}$, frame-relative velocity $\mathbf{v}$, and body-to-frame quaternion $\mathbf{q}$ in a single body-centered Cartesian frame (`SpaceEnvironment`). On a planetary surface, the frame is the rotating body-fixed frame (`EARTH_ITRF`, `MOON_PA`, `MARS_IAU`) with angular velocity $\boldsymbol{\omega}_{\text{ie}} = [0, 0, \omega]^\top$ and an attached `BodyEllipsoid`. In space, the frame is an inertial or rotating orbital frame.
 
@@ -49,7 +49,7 @@ $$\begin{aligned} \dot{\mathbf{p}} &= \mathbf{v} \\ \dot{\mathbf{v}} &= \mathbf{
 
 Here $\mathbf{g}(\mathbf{p})$ includes the gravitational acceleration and the centrifugal term $-\boldsymbol{\omega}_f \times (\boldsymbol{\omega}_f \times \mathbf{p})$. When the IMU supplies pre-integrated coning and sculling increments (`ImuIncrement`), `ingest_imu_increment` applies the rotational velocity correction $\Delta\mathbf{v}_{\text{rot}} = \Delta\tilde{\mathbf{v}} + \frac{1}{2}(\Delta\tilde{\boldsymbol{\theta}} \times \Delta\tilde{\mathbf{v}})$ and exact frame rotation over $\Delta t$.
 
-Because $\delta\boldsymbol{\theta}$ is a right perturbation in body axes, the frame rotation cancels out of the attitude error block:
+Because $\delta\boldsymbol{\theta}$ is a right perturbation in body axes, the frame rotation cancels out of the attitude error block `[Sola2017]`:
 
 $$\begin{aligned} \delta\dot{\mathbf{p}} &= \delta\mathbf{v} \\ \delta\dot{\mathbf{v}} &= -\mathbf{C}_b^f [\tilde{\mathbf{f}}_b\times]\,\delta\boldsymbol{\theta} - \mathbf{C}_b^f \delta\mathbf{b}_a + \frac{\partial \mathbf{g}}{\partial \mathbf{p}}\delta\mathbf{p} - 2[\boldsymbol{\omega}_f\times]\delta\mathbf{v} \\ \delta\dot{\boldsymbol{\theta}} &= -[\tilde{\boldsymbol{\omega}}_b\times]\,\delta\boldsymbol{\theta} - \delta\mathbf{b}_g \end{aligned}$$
 
@@ -59,13 +59,13 @@ During an orbital coast, accelerometer noise exceeds the micro-gravity environme
 
 ## Van Loan discretization and closed-loop reset
 
-To discretize the continuous $22 \times 22$ error dynamics matrix $\mathbf{F}$ and spectral density matrix $\mathbf{Q}_c$ over $\Delta t$, the filter forms the $44 \times 44$ Van Loan block matrix:
+To discretize the continuous $22 \times 22$ error dynamics matrix $\mathbf{F}$ and spectral density matrix $\mathbf{Q}_c$ over $\Delta t$, the filter forms the $44 \times 44$ Van Loan block matrix `[VanLoan1978]`:
 
 $$\mathbf{M} = \begin{bmatrix} -\mathbf{F} & \mathbf{Q}_c \\ \mathbf{0} & \mathbf{F}^\top \end{bmatrix}\Delta t, \qquad \exp(\mathbf{M}) = \begin{bmatrix} \mathbf{A}_{11} & \mathbf{A}_{12} \\ \mathbf{0} & \mathbf{A}_{22} \end{bmatrix}$$
 
 A $[6/6]$ Padé approximant with scaling and squaring evaluates $\exp(\mathbf{M})$ on the stack. Then $\boldsymbol{\Phi} = \mathbf{A}_{22}^\top$ and $\mathbf{Q}_d = \boldsymbol{\Phi}\mathbf{A}_{12}$.
 
-After each admitted measurement update computes the error estimate $\delta\hat{\mathbf{x}}^+$, the filter injects $\delta\hat{\mathbf{x}}^+$ into the nominal state ($\hat{\mathbf{q}}^+ = \hat{\mathbf{q}}^- \otimes \exp(\frac{1}{2}\delta\hat{\boldsymbol{\theta}}^+)$), zeros the error state, and applies the manifold covariance reset Jacobian:
+After each admitted measurement update computes the error estimate $\delta\hat{\mathbf{x}}^+$, the filter injects $\delta\hat{\mathbf{x}}^+$ into the nominal state ($\hat{\mathbf{q}}^+ = \hat{\mathbf{q}}^- \otimes \exp(\frac{1}{2}\delta\hat{\boldsymbol{\theta}}^+)$), zeros the error state, and applies the manifold covariance reset Jacobian `[Sola2017]`:
 
 $$\mathbf{P}^+ \leftarrow \mathbf{J}\mathbf{P}^+\mathbf{J}^\top, \qquad \mathbf{J}_{\theta\theta} = \mathbf{I}_3 - \frac{1}{2}[\delta\hat{\boldsymbol{\theta}}^+\times]$$
 
@@ -76,3 +76,9 @@ When a vehicle launches from a rotating surface into an inertial orbit or crosse
 $$\begin{aligned} \mathbf{p}' &= \mathbf{C}(\mathbf{p} - \mathbf{o}) \\ \mathbf{v}' &= \mathbf{C}\bigl(\mathbf{v} - \dot{\mathbf{o}} - \boldsymbol{\omega}_{\text{rel}} \times (\mathbf{p} - \mathbf{o})\bigr) \\ \mathbf{q}' &= \mathbf{q}_{\mathbf{C}} \otimes \mathbf{q} \end{aligned}$$
 
 The error covariance transforms via $\mathbf{P}' = \mathbf{J}_{\text{frame}}\mathbf{P}\mathbf{J}_{\text{frame}}^\top$ with coupling block $\mathbf{J}_{vp} = -\mathbf{C}[\boldsymbol{\omega}_{\text{rel}}\times]$.
+
+## Assumptions, observability limits, and embedded resource trade-offs
+
+1. **Observability under unaccelerated flight:** With position-only or velocity-only aiding in straight-and-level unaccelerated flight ($\tilde{\mathbf{f}}_b = -\mathbf{C}_f^b \mathbf{g}$), roll and pitch errors couple into horizontal acceleration via $-\mathbf{C}_b^f[\tilde{\mathbf{f}}_b\times]\delta\boldsymbol{\theta}$, but heading error around the gravity vector and vertical gyro bias $\delta b_{g,z}$ remain unobservable until horizontal acceleration maneuvers occur or an attitude/star/visual-pose observation arrives `[Groves2013]`.
+2. **Nuisance state observability:** Barometric bias $\delta b_{\text{alt}}$ is observable only when both barometric `Altitude` and geometric height (`PositionFix` or `TerrainClearance`) are present. Magnetic bias $\delta b_{\text{mag}}$ is separable from horizontal position only when the trajectory crosses changing crustal gradient directions.
+3. **Stack and compute footprint of the 22-state core:** A single $22 \times 22$ `f64` covariance matrix occupies $3{,}872\text{ B}$ ($3.78\text{ KiB}$), and a $44 \times 44$ `f64` Van Loan matrix occupies $15{,}488\text{ B}$ ($15.1\text{ KiB}$) on the stack during Padé scaling and squaring. While this unified state space eliminates filter handoffs across surface and space regimes, resource-constrained microcontrollers (such as ARM Cortex-M33) must provision sufficient stack margin for the Padé workspace and bounded history ring, or exploit the block-diagonal decoupling of the scalar/clock states (`15..22`).

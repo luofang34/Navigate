@@ -21,15 +21,22 @@ Integrated navigation across planetary surfaces and cislunar space uses four pri
 | Local North-East-Down (NED) | Vehicle or tangent anchor | $+N$ tangent north, $+E$ tangent east, $+D$ inward along ellipsoid normal | `navigate-geodesy::NedOffset`, `navigate-contract::NedVelocity` |
 | Body Forward-Right-Down (FRD) and Optical Camera | Vehicle reference point / camera optical center | Body: $+X$ forward, $+Y$ right, $+Z$ down. Camera: $+X$ right, $+Y$ down, $+Z$ forward | `navigate-camera::CameraMount`, `navigate-camera::OpticalPose` |
 
-## Pole-free local axes
+## Pole-free local axes and polar azimuth conditioning
 
-Spherical-coordinate mechanization equations often compute meridian and prime-vertical curvature rates with terms proportional to $\tan\varphi$ or $\sec\varphi = 1/\cos\varphi$. Those equations divide by zero at $\varphi = \pm 90^\circ$.
+Spherical-coordinate mechanization equations compute meridian and prime-vertical curvature rates with terms proportional to $\tan\varphi$ or $\sec\varphi = 1/\cos\varphi$. Those rates divide by zero at $\varphi = \pm 90^\circ$.
 
 In `Navigate`, the inertial filter stores its state in the body-centered Cartesian frame (`InertialNavigationFilter`, ADR-0017). Local NED axes are constructed directly from trigonometric functions of $(\varphi, \lambda)$ without dividing by $\cos\varphi$:
 
 $$\mathbf{C}_{\text{NED}\to\text{BF}}(\varphi, \lambda) = \begin{bmatrix} -\sin\varphi\cos\lambda & -\sin\lambda & -\cos\varphi\cos\lambda \\ -\sin\varphi\sin\lambda & \cos\lambda & -\cos\varphi\sin\lambda \\ \cos\varphi & 0 & -\sin\varphi \end{bmatrix}$$
 
-The columns of $\mathbf{C}_{\text{NED}\to\text{BF}}$ are the unit vectors $\mathbf{u}_N$, $\mathbf{u}_E$, and $\mathbf{u}_D$ in body-fixed coordinates. This matrix is orthonormal at every latitude, including the north and south poles. In the visual stack, `LocalFrame::BodyTangentEnu` provides the corresponding pole-free East-North-Up (ENU) triad on the Earth, the Moon, and Mars (ADR-0020).
+The columns of $\mathbf{C}_{\text{NED}\to\text{BF}}$ are the unit vectors $\mathbf{u}_N$, $\mathbf{u}_E$, and $\mathbf{u}_D$ in body-fixed coordinates. For any given $(\varphi, \lambda)$, this matrix is orthonormal at every latitude, including the north and south poles.
+
+### Polar azimuth sensitivity and model selection (ADR-0017)
+
+Although $\mathbf{C}_{\text{NED}\to\text{BF}}(\pm\pi/2, \lambda)$ is algebraically finite and orthonormal for any supplied $\lambda$, the geographic meridian itself is not unique at the pole: a tiny horizontal position offset $\delta\mathbf{p}$ near $\varphi = \pm 90^\circ$ rotates the geodetic longitude $\lambda$ and the local north/east axes by up to $\pi$ radians. Therefore (ADR-0017):
+
+- **State propagation and position fixes:** The filter state and covariance remain in body-centered Cartesian axes (`EARTH_ITRF`, `MOON_PA`), which have no polar singularity. A `PositionFix` converts into body-fixed Cartesian coordinates with identity Jacobian $\mathbf{H} = \mathbf{I}_3$, so polar position updates remain well-conditioned.
+- **Velocity and attitude near the pole:** Because a small position error near $\varphi = \pm 90^\circ$ rotates the local NED axes, local-level `VelocityFix` and `AttitudeFix` observations lose geometric value close to a pole. Polar missions use Cartesian velocity updates (`CartesianVelocityFix`), ECEF star lines of sight (`LineOfSight`), and tangent-plane visual frames (`LocalFrame::BodyTangentEnu`, ADR-0020) anchored at a fixed reference point rather than the instantaneous vehicle meridian.
 
 ## Multi-body ellipsoidal geodesy (`navigate-geodesy`)
 
@@ -41,7 +48,14 @@ the forward conversion (`geodetic_to_body_fixed`) from $(\varphi, \lambda, h)$ t
 
 $$\begin{aligned} x &= \bigl(N(\varphi) + h\bigr)\cos\varphi\cos\lambda \\ y &= \bigl(N(\varphi) + h\bigr)\cos\varphi\sin\lambda \\ z &= \bigl(N(\varphi)(1 - e^2) + h\bigr)\sin\varphi \end{aligned}$$
 
-The inverse conversion (`body_fixed_to_geodetic`) uses a deterministic two-pass Bowring iteration. On spherical bodies ($f = 0$) and on the polar axis ($\sqrt{x^2 + y^2} = 0$), the closed-form solution is exact. Over tested altitudes from $-400\text{ m}$ to $100\text{ km}$ on WGS84, the round-trip error is less than $10^{-6}\text{ m}$.
+The inverse conversion (`body_fixed_to_geodetic`) uses a deterministic two-pass Bowring scheme `[Bowring1985]`. On spherical bodies ($f = 0$) and on the polar axis ($\sqrt{x^2 + y^2} = 0$), the closed-form solution is exact. Over tested altitudes from $-400\text{ m}$ to $100\text{ km}$ on WGS84, the round-trip error is less than $10^{-6}\text{ m}$.
+
+### Spherical great-circle guidance geometry versus ellipsoidal geodesics
+
+`navigate-geodesy::great_circle` (`distance_m`, `initial_bearing_rad`, `cross_track_m`, `along_track_m`) models the body as a sphere of mean radius $R_{\text{mean}} = \text{BodyEllipsoid::mean\_radius\_m}()$ rather than solving the full ellipsoidal geodesic problem `[Karney2013]`.
+
+- **Error budget and scope:** On the Earth ($f \approx 1/298.257$), the spherical great-circle approximation differs from the ellipsoidal geodesic by at most $\sim 0.5\%$ in distance and bearing. On Mars ($f \approx 1/169.8$), the difference is at most $\sim 0.9\%$. On a lunar sphere ($f = 0$), the spherical model is exact.
+- **Why this suffices for closed-loop guidance:** In `navigate-guidance`, cross-track deviation $e_{\text{xtk}}$ feeds a closed-loop lateral controller that drives $e_{\text{xtk}} \to 0$ as the vehicle approaches the target fix. Survey-grade position truth always goes through the exact body-fixed ellipsoidal conversion path (`geodetic_to_body_fixed` / `LocalTangentPlane`), never through `great_circle`.
 
 ### Vertical datums
 

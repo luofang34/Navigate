@@ -22,19 +22,19 @@ Each law in `navigate-trajectory` maps a `StateVector` $(\mathbf{r}, \mathbf{v})
 
 ### Key equations
 
-1. **Clohessy–Wiltshire rendezvous transfer (`cw_transfer_velocity`):**
+1. **Clohessy–Wiltshire rendezvous transfer (`cw_transfer_velocity`, `[Clohessy1960]`):**
    With mean motion $n = \sqrt{\mu / r_{\text{tgt}}^3}$ and transfer time $T$, the relative position transition blocks $\boldsymbol{\Phi}_{rr}(T)$ and $\boldsymbol{\Phi}_{rv}(T)$ in the target LVLH frame yield the required initial relative velocity:
 
    $$\delta\mathbf{v}_0^+ = \boldsymbol{\Phi}_{rv}^{-1}(T)\bigl(\delta\mathbf{r}_f - \boldsymbol{\Phi}_{rr}(T)\delta\mathbf{r}_0\bigr)$$
 
-2. **Atmospheric entry drag-versus-energy tracking (`evaluate_entry`):**
+2. **Atmospheric entry drag-versus-energy tracking (`evaluate_entry`, `[Harpold1979]`):**
    Using specific energy $E = \frac{1}{2}v_{\text{rel}}^2 - \mu/r$ as the monotonic independent variable instead of time, the law interpolates reference drag $D_{\text{ref}}(E)$ and drag rate $\dot{D}_{\text{ref}}(E)$ from caller-borrowed `EntryNode` knots, computes the required vertical lift fraction:
 
    $$\cos\sigma_{\text{cmd}} = \cos\sigma_{\text{ref}} + k_D(D - D_{\text{ref}}) + k_{\dot{D}}(\dot{D} - \dot{D}_{\text{ref}})$$
 
    and flips the sign of the bank angle $\sigma = \pm\arccos(\cos\sigma_{\text{cmd}})$ whenever the cross-range azimuth error exceeds the energy-scheduled heading deadband.
 
-3. **Polynomial E-guidance powered descent (`evaluate_powered_descent`):**
+3. **Polynomial E-guidance powered descent (`evaluate_powered_descent`, `[Cherry1964]`):**
    Given current $(\mathbf{r}, \mathbf{v})$, target $(\mathbf{r}_f, \mathbf{v}_f)$, apparent gravity $\mathbf{g}$, and time-to-go $t_{\text{go}} > 0$:
 
    $$\mathbf{a}_{\text{thrust}} = -\frac{6}{t_{\text{go}}^2}\bigl(\mathbf{r} - \mathbf{r}_f + \mathbf{v}\,t_{\text{go}}\bigr) + \frac{2}{t_{\text{go}}}(\mathbf{v} - \mathbf{v}_f) - \mathbf{g}$$

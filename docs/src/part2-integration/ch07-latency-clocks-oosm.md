@@ -53,12 +53,19 @@ Suppose an IMU sample spans the time interval $[t_0, t_1]$ with angular rate $\b
 3. It evaluates the measurement model, frame gate, and $\chi^2$ innovation gate at $t_{\text{acq}}$ and applies the Kalman update.
 4. During replay, it propagates the remaining sub-interval $[t_{\text{acq}}, t_1]$ over $\Delta t_2 = t_1 - t_{\text{acq}}$ with the same IMU sample rates, and then replays all events after $t_1$.
 
-Because the replay does not re-run the $\chi^2$ gate on previously admitted observations, and because the history commit is atomic, out-of-order arrival produces the same state and covariance as in-order arrival.
+### Fixed-decision replay vs. full chronological gate equivalence
+
+When the filter replays historical observations after $t_{\text{acq}}$, it recomputes each observation's innovation and Joseph covariance update against the newly corrected trajectory, but it preserves the prior admission decision rather than re-evaluating the $\chi^2$ gate. This design preserves **admission monotonicity**: an observation that was already reported as `Admitted` to external callers is never retroactively revoked by a later arrival.
+
+Consequently, out-of-sequence replay produces the exact same state and covariance as chronological in-order arrival when two conditions hold:
+
+1. **Invariant gate decisions:** Inserting the delayed observation at $t_{\text{acq}}$ does not shift any subsequent observation's normalized innovation squared $\gamma_k = \mathbf{y}_k^\top \mathbf{S}_k^{-1} \mathbf{y}_k$ across its $\chi^2$ threshold $\tau$.
+2. **Linear or small-relinearization regime:** The measurement and propagation models between $t_{\text{acq}}$ and $t_{\text{state}}$ are linear (as in `NavigationFilter`), or the trajectory correction is small enough that ESKF Jacobian relinearization differences are negligible.
 
 ### Frame-aware historical admission
 
 A spacecraft may capture an optical navigation image in `EARTH_J2000` at $t_1$, execute `change_frame` to `MOON_J2000` at $t_2$, and finish processing the image at $t_3 > t_2$. Because `InertialNavigationFilter` checks the `FrameId` gate against the rewound state at $t_1$ (where the active frame was `EARTH_J2000`) and then replays `change_frame` at $t_2$, the delayed observation is admitted in its native frame and transformed into the lunar frame without error (ADR-0014, ADR-0017).
 
-##Delayed covariance propagation in `navigate-visual-flight`
+## Delayed covariance propagation in `navigate-visual-flight`
 
 When the 30 Hz flight visual engine (`FlightVisualEngine`) runs a slow background map-anchor search on a worker thread while tracking optical flow at frame rate, the anchor result arrives several frames late. In addition to the filter's OOSM history ring, `FlightVisualEngine` can propagate the anchor pose forward along the accumulated relative odometry increments $(\Delta\mathbf{p}_{\text{odom}}, \mathbf{Q}_{\text{odom}})$ to emit a current-epoch `VisualFix` with inflated covariance when low-rate consumers cannot rewind.

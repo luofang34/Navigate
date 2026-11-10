@@ -1,6 +1,6 @@
 # Chapter 14: Magnetic Anomaly Navigation (MagNav)
 
-Crustal magnetic anomalies arise from variations in remanent and induced magnetization within rocks above the Curie temperature depth in a planet's crust. Unlike optical or radar TRN, crustal magnetic fields penetrate clouds, fog, darkness, water, and foliage without attenuation, and require no radiated energy. `navigate-magnav` and `navigate-fusion` implement a complete magnetic anomaly navigation stack inspired by Canciani and `MagNav.jl`, adapted to zero-heap `#![no_std]` safety and integrity rules (ADR-0012, ADR-0014, ADR-0016).
+Crustal magnetic anomalies arise from variations in remanent and induced magnetization within rocks above the Curie temperature depth in a planet's crust. Unlike optical or radar TRN, crustal magnetic fields penetrate clouds, fog, darkness, water, and foliage without attenuation, and require no radiated energy. `navigate-magnav` and `navigate-fusion` implement a complete magnetic anomaly navigation stack inspired by Canciani (`[Canciani2016]`) and `MagNav.jl` (`[Taylor2024]`), adapted to zero-heap `#![no_std]` safety and integrity rules (ADR-0012, ADR-0014, ADR-0016).
 
 ## Technical names
 
@@ -20,7 +20,7 @@ A scalar optically pumped magnetometer (such as a Cesium or Rubidium vapor senso
 
 ### 18-term Tolles–Lawson aircraft compensation (`OnlineTlCalibrator`)
 
-Let $\mathbf{B}_{\text{vec}} = [B_x, B_y, B_z]^\top$ be the vector magnetic field measured by a tri-axial fluxgate magnetometer in body FRD axes, with direction cosines $\cos\boldsymbol{\alpha} = \mathbf{B}_{\text{vec}} / \|\mathbf{B}_{\text{vec}}\| = [c_x, c_y, c_z]^\top$ and time derivatives $\dot{c}_x, \dot{c}_y, \dot{c}_z$. `tolles_lawson_basis` constructs the 18 basis terms $\mathbf{a}(\mathbf{B}_{\text{vec}}, \dot{\mathbf{B}}_{\text{vec}}) \in \mathbb{R}^{18}$:
+Let $\mathbf{B}_{\text{vec}} = [B_x, B_y, B_z]^\top$ be the vector magnetic field measured by a tri-axial fluxgate magnetometer in body FRD axes, with direction cosines $\cos\boldsymbol{\alpha} = \mathbf{B}_{\text{vec}} / \|\mathbf{B}_{\text{vec}}\| = [c_x, c_y, c_z]^\top$ and time derivatives $\dot{c}_x, \dot{c}_y, \dot{c}_z$. `tolles_lawson_basis` constructs the 18 basis terms $\mathbf{a}(\mathbf{B}_{\text{vec}}, \dot{\mathbf{B}}_{\text{vec}}) \in \mathbb{R}^{18}$ (`[Tolles1950]`):
 
 $$B_{\text{aircraft}} = \underbrace{\sum_{i=1}^3 \beta_i c_i}_{\text{3 Permanent}} + \underbrace{\|\mathbf{B}_{\text{vec}}\|\sum_{i=1}^3 \sum_{j=i}^3 \beta_{ij} c_i c_j}_{\text{6 Induced}} + \underbrace{\|\mathbf{B}_{\text{vec}}\|\sum_{i=1}^3 \sum_{j=1}^3 \beta'_{ij} c_i \dot{c}_j}_{\text{9 Eddy-current}}$$
 

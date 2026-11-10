@@ -1,6 +1,6 @@
 # Chapter 16: Reduced-Dynamic Orbit Determination and Cislunar Navigation
 
-In orbital and cislunar flight, a spacecraft spends hours or days coasting between short thruster burns. During a coast, nongravitational accelerations are micro-g or smaller, below the bias stability of tactical and navigation-grade accelerometers. Integrating noisy IMU samples during a multi-day coast degrades the orbit estimate rapidly. Instead, **Reduced-Dynamic Orbit Determination (RDOD)** propagates the state using high-precision analytical and numerical force models augmented with stochastic empirical accelerations (Dynamic Model Compensation, DMC), and fuses radiometric and optical navigation (OpNav) observations. `navigate-astrodynamics` and `navigate-fusion` implement this capability in `#![no_std]` with zero heap allocation (ADR-0016, ADR-0018).
+In orbital and cislunar flight, a spacecraft spends hours or days coasting between short thruster burns. During a coast, nongravitational accelerations are micro-g or smaller, below the bias stability of tactical and navigation-grade accelerometers. Integrating noisy IMU samples during a multi-day coast degrades the orbit estimate rapidly. Instead, **Reduced-Dynamic Orbit Determination (RDOD)** propagates the state using high-precision analytical and numerical force models augmented with stochastic empirical accelerations (Dynamic Model Compensation, DMC, `[Tapley2004]`), and fuses radiometric and optical navigation (OpNav) observations. `navigate-astrodynamics` and `navigate-fusion` implement this capability in `#![no_std]` with zero heap allocation (ADR-0016, ADR-0018).
 
 ## Technical names
 
@@ -21,7 +21,7 @@ A two-body Keplerian orbit is only a first approximation:
 
 ### Pole-free Cartesian solid spherical harmonics (`SphericalHarmonicField`)
 
-Classical spherical harmonic recurrences in spherical coordinates $(r, \varphi, \lambda)$ contain $\tan\varphi$ and $1/\cos\varphi$ terms in the gravity gradient and become singular at the poles. `navigate-astrodynamics::gravity` uses the Montenbruck and Gill recursion in Cartesian solid harmonics $V_{nm}(x, y, z)$ and $W_{nm}(x, y, z)$ in body-fixed axes:
+Classical spherical harmonic recurrences in spherical coordinates $(r, \varphi, \lambda)$ contain $\tan\varphi$ and $1/\cos\varphi$ terms in the gravity gradient and become singular at the poles. `navigate-astrodynamics::gravity` uses the Montenbruck and Gill (`[Montenbruck2000]`) recursion in Cartesian solid harmonics $V_{nm}(x, y, z)$ and $W_{nm}(x, y, z)$ in body-fixed axes:
 
 $$V_{00} = \frac{R_{\text{ref}}}{r}, \qquad W_{00} = 0$$
 

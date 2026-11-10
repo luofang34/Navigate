@@ -20,8 +20,20 @@ If an adapter converts the star camera attitude $\mathbf{C}_b^e$ into a local NE
 
 By contrast, when each matched star enters `InertialNavigationFilter` as a tightly coupled `ObservationValue::LineOfSight` in ECEF axes (`LineOfSightReference::InertialDirection`):
 
-- The measurement requires **no vehicle position** and remains 100% statistically independent.
-- In `InertialNavigationFilter`, the star sighting locks the body attitude $\mathbf{C}_b^e$ in ECEF axes. Because the accelerometers measure $\mathbf{f}_b \approx -\mathbf{C}_e^b \mathbf{g}(\mathbf{p})$, and the direction of gravity $\mathbf{g}(\mathbf{p})$ rotates by $1''$ for every $30.9\text{ m}$ on the Earth's surface, the velocity error dynamics $\delta\dot{\mathbf{v}} = (\partial\mathbf{g}/\partial\mathbf{p})\delta\mathbf{p} - \mathbf{C}_b^e[\tilde{\mathbf{f}}_b\times]\delta\boldsymbol{\theta}$ couple attitude and position. Inertial star lines of sight plus accelerometers make **position observable without GNSS**!
+- The measurement requires **no vehicle position estimate** and avoids prior-position circularity (though consecutive star sightings within a frame still share common star-catalog, earth-orientation, and mount-calibration errors).
+- In `InertialNavigationFilter`, the star sighting locks the body attitude $\mathbf{C}_b^e$ in ECEF axes. Because the accelerometers measure $\mathbf{f}_b \approx -\mathbf{C}_e^b \mathbf{g}(\mathbf{p})$, and the direction of gravity $\mathbf{g}(\mathbf{p})$ rotates by $1''$ for every $30.9\text{ m}$ on the Earth's surface, the velocity error dynamics $\delta\dot{\mathbf{v}} = (\partial\mathbf{g}/\partial\mathbf{p})\delta\mathbf{p} - \mathbf{C}_b^e[\tilde{\mathbf{f}}_b\times]\delta\boldsymbol{\theta}$ couple attitude and position. Inertial star lines of sight plus accelerometers make **horizontal position observable without GNSS** (`[Groves2013]`, `[Savage2000]`).
+
+### Astro-inertial observability conditions and accelerometer-bias coupling
+
+Recovering horizontal position from star sightings and accelerometers requires three physical conditions:
+
+1. **Reference gravity knowledge:** The filter must evaluate an accurate gravity model $\mathbf{g}(\mathbf{p})$ (`Somigliana` normal gravity plus $J_2$ or spherical harmonics); any unmodeled deflection of the vertical maps directly into horizontal position bias ($1'' \approx 30.9\text{ m}$ on the Earth).
+2. **Earth rotation time (`Ut1Seconds`):** Because celestial right ascension is fixed in inertial space while the surface rotates at $\omega_\oplus \approx 7.292115\times 10^{-5}\text{ rad/s}$, an uncalibrated UT1 clock offset $\Delta t_{\text{UT1}}$ shifts equatorial longitude by $\omega_\oplus R_e \Delta t_{\text{UT1}} \approx 465\text{ m/s}$.
+3. **Bounded horizontal accelerometer bias:** In steady unaccelerated flight, a horizontal accelerometer bias $\delta\mathbf{b}_{a,h}$ cannot be distinguished from a tilt of the local gravity vector $\delta\boldsymbol{\theta}_h \approx \delta\mathbf{b}_{a,h}/g$. With body attitude locked by the star tracker, the steady-state Schuler equilibrium offsets the horizontal position estimate by:
+
+$$\delta\mathbf{p}_h \approx \frac{R_e}{g}\,\mathbf{C}_b^n \delta\mathbf{b}_{a,h}$$
+
+On the Earth ($R_e / g \approx 6.50\times 10^5\text{ s}^2$), an uncalibrated horizontal accelerometer bias of $100\,\mu g$ ($9.8\times 10^{-4}\text{ m/s}^2$) induces a $\sim 637\text{ m}$ horizontal position offset. Separating $\mathbf{b}_a$ from $\delta\mathbf{p}_h$ requires either navigation-grade accelerometers ($\sigma_{b_a} \le 10\,\mu g$) or heading/attitude maneuvers that modulate $\mathbf{C}_b^n$ relative to the local vertical.
 
 ## 2. Mathematical formulation (`navigate-startrack`)
 
@@ -53,14 +65,14 @@ When the vehicle rotates during the exposure interval, each star forms an elonga
 ### Stage 2: Star identification (`identify_stars`)
 
 - **Prior-aided mode (`IdentifyMode::Prior`)**: Projects the `navigate-celestial` catalog through the `AttitudePrior`, requires mutual nearest-neighbor uniqueness within an angular gate, and verifies all pairwise inter-star angles.
-- **Lost-in-Space mode (`IdentifyMode::LostInSpace`)**: Uses a precomputed `PairCatalogue` of catalog star pairs within the camera field of view, sorted by inter-star angle. For a triad of bright centroids $(i, j, k)$:
+- **Lost-in-Space mode (`IdentifyMode::LostInSpace`)**: Uses a precomputed `PairCatalogue` of catalog star pairs within the camera field of view, sorted by inter-star angle (`[Mortari2004]`). For a triad of bright centroids $(i, j, k)$:
   1. Binary searches `PairCatalogue` for catalog pairs matching angles $\theta_{ij}, \theta_{jk}, \theta_{ik}$ within tolerance.
   2. Checks 3D triangle handedness ($\det[\mathbf{u}_i, \mathbf{u}_j, \mathbf{u}_k]$ sign) to reject mirror-image asterisms.
   3. Requires a fourth centroid $m$ to confirm a unique catalog pyramid before refining the full frame with the resulting attitude prior.
 
 ### Stage 3: Weighted Davenport q-method (`solve_attitude`)
 
-Given $N$ matched body unit vectors $\mathbf{b}_i$ and ECEF reference unit vectors $\mathbf{r}_i$ with weights $w_i = 1/\sigma_i^2$, `solve_attitude` constructs the $4\times 4$ Davenport matrix $\mathbf{K}$ from $\mathbf{B} = \sum w_i \mathbf{b}_i \mathbf{r}_i^\top$. The eigenvector of $\mathbf{K}$ with the largest eigenvalue is the optimal unit quaternion $\hat{\mathbf{q}}_b^e$. The $3\times 3$ attitude covariance retains the anisotropic centroid covariance $\boldsymbol{\Sigma}_{\mathbf{c},i}$ projected through the pinhole and lens-distortion Jacobian.
+Given $N$ matched body unit vectors $\mathbf{b}_i$ and ECEF reference unit vectors $\mathbf{r}_i$ with weights $w_i = 1/\sigma_i^2$, `solve_attitude` constructs the $4\times 4$ Davenport matrix $\mathbf{K}$ from $\mathbf{B} = \sum w_i \mathbf{b}_i \mathbf{r}_i^\top$ (`[Davenport1968]`). The eigenvector of $\mathbf{K}$ with the largest eigenvalue is the optimal unit quaternion $\hat{\mathbf{q}}_b^e$. The $3\times 3$ attitude covariance retains the anisotropic centroid covariance $\boldsymbol{\Sigma}_{\mathbf{c},i}$ projected through the pinhole and lens-distortion Jacobian.
 
 ### Stage 4: 2-DOF tangent-plane `LineOfSight` measurement model
 

@@ -43,7 +43,7 @@ Instead of warping the live oblique image onto a flat plane (which fails over 3D
 
 ### Stage 3: Semantic occlusion and propeller masking (`navigate-match::segment`)
 
-For visible-band frames, `navigate-match::segment` runs a 4-class `SegFormer-B0` hierarchical vision transformer trained in pure Rust on `burn`:
+For visible-band frames, `navigate-match::segment` runs a 4-class `SegFormer-B0` (`[Xie2021]`) hierarchical vision transformer trained in pure Rust on `burn`:
 
 - Class `0` (`sky`), Class `2` (`airframe`), and Class `3` (`propeller`) are masked to `0`.
 - Only Class `1` (`ground`) pixels (`255`) pass to the feature matcher.
@@ -56,10 +56,10 @@ For visible-band frames, `navigate-match::segment` runs a 4-class `SegFormer-B0`
 
 | Model | Role in `Navigate` | Key algorithmic properties |
 |---|---|---|
-| `LoFTR` | High-accuracy detector-free dense matching | Coarse $1/8$-scale ResNet + Linear Transformer self/cross-attention, followed by $1/2$-scale correlation refinement |
-| `XFeat` | High-speed sparse keypoint & descriptor extraction | Featherweight CNN architecture designed for real-time 30 Hz flight corridor tracking (`XFeatRuntime`) |
-| `LighterGlue` | Learned sparse graph matching | Attentional graph neural network over `XFeat` keypoints with adaptive token bucketing (`StaticMatcherShape`) and confidence early exit |
-| `Dinov2` | Coarse global place recognition | ViT-S/14 vision transformer whose patch and CLS tokens index large geographic regions in `navigate-locate::place` |
+| `LoFTR` (`[Sun2021]`) | High-accuracy detector-free dense matching | Coarse $1/8$-scale ResNet + Linear Transformer self/cross-attention, followed by $1/2$-scale correlation refinement |
+| `XFeat` (`[Potje2024]`) | High-speed sparse keypoint & descriptor extraction | Featherweight CNN architecture designed for real-time 30 Hz flight corridor tracking (`XFeatRuntime`) |
+| `LighterGlue` (`[Lindenberger2023]`) | Learned sparse graph matching | Attentional graph neural network over `XFeat` keypoints with adaptive token bucketing (`StaticMatcherShape`) and confidence early exit |
+| `Dinov2` (`[Oquab2024]`) | Coarse global place recognition | ViT-S/14 vision transformer whose patch and CLS tokens index large geographic regions in `navigate-locate::place` |
 
 ### Stage 5: Precomputed Kashin reference banks (`navigate-match::kashin`)
 

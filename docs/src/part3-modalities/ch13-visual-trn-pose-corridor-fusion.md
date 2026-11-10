@@ -20,11 +20,14 @@ Even with learned transformers (`LoFTR` or `LighterGlue`), 20% to 60% of corresp
 
 ### Robust `L1-GNC` PnP and spatial holdout (`navigate-visual::pose_solver`, `holdout_pnp`)
 
-Given 3D reference points $\mathbf{P}_i$ and normalized camera rays $\bar{\mathbf{u}}_i$, `solve_pose_l1_gnc` minimizes the robust reprojection cost over $(\mathbf{R}, \mathbf{t}) \in SE(3)$:
+Given 3D reference points $\mathbf{P}_i$ and normalized camera rays $\bar{\mathbf{u}}_i$, `solve_pose_l1_gnc` minimizes the robust reprojection cost over $(\mathbf{R}, \mathbf{t}) \in SE(3)$ (`[Yang2020]`):
 
 $$\min_{\mathbf{R} \in SO(3),\, \mathbf{t} \in \mathbb{R}^3} \sum_{i=1}^N \rho_\mu\!\left(\|\pi(\mathbf{R}^\top(\mathbf{P}_i - \mathbf{t})) - \bar{\mathbf{u}}_i\|\right)$$
 
-where $\rho_\mu(\cdot)$ is a surrogate penalty parameterized by a continuation parameter $\mu$. Starting from a convex $L_1$/Huber surrogate that admits a global optimum without random seeds, `solve_pose_l1_gnc` gradually tightens $\mu$ via iteratively reweighted Gauss–Newton steps on the $se(3)$ Lie algebra until hard outliers receive zero weight.
+where $\rho_\mu(\cdot)$ is a surrogate penalty parameterized by a continuation parameter $\mu$. Because perspective projection over $(\mathbf{R}, \mathbf{t}) \in SE(3)$ is non-convex, a residual-convex loss does not guarantee a global optimum over arbitrary attitudes. Instead, `solve_pose_l1_gnc` initializes at a bounded `PosePrior` (whose uncertainty lies within the convergence basin of the local tangent linearization) and executes a two-stage deterministic schedule without random RANSAC sampling:
+
+1. **Stage 1 (Smoothed-$L_1$ IRLS, `WeightKernel::L1`):** Runs iteratively reweighted Gauss–Newton updates on $\mathfrak{se}(3)$ with the residual-convex smoothed-$L_1$ weight $w_i = 1 / \sqrt{r_i^2 + \epsilon^2}$ to pull the pose toward the inlier consensus from the `PosePrior`.
+2. **Stage 2 (Graduated Non-Convexity, `WeightKernel::Gnc` and `WeightKernel::Tls`):** Tightens the continuation parameter $\mu$ across outer iterations until residuals above the truncated least-squares threshold receive exact zero weight, while enforcing bounded rotation and translation gates relative to `PosePrior`.
 
 To prevent overfitting to a single local cluster of features, `MaskAwareSpatialHoldout` partitions the valid image domain into spatial sectors, fits the pose on training sectors, and verifies reprojection error on held-out sectors. If the matched rays span too narrow a solid angle (`QueryRayDomain`), the solver rejects the frame rather than emitting an ill-conditioned pose.
 
@@ -53,11 +56,17 @@ flowchart TD
 
 ## 3. Entering the fusion filter (`fusion_bridge`)
 
-The visual covariance $\boldsymbol{\Sigma}_{\text{geom}}$ from PnP reflects only pixel noise and ray geometry; it does **not** include DEM registration errors, orthophoto rectification shifts, or camera-to-IMU mount misalignment (ADR-0007).
+The visual covariance $\boldsymbol{\Sigma}_{\text{solver}}$ from PnP reflects only pixel noise and ray geometry; it does **not** include DEM registration errors, orthophoto rectification shifts, or camera-to-IMU mount misalignment (ADR-0007).
 
-`navigate_visual::fusion_bridge` transforms the pose from its `LocalFrame` (Web Mercator up to $85^\circ$ latitude, or pole-free `LocalFrame::BodyTangentEnu` at all latitudes up to $90^\circ$ on the Earth, the Moon, and Mars, ADR-0020) into the body-fixed frame of the planet and inflates the covariance with the declared map and mount error budgets:
+Because systematic errors—horizontal map registration $e_{\text{map},h}$, vertical DEM datum error $e_{\text{map},v}$, mount calibration $e_{\text{cal}}$, projection geometry approximation $e_{\text{geom}}$, and tie-point disparity $e_{\text{disp}}$—are coherent and can correlate constructively, summing their variances directly would underestimate the true error when biases align. Instead, `VisualErrorBudget::variances_m2` bounds the systematic budget in the local tangent frame (`LocalFrame`) using the **squared sum of RMS allowances** (the worst-case positive correlation bound):
 
-$$\boldsymbol{\Sigma}_{\text{total}} = \boldsymbol{\Sigma}_{\text{geom}} + \boldsymbol{\Sigma}_{\text{map}} + \boldsymbol{\Sigma}_{\text{mount}}$$
+$$\sigma_{h,\text{budget}}^2 = \left(e_{\text{map},h} + e_{\text{cal}} + e_{\text{geom}} + e_{\text{disp}}\right)^2, \qquad \sigma_{v,\text{budget}}^2 = \left(e_{\text{map},v} + e_{\text{cal}} + e_{\text{geom}} + e_{\text{disp}}\right)^2$$
+
+In the common local tangent frame (Web Mercator up to $85^\circ$ latitude, or pole-free `LocalFrame::BodyTangentEnu` up to $90^\circ$ on the Earth, the Moon, and Mars, ADR-0020), `navigate_visual::fusion_bridge` adds $\boldsymbol{\Sigma}_{\text{budget}} = \operatorname{diag}(\sigma_{h,\text{budget}}^2, \sigma_{h,\text{budget}}^2, \sigma_{v,\text{budget}}^2)$ to the solver's geometric covariance $\boldsymbol{\Sigma}_{\text{solver}}$ and maps the combined covariance into the planet-fixed frame via the frame Jacobian $\mathbf{J}$:
+
+$$\boldsymbol{\Sigma}_{\text{frame}} = \mathbf{J}\left(\boldsymbol{\Sigma}_{\text{solver}} + \boldsymbol{\Sigma}_{\text{budget}}\right)\mathbf{J}^\top$$
+
+To limit temporal autocorrelation when the aircraft views the same terrain patch across consecutive frames, `EvidenceIndependence` tracks spatial cell visitation and baseline travel before crediting independent visual fixes.
 
 The bridge emits either:
 
