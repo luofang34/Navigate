@@ -1,7 +1,7 @@
 [book]
 title = "Navigate: Principles and Architecture of Modern Integrated Navigation"
 authors = ["Fang Luo (Sokoly Research)"]
-description = "A textbook on modern state-of-the-art navigation and guidance methods, and the engineering manual for the Navigate workspace."
+description = "An introduction to modern integrated navigation and guidance methods, and the engineering manual for the Navigate workspace."
 language = "en"
 src = "src"
 

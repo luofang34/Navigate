@@ -8,7 +8,7 @@
 
 This book has two purposes:
 
-1. It is a textbook on modern state-of-the-art (SOTA) integrated navigation and guidance methods.
+1. Introduction of modern integrated navigation and guidance methods.
 2. It is the engineering manual for the [`Navigate`](https://github.com/luofang34/Navigate) Rust workspace.
 
 ## Technical names
@@ -19,18 +19,19 @@ This book has two purposes:
 - **Integrity** is a measure of the trust that a guidance law or an operator can place in the correctness of a navigation solution.
 - A **sans-IO core** is a deterministic software module that performs no input/output (I/O) and reads no system clock.
 
-## Why this book connects theory and code
+## Connecting navigation theory and implementation
 
-Many navigation textbooks present ideal Kalman filter equations under Gaussian white noise. Real vehicles operate in harder conditions:
+Ideal filter equations assume stationary Gaussian noise and continuous sensor availability. In practice, a vehicle navigation system operates under physical and environmental constraints:
 
-- Global Navigation Satellite System (GNSS) signals experience multipath interference, jamming, and spoofing.
-- Inertial Measurement Units (IMUs) drift without bound because of sensor biases and gravity model errors.
-- Camera frames and geophysical map measurements arrive after newer IMU samples.
-- Geophysical and terrain maps contain flat regions with zero gradient and ambiguous regions with multiple matching locations.
-- Cascaded estimators create hidden statistical correlations when one filter consumes the output of another filter.
-- Long-range aircraft and spacecraft cross the geographic poles and move between planetary reference frames.
+- Global Navigation Satellite System (GNSS) signals experience multipath interference, radio-frequency jamming, and spoofing.
+- Inertial Measurement Units (IMUs) drift over time because of sensor biases and gravity model errors.
+- Optical and star cameras become unavailable in clouds, fog, precipitation, smoke, or featureless terrain, and thermal infrared contrast degrades during rain or diurnal thermal crossover.
+- Camera frames and geophysical map measurements arrive with processing latency after newer IMU samples.
+- Geophysical and terrain maps contain flat regions with weak gradients and repetitive regions with multiple matching locations.
+- Cascaded estimators create statistical correlations when one filter consumes the output of another filter.
+- Long-range vehicles cross the geographic poles and move between planetary reference frames.
 
-`Navigate` addresses each of these physical problems directly in its type system and filter architecture. Every equation in this book maps to a module in the workspace. Every admission gate and failure mode maps to a variant in `RejectionReason` or `GuidanceRefusal`.
+This book connects these physical models and failure conditions to the types, admission checks, and modules in the `Navigate` workspace. Equations in the text correspond to modules in the repository, and admission gates map to variants in `RejectionReason` or `GuidanceRefusal`.
 
 ## Structure of the book
 
@@ -53,8 +54,7 @@ Many navigation textbooks present ideal Kalman filter equations under Gaussian w
   institution  = {Sokoly Research},
   title        = {Navigate: Principles and Architecture of Modern Integrated Navigation},
   year         = {2026},
-  note         = {Work in progress, licensed under CC BY-SA 4.0},
-  url          = {https://luofang34.github.io/Navigate/}
+  note         = {Work in progress, licensed under CC BY-SA 4.0}
 }
 ```
 

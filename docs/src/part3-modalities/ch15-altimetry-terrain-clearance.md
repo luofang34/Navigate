@@ -11,7 +11,7 @@ Vertical channel stability is critical in inertial navigation because the vertic
 
 ## 1. The physical problem: Curvature, pressure drift, and beam inclination
 
-Simple altimeter implementations make three dangerous approximations:
+Altimeter measurement models must account for three physical effects:
 
 1. **Flat-plane altitude error:** In a local tangent plane, the plane's $-p_D$ coordinate diverges from ellipsoidal height $h$ by $\Delta h \approx d^2 / (2R_e)$ as distance $d$ from the origin grows. At $d = 50\text{ km}$ on the Earth, $-p_D$ is in error by $196\text{ m}$ (ADR-0012).
 2. **Isobaric drift:** A barometric altimeter measures static pressure, not geometric height. Weather fronts shift isobaric surfaces by hundreds of meters.

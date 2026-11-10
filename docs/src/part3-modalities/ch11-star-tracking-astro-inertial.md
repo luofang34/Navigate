@@ -68,9 +68,11 @@ In `InertialNavigationFilter`, a 3D unit vector $\mathbf{u}_b$ has only two degr
 
 $$\mathbf{y} = \mathbf{B}^\top \mathbf{u}_{b,\text{meas}} \in \mathbb{R}^2, \qquad \mathbf{H}_{\theta} = \mathbf{B}^\top [\hat{\mathbf{u}}_b\times] \in \mathbb{R}^{2\times 3}, \qquad \mathbf{R} = \sigma^2 \mathbf{I}_2$$
 
-## 3. Pathologies, integrity, and mode switching (`StarTracker`)
+## 3. Pathologies, weather outages, and mode switching (`StarTracker`)
 
-If the filter's attitude prior drifts during a cloud outage, a naive prior-aided tracker never recovers because true stars fall outside its projection gate. `StarTracker` prevents prior lock-out with automatic mode switching: it uses `IdentifyMode::Prior` only while holding a valid lock (`TrackerLock`) with a narrow prior radius, and drops back to `IdentifyMode::LostInSpace` at startup, whenever the prior exceeds `max_prior_radius_rad`, or after `max_lost_frames` consecutive failed frames.
+Within an atmosphere, cloud cover, fog, precipitation, and daytime Rayleigh sky background below the stratosphere block star sightings completely. During such environmental outages, the star tracker produces no valid pyramid or prior match, and the inertial filter coasts on IMU mechanization or other aiding sensors while observation silence degrades integrity honestly.
+
+When the sky clears after an outage, the filter's attitude prior may have drifted outside the narrow projection gate of a prior-aided tracker. `StarTracker` prevents prior lock-out with automatic mode switching: it uses `IdentifyMode::Prior` only while holding a valid lock (`TrackerLock`) with a narrow prior radius, and drops back to `IdentifyMode::LostInSpace` at startup, whenever the prior exceeds `max_prior_radius_rad`, or after `max_lost_frames` consecutive failed frames.
 
 ## 4. Implementation in `Navigate`
 

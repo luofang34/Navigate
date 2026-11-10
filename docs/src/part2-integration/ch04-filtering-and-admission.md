@@ -25,7 +25,7 @@ When a measurement $\mathbf{z}_k \in \mathbb{R}^m$ with linearized Jacobian $\ma
 
 $$\begin{aligned} \mathbf{y}_k &= \mathbf{z}_k - \mathbf{h}(\hat{\mathbf{x}}_k^-) \\ \mathbf{S}_k &= \mathbf{H}_k \mathbf{P}_k^- \mathbf{H}_k^\top + \mathbf{R}_k \\ \mathbf{K}_k &= \mathbf{P}_k^- \mathbf{H}_k^\top \mathbf{S}_k^{-1} \end{aligned}$$
 
-Standard textbook implementations update the covariance with $(\mathbf{I} - \mathbf{K}_k\mathbf{H}_k)\mathbf{P}_k^-$, which can lose symmetry and positive definiteness under finite-precision floating-point arithmetic. `navigate-fusion` uses the symmetric Joseph stabilized form:
+The short covariance update $(\mathbf{I} - \mathbf{K}_k\mathbf{H}_k)\mathbf{P}_k^-$ can lose symmetry and positive definiteness under finite-precision floating-point arithmetic. `navigate-fusion` uses the symmetric Joseph stabilized form:
 
 $$\mathbf{P}_k^+ = (\mathbf{I} - \mathbf{K}_k\mathbf{H}_k)\mathbf{P}_k^-(\mathbf{I} - \mathbf{K}_k\mathbf{H}_k)^\top + \mathbf{K}_k \mathbf{R}_k \mathbf{K}_k^\top$$
 

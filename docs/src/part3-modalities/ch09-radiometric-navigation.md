@@ -8,6 +8,7 @@ Radiometric navigation determines position, velocity, and time by measuring the 
 - **Pseudorange rate** $\dot{\rho}$ is the time derivative of pseudorange, corrupted by the frequency drift of the receiver oscillator.
 - **Two-way range** is a round-trip range measurement from a ground station to a spacecraft transponder and back, which cancels the vehicle clock offset.
 - **Shapiro delay** $\Delta\rho_{\text{Shapiro}}$ is the relativistic extra light travel path caused by the gravitational potential of a massive body such as the Sun.
+- **Controlled Reception Pattern Antenna (CRPA)** is a multi-element antenna array that adjusts the phase and amplitude weights of its elements to form spatial nulls toward radio-frequency interference (jammers) and gain beams toward satellites.
 
 ## 1. The physical problem and observability
 
@@ -69,3 +70,22 @@ Radiometric models live in `crates/navigate-fusion/src/inertial/radiometric.rs` 
 - `ObservationValue::PseudorangeRate { emitter_position_m, emitter_velocity_mps, pseudorange_rate_mps, variance_mps2 }`
 - `ObservationValue::TwoWayRange { tx_position_m, rx_position_m, shapiro_body, round_trip_range_m, turnaround_delay_m, variance_m2 }`
 - `ObservationValue::TwoWayRangeRate { tx_position_m, tx_velocity_mps, rx_position_m, rx_velocity_mps, round_trip_range_rate_mps, variance_mps2 }`
+
+## 5. Stub: Controlled Reception Pattern Antennas (CRPA) and Array Anti-Jam Coupling
+
+> **Stub notice:** This section is a stub reserved for future multi-element antenna array, anti-jamming, and angle-of-arrival spoofing-detection models.
+
+Received GNSS signal power at the Earth's surface is approximately $-160\text{ dBW}$, which is below the thermal noise floor. Even a low-power terrestrial jammer can saturate a fixed-pattern single-element antenna across tens of kilometers. A **Controlled Reception Pattern Antenna (CRPA)** uses an array of $M$ antenna elements (typically $M = 4$ to $16$) with Space-Time Adaptive Processing (STAP) or Space-Frequency Adaptive Processing (SFAP) to suppress interference and verify signal authenticity.
+
+### Planned coupling seams with `InertialNavigationFilter`
+
+1. **INS-aided spatial null steering and beam forming:**
+   For a wave arriving along unit vector $\mathbf{u}_b = -\mathbf{C}_f^b \mathbf{u}_f$ in body FRD axes and element positions $\mathbf{d}_m$ ($m = 1, \dots, M$) on the airframe, the narrowband array manifold vector at carrier wavelength $\lambda$ is:
+
+   $$\mathbf{a}(\mathbf{u}_b) = \begin{bmatrix} \exp\!\bigl(-j\frac{2\pi}{\lambda}\mathbf{d}_1^\top \mathbf{u}_b\bigr) & \cdots & \exp\!\bigl(-j\frac{2\pi}{\lambda}\mathbf{d}_M^\top \mathbf{u}_b\bigr) \end{bmatrix}^\top \in \mathbb{C}^M$$
+
+   Minimum Variance Distortionless Response (MVDR / Capon) beamforming computes complex weights $\mathbf{w} = \mathbf{R}_{xx}^{-1}\mathbf{a}(\mathbf{u}_b) / \bigl(\mathbf{a}^H(\mathbf{u}_b)\mathbf{R}_{xx}^{-1}\mathbf{a}(\mathbf{u}_b)\bigr)$ from the sample spatial covariance $\mathbf{R}_{xx}$. During rapid vehicle roll or pitch maneuvers, jammers move across the body frame faster than $\mathbf{R}_{xx}$ can average. Rotating the null constraints with the high-rate INS attitude increment $\Delta\tilde{\boldsymbol{\theta}}$ keeps spatial nulls locked onto interference sources throughout dynamic maneuvers.
+2. **Direction-of-Arrival (DoA) spoofing discrimination:**
+   A meaconing or multi-channel spoofing transmitter radiates several counterfeit satellite signals from a single physical direction. While a single antenna is blind to signal arrival angle, a calibrated CRPA estimates the measured arrival direction $\hat{\mathbf{u}}_{b,\text{DoA}}$ from element carrier-phase differences. Comparing $\hat{\mathbf{u}}_{b,\text{DoA}}$ against the predicted ephemeris direction $-\hat{\mathbf{C}}_f^b \mathbf{u}_f$ (and checking for multiple PRNs sharing one arrival vector) provides a pre-admission spoofing gate before pseudoranges enter the Kalman update.
+3. **Adaptive array group-delay and phase-center bias compensation:**
+   Space-time adaptive tap weights $\mathbf{w}(\omega)$ alter the effective antenna phase center and introduce direction-dependent code group delays $\Delta\rho_{\text{CRPA}}(\mathbf{u}_b, \mathbf{w})$ of several nanoseconds (meters). In the `Navigate` measurement contract, calibrated array group-delay corrections enter `sagnac_and_media_correction_m`, while residual uncalibrated array distortion inflates `variance_m2` based on the measured jammer-to-signal ratio ($J/S$).

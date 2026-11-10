@@ -11,14 +11,15 @@ Terrain-Relative Navigation (TRN) determines absolute vehicle position and attit
 - **Detector-free matching** (`LoFTR`) matches dense image grids with self- and cross-attention transformers without requiring discrete keypoint corners.
 - **Sparse learned matching** (`XFeat` + `LighterGlue`) extracts lightweight CNN keypoints and descriptors (`XFeat`) and matches them with an adaptive early-exit graph transformer (`LighterGlue`).
 
-## 1. The physical problem: Day/night appearance invariance and occlusions
+## 1. The physical problem: Day/night appearance invariance, weather, and occlusions
 
-To match a live airborne or spacecraft frame against a satellite reference map, the front-end pipeline must overcome four physical discrepancies:
+To match a live airborne or spacecraft frame against a satellite reference map, the front-end pipeline must account for five physical and environmental factors:
 
-1. **Perspective and terrain relief distortion:** An oblique camera looking at mountainous terrain sees foreshortened slopes and occluded valleys that differ from a nadir satellite map.
-2. **Dynamic occluders:** An aircraft camera often sees the nose cone, wing struts, or a spinning propeller in the lower field of view, and sky or clouds above the horizon. Matching airframe pixels across frames biases visual odometry toward zero motion; matching clouds to ground texture produces gross position outliers.
-3. **Spectral shift (Visible vs. LWIR thermal):** At night, a Long-Wave Infrared (LWIR, $8\text{–}14\,\mu\text{m}$) sensor records 16-bit thermal radiance counts (`Pixels::Gray16`). Thermal contrast reverses between day and night.
-4. **Hardware heterogeneity:** The same matching code must run deterministically on embedded NPUs, native GPUs (Vulkan, Metal, CUDA), and browser WebGPU/WebNN workers.
+1. **Weather and surface unavailability:** Overcast cloud decks below the vehicle, fog, heavy rain, snow-covered plains, and open water obscure or erase ground texture. In LWIR thermal imagery, prolonged rain or diurnal thermal crossover reduces ground emissivity contrast to near zero. When valid ground pixels or feature matches fall below minimum thresholds, the pipeline must reject the frame cleanly rather than emit a false fix.
+2. **Perspective and terrain relief distortion:** An oblique camera looking at mountainous terrain sees foreshortened slopes and occluded valleys that differ from a nadir satellite map.
+3. **Dynamic occluders:** An aircraft camera often sees the nose cone, wing struts, or a spinning propeller in the lower field of view, and sky or clouds above the horizon. Matching airframe pixels across frames biases visual odometry toward zero motion; matching clouds to ground texture produces gross position outliers.
+4. **Spectral shift (Visible vs. LWIR thermal):** At night, a Long-Wave Infrared (LWIR, $8\text{–}14\,\mu\text{m}$) sensor records 16-bit thermal radiance counts (`Pixels::Gray16`). Thermal contrast can reverse between day and night.
+5. **Hardware heterogeneity:** The same matching code must run deterministically on embedded NPUs, native GPUs (Vulkan, Metal, CUDA), and browser WebGPU/WebNN workers.
 
 ## 2. Mathematical and algorithmic pipeline
 

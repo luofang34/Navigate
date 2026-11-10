@@ -1,6 +1,6 @@
 # Chapter 2: Reference Frames, Time Scales, and Multi-Body Geodesy
 
-A navigation equation has meaning only when its reference frame, its coordinate time scale, and its reference surface are explicit. Many legacy navigation systems hardcode the Earth WGS84 ellipsoid and break near the geographic poles. `Navigate` defines explicit frames, physical time scales, and pole-free ellipsoidal geodesy for any planetary body (ADR-0013, ADR-0015, ADR-0017).
+A navigation equation has meaning only when its reference frame, its coordinate time scale, and its reference surface are explicit. Single-body implementations often assume the Earth WGS84 ellipsoid and have coordinate singularities near the geographic poles. `Navigate` defines explicit frames, physical time scales, and pole-free ellipsoidal geodesy for any planetary body (ADR-0013, ADR-0015, ADR-0017).
 
 ## Technical names
 
@@ -12,7 +12,7 @@ A navigation equation has meaning only when its reference frame, its coordinate 
 
 ## Coordinate frames in `Navigate`
 
- integrated navigation across planetary surfaces and cislunar space uses four primary coordinate triads:
+Integrated navigation across planetary surfaces and cislunar space uses four primary coordinate triads:
 
 | Frame | Origin | Axes | Primary crate and type |
 |---|---|---|---|
@@ -23,7 +23,7 @@ A navigation equation has meaning only when its reference frame, its coordinate 
 
 ## Pole-free local axes
 
-Standard textbook equations often compute meridian and prime-vertical curvature rates with terms proportional to $\tan\varphi$ or $\sec\varphi = 1/\cos\varphi$. Those equations divide by zero at $\varphi = \pm 90^\circ$.
+Spherical-coordinate mechanization equations often compute meridian and prime-vertical curvature rates with terms proportional to $\tan\varphi$ or $\sec\varphi = 1/\cos\varphi$. Those equations divide by zero at $\varphi = \pm 90^\circ$.
 
 In `Navigate`, the inertial filter stores its state in the body-centered Cartesian frame (`InertialNavigationFilter`, ADR-0017). Local NED axes are constructed directly from trigonometric functions of $(\varphi, \lambda)$ without dividing by $\cos\varphi$:
 
