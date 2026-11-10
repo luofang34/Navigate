@@ -4807,6 +4807,7 @@ dependencies = [
  "flamsteed",
  "hifitime",
  "nalgebra 0.35.0",
+ "navigate-astrodynamics",
  "navigate-contract",
  "navigate-geodesy",
  "serde_json",

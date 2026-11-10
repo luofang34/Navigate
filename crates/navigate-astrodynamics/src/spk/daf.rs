@@ -1,4 +1,9 @@
-//! Binary NAIF Double Precision Array File (`DAF/SPK`) container and Chebyshev evaluation.
+//! Binary NAIF Double Precision Array File (`DAF/SPK`) container parsing.
+
+use std::string::String;
+use std::vec::Vec;
+
+use super::chebyshev::ChebyshevError;
 
 const RECORD_BYTES: usize = 1024;
 const DOUBLES_PER_RECORD: usize = 128;
@@ -66,6 +71,9 @@ pub enum SpkError {
     /// A Chebyshev record has an invalid radius or coefficient count.
     #[error("invalid Chebyshev record in segment `{0}`")]
     InvalidChebyshevRecord(String),
+    /// Underlying Chebyshev evaluation failed.
+    #[error("Chebyshev evaluation error: {0}")]
+    Chebyshev(#[from] ChebyshevError),
     /// No segment chain connects `target` to `center`.
     #[error("no SPK segment chain connects NAIF body {target} to {center}")]
     UnconnectedBodies {
@@ -210,7 +218,7 @@ impl<'a> DafContainer<'a> {
         let name = self
             .bytes
             .get(n_off..n_off.wrapping_add(entry_bytes))
-            .map(|s| String::from_utf8_lossy(s).trim().to_owned())
+            .map(|s| String::from(String::from_utf8_lossy(s).trim()))
             .unwrap_or_default();
         Ok(RawDafSummary { name, dc, ic })
     }
@@ -271,7 +279,7 @@ fn detect_endian(bytes: &[u8]) -> Result<DafEndian, SpkError> {
     if (1..=124).contains(&nd_be) {
         return Ok(DafEndian::Big);
     }
-    Err(SpkError::UnsupportedBinaryFormat(trimmed.to_owned()))
+    Err(SpkError::UnsupportedBinaryFormat(String::from(trimmed)))
 }
 
 fn read_i32(bytes: &[u8], offset: usize, endian: DafEndian) -> Result<i32, SpkError> {
@@ -300,47 +308,4 @@ fn read_f64(bytes: &[u8], offset: usize, endian: DafEndian) -> Result<f64, SpkEr
         DafEndian::Little => f64::from_le_bytes(arr),
         DafEndian::Big => f64::from_be_bytes(arr),
     })
-}
-
-pub(super) fn eval_chebyshev_pv(
-    coeffs: &[f64],
-    mid_s: f64,
-    radius_s: f64,
-    t_s: f64,
-) -> Option<(f64, f64)> {
-    if !radius_s.is_finite() || radius_s <= 0.0 {
-        return None;
-    }
-    let &c0 = coeffs.first()?;
-    let tau_raw = (t_s - mid_s) / radius_s;
-    if !tau_raw.is_finite() || tau_raw.abs() > 1.0 + 1e-9 {
-        return None;
-    }
-    let tau = tau_raw.clamp(-1.0, 1.0);
-    if coeffs.len() == 1 {
-        return Some((c0, 0.0));
-    }
-    let two_tau = 2.0 * tau;
-    let mut t_prev2 = 1.0_f64;
-    let mut t_prev1 = tau;
-    let mut dt_prev2 = 0.0_f64;
-    let mut dt_prev1 = 1.0_f64;
-
-    let c1 = coeffs.get(1).copied().unwrap_or(0.0);
-    let mut sum_p = c1 * t_prev1 + c0;
-    let mut sum_dp = c1;
-
-    let mut k = 2_usize;
-    while let Some(&ck) = coeffs.get(k) {
-        let tk = two_tau * t_prev1 - t_prev2;
-        let dtk = two_tau * dt_prev1 + 2.0 * t_prev1 - dt_prev2;
-        sum_p += ck * tk;
-        sum_dp += ck * dtk;
-        t_prev2 = t_prev1;
-        t_prev1 = tk;
-        dt_prev2 = dt_prev1;
-        dt_prev1 = dtk;
-        k = k.wrapping_add(1);
-    }
-    Some((sum_p, sum_dp / radius_s))
 }
