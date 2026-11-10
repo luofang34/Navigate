@@ -29,6 +29,7 @@ mod earth_rotation;
 mod error;
 mod observation;
 mod precession;
+mod spk;
 mod stars;
 mod state;
 mod time_bridge;
@@ -38,12 +39,14 @@ pub use analytic::{AnalyticEphemeris, AnalyticError};
 pub use anise_adapter::{AniseEphemeris, AniseError};
 pub use delta_t::{CivilTime, DeltaT, DeltaTBasis, civil_time, delta_t};
 pub use earth_fixed::{
-    EarthFixedSight, SubsolarPoint, moon_ecef, moon_ecef_tt, subsolar_point, sun_ecef, sun_ecef_tt,
+    EarthFixedSight, SubsolarPoint, moon_ecef, moon_ecef_tt, moon_ecef_tt_with, moon_ecef_with,
+    subsolar_point, sun_ecef, sun_ecef_tt, sun_ecef_tt_with, sun_ecef_with,
 };
 pub use error::ObservationError;
 pub use hifitime::{Duration, Epoch, TimeScale};
 pub use navigate_contract::FrameId;
 pub use observation::{Correction, Sight, observe_body};
+pub use spk::{DafEndian, SpkDataType, SpkEphemeris, SpkError, SpkFile, SpkSegment};
 pub use stars::{StarSight, stars_ecef, stars_ecef_tt, stars_ecef_tt_into};
 pub use state::{Ephemeris, State};
 pub use time_bridge::{
