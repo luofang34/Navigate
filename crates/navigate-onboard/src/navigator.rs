@@ -7,7 +7,6 @@ use navigate_contract::{
 
 use core::any::Any;
 
-use navigate_data::product::{KindName, ProductKind, ProductUse};
 use navigate_data::{LayerKind, Sha256Digest};
 
 use crate::{AcceptanceSink, OnboardError, SensorInput, SensorSuite};
@@ -26,8 +25,9 @@ pub enum Need {
 pub struct DataRequirement {
     /// A core layer kind, or `None` for a product requirement.
     pub layer: Option<LayerKind>,
-    /// A product kind, or `None` for a layer requirement.
-    pub product: Option<ProductKind>,
+    /// A product kind by its name in the product format (for example
+    /// `keyframes`), or `None` for a layer requirement.
+    pub product: Option<&'static str>,
     /// Altitude bands that the navigator can use, inclusive, or `None` for
     /// any band.
     pub altitude_bands: Option<(u32, u32)>,
@@ -35,11 +35,23 @@ pub struct DataRequirement {
     pub need: Need,
 }
 
+/// What a navigator does with one product chunk at load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductUse {
+    /// The navigator uses the chunk.
+    Use,
+    /// The navigator does not use the chunk and falls back to another
+    /// representation, for the stated reason.
+    Fallback(String),
+    /// The navigator refuses the chunk, for the stated reason.
+    Refusal(String),
+}
+
 /// What a navigator did with one product chunk at load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductReport {
-    /// The kind of the chunk.
-    pub kind: KindName,
+    /// The kind of the chunk, by its name in the product format.
+    pub kind: String,
     /// The chunk digest.
     pub chunk: Sha256Digest,
     /// Use, fallback, or refusal, with the reason.
