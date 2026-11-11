@@ -1,4 +1,5 @@
 mod baro_consistency;
+mod baro_maneuver;
 mod checkpoints;
 mod coast;
 mod deep_space;

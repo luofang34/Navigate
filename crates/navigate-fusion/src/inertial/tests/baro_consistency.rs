@@ -39,19 +39,23 @@ const HORIZONTAL_SIGMA_M: f64 = 800.0;
 /// alignment.
 const ATTITUDE_SIGMA_RAD: f64 = 1e-3;
 
+/// SplitMix64 finalizer: independent bits for each input.
+fn mix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// A standard normal draw for one seed and one index: Box–Muller over
-/// two uniform hashes.
+/// two SplitMix64 uniforms.
 fn gauss(seed: u32, index: u32) -> f64 {
-    let uniform = |j: u32| {
-        let hash = seed
-            .wrapping_mul(7_919)
-            .wrapping_add(j)
-            .wrapping_mul(2_654_435_761)
-            .wrapping_add(0x9E37_79B9)
-            >> 8;
-        (f64::from(hash) + 0.5) / f64::from(1_u32 << 24)
+    let uniform = |j: u64| {
+        let bits = mix((u64::from(seed) << 40) ^ j) >> 11;
+        (bits as f64 + 0.5) / (1_u64 << 53) as f64
     };
-    let (a, b) = (uniform(2 * index), uniform(2 * index + 1));
+    let j = u64::from(index) * 2;
+    let (a, b) = (uniform(j), uniform(j + 1));
     (-2.0 * a.ln()).sqrt() * (core::f64::consts::TAU * b).cos()
 }
 
