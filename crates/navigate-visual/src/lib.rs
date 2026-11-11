@@ -81,7 +81,7 @@ pub use local_scene::{
     refine_calibrated_local_scene, refine_local_scene, refine_local_scene_with_gauge,
     refine_regularized_local_scene,
 };
-pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig};
+pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig, MatchEvidence};
 pub use matching::{
     AsyncImageMatcher, FeatureBackend, FeatureMetadata, ImageMatcher, PixelMatch, PointTracker,
     PyramidalMatcher,

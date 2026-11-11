@@ -48,9 +48,10 @@ pub use error::{MapRefusal, OnboardError};
 pub use navigate_fusion::ImuBiasPrior;
 pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 #[cfg(feature = "terrain-camera")]
-pub use reference::{
-    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
-    TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
+pub use reference::terrain::{
+    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, Luma, MapReport,
+    MatchPair, OfferedFix, SolvedPose, TerrainConfig, TerrainMapRequest, TerrainMatch, ViewPose,
+    WorkingCamera, WorkingLimit,
 };
 pub use reference::{NavigatorFilter, ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{

@@ -1,6 +1,8 @@
 //! One terrain camera: its declared model, the working resolution of the
 //! match, the state of its capture stream, and the steps of one frame.
 
+use std::sync::Arc;
+
 use image::GrayImage;
 use image::imageops::{FilterType, resize};
 use nalgebra::Vector3;
@@ -17,6 +19,7 @@ use navigate_visual::{
 use super::belief::{Belief, BeliefSource, Exposure, body_position};
 use super::budget::{ViewGeometry, external_covariance_ned};
 use super::config::WorkingCamera;
+use super::inspection::{Pending, TerrainMatch};
 use super::map::TerrainMap;
 use super::names::{self, rejection};
 use super::view::{NoView, Sight, Views, model};
@@ -48,6 +51,12 @@ pub(crate) struct TerrainCamera {
     working: Option<WorkingCamera>,
     /// Where the belief of the last frame came from.
     belief_source: Option<BeliefSource>,
+    /// Whether the host asked to keep what each frame did.
+    inspect: bool,
+    /// What the frame being taken made so far.
+    pending: Pending,
+    /// What the last frame did, when `inspect` is set.
+    last: Option<TerrainMatch>,
 }
 
 /// The frame of the match: the image at the size of the working camera.
@@ -121,6 +130,9 @@ impl TerrainCamera {
             ground_height_m: None,
             working: None,
             belief_source: None,
+            inspect: false,
+            pending: Pending::default(),
+            last: None,
         })
     }
 
@@ -131,6 +143,42 @@ impl TerrainCamera {
         self.ground_height_m = None;
         self.working = None;
         self.belief_source = None;
+        self.forget_match();
+    }
+
+    /// Keeps, or stops keeping, what each frame did.
+    pub(super) fn set_inspect(&mut self, on: bool) {
+        self.inspect = on;
+        self.forget_match();
+    }
+
+    /// What the last frame did, when the host asked to keep it.
+    pub(super) const fn last_match(&self) -> Option<&TerrainMatch> {
+        self.last.as_ref()
+    }
+
+    /// Drops what earlier frames made: a new frame starts.
+    pub(super) fn begin(&mut self) {
+        self.pending = Pending::default();
+    }
+
+    /// Records what the frame did, when the host asked to keep it.
+    pub(super) fn finish(
+        &mut self,
+        acquired_at: navigate_contract::MonotonicNanos,
+        outcome: crate::Outcome,
+        path: Option<&'static str>,
+    ) {
+        let pending = core::mem::take(&mut self.pending);
+        if self.inspect {
+            self.last = Some(pending.finish(acquired_at, outcome, path));
+        }
+    }
+
+    /// Drops the record: the last frame failed, or the map changed.
+    pub(super) fn forget_match(&mut self) {
+        self.pending = Pending::default();
+        self.last = None;
     }
 
     /// Where the belief of the last frame came from.
@@ -268,7 +316,19 @@ impl TerrainCamera {
             capture_time_ns: acquired,
         };
         let frame = resampled(stamp, image, &reference.working.intrinsics);
-        match self.localizer.estimate_blocking(&frame, view, &prior) {
+        // Both calls run the same match; the second also returns its pairs.
+        let estimate = if self.inspect {
+            let (estimate, evidence) = self
+                .localizer
+                .estimate_with_evidence_blocking(&frame, view, &prior);
+            let working = reference.working;
+            let view = Arc::clone(&reference.view);
+            self.pending.compared(view, frame.image, working, &evidence);
+            estimate
+        } else {
+            self.localizer.estimate_blocking(&frame, view, &prior)
+        };
+        match estimate {
             Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, (key, path))),
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain frame did not match");
@@ -286,6 +346,9 @@ impl TerrainCamera {
         view: &ReferenceView,
         (frame, path): (FrameKey, &'static str),
     ) -> Sighting {
+        if self.inspect {
+            self.pending.solved(&estimate);
+        }
         let geometry = ViewGeometry::of(&estimate, view);
         // The map error of a fix is the error of the imagery that the
         // camera saw: the cell is that of the matched ground, not of the
@@ -304,12 +367,17 @@ impl TerrainCamera {
         let external = external_covariance_ned(&map.sigmas, self.calibration_sigma_rad, &geometry);
         estimate.pose.position = body_position(&estimate.pose, &self.mount);
         match position_fix_observation_composed(&estimate, &self.identity, &external) {
-            Ok(observation) => Sighting::Fix {
-                observation: Box::new(observation),
-                cell,
-                frame,
-                path,
-            },
+            Ok(observation) => {
+                if self.inspect {
+                    self.pending.offered(&observation);
+                }
+                Sighting::Fix {
+                    observation: Box::new(observation),
+                    cell,
+                    frame,
+                    path,
+                }
+            }
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain fix was not built");
                 Sighting::Unused(names::FIX_REFUSED, Some(path))
