@@ -107,6 +107,32 @@ fn a_new_cell_takes_over_the_block_and_the_old_cell_is_refused() {
     assert!(!keyed.filter.binds_correlated_key(1));
 }
 
+#[test]
+fn a_takeover_that_the_gate_refuses_leaves_the_held_cell_intact() {
+    let mut keyed = flight::<25>(BOUND);
+    let at_ms = keyed.step();
+    let first = anchor(&keyed, &Vector3::new(1.0, -2.0, 0.5), 3, 1, at_ms);
+    assert_accepted(keyed.filter.ingest(&first, t(at_ms)));
+    let at_ms = keyed.step();
+    let before = *core(&keyed.filter);
+    // A fix of cell 2 kilometres off: the gate refuses it after its plan
+    // took over the block of cell 1.
+    let far = anchor(&keyed, &Vector3::new(4_000.0, 0.0, 0.0), 3, 2, at_ms);
+    assert!(matches!(
+        keyed.filter.ingest(&far, t(at_ms)),
+        IngestOutcome::Rejected(RejectionReason::InnovationGate { .. })
+    ));
+    assert!(keyed.filter.binds_correlated_key(1));
+    assert!(!keyed.filter.binds_correlated_key(2));
+    let after = core(&keyed.filter);
+    assert_eq!(after.p, before.p);
+    assert_eq!(after.nominal.correlated, before.nominal.correlated);
+    // Cell 1 still reads its block.
+    let at_ms = keyed.step();
+    let again = anchor(&keyed, &Vector3::new(1.0, -2.0, 0.5), 3, 1, at_ms);
+    assert_accepted(keyed.filter.ingest(&again, t(at_ms)));
+}
+
 /// The core after fixes of cell 1 at each step, and a fix of cell 2
 /// acquired at step 3, after the fix of cell 1 of that step, that
 /// arrives at step 3 or, delayed, at step 6.
