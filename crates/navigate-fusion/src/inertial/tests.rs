@@ -5,6 +5,7 @@ mod checkpoints;
 mod coast;
 mod correlated;
 mod correlated_gnss;
+mod correlated_keys;
 mod deep_space;
 mod flight_truth;
 mod frame_change;

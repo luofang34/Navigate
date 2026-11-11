@@ -57,7 +57,8 @@ where
         // goes on without it.
         Err(
             RejectionReason::CorrelatedErrorRepeated { .. }
-            | RejectionReason::CorrelatedSourceUntracked,
+            | RejectionReason::CorrelatedSourceUntracked
+            | RejectionReason::CorrelatedProcessRetired,
         ) if mode == Mode::Replay => return Ok(0.0),
         Err(reason) => return Err(reason),
     };

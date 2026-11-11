@@ -329,4 +329,15 @@ where
     pub const fn layout(&self) -> StateLayout {
         self.config.layout
     }
+
+    /// Whether a correlated-error block holds the keyed process `key`
+    /// (`CorrelatedError::with_key`). A caller that offers keyed fixes
+    /// asks this before it offers a key that had a block before: a key
+    /// that lost its block must not be offered again.
+    #[must_use]
+    pub fn binds_correlated_key(&self, key: u64) -> bool {
+        self.core
+            .as_ref()
+            .is_some_and(|core| core.correlated.binds(key))
+    }
 }

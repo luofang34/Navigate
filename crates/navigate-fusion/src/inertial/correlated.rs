@@ -82,11 +82,11 @@ impl ErrorKind {
     }
 }
 
-/// The process of one source: the source, its epoch, the kind, and the
-/// declaration of its latest fix. The source, the epoch, and the kind
-/// identify the process; a source may change its declaration from fix
-/// to fix, for example with its satellite geometry, and the process
-/// stays the same.
+/// The process of one fix: the source, its epoch, the kind, and the
+/// declaration. Without a key, the source, the epoch, and the kind
+/// identify the process; with a key, the kind and the key do. A source
+/// may change its declaration from fix to fix, for example with its
+/// satellite geometry, and the process stays the same.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Process {
     source: SourceId,
@@ -96,12 +96,28 @@ pub(crate) struct Process {
 }
 
 impl Process {
-    fn same_source(&self, other: &Self) -> bool {
-        self.source == other.source && self.kind == other.kind
+    /// Whether `other` has the owner of this process: the same kind and
+    /// key, or without keys the same kind and source. A source keeps its
+    /// block or its entry across its epochs.
+    fn same_owner(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && match (self.declared.key, other.declared.key) {
+                (Some(a), Some(b)) => a == b,
+                (None, None) => self.source == other.source,
+                _ => false,
+            }
     }
 
     fn same_process(&self, other: &Self) -> bool {
-        self.same_source(other) && self.epoch == other.epoch
+        self.same_owner(other) && (self.declared.key.is_some() || self.epoch == other.epoch)
+    }
+
+    /// The kind and the key of a constant keyed process.
+    fn constant_key(&self) -> Option<(ErrorKind, u64)> {
+        self.declared
+            .key
+            .filter(|_| self.declared.tau_s.is_infinite())
+            .map(|key| (self.kind, key))
     }
 }
 
@@ -151,6 +167,9 @@ fn released(process: &Process, last_at: MonotonicNanos, at: MonotonicNanos) -> b
 pub(crate) struct CorrelatedSources {
     blocks: [Option<Tracked>; MAX_CORRELATED_BLOCKS],
     unbound: [Option<Seen>; MAX_UNBOUND_SOURCES],
+    /// The constant keyed process that each block took over last. The
+    /// filter refuses it, because its block no longer holds its error.
+    retired: [Option<(ErrorKind, u64)>; MAX_CORRELATED_BLOCKS],
 }
 
 /// How one fix applies its correlated error.
@@ -178,6 +197,8 @@ pub(crate) enum Plan {
 pub(crate) struct Pending {
     tracked: Tracked,
     pub(crate) plan: Plan,
+    /// The constant keyed process whose block this fix takes over.
+    retires: Option<(ErrorKind, u64)>,
 }
 
 impl CorrelatedSources {
@@ -195,6 +216,11 @@ impl CorrelatedSources {
             shape,
             last_at: at,
         };
+        if let Some(key) = process.constant_key()
+            && self.retired.contains(&Some(key))
+        {
+            return Err(RejectionReason::CorrelatedProcessRetired);
+        }
         let offsets = layout.correlated();
         let bound =
             self.blocks
@@ -203,7 +229,7 @@ impl CorrelatedSources {
                 .enumerate()
                 .find_map(|(block, (slot, offset))| {
                     let current = (*slot)?;
-                    (current.process.same_source(&process) && !current.released(at))
+                    (current.process.same_owner(&process) && !current.released(at))
                         .then_some((block, offset?, current))
                 });
         if let Some((block, offset, current)) = bound {
@@ -216,7 +242,11 @@ impl CorrelatedSources {
                 kind: process.kind,
                 reset,
             };
-            return Ok(Pending { tracked, plan });
+            return Ok(Pending {
+                tracked,
+                plan,
+                retires: None,
+            });
         }
         if let Some(pending) = self.inflated(&tracked, at, false)? {
             return Ok(pending);
@@ -237,10 +267,49 @@ impl CorrelatedSources {
                 kind: process.kind,
                 reset: true,
             };
-            return Ok(Pending { tracked, plan });
+            return Ok(Pending {
+                tracked,
+                plan,
+                retires: None,
+            });
+        }
+        if let Some(pending) = self.take_over(&tracked, offsets) {
+            return Ok(pending);
         }
         self.inflated(&tracked, at, true)?
             .ok_or(RejectionReason::CorrelatedSourceUntracked)
+    }
+
+    /// The plan of a constant keyed process that takes over the block of
+    /// the constant keyed process of the same kind with the oldest last
+    /// fix, or none.
+    fn take_over(
+        &self,
+        tracked: &Tracked,
+        offsets: [Option<usize>; MAX_CORRELATED_BLOCKS],
+    ) -> Option<Pending> {
+        let (kind, _) = tracked.process.constant_key()?;
+        let (block, offset, current) = self
+            .blocks
+            .iter()
+            .zip(offsets)
+            .enumerate()
+            .filter_map(|(block, (slot, offset))| {
+                let current = (*slot)?;
+                let (held, _) = current.process.constant_key()?;
+                (held == kind).then_some((block, offset?, current))
+            })
+            .min_by_key(|(_, _, current)| current.last_at)?;
+        Some(Pending {
+            tracked: *tracked,
+            plan: Plan::Bound {
+                block,
+                offset,
+                kind,
+                reset: true,
+            },
+            retires: current.process.constant_key(),
+        })
     }
 
     /// The inflated plan of `tracked` when its source has an entry in the
@@ -256,7 +325,7 @@ impl CorrelatedSources {
         let process = tracked.process;
         let found = self.unbound.iter().enumerate().find_map(|(entry, slot)| {
             let current = (*slot)?;
-            (current.process.same_source(&process) && !current.released(at))
+            (current.process.same_owner(&process) && !current.released(at))
                 .then_some((entry, current))
         });
         let (entry, factor) = match found {
@@ -290,6 +359,7 @@ impl CorrelatedSources {
         Ok(Some(Pending {
             tracked: *tracked,
             plan,
+            retires: None,
         }))
     }
 
@@ -299,6 +369,10 @@ impl CorrelatedSources {
             Plan::Bound { block, .. } => {
                 if let Some(slot) = self.blocks.get_mut(block) {
                     *slot = Some(pending.tracked);
+                }
+                if let (Some(retired), Some(slot)) = (pending.retires, self.retired.get_mut(block))
+                {
+                    *slot = Some(retired);
                 }
             }
             Plan::Inflated { entry, .. } => {
@@ -337,6 +411,14 @@ impl CorrelatedSources {
             q_d.fixed_view_mut::<3, 3>(i, i)
                 .copy_from(&(tracked.shape * (1.0 - rho * rho)));
         }
+    }
+
+    /// Whether a block holds a keyed process with `key`.
+    pub(crate) fn binds(&self, key: u64) -> bool {
+        self.blocks
+            .iter()
+            .flatten()
+            .any(|tracked| tracked.process.declared.key == Some(key))
     }
 
     /// Rotates the position blocks and their stationary covariances by

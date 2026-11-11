@@ -29,7 +29,7 @@ const BOUND: StateLayout = StateLayout::FULL.with_correlated_blocks(1);
 
 /// A boxed flight: two filters with their histories do not fit on the
 /// stack of a test thread.
-fn flight<const N: usize>(layout: StateLayout) -> std::boxed::Box<Flight<N>>
+pub(super) fn flight<const N: usize>(layout: StateLayout) -> std::boxed::Box<Flight<N>>
 where
     Const<N>: DimMin<Const<N>, Output = Const<N>>,
 {

@@ -252,6 +252,11 @@ pub enum RejectionReason {
     /// not know.
     #[error("no block and no room to track a new correlated source")]
     CorrelatedSourceUntracked,
+    /// The keyed process of the fix lost its block to a newer process
+    /// (ADR-0023). The filter no longer holds its error, so a fix of it
+    /// would be taken as independent of the earlier fixes.
+    #[error("the correlated process lost its block")]
+    CorrelatedProcessRetired,
 }
 
 /// Per-reason rejection counters; every refusal increments exactly one.
@@ -310,6 +315,8 @@ pub struct RejectionCounters {
     pub correlated_error_repeated: u64,
     /// Refusals of a correlated source that the filter cannot track.
     pub correlated_source_untracked: u64,
+    /// Refusals of a keyed correlated process that lost its block.
+    pub correlated_process_retired: u64,
 }
 
 impl RejectionCounters {
@@ -343,6 +350,7 @@ impl RejectionCounters {
             RejectionReason::CorrelationNotModelled { .. } => &mut self.correlation_not_modelled,
             RejectionReason::CorrelatedErrorRepeated { .. } => &mut self.correlated_error_repeated,
             RejectionReason::CorrelatedSourceUntracked => &mut self.correlated_source_untracked,
+            RejectionReason::CorrelatedProcessRetired => &mut self.correlated_process_retired,
         };
         *counter = counter.wrapping_add(1);
     }
