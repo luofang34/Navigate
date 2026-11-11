@@ -94,6 +94,7 @@ draft until the joint RFC (ADR-0005).
   assess their effect on the fitted pose. A small coordinate difference at the
   camera does not establish a small position error. The declared budget cannot
   correct a biased geometry model.
-- Pilotage owns camera calibration and map release identity. The host
-  fills `MapRevision` from its package identity, and it fills the
-  calibration term from its calibration records.
+- Pilotage owns camera calibration. `navigate-data` computes the map
+  identity (ADR-0022): the host fills `MapRevision` with the identity of
+  the package that it opened, and it fills the calibration term from its
+  calibration records.
