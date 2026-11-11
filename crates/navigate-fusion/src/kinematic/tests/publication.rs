@@ -254,6 +254,22 @@ fn solution_sequence_advances_per_publication() {
 }
 
 #[test]
+fn the_solution_sequence_advances_only_when_the_solution_changes() {
+    let mut f = filter();
+    assert_accepted(f.ingest(&gnss_fix(1, 1, 0, origin()), t(0)));
+    let first = f.tick(t(10)).expect("initialized");
+    // The same state at the same time: the same solution, sequence
+    // included.
+    let again = f.tick(t(10)).expect("initialized");
+    assert_eq!(again, first);
+    // A measurement changes the state at the same time.
+    assert_accepted(f.ingest(&gnss_fix(1, 2, 10, position_north_m(3.0)), t(10)));
+    let updated = f.tick(t(10)).expect("initialized");
+    assert_eq!(updated.stamp.sequence, first.stamp.sequence.next());
+    assert_eq!(f.tick(t(10)).expect("initialized"), updated);
+}
+
+#[test]
 fn identical_observation_scripts_yield_field_identical_solutions() {
     fn run() -> Vec<Option<NavigationSolution>> {
         let mut f = filter();
