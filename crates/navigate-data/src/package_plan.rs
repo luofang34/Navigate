@@ -57,6 +57,13 @@ pub struct PlanBounds {
 impl PlanBounds {
     /// The bounds of the onboard terrain-camera package: 500 m of search
     /// radius and of track deviation, and 4 km of slant range.
+    ///
+    /// These are engineering choices, not values from a source or a
+    /// measurement. The search radius and the deviation bound how far the
+    /// onboard belief may drift from the planned track and still find its
+    /// map; the range bounds the slant distance at which the camera can
+    /// use the ground. A route whose belief can drift further, or whose
+    /// camera sees further, needs other bounds.
     pub const ONBOARD: Self = Self {
         search_radius_m: 500.0,
         deviation_m: 500.0,
