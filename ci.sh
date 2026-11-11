@@ -93,10 +93,12 @@ echo "$monte_carlo_out" | grep -q "test result: ok. $monte_carlo_count passed" \
 
 echo "== navigate-onboard Monte Carlo consistency (release) =="
 onboard_tests="reference::tests::correlated_gnss::monte_carlo_a_declared_correlated_gnss_error_at_10_hz_keeps_the_position_nees_in_band
-reference::tests::correlated_gnss::monte_carlo_a_correlated_gnss_error_declared_as_white_at_10_hz_is_over_confident"
+reference::tests::correlated_gnss::monte_carlo_a_correlated_gnss_error_declared_as_white_at_10_hz_is_over_confident
+reference::terrain::tests::anchors::monte_carlo_a_cruise_across_cells_with_bound_map_errors_keeps_the_position_nees_in_band
+reference::terrain::tests::anchors::monte_carlo_a_loiter_in_one_cell_with_its_bound_map_error_keeps_the_position_nees_in_band"
 onboard_count=$(echo "$onboard_tests" | wc -l | tr -d ' ')
 # shellcheck disable=SC2086
-onboard_out=$(cargo test --release -p navigate-onboard --lib -- --exact $onboard_tests 2>&1) \
+onboard_out=$(cargo test --release -p navigate-onboard --features terrain-camera --lib -- --exact $onboard_tests 2>&1) \
     || { echo "$onboard_out"; exit 1; }
 echo "$onboard_out" | grep "test result"
 echo "$onboard_out" | grep -q "test result: ok. $onboard_count passed" \

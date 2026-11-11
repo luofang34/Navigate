@@ -102,16 +102,30 @@ another source that arrived first. The replay then gives those fixes
 the plan they would have had in order, and skips a fix that would have
 been refused in order.
 
-### 4. Relation to `SharedMapError`
+### 4. Keyed processes, and the map cells of terrain anchors
 
-The registration error of a visual map cell is a constant correlated
-error of that cell. Declared with `tau_s = ∞`, the first anchor of a
-process is an independent fix, and the next anchors either read its
-block or, without a free block, are refused. This is what
-`FusionEligibility::SharedMapError` asks for. The filter keys a process
-by the source and its epoch, so a declaration for each cell needs a key
-for each cell. That key, and the declaration in `navigate-visual` and
-`navigate-onboard`, are a separate change.
+A declaration can carry a key (`CorrelatedError::with_key`). The key and
+the kind alone then name the process, so the fixes of several sources
+share it: two terrain cameras that see one map cell share the
+registration error of that cell. When no block is free, a constant keyed
+process takes over the block of the constant keyed process of the same
+kind with the oldest fix. The filter refuses the older key until that
+block is taken over again (`CorrelatedProcessRetired`), and a replay
+skips such a fix as it would have been refused in order. The filter does
+not remember earlier keys: the caller keeps that memory and does not
+offer a key that lost its block. `binds_correlated_key` tells the caller
+whether a block still holds a key.
+
+The reference navigator declares the map error of each terrain fix, the
+registration of the imagery and the height of the terrain, as a constant
+correlated error keyed by the map cell of the matched ground. The fix
+covariance holds the rest: the relief and calibration terms and the
+image geometry. A suite with a terrain camera gets one block for the
+map. The `MapCellLedger` of `navigate-visual` is the memory of the cells
+that had a fix: a fix of a cell that had one is offered while the block
+holds that cell, and withheld as `SharedMapError` once a newer cell took
+the block. This replaces the rule that only the first fix of each cell
+reaches the filter.
 
 ### 5. An altitude update does not correct the horizontal states
 
@@ -128,9 +142,9 @@ Joseph covariance update (a Schmidt "consider" update of those states).
 - A vehicle pays for the blocks it uses. On the development host, one
   IMU step of the release build takes 19.6 µs with 15 states, 24.5 µs
   with 16, and 79.7 µs with 22.
-- The filter with its history is 230.6 KB with 19 states, 244.3 KB with
-  22, and 260.1 KB with 25. Each retained observation is 280 bytes with
-  its declaration.
+- The filter with its history is 233.6 KB with 19 states, 247.4 KB with
+  22, 263.2 KB with 25, and 281.0 KB with 28. Each retained observation
+  is 288 bytes with its declaration.
 - A correlated GNSS error declared with a bound block gives a mean 3-D
   NEES of 2.2 to 4.3 on the route of the context. Declared with a
   correlation time three times too short or too long, it stays in the
@@ -140,7 +154,18 @@ Joseph covariance update (a Schmidt "consider" update of those states).
   the inflation, and 2.53 m with the over-confident white declaration.
 - A star mount error declared as a constant correlated error gives a
   mean attitude NEES of 2.86.
-- An observation that declares a correlated error is 40 bytes larger.
+- With one fix for each map cell, a block gives the same core estimate as
+  a white fix with the map variance added. In a synthetic loiter in one
+  cell with 2 Hz anchors (constant registration and height error, a
+  constant calibration angle, a relief term along the view, and white
+  matcher noise), the filter takes all 1800 anchors with a mean 3-D NEES
+  of 5.6 / 3.1 / 4.4 at 300 / 600 / 900 s; the first-fix rule took one.
+  The relief term, declared white but constant in the cell, sets the
+  margin: without it the NEES is 2.1 / 1.9 / 2.3.
+- A filter with the map block and a correlated GNSS block has 28 states:
+  281.0 KB with its history, and a Van Loan stack frame of 188.7 KB on
+  thumbv8m.
+- The declaration makes each observation 48 bytes larger.
 - A source adapter must know its error model to declare it. A white
   declaration of a correlated error stays over-confident.
 
