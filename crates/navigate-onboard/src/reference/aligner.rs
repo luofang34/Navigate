@@ -41,13 +41,12 @@ struct Magnetometer {
     declination_sigma_rad: f64,
 }
 
-/// A state that one rest window gave.
+/// A state that one rest window gave, with the IMU biases of the window
+/// in its bias prior.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Solved {
     pub alignment: Alignment,
     pub record: AlignmentRecord,
-    /// The IMU biases of the window for the filter.
-    pub biases: ImuBiasPrior,
 }
 
 /// What the alignment waits for.
@@ -284,6 +283,7 @@ impl Aligner {
                     heading_sigma_rad * heading_sigma_rad,
                 ),
                 at,
+                imu_bias_prior: Some(biases),
             },
             record: AlignmentRecord {
                 at,
@@ -295,7 +295,6 @@ impl Aligner {
                 gyro_bias_rad_s: Some(gyro_bias.into()),
                 gyro_bias_sigma_rad_s: Some(gyro_bias_var.sqrt()),
             },
-            biases,
         })
     }
 
@@ -340,9 +339,14 @@ impl Aligner {
     }
 }
 
-/// What a transfer alignment states: the host gave each part.
+/// What a transfer alignment states: the host gave each part, and the
+/// gyroscope bias of its prior, if it has one.
 pub(crate) fn transfer_record(a: &Alignment) -> AlignmentRecord {
     let (north, east, down) = a.attitude_cov.diagonal();
+    let gyro = a.imu_bias_prior.map(|prior| {
+        let (x, y, z) = prior.gyro_cov_body.diagonal();
+        (prior.gyro_bias_body_rad_s, x.max(y).max(z).max(0.0).sqrt())
+    });
     AlignmentRecord {
         at: a.at,
         source: AlignmentSource::Transfer,
@@ -350,8 +354,8 @@ pub(crate) fn transfer_record(a: &Alignment) -> AlignmentRecord {
         position: None,
         tilt_sigma_rad: ((north + east) / 2.0).max(0.0).sqrt(),
         heading_sigma_rad: down.max(0.0).sqrt(),
-        gyro_bias_rad_s: None,
-        gyro_bias_sigma_rad_s: None,
+        gyro_bias_rad_s: gyro.map(|(bias, _)| bias),
+        gyro_bias_sigma_rad_s: gyro.map(|(_, sigma)| sigma),
     }
 }
 

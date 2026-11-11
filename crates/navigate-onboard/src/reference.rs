@@ -355,7 +355,7 @@ impl Navigator for ReferenceNavigator {
     }
 
     fn align(&mut self, a: &Alignment) -> Result<(), OnboardError> {
-        self.set_state(a, aligner::transfer_record(a), None)
+        self.set_state(a, aligner::transfer_record(a))
     }
 
     fn alignment_status(&self) -> Option<AlignmentStatus> {
