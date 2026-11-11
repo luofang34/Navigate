@@ -55,10 +55,14 @@ const NEES_BAND: (f64, f64) = if cfg!(debug_assertions) {
     (0.5, 6.0)
 };
 
-/// The band of the mean NEES of the geodetic height error at the end of
-/// the trial route: the measured over-confidence (85), which a consistent
-/// vertical brings to about 1.
-const HEIGHT_LIMIT: (f64, f64) = (20.0, 400.0);
+/// The band of the mean NEES of the geodetic height error (one degree
+/// of freedom per run): the 0.1 % and 99.9 % points of χ²(2)/2 for two
+/// runs and of χ²(12)/12 for twelve.
+const HEIGHT_BAND: (f64, f64) = if cfg!(debug_assertions) {
+    (0.001, 6.9)
+} else {
+    (0.18, 2.74)
+};
 
 /// The in-flight alignment of the trial.
 const ALIGNMENT: Alignment = Alignment {
@@ -143,20 +147,15 @@ fn monte_carlo_an_altimeter_in_turns_keeps_the_horizontal_estimate_consistent() 
             "{at_s} s: RMS {rms} vs INS {free_rms}"
         );
     }
-    // The known limit of the altitude model: at kilometers of horizontal
-    // error the height estimate is over-confident, because the height
-    // depends on the horizontal error through −d²/(2R) and that
-    // dependence is not in the error covariance. The mean NEES of the
-    // geodetic height error (one degree of freedom, 1 for a consistent
-    // filter) is about 1 up to 500 s and 85 at the end of the trial route,
-    // with 15 km of horizontal error. A vertical error state that is the
-    // geodetic height difference (ADR-0023) brings it into its band.
-    if !cfg!(debug_assertions) {
-        let height = baro.last().map_or(f64::NAN, |report| report[3]);
+    // The height is consistent too: the residual of an altitude is the
+    // geodetic height difference, which is the vertical error state.
+    let (low, high) = HEIGHT_BAND;
+    for (index, report) in baro.iter().enumerate() {
+        let height = report[3];
         assert!(
-            (HEIGHT_LIMIT.0..=HEIGHT_LIMIT.1).contains(&height),
-            "height NEES {height}; by report {:?}",
-            baro.iter().map(|r| r[3]).collect::<Vec<_>>()
+            (low..=high).contains(&height),
+            "{} s: height NEES {height}",
+            (index + 1) * 100
         );
     }
 }
