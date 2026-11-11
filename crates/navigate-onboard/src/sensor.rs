@@ -29,6 +29,9 @@ pub enum SensorKind {
     /// surveyed launch point. It is a measurement with a declared error,
     /// and its input says that the vehicle is at rest on the point.
     SurveyedPoint,
+    /// An operator or a host core that declares the start of a vehicle
+    /// that has no other source of it.
+    Operator,
     /// A sensor that gives fusion observations itself.
     ObservationSource,
 }
@@ -45,6 +48,7 @@ impl SensorKind {
             Self::TerrainCamera => "terrain camera",
             Self::Magnetometer => "magnetometer",
             Self::SurveyedPoint => "surveyed point",
+            Self::Operator => "operator",
             Self::ObservationSource => "observation source",
         }
     }
@@ -93,20 +97,16 @@ pub enum ErrorBudget {
         /// error is this angle times the range to the ground.
         calibration_sigma_rad: f64,
     },
-    /// Magnetometer errors, each as an error of the heading that the
-    /// sensor gives at rest.
+    /// Magnetometer errors, each axis, as fields. The field of the place
+    /// is not a property of the sensor: the host states it with
+    /// [`crate::Navigator::set_magnetic_reference`].
     Magnetometer {
-        /// White noise of one sample, radians.
-        noise_sigma_rad: f64,
+        /// White noise of one sample, tesla.
+        noise_sigma_t: f64,
         /// Residual of the body field after calibration: hard and soft
-        /// iron and the field of motor currents, radians. It is a bias,
-        /// so more samples do not make it smaller.
-        disturbance_sigma_rad: f64,
-        /// Declination of the place, radians, east positive, from a
-        /// field model. Navigate holds no field model.
-        declination_rad: f64,
-        /// One-sigma of that declination, radians.
-        declination_sigma_rad: f64,
+        /// iron and the field of motor currents, tesla. It is a bias, so
+        /// more samples do not make it smaller.
+        disturbance_sigma_t: f64,
     },
     /// The inputs carry their own covariances.
     Declared,
@@ -175,6 +175,7 @@ impl SensorSuite {
                     | (SensorKind::TerrainCamera, ErrorBudget::TerrainCamera { .. })
                     | (SensorKind::Magnetometer, ErrorBudget::Magnetometer { .. })
                     | (SensorKind::SurveyedPoint, ErrorBudget::Declared)
+                    | (SensorKind::Operator, ErrorBudget::Declared)
                     | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
@@ -283,6 +284,16 @@ pub enum SensorData {
         /// The field, forward, right, down.
         field_body_t: [f64; 3],
     },
+    /// The vehicle is at a known position at the stamp, and may be
+    /// moving: a position and nothing about rest.
+    KnownPosition {
+        /// The position.
+        position: GeodeticPosition,
+        /// Horizontal one-sigma, each axis, metres.
+        horizontal_sigma_m: f64,
+        /// Vertical one-sigma, metres.
+        vertical_sigma_m: f64,
+    },
     /// The vehicle is at rest on a surveyed point.
     SurveyedPosition {
         /// The point.
@@ -292,6 +303,8 @@ pub enum SensorData {
         /// Vertical one-sigma of the survey, metres.
         vertical_sigma_m: f64,
     },
+    /// The start that an operator declares, at the stamp of the input.
+    DeclaredStart(crate::DeclaredStart),
     /// An observation that the sensor made itself.
     Observation(Observation),
 }
@@ -309,6 +322,8 @@ impl SensorData {
             Self::TerrainFrame { .. } => "terrain frame",
             Self::MagneticField { .. } => "magnetic field",
             Self::SurveyedPosition { .. } => "surveyed position",
+            Self::KnownPosition { .. } => "known position",
+            Self::DeclaredStart(_) => "declared start",
             Self::Observation(_) => "observation",
         }
     }

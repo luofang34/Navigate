@@ -3,7 +3,7 @@
 
 use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
 
-use super::{measurement, names};
+use super::{Increment, Moving, measurement, names};
 use crate::{
     AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
     ErrorBudget, OnboardError, Outcome, ReferenceNavigator, SensorData, SensorInput,
@@ -28,10 +28,15 @@ impl ReferenceNavigator {
                 delta_theta_rad,
                 delta_velocity_m_s,
             } => {
-                let solved =
-                    self.aligner
-                        .increment(at, *dt_s, *delta_theta_rad, *delta_velocity_m_s);
-                return solved.map_or(Ok(()), |s| self.set_state(&s.alignment, s.record));
+                let solved = self.aligner.increment(Increment {
+                    sensor: input.sensor,
+                    acquired_at: at,
+                    delivered_at: input.delivered_at,
+                    dt_s: *dt_s,
+                    delta_theta_rad: *delta_theta_rad,
+                    delta_velocity_m_s: *delta_velocity_m_s,
+                });
+                return solved.map_or(Ok(()), |moving| self.set_moving_state(&moving));
             }
             SensorData::StarExposureMid => {
                 if let Some(channel) = self.stars.get_mut(&input.sensor.get()) {
@@ -64,9 +69,13 @@ impl ReferenceNavigator {
                         n.max(e).max(d).sqrt()
                     })
                     .or(declared_speed);
-                let velocity = velocity.zip(speed_sigma);
-                self.aligner
+                let velocity = velocity.map(|v| (v, speed_sigma));
+                let moving = self
+                    .aligner
                     .gnss(at, *position, velocity, position_cov.or(declared));
+                if let Some(moving) = moving {
+                    self.set_moving_state(&moving)?;
+                }
             }
             SensorData::MagneticField { field_body_t } => {
                 self.aligner.magnetic(at, *field_body_t);
@@ -78,6 +87,18 @@ impl ReferenceNavigator {
             } => self
                 .aligner
                 .surveyed(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
+            SensorData::DeclaredStart(start) => {
+                if let Some(moving) = self.aligner.declared(at, *start) {
+                    self.set_moving_state(&moving)?;
+                }
+            }
+            SensorData::KnownPosition {
+                position,
+                horizontal_sigma_m,
+                vertical_sigma_m,
+            } => self
+                .aligner
+                .known(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
             _ => {}
         }
         sink.record(AcceptanceRecord {
@@ -87,6 +108,32 @@ impl ReferenceNavigator {
             outcome: Outcome::Unused(names::ALIGNMENT),
             context: None,
         });
+        Ok(())
+    }
+
+    /// Sets the state of a moving vehicle at a GNSS fix, then gives the
+    /// filter the inertial increments that came after that fix.
+    fn set_moving_state(&mut self, moving: &Moving) -> Result<(), OnboardError> {
+        let solved = &moving.solved;
+        self.set_state(&solved.alignment, solved.record)?;
+        for step in &moving.later {
+            let input = SensorInput {
+                sensor: step.sensor,
+                acquired_at: step.acquired_at,
+                delivered_at: step.delivered_at,
+                data: SensorData::ImuIncrement {
+                    dt_s: step.dt_s,
+                    delta_theta_rad: step.delta_theta_rad,
+                    delta_velocity_m_s: step.delta_velocity_m_s,
+                },
+            };
+            self.imu(
+                &input,
+                step.dt_s,
+                step.delta_theta_rad,
+                step.delta_velocity_m_s,
+            )?;
+        }
         Ok(())
     }
 
@@ -175,11 +222,10 @@ impl ReferenceNavigator {
     }
 
     /// Sets how the navigator aligns itself.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a value that is not finite and positive.
-    pub fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+    pub(in crate::reference) fn configure_alignment(
+        &mut self,
+        config: AlignmentConfig,
+    ) -> Result<(), OnboardError> {
         if !config.is_usable() {
             return Err(OnboardError::Config {
                 field: "alignment configuration",
