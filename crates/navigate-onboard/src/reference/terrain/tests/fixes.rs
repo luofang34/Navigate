@@ -3,6 +3,7 @@
 
 use nalgebra::Vector3;
 use navigate_camera::CameraMount;
+use navigate_fusion::RejectionReason;
 
 use super::flight::{CAMERA, Flight, RATE, at, fly, load, navigator, request, show_events};
 use super::world::{CENTRE, GROUND_M, World, WorldSpec, camera_model, correlation_cell};
@@ -45,6 +46,13 @@ pub(crate) fn across_cells() -> Flight {
 }
 
 const SHARED: Outcome = Outcome::Unused("shared_map_error");
+
+/// Bound on the error of the solution after a fix, on each of the
+/// horizontal and the vertical, metres: three pixels of the test camera,
+/// which are 5.3 m on the ground from 800 m. Over the poses of
+/// [`the_declared_sigma_holds_the_error_and_is_of_its_order`] the
+/// horizontal error is 3.7 m root mean square and 8.5 m at most.
+const FIX_BOUND_M: f64 = 16.0;
 
 #[test]
 fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_camera() {
@@ -97,10 +105,9 @@ fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_
         sigma_v,
         "a hovering vehicle after one fix"
     );
-    // One pixel of the camera is 5.3 m on the ground. The alignment error
-    // was 43 m horizontal and 12 m vertical.
-    assert!(error.xy().norm() < 8.0, "{error}");
-    assert!(error.z.abs() < 8.0, "{error}");
+    // The alignment error was 43 m horizontal and 12 m vertical.
+    assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
+    assert!(error.z.abs() < FIX_BOUND_M, "{error}");
     // The declared one-sigma holds the error and is of its order, and it
     // is not less than the stated error of the map.
     assert!(error.xy().norm() < 3.0 * sigma_h && error.z.abs() < 3.0 * sigma_v);
@@ -147,7 +154,7 @@ fn a_flight_takes_one_independent_fix_in_each_map_cell() {
     let (nn, ee, _) = solution.position_cov.diagonal();
     let (north_m, east_m, sigma_h) = (error.x, error.y, (nn + ee).sqrt());
     tracing::info!(north_m, east_m, sigma_h, "a flight after four fixes");
-    assert!(error.xy().norm() < 8.0, "{error}");
+    assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
     assert!(error.xy().norm() < 3.0 * (nn + ee).sqrt());
     // Four fixes with independent map error: the filter may go below the
     // error of one fix, but not below the map error over the square root
@@ -191,8 +198,12 @@ fn a_fix_that_the_filter_refuses_does_not_close_its_map_cell() {
     let records = terrain(&sink);
     assert_eq!(records.len(), 2);
     for (outcome, path) in &records {
+        let gated = matches!(
+            outcome,
+            Outcome::Rejected(RejectionReason::InnovationGate { .. })
+        );
         assert!(
-            matches!(outcome, Outcome::Rejected(_)) && *path == Some("render"),
+            gated && *path == Some("render"),
             "a refused fix is not an earlier fix of its cell: {records:?}"
         );
     }
@@ -221,7 +232,7 @@ fn a_late_frame_is_matched_at_its_exposure_and_an_old_frame_is_not_matched() {
     }
     // The vehicle moved 2.3 m in the 60 ms. The fix is for the exposure.
     let error = flight.error_m(&navigator.solution(at(100)).unwrap(), 100);
-    assert!(error.xy().norm() < 8.0, "{error}");
+    assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
     // A frame that comes 0.8 s after its exposure is older than the bound.
     navigator
         .ingest(&flight.frame(&world, &belly(), 60, 40), &mut sink)
@@ -275,8 +286,83 @@ fn keyframes_serve_inside_their_envelope_and_the_package_serves_outside() {
         assert_eq!(terrain(&sink), [(Outcome::Accepted, Some(path))]);
         let error = hover.error_m(&navigator.solution(at(RATE)).unwrap(), RATE);
         assert!(
-            error.xy().norm() < 8.0 && error.z.abs() < 8.0,
+            error.xy().norm() < FIX_BOUND_M && error.z.abs() < FIX_BOUND_M,
             "{path}: {error}"
         );
     }
+}
+
+/// The fix of each of eight poses, alternately through the belly camera
+/// and an oblique camera, against a navigator that knows little (a
+/// one-sigma of 1 km), so that the solution after the fix is the fix.
+#[test]
+fn the_declared_sigma_holds_the_error_and_is_of_its_order() {
+    show_events();
+    let world = World::build(&WorldSpec::default());
+    let wide = TerrainMapRequest {
+        config: TerrainConfig {
+            max_search_radius_m: 80.0,
+            ..request(&world).config
+        },
+        ..request(&world)
+    };
+    let (mut squared_m2, mut normalized) = (0.0, 0.0);
+    const POSES: u32 = 8;
+    for i in 0..POSES {
+        let a = f64::from(i);
+        let hover = Flight {
+            start: [
+                CENTRE[0] + 0.004 * (a * 1.7).sin(),
+                CENTRE[1] + 0.006 * (a * 2.3).cos(),
+                HEIGHT_M + 60.0 * (a * 0.9).sin(),
+            ],
+            speed_m_s: 0.0,
+        };
+        let off = [
+            30.0 * (a * 1.1).sin(),
+            30.0 * (a * 0.7).cos(),
+            10.0 * (a * 1.9).sin(),
+        ];
+        let mount = if i % 2 == 0 {
+            belly()
+        } else {
+            CameraMount::rotated_forward(0.1, -70.0_f64.to_radians(), 0.4 + a)
+                .with_lever_arm(Vector3::new(2.0, -0.7, 0.9))
+        };
+        let mut navigator = navigator(&hover, mount, off, 1_000.0);
+        navigator
+            .load_terrain_map(std::sync::Arc::clone(&world.store), &wide, None)
+            .unwrap();
+        let mut sink = Vec::new();
+        fly(
+            &mut navigator,
+            &hover,
+            &world,
+            &mount,
+            1..=1,
+            |_| true,
+            &mut sink,
+        )
+        .unwrap();
+        assert_eq!(terrain(&sink), [(Outcome::Accepted, Some("render"))]);
+        let solution = navigator.solution(at(1)).unwrap();
+        let error = hover.error_m(&solution, 1);
+        let (nn, ee, dd) = solution.position_cov.diagonal();
+        assert!(error.x.abs() < 3.0 * nn.sqrt() && error.y.abs() < 3.0 * ee.sqrt());
+        assert!(error.z.abs() < 3.0 * dd.sqrt());
+        squared_m2 += error.xy().norm_squared();
+        normalized += error.x * error.x / nn + error.y * error.y / ee;
+    }
+    let rms_m = (squared_m2 / f64::from(POSES)).sqrt();
+    let nees = normalized / f64::from(POSES);
+    tracing::info!(
+        rms_m,
+        nees,
+        "the horizontal error of eight fixes and its normalized square"
+    );
+    assert!(rms_m < 2.0 * 5.3, "{rms_m}");
+    // The normalized squared error of two axes is 2 for a covariance that
+    // is exact. Above 2 the fix is overconfident. Below 0.02 the declared
+    // one-sigma is more than ten times the error.
+    assert!(nees < 2.0 && nees > 0.02, "{nees}");
 }

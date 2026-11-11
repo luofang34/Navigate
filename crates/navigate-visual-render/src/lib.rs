@@ -12,7 +12,7 @@ mod test_package;
 
 pub use atlas::{AtlasLayout, ImageAtlas, TerrainAtlas};
 pub use error::RenderError;
-pub use keyframes::{KeyframeSpec, build_keyframes};
+pub use keyframes::{KeyframeRendering, KeyframeSpec, build_keyframes};
 pub use package_scene::{SceneRequest, SceneWindow, scene_around};
 pub use renderer::{GpuRenderer, GpuScene, GpuViewport, RenderLimits, RenderScene};
 pub use sparse::{AdaptiveRenderStats, SparseRayHit, SparseSceneSampler};

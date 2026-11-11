@@ -9,7 +9,7 @@ use navigate_data::product::{
     ValidityEnvelope, route_digest,
 };
 use navigate_data::resource::{great_circle_m, point_along};
-use navigate_data::{LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
+use navigate_data::{GeoidModel, LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
 use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceView};
 
 use crate::package_scene::{Geoid, SceneRequest, scene_around};
@@ -61,10 +61,32 @@ fn micro(v: f64) -> i64 {
     (v * 1e6).round() as i64
 }
 
+/// How the keyframes of a chunk were rendered, as its recipe states.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyframeRendering {
+    /// Angle of the optical axis of each view below the horizontal, radians.
+    pub depression_rad: f64,
+    /// The geoid model that the builder had for the heights of an
+    /// orthometric elevation layer. The depth of each view follows from
+    /// it, so a reader with another model, or with none, has other
+    /// terrain heights than the views.
+    pub geoid: Option<GeoidModel>,
+}
+
+/// The recipe value of a geoid model: zero for none.
+const fn geoid_code(model: Option<GeoidModel>) -> i64 {
+    match model {
+        Some(GeoidModel::Egm96) => 1,
+        Some(GeoidModel::Egm2008) => 2,
+        Some(GeoidModel::Unsupported) | None => 0,
+    }
+}
+
 impl KeyframeSpec {
-    /// The complete recipe of the product, in integer units.
+    /// The complete recipe of the product, in integer units, for a builder
+    /// with the geoid model `geoid`.
     #[must_use]
-    pub fn recipe(&self) -> Recipe {
+    pub fn recipe(&self, geoid: Option<GeoidModel>) -> Recipe {
         Recipe::new(
             KEYFRAME_ALGORITHM,
             env!("CARGO_PKG_VERSION"),
@@ -82,16 +104,26 @@ impl KeyframeSpec {
         .with("luma_edge", i64::from(self.luma_edge))
         .with("depth_edge_ppm", micro(f64::from(self.depth_edge)))
         .with("encoding_nvkeyv01", 1)
+        .with("geoid_model", geoid_code(geoid))
     }
 
-    /// The camera depression that a recipe of [`Self::recipe`] states, in
-    /// radians, or `None` for a recipe of another algorithm or encoding.
+    /// What a recipe of [`Self::recipe`] states about the views, or `None`
+    /// for a recipe of another algorithm or encoding.
     #[must_use]
-    pub fn recipe_depression_rad(recipe: &Recipe) -> Option<f64> {
+    pub fn rendering(recipe: &Recipe) -> Option<KeyframeRendering> {
         let known = recipe.algorithm == KEYFRAME_ALGORITHM
             && recipe.parameters.get("encoding_nvkeyv01") == Some(&1);
         let depression = recipe.parameters.get("depression_urad")?;
-        known.then_some(*depression as f64 * 1e-6)
+        let geoid = match recipe.parameters.get("geoid_model")? {
+            0 => None,
+            1 => Some(GeoidModel::Egm96),
+            2 => Some(GeoidModel::Egm2008),
+            _ => return None,
+        };
+        known.then_some(KeyframeRendering {
+            depression_rad: *depression as f64 * 1e-6,
+            geoid,
+        })
     }
 
     /// The camera calibration in micro-pixels.
@@ -269,7 +301,8 @@ pub async fn build_keyframes<S: ReadPort + WritePort + ?Sized>(
         envelope: Some(spec.envelope),
         calibration: Some(spec.calibration()),
     };
-    let mut writer = ProductWriter::new(ProductKind::Keyframes, spec.recipe(), binding);
+    let recipe = spec.recipe(geoid.map(|(model, _)| model));
+    let mut writer = ProductWriter::new(ProductKind::Keyframes, recipe, binding);
     for (key, (pose, view)) in (0_u32..).zip(poses.iter().zip(&views)) {
         writer.add_entry(store, key, Some(*pose), view).await?;
     }

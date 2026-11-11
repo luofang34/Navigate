@@ -261,6 +261,47 @@ fn unknown_accuracy_and_an_unknown_geoid_are_stated_and_never_taken_as_zero() {
 }
 
 #[test]
+fn keyframes_with_other_terrain_heights_than_the_navigator_are_not_used() {
+    let orthometric = VerticalDatum::Orthometric {
+        geoid: GeoidModel::Egm96,
+    };
+    let world = World::build(&WorldSpec {
+        vertical_datum: Some(orthometric),
+        radius_m: 1_200.0,
+        ..WorldSpec::default()
+    });
+    // The builder of the keyframes had no geoid model.
+    let keyframes = world.keyframes(camera_model(), HEIGHT_M);
+    let with_products = TerrainMapRequest {
+        products: Some(keyframes.list),
+        ..request(&world)
+    };
+    let mut navigator = navigator(&hover(), belly(), [0.0; 3], 20.0);
+    let mut load = |geoid: Option<HostGeoid>| {
+        let report = navigator
+            .load_terrain_map(Arc::clone(&world.store), &with_products, geoid)
+            .unwrap();
+        (
+            report.keyframes,
+            report.undulation_bound_m,
+            report.products[0].decision.clone(),
+        )
+    };
+    // No model on each side: the same heights, and the bound is in the
+    // covariance of each fix.
+    assert_eq!(load(None), (4, 107.0, ProductUse::Use));
+    // A model of another geoid converts nothing, as the builder did.
+    let other: HostGeoid = (GeoidModel::Egm2008, Arc::new(FlatGeoid));
+    assert_eq!(load(Some(other)), (4, 107.0, ProductUse::Use));
+    // With the model of the datum, the navigator has heights 48 m above
+    // those of the keyframes and states no bound: it renders its references.
+    let model: HostGeoid = (GeoidModel::Egm96, Arc::new(FlatGeoid));
+    let (count, bound_m, decision) = load(Some(model));
+    assert_eq!((count, bound_m), (0, 0.0));
+    assert!(matches!(decision, ProductUse::Fallback(reason) if reason.contains("geoid")));
+}
+
+#[test]
 fn a_camera_and_a_frame_that_the_means_cannot_take_are_refused() {
     let lwir = imager().with_band(SpectralBand::LongWaveInfrared);
     assert_eq!(

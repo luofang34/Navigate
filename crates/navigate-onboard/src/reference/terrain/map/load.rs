@@ -11,7 +11,8 @@ use navigate_data::product::{
 };
 use navigate_data::tile::{ground_sample_distance_m, tile_lat_lon};
 use navigate_data::{
-    EllipsoidalHeight, Encoding, Layer, LayerKind, Package, RandomAccess, ReadPort, Sha256Digest,
+    EllipsoidalHeight, Encoding, GeoidModel, Layer, LayerKind, Package, RandomAccess, ReadPort,
+    Sha256Digest, VerticalDatum,
 };
 use navigate_geodesy::GeoidUndulation;
 use navigate_visual_render::KeyframeSpec;
@@ -46,7 +47,14 @@ where
     let (imagery, imagery_report) = layer(&package, LayerKind::Imagery, request, &mut blobs)?;
     let (elevation, elevation_report) = layer(&package, LayerKind::Elevation, request, &mut blobs)?;
     let undulation_bound_m = undulation_bound_m(&elevation, geoid.as_ref());
-    let (products, keyframes) = products(&*store, request, &blobs, cameras)?;
+    let mission = Mission {
+        request,
+        blobs: &blobs,
+        cameras,
+        datum: elevation.layer.vertical_datum,
+        geoid: geoid.as_ref().map(|(model, _)| *model),
+    };
+    let (products, keyframes) = products(&*store, &mission)?;
     // The undulation bound is a limit, not a one-sigma value. The budget
     // takes it as one, which is the cautious reading.
     let sigmas = MapSigmas {
@@ -190,13 +198,36 @@ fn undulation_bound_m(elevation: &LayerUse, geoid: Option<&HostGeoid>) -> f64 {
     }
 }
 
+/// What decides the use of a product chunk.
+struct Mission<'a> {
+    request: &'a TerrainMapRequest,
+    /// The tile blobs of the package.
+    blobs: &'a BTreeSet<Sha256Digest>,
+    /// The calibrations of the declared terrain cameras.
+    cameras: &'a [Calibration],
+    /// The vertical datum of the elevation layer.
+    datum: Option<VerticalDatum>,
+    /// The geoid model of the host.
+    geoid: Option<GeoidModel>,
+}
+
+impl Mission<'_> {
+    /// Whether a reader with the geoid model `model` converts the heights
+    /// of the elevation layer to ellipsoid heights with it.
+    fn converts_with(&self, model: Option<GeoidModel>) -> bool {
+        matches!(
+            (self.datum, model),
+            (Some(VerticalDatum::Orthometric { geoid }), Some(model)) if geoid == model
+        )
+    }
+}
+
 /// Reads the product list and decides the use of each chunk.
 fn products<S: ReadPort + ?Sized>(
     store: &S,
-    request: &TerrainMapRequest,
-    blobs: &BTreeSet<Sha256Digest>,
-    cameras: &[Calibration],
+    mission: &Mission<'_>,
 ) -> Result<(Vec<ProductReport>, Vec<KeyframeSet>), MapRefusal> {
+    let request = mission.request;
     let Some(list) = request.products else {
         return Ok((Vec::new(), Vec::new()));
     };
@@ -206,15 +237,13 @@ fn products<S: ReadPort + ?Sized>(
     let mut sets = Vec::new();
     for entry in &list.chunks {
         let decision = match &entry.kind {
-            KindName::Known(ProductKind::Keyframes) => {
-                match keyframes(store, entry, request, blobs, cameras) {
-                    Ok(set) => {
-                        sets.push(set);
-                        ProductUse::Use
-                    }
-                    Err(decision) => decision,
+            KindName::Known(ProductKind::Keyframes) => match keyframes(store, entry, mission) {
+                Ok(set) => {
+                    sets.push(set);
+                    ProductUse::Use
                 }
-            }
+                Err(decision) => decision,
+            },
             KindName::Known(_) => {
                 ProductUse::Fallback("the reference navigator does not use this product".into())
             }
@@ -231,10 +260,9 @@ fn products<S: ReadPort + ?Sized>(
 fn keyframes<S: ReadPort + ?Sized>(
     store: &S,
     entry: &ListEntry,
-    request: &TerrainMapRequest,
-    blobs: &BTreeSet<Sha256Digest>,
-    cameras: &[Calibration],
+    mission: &Mission<'_>,
 ) -> Result<KeyframeSet, ProductUse> {
+    let (request, blobs, cameras) = (mission.request, mission.blobs, mission.cameras);
     let refuse = |reason: String| ProductUse::Refusal(reason);
     let chunk =
         pollster::block_on(open_chunk(store, entry.chunk)).map_err(|e| refuse(e.to_string()))?;
@@ -261,8 +289,17 @@ fn keyframes<S: ReadPort + ?Sized>(
     }
     let recipe =
         pollster::block_on(read_recipe(store, chunk.recipe)).map_err(|e| refuse(e.to_string()))?;
-    let depression_rad = KeyframeSpec::recipe_depression_rad(&recipe)
+    let rendering = KeyframeSpec::rendering(&recipe)
         .ok_or_else(|| refuse("the recipe is of another renderer or encoding".into()))?;
+    // The depth of a stored view holds the terrain heights of its builder.
+    // With another conversion of the heights, the fix of a keyframe is
+    // off by the undulation and the covariance does not state it.
+    if mission.converts_with(rendering.geoid) != mission.converts_with(mission.geoid) {
+        return Err(ProductUse::Fallback(
+            "the keyframes and the navigator do not convert the heights with the same geoid model"
+                .into(),
+        ));
+    }
     let entries: Option<Vec<Keyframe>> = chunk
         .entries
         .iter()
@@ -278,7 +315,7 @@ fn keyframes<S: ReadPort + ?Sized>(
     Ok(KeyframeSet {
         calibration,
         envelope,
-        depression_rad,
+        depression_rad: rendering.depression_rad,
         entries,
     })
 }
