@@ -84,7 +84,7 @@ pub use frame_change::FrameChange;
 use history::History;
 pub use history::MAX_INERTIAL_HISTORY;
 pub use imu::{ImuIncrement, ImuSample};
-pub use layout::{CORE_STATES, StateLayout};
+pub use layout::{CORE_STATES, LayoutError, StateLayout};
 pub use local_level::ned_to_body_fixed_dcm;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
 pub use past::{PastState, PastStateRefusal};

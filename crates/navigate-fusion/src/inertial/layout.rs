@@ -9,6 +9,26 @@
 //! model compensation, and the receiver clock. A filter stores its
 //! covariance with the dimension of its layout, so a layout without a
 //! block does not pay for it.
+//!
+//! What a block does to the core block:
+//!
+//! - The altitude bias, the magnetic bias, and the clock have no term in
+//!   the dynamics of the core block. Only their own measurements read
+//!   them. A layout without such a block gives the same core estimate
+//!   as one with it, when no measurement of that block arrives.
+//! - The empirical acceleration enters the velocity in the force-model
+//!   propagation when `InertialConfig::dmc` is set. A layout without the
+//!   block refuses that configuration; without `dmc` the block has zero
+//!   rows and is equivalent to its absence.
+
+use nalgebra::{Const, DimMin};
+use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
+use navigate_contract::ClockDomainId;
+use thiserror::Error;
+
+use super::InertialNavigationFilter;
+use super::config::InertialConfig;
+use super::regime::Regime;
 
 /// The number of states of the core block.
 pub const CORE_STATES: usize = 15;
@@ -35,6 +55,28 @@ impl StateLayout {
         mag_bias: Some(16),
         dmc: Some(17),
         clock: Some(20),
+    };
+
+    /// The core block alone, 15 states: an IMU with any means that
+    /// needs no bias state of its own, such as position fixes, velocity
+    /// fixes, ranges, terrain clearance, lines of sight, and visual
+    /// poses.
+    pub const CORE: Self = Self {
+        dimension: CORE_STATES,
+        alt_bias: None,
+        mag_bias: None,
+        dmc: None,
+        clock: None,
+    };
+
+    /// The core block and the barometric altitude bias (15), 16 states:
+    /// an aircraft with an altimeter.
+    pub const AVIATION: Self = Self {
+        dimension: CORE_STATES + 1,
+        alt_bias: Some(CORE_STATES),
+        mag_bias: None,
+        dmc: None,
+        clock: None,
     };
 
     /// The number of error states.
@@ -136,5 +178,100 @@ impl StateLayout {
             }
         }
         true
+    }
+}
+
+/// Why a filter refuses its layout at construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum LayoutError {
+    /// The layout does not fit the dimension of the filter, or its
+    /// blocks overlap.
+    #[error("the layout of dimension {layout} does not fit a filter of dimension {filter}")]
+    Dimension {
+        /// The dimension of the layout.
+        layout: usize,
+        /// The dimension of the filter.
+        filter: usize,
+    },
+    /// The configuration has a model whose block the layout does not
+    /// have: the empirical acceleration (`dmc`) or the clock.
+    #[error("the configuration needs the {block} block, which the layout does not have")]
+    MissingBlock {
+        /// The name of the block.
+        block: &'static str,
+    },
+}
+
+impl StateLayout {
+    /// Refuses a layout that does not fit `n`, and a configuration with a
+    /// model that has no block in the layout.
+    fn check(&self, n: usize, config: &InertialConfig) -> Result<(), LayoutError> {
+        if !self.fits(n) {
+            return Err(LayoutError::Dimension {
+                layout: self.dimension,
+                filter: n,
+            });
+        }
+        if config.dmc.is_some() && self.dmc.is_none() {
+            return Err(LayoutError::MissingBlock { block: "dmc" });
+        }
+        if config.clock_model.is_some() && self.clock.is_none() {
+            return Err(LayoutError::MissingBlock { block: "clock" });
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
+    /// Builds an uninitialized filter of the layout `config.layout`, of
+    /// dimension `N`, on the surface of `body`, as
+    /// [`InertialNavigationFilter::new_surface`] does for
+    /// [`StateLayout::FULL`].
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutError`] for a layout that does not fit `N` or that lacks a
+    /// block the configuration needs.
+    pub fn surface_with_layout(
+        config: InertialConfig,
+        clock: ClockDomainId,
+        body: PlanetaryBody,
+    ) -> Result<Self, LayoutError> {
+        config.layout.check(N, &config)?;
+        let mut config = config;
+        if body.ellipsoid != navigate_geodesy::BodyEllipsoid::WGS84 {
+            config.fusion.require_explicit_frame = true;
+        }
+        Ok(Self::build(config, clock, Regime::surface_of(&body)))
+    }
+
+    /// Builds an uninitialized filter of the layout `config.layout`, of
+    /// dimension `N`, in the frame of `env`, as
+    /// [`InertialNavigationFilter::new_space`] does for
+    /// [`StateLayout::FULL`].
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutError`] for a layout that does not fit `N` or that lacks a
+    /// block the configuration needs.
+    pub fn space_with_layout(
+        config: InertialConfig,
+        clock: ClockDomainId,
+        env: SpaceEnvironment,
+    ) -> Result<Self, LayoutError> {
+        config.layout.check(N, &config)?;
+        let mut config = config;
+        config.fusion.require_explicit_frame = true;
+        Ok(Self::build(config, clock, Regime::space(env)))
+    }
+
+    /// The layout of the error state.
+    #[must_use]
+    pub const fn layout(&self) -> StateLayout {
+        self.config.layout
     }
 }
