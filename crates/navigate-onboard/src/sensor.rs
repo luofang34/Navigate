@@ -22,6 +22,13 @@ pub enum SensorKind {
     /// A camera that sees the terrain. The navigator matches its frames
     /// against the terrain map that the host loads.
     TerrainCamera,
+    /// A three-axis magnetometer. It gives the heading of an alignment at
+    /// rest.
+    Magnetometer,
+    /// A point that the host measured before the flight, for example the
+    /// surveyed launch point. It is a measurement with a declared error,
+    /// and its input says that the vehicle is at rest on the point.
+    SurveyedPoint,
     /// A sensor that gives fusion observations itself.
     ObservationSource,
 }
@@ -36,6 +43,8 @@ impl SensorKind {
             Self::Barometer => "barometer",
             Self::StarCamera => "star camera",
             Self::TerrainCamera => "terrain camera",
+            Self::Magnetometer => "magnetometer",
+            Self::SurveyedPoint => "surveyed point",
             Self::ObservationSource => "observation source",
         }
     }
@@ -83,6 +92,21 @@ pub enum ErrorBudget {
         /// principal point, lens model) as an angle, radians. Its position
         /// error is this angle times the range to the ground.
         calibration_sigma_rad: f64,
+    },
+    /// Magnetometer errors, each as an error of the heading that the
+    /// sensor gives at rest.
+    Magnetometer {
+        /// White noise of one sample, radians.
+        noise_sigma_rad: f64,
+        /// Residual of the body field after calibration: hard and soft
+        /// iron and the field of motor currents, radians. It is a bias,
+        /// so more samples do not make it smaller.
+        disturbance_sigma_rad: f64,
+        /// Declination of the place, radians, east positive, from a
+        /// field model. Navigate holds no field model.
+        declination_rad: f64,
+        /// One-sigma of that declination, radians.
+        declination_sigma_rad: f64,
     },
     /// The inputs carry their own covariances.
     Declared,
@@ -149,6 +173,8 @@ impl SensorSuite {
                     | (SensorKind::Barometer, ErrorBudget::Barometer { .. })
                     | (SensorKind::StarCamera, ErrorBudget::StarCamera { .. })
                     | (SensorKind::TerrainCamera, ErrorBudget::TerrainCamera { .. })
+                    | (SensorKind::Magnetometer, ErrorBudget::Magnetometer { .. })
+                    | (SensorKind::SurveyedPoint, ErrorBudget::Declared)
                     | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
@@ -251,6 +277,21 @@ pub enum SensorData {
         /// Luminance, eight bits for each pixel, row-major, top row first.
         luma: Vec<u8>,
     },
+    /// The magnetic field in the body axes, tesla. The navigator uses its
+    /// direction for the heading of an alignment at rest.
+    MagneticField {
+        /// The field, forward, right, down.
+        field_body_t: [f64; 3],
+    },
+    /// The vehicle is at rest on a surveyed point.
+    SurveyedPosition {
+        /// The point.
+        position: GeodeticPosition,
+        /// Horizontal one-sigma of the survey, each axis, metres.
+        horizontal_sigma_m: f64,
+        /// Vertical one-sigma of the survey, metres.
+        vertical_sigma_m: f64,
+    },
     /// An observation that the sensor made itself.
     Observation(Observation),
 }
@@ -266,6 +307,8 @@ impl SensorData {
             Self::StarExposureMid => "star exposure",
             Self::StarCentroids { .. } => "star centroids",
             Self::TerrainFrame { .. } => "terrain frame",
+            Self::MagneticField { .. } => "magnetic field",
+            Self::SurveyedPosition { .. } => "surveyed position",
             Self::Observation(_) => "observation",
         }
     }

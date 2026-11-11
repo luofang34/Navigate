@@ -80,6 +80,8 @@ pub(crate) struct StarChannel {
     pub(crate) mount_variance_rad2: f64,
     held_prior: Option<AttitudePrior>,
     tracker: StarTracker,
+    /// The tracker as it starts, without a lock.
+    unlocked: StarTracker,
 }
 
 /// What one frame gave.
@@ -123,6 +125,8 @@ impl StarChannel {
         .map_err(|e| OnboardError::StarTrack(e.to_string()))?;
         let pairs = PairCatalogue::new(&stars, diagonal_rad, catalogue.lost_in_space_faintest_v)
             .map_err(|e| OnboardError::StarTrack(e.to_string()))?;
+        let unlocked = StarTracker::new(TrackerConfig::default())
+            .map_err(|e| OnboardError::StarTrack(e.to_string()))?;
         Ok(Self {
             imager,
             mount,
@@ -130,9 +134,17 @@ impl StarChannel {
             catalogue,
             mount_variance_rad2: mount_alignment_sigma_rad * mount_alignment_sigma_rad,
             held_prior: None,
-            tracker: StarTracker::new(TrackerConfig::default())
-                .map_err(|e| OnboardError::StarTrack(e.to_string()))?,
+            tracker: unlocked,
+            unlocked,
         })
+    }
+
+    /// Forgets what the channel holds of a state of the filter: the prior
+    /// held for the next frame, and the lock, which the priors of that
+    /// state kept.
+    pub(crate) fn forget_state(&mut self) {
+        self.held_prior = None;
+        self.tracker = self.unlocked;
     }
 
     /// Holds the attitude prior of the next frame.
