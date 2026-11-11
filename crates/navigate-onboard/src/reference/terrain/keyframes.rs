@@ -12,7 +12,7 @@ use navigate_visual_render::keyframes::{camera_orientation, reference_view};
 
 use super::belief::Belief;
 use super::map::TerrainMap;
-use navigate_camera::CameraMount;
+use navigate_camera::{CameraMount, Intrinsics};
 
 /// One stored keyframe.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,6 +32,22 @@ pub(crate) struct KeyframeSet {
     /// Angle of the optical axis of each view below the horizontal, radians.
     pub depression_rad: f64,
     pub entries: Vec<Keyframe>,
+}
+
+/// The camera of a product chunk when it is the declared camera resampled
+/// to another size: the same field of view, so a frame of the declared
+/// camera can be resampled to the stored views.
+pub(crate) fn resampled_to(declared: &Intrinsics, stored: &Calibration) -> Option<Intrinsics> {
+    let resampled = declared.resized([stored.width, stored.height]).ok()?;
+    let k = CameraModel {
+        width: resampled.width,
+        height: resampled.height,
+        fx: resampled.fx,
+        fy: resampled.fy,
+        cx: resampled.cx,
+        cy: resampled.cy,
+    };
+    (calibration_of(&k) == *stored).then_some(resampled)
 }
 
 /// The calibration of a camera in the integer units of a product chunk.

@@ -33,15 +33,22 @@ pub(crate) fn belly() -> CameraMount {
 /// sixth, one half, and five sixths of each cell: no frame is near a cell
 /// boundary.
 pub(crate) fn across_cells() -> Flight {
-    let ([lat, lon], cell_m) = correlation_cell(CENTRE);
+    // The belly camera is one metre behind the reference point.
+    north_through_cells(super::world::CORRELATION_ZOOM, 3.0, HEIGHT_M, -1.0)
+}
+
+/// A flight to the north at `height_m` from just south of a cell of
+/// `zoom`, at one cell for `frames` frames of each half second. The
+/// ground that the camera sees is `ahead_m` north of the reference point,
+/// and it is half a frame step into the cell at the first frame.
+pub(crate) fn north_through_cells(zoom: u32, frames: f64, height_m: f64, ahead_m: f64) -> Flight {
+    let ([lat, lon], cell_m) = correlation_cell(CENTRE, zoom);
     let south_edge = lat - (cell_m / 2.0 / 6_364_000.0_f64).to_degrees();
-    let speed_m_s = cell_m / 3.0 / 0.5;
-    // The camera is one metre behind the reference point, and the first
-    // frame comes after a third of a cell.
-    let start = south_edge + ((1.0 - cell_m / 6.0) / 6_364_000.0_f64).to_degrees();
+    let step_m = cell_m / frames;
+    let start = south_edge - ((ahead_m + step_m / 2.0) / 6_364_000.0_f64).to_degrees();
     Flight {
-        start: [start, lon, HEIGHT_M],
-        speed_m_s,
+        start: [start, lon, height_m],
+        speed_m_s: step_m / 0.5,
     }
 }
 
