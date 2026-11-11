@@ -11,7 +11,9 @@ use std::sync::Arc;
 use image::GrayImage;
 use navigate_contract::{GeodeticPosition, MonotonicNanos, SymmetricCov3};
 use navigate_fusion::{Observation, ObservationValue};
-use navigate_visual::{CameraPose, Estimate, LocalFrame, MatchEvidence, ReferenceView};
+use navigate_visual::{
+    CameraPose, Estimate, LocalFrame, MatchEvidence, PosePrior, ReferenceView, VisualError,
+};
 
 use super::config::WorkingCamera;
 use crate::Outcome;
@@ -72,6 +74,20 @@ pub struct SolvedPose {
     pub reprojection_rms_px: f64,
 }
 
+/// How far the solved pose is from the believed pose that bounds the
+/// match, and the bounds: a pose outside either radius is refused.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PriorGate {
+    /// Translation of the solved camera from the believed one, metres.
+    pub position_m: f64,
+    /// Rotation of the solved camera from the believed one, radians.
+    pub attitude_rad: f64,
+    /// The position search radius, metres.
+    pub position_radius_m: f64,
+    /// The attitude search radius, radians.
+    pub attitude_radius_rad: f64,
+}
+
 /// The position fix that a match offered to the filter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OfferedFix {
@@ -128,10 +144,30 @@ impl std::fmt::Debug for Compared {
 pub(super) struct Pending {
     compared: Option<Compared>,
     solved: Option<SolvedPose>,
+    gate: Option<PriorGate>,
     fix: Option<OfferedFix>,
 }
 
 impl Pending {
+    /// Keeps the distance of a solved pose from the prior, or of a pose
+    /// that the bounds of the prior refused.
+    pub(super) fn gate(&mut self, prior: &PosePrior, estimate: &Result<Estimate, VisualError>) {
+        let (position_m, attitude_rad) = match estimate {
+            Ok(estimate) => (
+                (estimate.pose.position - prior.pose.position).norm(),
+                estimate.pose.orientation.angle_to(&prior.pose.orientation),
+            ),
+            Err(VisualError::OutsidePrior { meters, radians }) => (*meters, *radians),
+            Err(_) => return,
+        };
+        self.gate = Some(PriorGate {
+            position_m,
+            attitude_rad,
+            position_radius_m: prior.position_radius_m,
+            attitude_radius_rad: prior.attitude_radius_rad,
+        });
+    }
+
     /// Keeps the images of a match and its correspondences.
     pub(super) fn compared(
         &mut self,
@@ -198,6 +234,7 @@ impl Pending {
             path,
             compared: self.compared,
             solved: self.solved,
+            gate: self.gate,
             fix: self.fix,
         }
     }
@@ -213,6 +250,7 @@ pub struct TerrainMatch {
     path: Option<&'static str>,
     compared: Option<Compared>,
     solved: Option<SolvedPose>,
+    gate: Option<PriorGate>,
     fix: Option<OfferedFix>,
 }
 
@@ -274,6 +312,13 @@ impl TerrainMatch {
     #[must_use]
     pub const fn solved(&self) -> Option<SolvedPose> {
         self.solved
+    }
+
+    /// How far the solved pose is from the belief that bounds the match,
+    /// for a pose that the fit solved, whether the bounds kept it or not.
+    #[must_use]
+    pub const fn prior_gate(&self) -> Option<PriorGate> {
+        self.gate
     }
 
     /// The fix offered to the filter, when the match gave one.

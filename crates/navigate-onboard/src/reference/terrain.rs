@@ -47,7 +47,7 @@ mod view;
 
 pub use belief::BeliefSource;
 pub use config::{TerrainConfig, WorkingCamera, WorkingLimit};
-pub use inspection::{Luma, MatchPair, OfferedFix, SolvedPose, TerrainMatch, ViewPose};
+pub use inspection::{Luma, MatchPair, OfferedFix, PriorGate, SolvedPose, TerrainMatch, ViewPose};
 pub use map::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainMapRequest,
 };
