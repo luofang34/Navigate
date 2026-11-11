@@ -74,36 +74,22 @@ pub(super) fn apply_vector_or_range(
 /// barometric source, and `h_ellipsoid(p)` for any other source. The
 /// position row is the outward normal of the ellipsoid,
 /// `[cos φ·cos λ, cos φ·sin λ, sin φ]`, which is the exact gradient of
-/// the ellipsoidal height.
-///
-/// The height also has a second-order term in the horizontal position
-/// error: a point `d` meters off along the tangent plane is `d²/(2·R)`
-/// higher, with `R` the radius of curvature of that direction. It is
-/// 2 m at 5 km and 11 m at 12 km, more than the noise of an altimeter.
-/// The model is second order (Gaussian second-order filter): the
-/// predicted height adds the mean `½·tr(K·P_h)` of the term, and the
-/// variance adds its variance `½·tr(K·P_h·K·P_h)`, with
-/// `K = diag(1/(M + h), 1/(N + h))` the curvature of the ellipsoid in
-/// the local north and east axes and `P_h` the horizontal position
-/// covariance in the same axes.
+/// the ellipsoidal height. The residual `z − h(x_nom)` is the geodetic
+/// height difference between the vehicle and the nominal state, and the
+/// vertical error state is that difference. The model adds no term for
+/// the curvature of the ellipsoid along a horizontal error: such a term
+/// would bias the height by about `σ_h²/R` (30 m at 14 km of horizontal
+/// 1-sigma).
 ///
 /// The update does not correct the horizontal position and velocity
-/// (`InertialCore::update_vertical`). The height depends on the
-/// horizontal error through `−d²/(2R)`. At kilometers of horizontal
-/// error this dependence is not Gaussian and is nearly constant within
-/// a flight, so it cannot be carried as a white variance: the updates
-/// would average it away, trust the vertical, and, once a turn makes the
-/// tilt observable, shrink the horizontal covariance far below the
-/// error. The horizontal states therefore take no correction from an
-/// altitude. The height still corrects the attitude and the biases,
-/// and those corrections reach the horizontal states through the
-/// dynamics.
-///
-/// Known limit: the height estimate is over-confident at kilometers of
-/// horizontal error. Its mean NEES is about 1 up to 5 km of horizontal
-/// error and 85 at 15 km on a route with turns. The error state measures
-/// the vertical along the local up of the nominal position, not as the
-/// geodetic height difference.
+/// (`InertialCore::update_vertical`). At kilometers of horizontal error
+/// on a route with turns, the vertical–horizontal cross-covariance does
+/// not carry real information: an update that uses it shrinks the
+/// horizontal 1-sigma to a fifth of the error (horizontal NEES 91 at the
+/// end of such a route), while an update that keeps off the horizontal
+/// states keeps the horizontal NEES and the height NEES in their bands.
+/// The height still corrects the attitude and the biases, and those
+/// corrections reach the horizontal states through the dynamics.
 pub(super) fn altitude(
     core: &InertialCore,
     ellipsoid: BodyEllipsoid,
@@ -120,27 +106,9 @@ pub(super) fn altitude(
     if barometric {
         h[(0, ALT_BIAS)] = 1.0;
     }
-    let (mean_m, variance_term_m2) = curvature_term(core, &local, ellipsoid);
     scalar(
-        altitude_m - (local.position.altitude_m + bias + mean_m),
+        altitude_m - (local.position.altitude_m + bias),
         h,
-        variance_m2 + variance_term_m2,
+        variance_m2,
     )
-}
-
-/// The mean and the variance of the second-order height term
-/// `½·δₕᵀ·K·δₕ` for a horizontal position error `δₕ ~ N(0, P_h)`.
-fn curvature_term(core: &InertialCore, local: &LocalLevel, ellipsoid: BodyEllipsoid) -> (f64, f64) {
-    let position = local.position;
-    let (meridian_m, prime_vertical_m) = ellipsoid.radii_of_curvature_m(position.latitude_rad);
-    let k_north = 1.0 / (meridian_m + position.altitude_m);
-    let k_east = 1.0 / (prime_vertical_m + position.altitude_m);
-    let p_ned = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(POS, POS).into_owned());
-    let (nn, ne, ee) = (p_ned[(0, 0)], p_ned[(0, 1)], p_ned[(1, 1)]);
-    let mean = 0.5 * (k_north * nn + k_east * ee);
-    let variance = 0.5
-        * (k_north * k_north * nn * nn
-            + 2.0 * k_north * k_east * ne * ne
-            + k_east * k_east * ee * ee);
-    (mean, variance)
 }
