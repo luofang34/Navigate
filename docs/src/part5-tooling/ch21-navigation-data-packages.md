@@ -178,6 +178,21 @@ between cells. The key of a cell is (source, revision, cell at the
 `correlation_zoom` of the layer): two packages cut from the same imagery
 give the same keys.
 
+`navigate_visual::session::MapCell` is the cell of one fix:
+
+- `MapCell::Source(key)` for a fix from a package layer, with the key from
+  `Layer::correlation_key` (`MapCell::of_layer`). A session anchor takes
+  it with `AnchorObservation::with_correlation`.
+- `MapCell::Local { .. }` for a map without a key: a tile catalog, or a
+  frame at a pole or on another body. The cell is a square of the local
+  frame of that one map.
+
+`MapCellLedger` records the first fix of each cell. `label` gives
+`Independent`, `SharedMapError` (with the earlier frame), or `Untracked`
+(the ledger is full), and it does not change the ledger. `commit` records
+a fix. A caller that offers a fix to a filter calls `commit` only when
+the filter accepts the fix.
+
 ## 8. Ports
 
 - `ReadPort::open(path)` gives an open file or `None`. The file has
@@ -359,4 +374,92 @@ altitude (with the barometer bias state), star-camera frames (identified
 lost in space or with the navigator's own attitude as the prior, then one
 line of sight for each star, with consecutive sequence numbers; each
 record of a star frame names its identification mode, `tracking` or
-`lost_in_space`), and observations that a sensor makes itself.
+`lost_in_space`), terrain-camera frames, and observations that a sensor
+makes itself.
+
+### Terrain camera
+
+Declare the camera in the suite:
+
+| `SensorSpec` field | Content |
+|---|---|
+| `kind` | `SensorKind::TerrainCamera` |
+| `imager` | `ImagerModel::pinhole(Intrinsics { width, height, fx, fy, cx, cy })`, in pixels. Pixel centres have integer coordinates. The band is visible; another band is refused (`OnboardError::UnsupportedBand`). |
+| `mount` | `CameraMount`: `lever_arm_body_m` is the optical centre from the body reference point in the body axes (forward, right, down); `cam_from_body` turns the body axes into the camera axes (`+X` right in the image, `+Y` down in the image, `+Z` along the optical axis). |
+| `budget` | `ErrorBudget::TerrainCamera { calibration_sigma_rad }`: the residual of the geometric calibration as an angle. |
+
+`CameraMount::rotated_forward(roll, pitch, yaw)` gives the mount of a
+forward camera that is turned by the yaw about the body down axis, then by
+the pitch about its image-right axis, then by the roll about its optical
+axis. A pitch of −90° is `CameraMount::nadir()`.
+
+Load the map before the first frame:
+
+```rust,ignore
+let store = Arc::new(DirectoryStore::new(directory));
+let mut request = TerrainMapRequest::new(package_identity, today);
+request.products = Some(product_list_digest);
+request.assumed_accuracy = Some(AssumedAccuracy { horizontal_sigma_m, vertical_sigma_m });
+let report = navigator.load_terrain_map(store, &request, geoid)?;
+```
+
+| Refusal (`MapRefusal`) | Cause |
+|---|---|
+| `NoTerrainCamera` | The suite declares no terrain camera. |
+| `Package(DataError)` | The manifest is missing (`Missing`), is not the manifest of the identity (`Integrity`), or is of another version or holds an unsupported value. |
+| `MissingLayer`, `EmptyLayer` | No imagery or no elevation layer, or a layer with no tile. |
+| `UnsupportedLayer` | Tiles that are not 256 pixels, imagery that is not PNG or JPEG, or elevation that is not Terrarium PNG. |
+| `UnknownAccuracy` | A layer states no accuracy and the request assumes none. |
+| `ProductList(DataError)` | The product list is missing, changed, or of another package. |
+
+The `MapReport` states the identity, each layer (source, revision, zoom
+levels, pixel size, tile and gap counts, the one-sigma on the present day
+and if the package or the host stated it), the bound of an unknown
+undulation, and the decision for each chunk of the product list. A
+keyframe chunk is used when the package holds each of its input blobs,
+its calibration is that of a declared terrain camera, and its recipe is
+that of `build_keyframes`. `TerrainMapRequest::route` limits the use to
+the chunks of one route.
+
+Give each frame as `SensorData::TerrainFrame { width, height, luma }`:
+eight-bit luminance, row-major, top row first, undistorted, of the
+declared size. `acquired_at` is the middle of the exposure, and
+`delivered_at` is the time when the frame reaches the navigator. A frame
+that comes more than `TerrainConfig::max_capture_lag_s` after its
+exposure is not matched.
+
+Each frame gives one record with the measurement `terrain_position` and
+the context `keyframe` or `render`:
+
+| Outcome | Meaning |
+|---|---|
+| `Accepted` | The filter took the fix. It is the first fix of its correlation cell. |
+| `Rejected(reason)` | The filter refused the fix. The cell stays open. |
+| `Unused("shared_map_error")` | An earlier fix carries the map error of the cell. The fix is not offered to the filter. |
+| `Unused("untracked_map_cell")` | The ledger is full. |
+| `Unused("outside_coverage")` | Less than `min_view_coverage` of the reference shows the map. |
+| `Unused("capture_lag")`, `Unused("no_solution")` | The frame is too old, or the navigator has no solution with an attitude. |
+| `Unused("insufficient_matches")` and the other localizer reasons | `navigate_visual::Localizer` did not accept a pose. |
+
+An input is an error, with no record, when no map is loaded
+(`MapNotLoaded`), when the frame size is not the declared size
+(`FrameSize`), and when the store fails or gives a changed blob
+(`MapRead`).
+
+The covariance of a fix is the image-geometry covariance of the match plus
+the covariance of each independent term: the imagery one-sigma `σ_h` on
+both horizontal axes, the height one-sigma `σ_z` (elevation accuracy and
+undulation bound) on the vertical axis and `σ_z · tan θ` along the ground
+direction of a view at the off-nadir angle `θ`, and the calibration angle
+times the range on each axis. `navigate_visual::fusion_bridge::
+position_fix_observation_composed` adds the sum to the image-geometry
+covariance with no further factor.
+
+Measured (release build, Apple M3 Max, directory store): one frame of
+320 by 240 pixels costs approximately 40 ms with a keyframe, which is the
+match, and approximately 0.5 s without, of which the reference render is
+more than 90 %. The scene window of a rendered reference costs
+approximately 9 ms and serves the next frames until the view leaves it. A
+frame in a cell that has a fix costs the same, because the cell is that of
+the matched ground. `cargo test --release -p navigate-onboard --lib cost
+-- --nocapture` gives the values of a machine.

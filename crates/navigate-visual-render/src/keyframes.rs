@@ -10,10 +10,13 @@ use navigate_data::product::{
 };
 use navigate_data::resource::{great_circle_m, point_along};
 use navigate_data::{LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
-use navigate_visual::{CameraModel, CameraPose, ReferenceView};
+use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceView};
 
 use crate::package_scene::{Geoid, SceneRequest, scene_around};
 use crate::{RenderError, SparseSceneSampler};
+
+/// The recipe algorithm of the keyframes that this module builds and reads.
+pub const KEYFRAME_ALGORITHM: &str = "navigate-visual-render/sparse-adaptive-ray-march";
 
 /// Magic of one encoded keyframe view.
 pub const KEYFRAME_MAGIC: &[u8; 8] = b"NVKEYV01";
@@ -63,7 +66,7 @@ impl KeyframeSpec {
     #[must_use]
     pub fn recipe(&self) -> Recipe {
         Recipe::new(
-            "navigate-visual-render/sparse-adaptive-ray-march",
+            KEYFRAME_ALGORITHM,
             env!("CARGO_PKG_VERSION"),
             None,
             Precision::F32,
@@ -79,6 +82,16 @@ impl KeyframeSpec {
         .with("luma_edge", i64::from(self.luma_edge))
         .with("depth_edge_ppm", micro(f64::from(self.depth_edge)))
         .with("encoding_nvkeyv01", 1)
+    }
+
+    /// The camera depression that a recipe of [`Self::recipe`] states, in
+    /// radians, or `None` for a recipe of another algorithm or encoding.
+    #[must_use]
+    pub fn recipe_depression_rad(recipe: &Recipe) -> Option<f64> {
+        let known = recipe.algorithm == KEYFRAME_ALGORITHM
+            && recipe.parameters.get("encoding_nvkeyv01") == Some(&1);
+        let depression = recipe.parameters.get("depression_urad")?;
+        known.then_some(*depression as f64 * 1e-6)
     }
 
     /// The camera calibration in micro-pixels.
@@ -151,6 +164,38 @@ pub fn decode_view(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<f32>), Render
         .map(|b| f32::from_le_bytes(*b))
         .collect();
     Ok((width, height, luma.to_vec(), depth))
+}
+
+/// The reference view of one stored keyframe: the view that
+/// [`build_keyframes`] rendered at `pose` with a camera `depression_rad`
+/// below the horizontal, from its entry blob `bytes`. The frame is the
+/// WGS84 east, north, up frame at the planned position.
+///
+/// # Errors
+///
+/// Refuses bytes that [`decode_view`] refuses and a pose outside the frame
+/// range.
+pub fn reference_view(
+    map: MapRevision,
+    pose: &PlannedPose,
+    depression_rad: f64,
+    bytes: &[u8],
+) -> Result<ReferenceView, RenderError> {
+    let (width, height, luma, depth_m) = decode_view(bytes)?;
+    let image = image::GrayImage::from_raw(width, height, luma)
+        .ok_or(RenderError::Invalid("keyframe view encoding"))?;
+    let ([lat, lon], altitude, heading) = pose.to_si();
+    let frame = LocalFrame::wgs84_enu(lat, lon)?;
+    Ok(ReferenceView {
+        map,
+        frame,
+        pose: CameraPose {
+            position: frame.local([lat, lon, altitude])?,
+            orientation: camera_orientation(heading, depression_rad),
+        },
+        image,
+        depth_m,
+    })
 }
 
 /// The planned poses along the legs, at `spacing_m`, each with the heading

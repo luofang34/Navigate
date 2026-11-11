@@ -182,8 +182,10 @@ records by range.
   the layer correlation zoom), not by the package identity. Two packages
   cut from the same imagery have the same keys, so their fixes in one cell
   share error. The correlation zoom is per layer; zoom 16 is the default.
-  `navigate-visual` changes its `MapCell` key to this key when the visual
-  means of `navigate-onboard` lands.
+  `navigate_visual::session::MapCell` holds this key for a fix from a
+  package layer. A map without a key (a tile catalog, a frame at a pole
+  or on another body, where no grid scheme applies) gets a local cell of
+  that one map.
 - A Web Mercator cell is not of constant size: a zoom 16 cell is
   approximately 611 m on a side at the equator, 460 m at 41° latitude, and
   306 m at 60°.
@@ -319,6 +321,49 @@ Rules of both traits:
 - The learned corridor stack (`navigate-visual-flight`) has its own
   filter. It is a second `Navigator`, not an aiding means of the first.
 
+The terrain-camera means of the reference navigator follows these rules:
+
+- **Frames.** The host declares the camera once: intrinsics, spectral
+  band, mount, and a calibration error. Each input is one frame as the
+  sensor gave it: luminance pixels and the time of the middle of the
+  exposure. The host makes no observation. A camera that is not a visible
+  camera is refused when the navigator is made.
+- **Map.** The host opens a store and gives it to the navigator with the
+  package identity, the present day, and, if it has them, the digest of
+  the product list, the geoid model, and the accuracy to assume for a
+  layer that states none. The navigator refuses, with a typed reason, a
+  package that is missing or not the expected one, a layer that is absent
+  or that the renderer cannot read, and an accuracy that no one states.
+  The answer of a load states the identity, the layers with their zoom
+  levels, pixel size, and present accuracy, and the use of each product
+  chunk. A frame without a loaded map is an error, not a record.
+- **Reference.** Inside the envelope of a stored keyframe, the keyframe is
+  the reference view. Outside, the navigator renders the reference from
+  the package at its believed camera pose.
+- **Belief at the exposure.** The filter gives a solution only at or
+  after its state time. The search starts at the solution on delivery,
+  moved back along its velocity, and its bounds grow with the delay. A
+  frame older than a set delay is not matched. The fix comes from the
+  image only: its lever arm comes off with the solved attitude, and its
+  stamp is the exposure.
+- **Covariance.** The covariance of a fix is the image-geometry
+  covariance of the match plus the covariances of independent terms (a
+  root sum square, not a sum of one-sigma values): the horizontal
+  accuracy of the imagery on the present day; the vertical accuracy of
+  the elevation, with the bound of an unknown undulation, on the vertical
+  axis and, times the tangent of the off-nadir angle, along the ground
+  direction of the view; and the calibration angle times the range.
+- **Correlation.** The correlation key of the matched ground labels each
+  fix. The first fix that the filter accepts in a cell is an independent
+  fix. A later fix in that cell shares its map error, so the navigator
+  does not offer it to the filter, and the record states that. A fix
+  that the filter refuses does not close its cell.
+- **Records.** Each frame gives one record: accepted, refused by the
+  filter with its reason, or not used with a reason, and the path of the
+  reference, `keyframe` or `render`.
+- **State.** A snapshot holds the frame order, the cells with a fix, and
+  the resident reference data. The map is immutable and shared.
+
 ### 14. Host obligations
 
 | Host | Fetch port | Read port | Store writer |
@@ -337,6 +382,8 @@ Rules of both traits:
 | Licence enforcement | The descriptor carries the terms; the host enforces them. |
 | Polar and other-body grids | The grid scheme value (§8). |
 | Representation L in a navigator | The data requirements of a navigator (§13). |
+| Fusion of a fix that shares the map error of an earlier fix | The one function of the terrain means that turns the label of a fix into what the filter is told. A filter state for time-correlated position error lets it pass the fix with a declared correlated error. |
+| The belief of the navigator at a past exposure | The one function of the terrain means that makes the belief. A query of the filter history replaces the move back along the velocity. |
 
 ### Relation to Pilotage
 

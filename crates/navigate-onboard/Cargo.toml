@@ -17,7 +17,16 @@ navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-guidance = { workspace = true, features = ["std"] }
 navigate-route = { workspace = true, features = ["std"] }
 navigate-startrack.workspace = true
+navigate-visual = { workspace = true, features = ["fusion"] }
+navigate-visual-render.workspace = true
+image.workspace = true
+pollster = "1.0"
 thiserror = { workspace = true, features = ["std"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
