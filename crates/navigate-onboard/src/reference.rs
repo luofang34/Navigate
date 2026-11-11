@@ -346,6 +346,7 @@ const fn fits(data: &SensorData, kind: SensorKind) -> bool {
                     SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
                     SensorKind::SurveyedPoint,
                 )
+                | (SensorData::DeclaredStart(_), SensorKind::Operator)
                 | (SensorData::Observation(_), _)
         )
 }
@@ -409,7 +410,8 @@ impl Navigator for ReferenceNavigator {
             | (
                 SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
                 SensorKind::SurveyedPoint,
-            ) => {
+            )
+            | (SensorData::DeclaredStart(_), SensorKind::Operator) => {
                 Self::alignment_only(input, sink);
                 Ok(())
             }

@@ -29,6 +29,9 @@ pub enum SensorKind {
     /// surveyed launch point. It is a measurement with a declared error,
     /// and its input says that the vehicle is at rest on the point.
     SurveyedPoint,
+    /// An operator or a host core that declares the start of a vehicle
+    /// that has no other source of it.
+    Operator,
     /// A sensor that gives fusion observations itself.
     ObservationSource,
 }
@@ -45,6 +48,7 @@ impl SensorKind {
             Self::TerrainCamera => "terrain camera",
             Self::Magnetometer => "magnetometer",
             Self::SurveyedPoint => "surveyed point",
+            Self::Operator => "operator",
             Self::ObservationSource => "observation source",
         }
     }
@@ -171,6 +175,7 @@ impl SensorSuite {
                     | (SensorKind::TerrainCamera, ErrorBudget::TerrainCamera { .. })
                     | (SensorKind::Magnetometer, ErrorBudget::Magnetometer { .. })
                     | (SensorKind::SurveyedPoint, ErrorBudget::Declared)
+                    | (SensorKind::Operator, ErrorBudget::Declared)
                     | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
@@ -298,6 +303,8 @@ pub enum SensorData {
         /// Vertical one-sigma of the survey, metres.
         vertical_sigma_m: f64,
     },
+    /// The start that an operator declares, at the stamp of the input.
+    DeclaredStart(crate::DeclaredStart),
     /// An observation that the sensor made itself.
     Observation(Observation),
 }
@@ -316,6 +323,7 @@ impl SensorData {
             Self::MagneticField { .. } => "magnetic field",
             Self::SurveyedPosition { .. } => "surveyed position",
             Self::KnownPosition { .. } => "known position",
+            Self::DeclaredStart(_) => "declared start",
             Self::Observation(_) => "observation",
         }
     }

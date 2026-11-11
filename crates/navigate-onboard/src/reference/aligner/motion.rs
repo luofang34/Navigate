@@ -110,7 +110,11 @@ impl Motion {
     /// The mean specific force between two instants, in the body axes at
     /// the second, m/s². `None` when the increments do not cover the span
     /// to one step.
-    fn mean_force(&self, from: MonotonicNanos, to: MonotonicNanos) -> Option<Vector3<f64>> {
+    pub(super) fn mean_force(
+        &self,
+        from: MonotonicNanos,
+        to: MonotonicNanos,
+    ) -> Option<Vector3<f64>> {
         let span_s = seconds_between(from, to);
         // The rotation from the body axes at an instant into the body axes
         // at `from`, and the sum of the velocity increments in those axes.
@@ -135,6 +139,44 @@ impl Motion {
         }
         (covered_s > 0.0 && (covered_s - span_s).abs() <= longest_step_s)
             .then(|| rotation.inverse() * sum / covered_s)
+    }
+
+    /// The mean body rate between two instants, rad/s, in the body axes
+    /// at the second to the turn of the span. `None` when the increments
+    /// do not cover the span to one step.
+    pub(super) fn mean_rate(
+        &self,
+        from: MonotonicNanos,
+        to: MonotonicNanos,
+    ) -> Option<Vector3<f64>> {
+        let span_s = seconds_between(from, to);
+        let mut sum = Vector3::zeros();
+        let mut covered_s = 0.0;
+        let mut longest_step_s: f64 = 0.0;
+        for step in &self.increments {
+            let inside_s = step.seconds_after(from) - step.seconds_after(to);
+            if inside_s > 0.0 {
+                sum += Vector3::from(step.delta_theta_rad) * (inside_s / step.dt_s);
+                covered_s += inside_s;
+                longest_step_s = longest_step_s.max(step.dt_s);
+            }
+        }
+        (covered_s > 0.0 && (covered_s - span_s).abs() <= longest_step_s).then(|| sum / covered_s)
+    }
+
+    /// The increments that end after `at`, which a state at `at` does not
+    /// hold.
+    pub(super) fn after(&self, at: MonotonicNanos) -> Vec<Increment> {
+        self.increments
+            .iter()
+            .filter(|step| step.acquired_at > at)
+            .copied()
+            .collect()
+    }
+
+    /// The end of the last increment.
+    pub(super) fn latest(&self) -> Option<MonotonicNanos> {
+        self.increments.back().map(|step| step.acquired_at)
     }
 
     /// Takes a fix of a vehicle whose course is its heading to
@@ -245,12 +287,7 @@ impl Motion {
         };
         Ok(Moving {
             solved: state.solved(fix),
-            later: self
-                .increments
-                .iter()
-                .filter(|step| step.acquired_at > fix.at)
-                .copied()
-                .collect(),
+            later: self.after(fix.at),
         })
     }
 }

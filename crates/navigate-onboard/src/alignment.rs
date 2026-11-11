@@ -17,6 +17,9 @@ pub enum AlignmentSource {
     Transfer,
     /// An evaluation gave the true state. A flight never has this source.
     Truth,
+    /// An operator declared position, height, heading and speed; the
+    /// navigator levelled from its own inertial data.
+    Declared,
 }
 
 /// What gave the heading of a self-alignment.
@@ -28,6 +31,8 @@ pub enum HeadingSource {
     /// The course over the ground of a vehicle that moves along its nose,
     /// to the configured allowance for its crab angle.
     GnssCourse,
+    /// The heading that an operator declared.
+    Declared,
 }
 
 /// What gave the position of a self-alignment.
@@ -40,6 +45,8 @@ pub enum PositionSource {
     SurveyedPoint,
     /// A position that the host states, with no statement of rest.
     KnownPosition,
+    /// The position that an operator declared with the start.
+    Declared,
 }
 
 /// The part of a self-alignment that is not complete.
@@ -100,6 +107,11 @@ pub enum AlignmentNeed {
     /// The vehicle moves too slowly for its course to be a heading as well
     /// as the alignment needs.
     CourseSpeed,
+    /// The specific force before a declared start is not that of a vehicle
+    /// that does not accelerate, within what the inertial errors explain.
+    SteadyMotion,
+    /// A declared height has no known reference.
+    HeightDatum,
 }
 
 impl AlignmentNeed {
@@ -121,6 +133,8 @@ impl AlignmentNeed {
             Self::InertialGap => "inertial_gap",
             Self::ForceDisagreement => "force_disagreement",
             Self::CourseSpeed => "course_speed",
+            Self::SteadyMotion => "steady_motion",
+            Self::HeightDatum => "height_datum",
         }
     }
 }
@@ -231,6 +245,13 @@ pub struct AlignmentConfig {
     /// crab angle of the wind that it can meet. The value is the host's
     /// engineering choice for its vehicle.
     pub course_heading_sigma_rad: Option<f64>,
+    /// One-sigma of the wind on each horizontal axis, m/s, for a declared
+    /// start whose speed is an airspeed: the statement does not say the
+    /// wind. An engineering choice for the vehicle's weather limits.
+    pub declared_wind_sigma_m_s: f64,
+    /// One-sigma of the vertical speed of a declared start, m/s: the
+    /// statement does not say it. An engineering choice for the vehicle.
+    pub declared_vertical_speed_sigma_m_s: f64,
 }
 
 impl Default for AlignmentConfig {
@@ -240,6 +261,8 @@ impl Default for AlignmentConfig {
             max_heading_sigma_rad: 0.2,
             suspect_after: 5,
             course_heading_sigma_rad: None,
+            declared_wind_sigma_m_s: 10.0,
+            declared_vertical_speed_sigma_m_s: 3.0,
         }
     }
 }
@@ -248,9 +271,14 @@ impl AlignmentConfig {
     /// Whether each value is finite and positive.
     #[must_use]
     pub fn is_usable(&self) -> bool {
-        [self.window_s, self.max_heading_sigma_rad]
-            .iter()
-            .all(|v| v.is_finite() && *v > 0.0)
+        [
+            self.window_s,
+            self.max_heading_sigma_rad,
+            self.declared_wind_sigma_m_s,
+            self.declared_vertical_speed_sigma_m_s,
+        ]
+        .iter()
+        .all(|v| v.is_finite() && *v > 0.0)
             && self.suspect_after > 0
             && self
                 .course_heading_sigma_rad

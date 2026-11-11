@@ -27,6 +27,7 @@
 mod acceptance;
 mod alignment;
 mod bundle;
+mod declared;
 mod director;
 mod error;
 mod navigator;
@@ -39,6 +40,7 @@ pub use alignment::{
     AlignmentStatus, HeadingSource, MagneticReference, PositionSource,
 };
 pub use bundle::Onboard;
+pub use declared::{DeclaredHeight, DeclaredSpeed, DeclaredStart, SpeedKind};
 pub use director::{
     DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector, SequenceCause,
 };

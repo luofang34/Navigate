@@ -18,10 +18,10 @@ use crate::AlignmentNeed;
 pub(crate) const GATE_SIGMAS: f64 = 4.0;
 /// Normal gravity half way between that at the equator and at the poles,
 /// m/s².
-const GRAVITY_MPS2: f64 = 9.806_2;
+pub(super) const GRAVITY_MPS2: f64 = 9.806_2;
 /// Half the span of normal gravity from the equator to the poles and from
 /// sea level to 3 km, m/s².
-const GRAVITY_SPAN_MPS2: f64 = 0.036;
+pub(super) const GRAVITY_SPAN_MPS2: f64 = 0.036;
 /// Rotation rate of the Earth, rad/s.
 pub(crate) const EARTH_RATE_RAD_S: f64 = 7.292_115e-5;
 

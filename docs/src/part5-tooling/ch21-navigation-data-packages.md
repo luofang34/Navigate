@@ -481,6 +481,43 @@ and no gyroscope bias, and the filter starts its biases at zero. The
 heading error of the state is the crab angle; the filter makes it smaller
 only when the vehicle has a horizontal acceleration.
 
+A vehicle with no GNSS can start from what an operator or a host core
+declares: `SensorData::DeclaredStart` from a `SensorKind::Operator`
+sensor, valid at the acquisition stamp of its input. It states the
+position with a horizontal one-sigma, the height with its
+`VerticalDatum` and one-sigma, the true heading with its one-sigma, and
+the speed, marked `SpeedKind::Airspeed` or `SpeedKind::GroundSpeed`,
+with its one-sigma. The navigator levels from its own inertial data over
+the `window_s` before the stamp and takes the rest from the statement;
+the record has `AlignmentSource::Declared`. A statement that comes late
+gives the state at its stamp, and the increments after it go into the
+filter; one that comes before the increments reach its stamp waits for
+them.
+
+Levelling takes the vehicle as not accelerated, and the state says what
+that costs. The size of the mean specific force must be that of gravity
+within four sigma of the accelerometer errors and of the false turn that
+the gyroscope bias makes at the declared speed; if not, the alignment
+waits with `steady_motion`. The size hardly shows an acceleration across
+gravity, so the tilt one-sigma holds every horizontal acceleration that
+the size test admits, spread evenly up to the largest. A vehicle that
+moves along its nose (`course_heading_sigma_rad` set) takes the
+centripetal acceleration of a turn, from the body rate and the declared
+speed, out of the specific force; another vehicle in a turn waits.
+
+The statement does not say four things, and the state holds an
+allowance for each:
+
+| Unstated | Allowance |
+|---|---|
+| Wind, for an airspeed | `AlignmentConfig::declared_wind_sigma_m_s` (10 m/s) on each horizontal axis |
+| Vertical speed | `AlignmentConfig::declared_vertical_speed_sigma_m_s` (3 m/s) |
+| Crab angle, the direction of the velocity | `course_heading_sigma_rad`; without it the direction is unknown, and each horizontal axis holds half the square of the speed |
+| Geoid undulation, for a height above a geoid | the bound of an unknown undulation, 107 m, as part of the vertical one-sigma |
+
+The two configured values are engineering choices for the vehicle. A
+height of unknown datum waits with `height_datum`.
+
 `Navigator::align` is a transfer alignment: the state of another
 estimator or of a survey. It replaces an alignment in progress and an
 earlier state. `Navigator::realign` forgets the state, and the sensors

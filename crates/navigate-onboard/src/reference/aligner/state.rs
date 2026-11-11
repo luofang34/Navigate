@@ -37,7 +37,7 @@ impl ReferenceNavigator {
                     delta_theta_rad: *delta_theta_rad,
                     delta_velocity_m_s: *delta_velocity_m_s,
                 });
-                return solved.map_or(Ok(()), |s| self.set_state(&s.alignment, s.record, s.biases));
+                return solved.map_or(Ok(()), |moving| self.set_moving_state(&moving));
             }
             SensorData::StarExposureMid => {
                 if let Some(channel) = self.stars.get_mut(&input.sensor.get()) {
@@ -88,6 +88,11 @@ impl ReferenceNavigator {
             } => self
                 .aligner
                 .surveyed(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
+            SensorData::DeclaredStart(start) => {
+                if let Some(moving) = self.aligner.declared(at, *start) {
+                    self.set_moving_state(&moving)?;
+                }
+            }
             SensorData::KnownPosition {
                 position,
                 horizontal_sigma_m,

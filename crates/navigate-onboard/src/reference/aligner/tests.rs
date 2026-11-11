@@ -10,6 +10,7 @@ use crate::{
     HeadingSource, Navigator, Outcome, PositionSource, ReferenceNavigator,
 };
 
+mod declared;
 mod envelope;
 mod inputs;
 mod lacks;

@@ -110,7 +110,7 @@ pub(super) fn attitude_error(truth: &Truth, solution: &NavigationSolution) -> Ve
 }
 
 /// The squared error `error`, normalized by the covariance `cov`.
-fn normalized(error: Vector3<f64>, cov: &SymmetricCov3) -> f64 {
+pub(super) fn normalized(error: Vector3<f64>, cov: &SymmetricCov3) -> f64 {
     (error.transpose() * matrix(cov).try_inverse().unwrap() * error)[(0, 0)]
 }
 

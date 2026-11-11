@@ -21,10 +21,11 @@ use navigate_fusion::ImuBiasPrior;
 
 use crate::{
     Alignment, AlignmentConfig, AlignmentNeed, AlignmentPhase, AlignmentRecord, AlignmentSource,
-    ErrorBudget, HeadingSource, MagneticReference, PositionSource, SensorData, SensorKind,
-    SensorSuite,
+    DeclaredStart, ErrorBudget, HeadingSource, MagneticReference, PositionSource, SensorData,
+    SensorKind, SensorSuite,
 };
 
+mod declared;
 mod heading;
 mod motion;
 pub(crate) mod names;
@@ -63,6 +64,8 @@ pub(crate) struct Aligner {
     /// What the alignment in motion lacked at the last fix of a moving
     /// vehicle, or `None` when the last fix was of a vehicle near rest.
     motion_need: Option<Waiting>,
+    /// A declared start whose stamp the increments have not passed.
+    pending: Option<(MonotonicNanos, DeclaredStart)>,
     waiting: Waiting,
 }
 
@@ -102,6 +105,7 @@ impl Aligner {
             window: Window::default(),
             motion: Motion::default(),
             motion_need: None,
+            pending: None,
             waiting: (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements),
         }
     }
@@ -111,6 +115,7 @@ impl Aligner {
         self.window = Window::default();
         self.motion = Motion::default();
         self.motion_need = None;
+        self.pending = None;
         self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements);
     }
 
@@ -119,9 +124,57 @@ impl Aligner {
         self.waiting
     }
 
-    /// Takes one inertial increment. At the end of a rest window it gives
-    /// the state of that window, if the window has one.
-    pub(crate) fn increment(&mut self, step: Increment) -> Option<Solved> {
+    /// Takes one inertial increment. It gives the state of a declared start
+    /// whose stamp it passes, or of a rest window that it completes.
+    pub(crate) fn increment(&mut self, step: Increment) -> Option<Moving> {
+        self.motion.increment(step);
+        if let Some(moving) = self.try_declared() {
+            return Some(moving);
+        }
+        self.rest_increment(step).map(|solved| Moving {
+            solved,
+            later: Vec::new(),
+        })
+    }
+
+    /// Takes the start that an operator declared at `at`.
+    pub(crate) fn declared(&mut self, at: MonotonicNanos, start: DeclaredStart) -> Option<Moving> {
+        if !start.is_usable() {
+            return None;
+        }
+        self.pending = Some((at, start));
+        self.try_declared()
+    }
+
+    /// The state of the pending declared start, once the increments pass
+    /// its stamp; what it lacks becomes what the alignment waits for.
+    fn try_declared(&mut self) -> Option<Moving> {
+        let (at, start) = self.pending?;
+        if self.motion.latest().is_none_or(|latest| latest < at) {
+            self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements);
+            return None;
+        }
+        self.pending = None;
+        let Some(inertial) = self.inertial else {
+            self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements);
+            return None;
+        };
+        match declared::solve(&start, at, &self.motion, &inertial, &self.config) {
+            Ok(moving) => Some(moving),
+            Err(need) => {
+                let phase = match need {
+                    AlignmentNeed::HeightDatum => AlignmentPhase::Position,
+                    _ => AlignmentPhase::Levelling,
+                };
+                self.waiting = (phase, need);
+                None
+            }
+        }
+    }
+
+    /// Takes one inertial increment into the rest window. At the end of the
+    /// window it gives the state of that window, if the window has one.
+    fn rest_increment(&mut self, step: Increment) -> Option<Solved> {
         let Increment {
             acquired_at: at,
             dt_s,
@@ -131,9 +184,6 @@ impl Aligner {
         } = step;
         if !(dt_s.is_finite() && dt_s > 0.0) {
             return None;
-        }
-        if self.config.course_heading_sigma_rad.is_some() {
-            self.motion.increment(step);
         }
         let begins =
             MonotonicNanos::from_nanos(at.as_nanos().saturating_sub((dt_s * 1e9).round() as u64));
@@ -433,6 +483,7 @@ pub(super) const fn measurement(data: &SensorData) -> &'static str {
         SensorData::MagneticField { .. } => names::MAGNETIC_FIELD,
         SensorData::SurveyedPosition { .. } => names::SURVEYED_POSITION,
         SensorData::KnownPosition { .. } => names::KNOWN_POSITION,
+        SensorData::DeclaredStart(_) => names::DECLARED_START,
         SensorData::StarCentroids { .. } => "star_line_of_sight",
         #[cfg(feature = "terrain-camera")]
         SensorData::TerrainFrame { .. } => super::terrain::MEASUREMENT,

@@ -12,6 +12,8 @@ pub(crate) const ALIGNMENT_ONLY: &str = "alignment_only";
 pub(crate) const MAGNETIC_FIELD: &str = "magnetic_field";
 /// Measurement name of a surveyed-point record.
 pub(crate) const SURVEYED_POSITION: &str = "surveyed_position";
+/// Measurement name of a declared-start record.
+pub(crate) const DECLARED_START: &str = "declared_start";
 /// Measurement name of a known-position record.
 pub(crate) const KNOWN_POSITION: &str = "known_position";
 
@@ -38,6 +40,8 @@ mod tests {
                 Need::InertialGap,
                 Need::ForceDisagreement,
                 Need::CourseSpeed,
+                Need::SteadyMotion,
+                Need::HeightDatum,
             ]
             .map(Need::name),
             [
@@ -55,12 +59,24 @@ mod tests {
                 "inertial_gap",
                 "force_disagreement",
                 "course_speed",
+                "steady_motion",
+                "height_datum",
             ]
         );
         assert_eq!([ALIGNMENT, ALIGNMENT_ONLY], ["alignment", "alignment_only"]);
         assert_eq!(
-            [MAGNETIC_FIELD, SURVEYED_POSITION, KNOWN_POSITION],
-            ["magnetic_field", "surveyed_position", "known_position"]
+            [
+                MAGNETIC_FIELD,
+                SURVEYED_POSITION,
+                KNOWN_POSITION,
+                DECLARED_START
+            ],
+            [
+                "magnetic_field",
+                "surveyed_position",
+                "known_position",
+                "declared_start"
+            ]
         );
     }
 }

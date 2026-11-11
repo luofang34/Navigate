@@ -385,6 +385,15 @@ The self-alignment of the reference navigator follows these rules:
   increments that came after that fix go into the filter after the
   state is set. The filter makes the heading better only when the
   vehicle has a horizontal acceleration.
+- **Declared start.** A vehicle with no GNSS can start from what an
+  operator declares: position, height with its datum, true heading, and
+  speed marked as airspeed or ground speed, each with a one-sigma, and
+  the time. The navigator levels from its own inertial data and takes
+  the vehicle as not accelerated; the tilt one-sigma holds every
+  horizontal acceleration that the size of the specific force cannot
+  show, and a specific force of the wrong size gives no state. What the
+  statement does not say (wind, vertical speed, crab angle, geoid
+  undulation) enters the covariance as a stated allowance.
 - **Position.** A GNSS fix with a covariance, or the surveyed point. The
   velocity is zero, with a one-sigma that covers each velocity the tests
   of rest let through.
