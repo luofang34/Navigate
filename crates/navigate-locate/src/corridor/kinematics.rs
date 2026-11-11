@@ -425,7 +425,7 @@ pub fn should_force_anchor(
             let north = (eye[1] / cell_m).floor() as i64;
             !visited_cells
                 .keys()
-                .any(|c| c.east == east && c.north == north)
+                .any(|c| c.local_index() == Some([east, north]))
         });
     let unc_hit = opts_anchor_uncertainty_m.is_some_and(|th| {
         kin.is_some_and(|k| (k.pos_cov_enu_m2[(0, 0)] + k.pos_cov_enu_m2[(1, 1)]).sqrt() >= th)

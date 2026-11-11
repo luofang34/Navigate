@@ -111,12 +111,8 @@ impl VisualCorridorSession {
         let _ = self.drain_session_events();
         self.ensure_ellipsoid(local_frame.reference_ellipsoid());
 
-        let cell = MapCell {
-            map_manifest_sha256: catalog_sha256.to_owned(),
-            east: (cand.eye[0] / cell_m).floor() as i64,
-            north: (cand.eye[1] / cell_m).floor() as i64,
-        };
-        let coords = Some([cell.east, cell.north]);
+        let cell = MapCell::local(catalog_sha256, cand.eye[0], cand.eye[1], cell_m);
+        let coords = cell.local_index();
         let lag_ns = arrival_ns.saturating_sub(capture_ns);
 
         match decision {

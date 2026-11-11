@@ -87,6 +87,65 @@ pub fn position_fix_observation_propagated(
     ))
 }
 
+/// Build a position fix whose external error the caller composed.
+///
+/// `external_ned_m2` is the covariance of the errors that image geometry
+/// cannot measure, in the local north, east, down axes at the fix: map
+/// registration, terrain height, calibration. The caller knows which terms
+/// are independent and adds their variances (a root sum square). The builder
+/// adds this covariance and the point-coordinate displacement of the frame
+/// to the image-geometry covariance, with no further inflation. The
+/// altitude of the fix is the height above the reference ellipsoid of the
+/// visual frame, so the map heights must be ellipsoid heights.
+///
+/// [`position_fix_observation`] is the alternative for a host that cannot
+/// state which terms are independent: it adds the declared terms linearly.
+/// This function does not screen repeated evidence or frame order. A caller
+/// that takes each estimate from one [`crate::Localizer`] has that screen.
+///
+/// # Errors
+/// Refuses an external covariance that is not finite, symmetric, and
+/// positive semidefinite, a position outside geodetic range, and an
+/// unusable sum.
+pub fn position_fix_observation_composed(
+    estimate: &Estimate,
+    identity: &VisualSourceIdentity,
+    external_ned_m2: &Matrix3<f64>,
+) -> Result<Observation, VisualFusionError> {
+    if (external_ned_m2 - external_ned_m2.transpose()).norm() > 1e-9 || !usable(external_ned_m2) {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
+    let [lat, lon, altitude_m] = estimate.frame.geodetic(estimate.pose.position);
+    let position = GeodeticPosition::new(lat.to_radians(), lon.to_radians(), altitude_m);
+    if !position.is_plausible() {
+        return Err(VisualFusionError::ImplausiblePosition);
+    }
+    let enu: Matrix3<f64> = estimate
+        .geometry_covariance
+        .fixed_view::<3, 3>(0, 0)
+        .into_owned();
+    let axes = ned_from_frame(estimate)?.to_rotation_matrix().into_inner();
+    let geometric = axes * enu * axes.transpose();
+    if (geometric - geometric.transpose()).norm() > 1e-9 || !usable(&geometric) {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
+    let displacement_m = estimate.frame.model_error_m(estimate.pose.position);
+    let ned = geometric + external_ned_m2 + Matrix3::identity() * displacement_m.powi(2);
+    if !usable(&ned) {
+        return Err(VisualFusionError::InvalidCovariance);
+    }
+    Ok(stamped_at(
+        estimate,
+        identity,
+        estimate.stamp.capture_time_ns,
+        estimate.stamp.sequence,
+        ObservationValue::PositionFix {
+            position,
+            covariance: to_cov3(&ned),
+        },
+    ))
+}
+
 /// Build a six-degree-of-freedom visual pose from one accepted visual estimate.
 ///
 /// The position is the camera optical centre, as in [`position_fix_observation`].

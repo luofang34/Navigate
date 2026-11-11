@@ -340,7 +340,7 @@ fn test_interval_trigger_horizontal_uncertainty() {
 #[test]
 fn test_interval_trigger_map_cell_boundary_crossing() {
     let mut visited = BTreeMap::new();
-    let cell_origin = MapCell {
+    let cell_origin = MapCell::Local {
         map_manifest_sha256: "manifest_a".to_owned(),
         east: 0,
         north: 0,
@@ -398,7 +398,7 @@ fn test_interval_trigger_map_cell_boundary_crossing() {
 #[test]
 fn test_interval_trigger_16_state_combinatorial_truth_table() {
     let mut visited = BTreeMap::new();
-    let visited_cell = MapCell {
+    let visited_cell = MapCell::Local {
         map_manifest_sha256: "m".to_owned(),
         east: 0,
         north: 0,

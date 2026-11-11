@@ -48,7 +48,7 @@ pub use events::{
     AnchorRejection, EventBatch, RevisedRange, RevisionCause, SegmentId, SegmentStart,
     SessionEvent, TrajectoryRevision,
 };
-pub use evidence::{FusionEligibility, MapCell};
+pub use evidence::{FusionEligibility, MapCell, MapCellLedger};
 pub use frame::{CaptureTime, ContinuityEpoch, FrameKey, FrameRecord, MediaTime, StreamId};
 pub use height::{
     AxisRange, Height, HeightBasis, HeightEstimate, HeightInputs, HeightSample, HeightSensor,

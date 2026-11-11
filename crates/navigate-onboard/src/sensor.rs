@@ -19,7 +19,8 @@ pub enum SensorKind {
     Barometer,
     /// A star camera.
     StarCamera,
-    /// A camera that sees the terrain.
+    /// A camera that sees the terrain. The navigator matches its frames
+    /// against the terrain map that the host loads.
     TerrainCamera,
     /// A sensor that gives fusion observations itself.
     ObservationSource,
@@ -76,6 +77,13 @@ pub enum ErrorBudget {
         /// One-sigma alignment error of the mount, radians.
         mount_alignment_sigma_rad: f64,
     },
+    /// Terrain camera knowledge.
+    TerrainCamera {
+        /// One-sigma residual of the geometric calibration (focal length,
+        /// principal point, lens model) as an angle, radians. Its position
+        /// error is this angle times the range to the ground.
+        calibration_sigma_rad: f64,
+    },
     /// The inputs carry their own covariances.
     Declared,
 }
@@ -87,9 +95,17 @@ pub struct SensorSpec {
     pub id: SourceId,
     /// What the sensor measures.
     pub kind: SensorKind,
-    /// The imager model of a camera, with its spectral band.
+    /// The imager model of a camera, with its spectral band: pinhole
+    /// intrinsics `fx`, `fy`, `cx`, `cy` in pixels, where pixel centres have
+    /// integer coordinates.
     pub imager: Option<ImagerModel>,
-    /// The mount of a camera, with its lever arm.
+    /// The mount of a camera. The lever arm is the optical centre from the
+    /// body reference point, in metres, in the body axes: forward, right,
+    /// down. The rotation takes the body axes into the camera axes: `+X`
+    /// right in the image, `+Y` down in the image, `+Z` along the optical
+    /// axis. `CameraMount::rotated_forward` gives it from roll, pitch, and
+    /// yaw of a forward camera. The body reference point is the point
+    /// whose position the navigator gives.
     pub mount: Option<CameraMount>,
     /// Nominal rate, Hz.
     pub rate_hz: f64,
@@ -132,7 +148,8 @@ impl SensorSuite {
                     )
                     | (SensorKind::Barometer, ErrorBudget::Barometer { .. })
                     | (SensorKind::StarCamera, ErrorBudget::StarCamera { .. })
-                    | (SensorKind::TerrainCamera | SensorKind::ObservationSource, _)
+                    | (SensorKind::TerrainCamera, ErrorBudget::TerrainCamera { .. })
+                    | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
             if !budget_ok || (camera && (a.imager.is_none() || a.mount.is_none())) {
@@ -218,6 +235,22 @@ pub enum SensorData {
         /// The centroids.
         centroids: Vec<StarCentroid>,
     },
+    /// One frame of a terrain camera, as the sensor gave it. The
+    /// acquisition time of the input is the middle of the exposure. The
+    /// intrinsics, the mount, and the spectral band are those of the
+    /// declared [`SensorSpec`]: the image is undistorted, its size is the
+    /// size of the declared intrinsics, and its axes are those of
+    /// `navigate_camera::Intrinsics` (columns to the right, rows down).
+    /// The navigator takes each row at the acquisition time, so it does
+    /// not model a rolling shutter.
+    TerrainFrame {
+        /// Image width, pixels.
+        width: u32,
+        /// Image height, pixels.
+        height: u32,
+        /// Luminance, eight bits for each pixel, row-major, top row first.
+        luma: Vec<u8>,
+    },
     /// An observation that the sensor made itself.
     Observation(Observation),
 }
@@ -232,6 +265,7 @@ impl SensorData {
             Self::BaroAltitude { .. } => "barometric altitude",
             Self::StarExposureMid => "star exposure",
             Self::StarCentroids { .. } => "star centroids",
+            Self::TerrainFrame { .. } => "terrain frame",
             Self::Observation(_) => "observation",
         }
     }

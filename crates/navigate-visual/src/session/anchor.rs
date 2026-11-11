@@ -3,6 +3,7 @@
 use crate::session::{FrameKey, pose::Pose, pose::from_camera};
 use crate::{Estimate, LocalFrame, MapRevision};
 use nalgebra::{Matrix3, Matrix6, Vector3};
+use navigate_data::CorrelationKey;
 
 /// The surface that the map depth describes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,10 +106,15 @@ pub struct AnchorObservation {
     pub backend: String,
     /// Declared map error near the anchor.
     pub reliability: MapReliability,
+    /// The correlation key of the package layer at the matched ground
+    /// (`navigate_data::Layer::correlation_key`). `None` for a map without
+    /// one; the session then cuts local cells for that one map.
+    pub correlation: Option<CorrelationKey>,
 }
 
 impl AnchorObservation {
-    /// An anchor from an accepted map-match estimate.
+    /// An anchor from an accepted map-match estimate against a map without
+    /// a correlation key.
     pub fn from_estimate(
         frame: FrameKey,
         estimate: &Estimate,
@@ -123,7 +129,15 @@ impl AnchorObservation {
             geometry_covariance: estimate.geometry_covariance,
             backend: estimate.backend.clone(),
             reliability,
+            correlation: None,
         }
+    }
+
+    /// The same anchor on a package layer with the correlation key `key`.
+    #[must_use]
+    pub const fn with_correlation(mut self, key: CorrelationKey) -> Self {
+        self.correlation = Some(key);
+        self
     }
 }
 

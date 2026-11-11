@@ -77,6 +77,29 @@ fn keyframes_are_a_product_of_the_core_with_their_recipe_and_envelope() {
     let fresh = pollster::block_on(render_at(&package, &store, &spec(), &pose, None)).unwrap();
     assert_eq!(luma, fresh.image.as_raw().clone());
     assert_eq!(depth, fresh.depth_m);
+    let stored = reference_view(
+        fresh.map.clone(),
+        &pose,
+        KeyframeSpec::rendering(&recipe).unwrap().depression_rad,
+        &pollster::block_on(chunk.entry_bytes(&store, &first)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored.image, fresh.image);
+    assert_eq!(stored.depth_m, fresh.depth_m);
+    assert_eq!(stored.frame.anchor(), fresh.frame.anchor());
+    assert!((stored.pose.position - fresh.pose.position).norm() < 1e-9);
+    assert!(stored.pose.orientation.angle_to(&fresh.pose.orientation) < 1e-6);
+    let other = Recipe::new("another/renderer", "1", None, Precision::F32);
+    assert_eq!(KeyframeSpec::rendering(&other), None);
+    // The recipe states the geoid model of the builder, so views with
+    // other terrain heights are another product.
+    assert_eq!(KeyframeSpec::rendering(&recipe).unwrap().geoid, None);
+    let with_geoid = spec().recipe(Some(GeoidModel::Egm96));
+    assert_ne!(with_geoid, recipe);
+    assert_eq!(
+        KeyframeSpec::rendering(&with_geoid).unwrap().geoid,
+        Some(GeoidModel::Egm96)
+    );
     let hits = depth.iter().filter(|d| **d > 0.0).count();
     assert!(hits > depth.len() * 9 / 10, "{hits}");
     let centre_depth = depth[60 * 160 + 80];

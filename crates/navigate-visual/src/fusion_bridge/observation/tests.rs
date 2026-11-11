@@ -359,3 +359,52 @@ fn polar_lunar_propagated_visual_pose_carries_frame_and_inflates_both_blocks() {
     assert!(prop_p.diagonal().0 > sync_p.diagonal().0 + 30.0);
     assert!(prop_a.diagonal().2 > sync_a.diagonal().2 + 1e-3);
 }
+
+#[test]
+fn a_composed_fix_adds_the_callers_covariance_without_inflation() {
+    let frame = LocalFrame::wgs84_enu(47.0, 11.0).unwrap();
+    let fix = estimate(
+        frame,
+        Vector3::new(0.0, 0.0, 900.0),
+        UnitQuaternion::identity(),
+    );
+    // Independent terms of 3 m and 4 m horizontal give a 5 m root sum square.
+    let horizontal_m2 = 3.0_f64.powi(2) + 4.0_f64.powi(2);
+    let external = Matrix3::from_diagonal(&Vector3::new(horizontal_m2, horizontal_m2, 36.0));
+    let observation = position_fix_observation_composed(&fix, &identity(), &external).unwrap();
+    assert_eq!(observation.frame, Some(FrameId::EARTH_ITRF93));
+    assert_eq!(observation.stamp.source, identity().source);
+    let ObservationValue::PositionFix {
+        position,
+        covariance,
+    } = observation.value
+    else {
+        panic!("a composed fix is a position fix");
+    };
+    assert!((position.altitude_m - 900.0).abs() < 1e-6);
+    // East 4, north 9, up 16 m² of image geometry move to north, east, down.
+    let ned = matrix(&covariance);
+    for (axis, expected) in [(0, 9.0 + 25.0), (1, 4.0 + 25.0), (2, 16.0 + 36.0)] {
+        assert!((ned[(axis, axis)] - expected).abs() < 1e-9, "{ned}");
+    }
+    let linear = position_fix_observation(&fix, &identity(), &budget()).unwrap();
+    let ObservationValue::PositionFix {
+        covariance: linear_cov,
+        ..
+    } = linear.value
+    else {
+        panic!("a position fix");
+    };
+    assert!(matrix(&linear_cov)[(0, 0)] > 5.0 * ned[(0, 0)]);
+
+    let mut negative = external;
+    negative[(2, 2)] = -1.0;
+    let mut skew = external;
+    skew[(0, 1)] = 1.0;
+    for bad in [negative, skew, external * f64::NAN] {
+        assert_eq!(
+            position_fix_observation_composed(&fix, &identity(), &bad),
+            Err(VisualFusionError::InvalidCovariance)
+        );
+    }
+}

@@ -121,12 +121,8 @@ pub(crate) fn classify_anchor_cell_fallback(
     frame_label: &str,
     capture_lag_ns: u64,
 ) -> FrameAdmission {
-    let cell = MapCell {
-        map_manifest_sha256: catalog_sha256.to_owned(),
-        east: (eye[0] / cell_m).floor() as i64,
-        north: (eye[1] / cell_m).floor() as i64,
-    };
-    let coords = Some([cell.east, cell.north]);
+    let cell = MapCell::local(catalog_sha256, eye[0], eye[1], cell_m);
+    let coords = cell.local_index();
     let (independent_ekf_fix, fusion_eligibility, earlier_anchor_id) =
         if let Some(earlier) = visited.get(&cell).cloned() {
             (false, FusionEligibility::SharedMapCell, Some(earlier))

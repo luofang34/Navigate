@@ -65,6 +65,7 @@ fn make_test_anchor(frame: FrameKey, pos: [f64; 3]) -> Result<AnchorObservation,
             surface: SurfaceModel::Surface,
             change: RegionChange::Unchanged,
         },
+        correlation: None,
     })
 }
 

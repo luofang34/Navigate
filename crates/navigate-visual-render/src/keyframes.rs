@@ -9,11 +9,14 @@ use navigate_data::product::{
     ValidityEnvelope, route_digest,
 };
 use navigate_data::resource::{great_circle_m, point_along};
-use navigate_data::{LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
-use navigate_visual::{CameraModel, CameraPose, ReferenceView};
+use navigate_data::{GeoidModel, LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
+use navigate_visual::{CameraModel, CameraPose, LocalFrame, MapRevision, ReferenceView};
 
 use crate::package_scene::{Geoid, SceneRequest, scene_around};
 use crate::{RenderError, SparseSceneSampler};
+
+/// The recipe algorithm of the keyframes that this module builds and reads.
+pub const KEYFRAME_ALGORITHM: &str = "navigate-visual-render/sparse-adaptive-ray-march";
 
 /// Magic of one encoded keyframe view.
 pub const KEYFRAME_MAGIC: &[u8; 8] = b"NVKEYV01";
@@ -58,12 +61,34 @@ fn micro(v: f64) -> i64 {
     (v * 1e6).round() as i64
 }
 
+/// How the keyframes of a chunk were rendered, as its recipe states.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyframeRendering {
+    /// Angle of the optical axis of each view below the horizontal, radians.
+    pub depression_rad: f64,
+    /// The geoid model that the builder had for the heights of an
+    /// orthometric elevation layer. The depth of each view follows from
+    /// it, so a reader with another model, or with none, has other
+    /// terrain heights than the views.
+    pub geoid: Option<GeoidModel>,
+}
+
+/// The recipe value of a geoid model: zero for none.
+const fn geoid_code(model: Option<GeoidModel>) -> i64 {
+    match model {
+        Some(GeoidModel::Egm96) => 1,
+        Some(GeoidModel::Egm2008) => 2,
+        Some(GeoidModel::Unsupported) | None => 0,
+    }
+}
+
 impl KeyframeSpec {
-    /// The complete recipe of the product, in integer units.
+    /// The complete recipe of the product, in integer units, for a builder
+    /// with the geoid model `geoid`.
     #[must_use]
-    pub fn recipe(&self) -> Recipe {
+    pub fn recipe(&self, geoid: Option<GeoidModel>) -> Recipe {
         Recipe::new(
-            "navigate-visual-render/sparse-adaptive-ray-march",
+            KEYFRAME_ALGORITHM,
             env!("CARGO_PKG_VERSION"),
             None,
             Precision::F32,
@@ -79,6 +104,26 @@ impl KeyframeSpec {
         .with("luma_edge", i64::from(self.luma_edge))
         .with("depth_edge_ppm", micro(f64::from(self.depth_edge)))
         .with("encoding_nvkeyv01", 1)
+        .with("geoid_model", geoid_code(geoid))
+    }
+
+    /// What a recipe of [`Self::recipe`] states about the views, or `None`
+    /// for a recipe of another algorithm or encoding.
+    #[must_use]
+    pub fn rendering(recipe: &Recipe) -> Option<KeyframeRendering> {
+        let known = recipe.algorithm == KEYFRAME_ALGORITHM
+            && recipe.parameters.get("encoding_nvkeyv01") == Some(&1);
+        let depression = recipe.parameters.get("depression_urad")?;
+        let geoid = match recipe.parameters.get("geoid_model")? {
+            0 => None,
+            1 => Some(GeoidModel::Egm96),
+            2 => Some(GeoidModel::Egm2008),
+            _ => return None,
+        };
+        known.then_some(KeyframeRendering {
+            depression_rad: *depression as f64 * 1e-6,
+            geoid,
+        })
     }
 
     /// The camera calibration in micro-pixels.
@@ -153,6 +198,38 @@ pub fn decode_view(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<f32>), Render
     Ok((width, height, luma.to_vec(), depth))
 }
 
+/// The reference view of one stored keyframe: the view that
+/// [`build_keyframes`] rendered at `pose` with a camera `depression_rad`
+/// below the horizontal, from its entry blob `bytes`. The frame is the
+/// WGS84 east, north, up frame at the planned position.
+///
+/// # Errors
+///
+/// Refuses bytes that [`decode_view`] refuses and a pose outside the frame
+/// range.
+pub fn reference_view(
+    map: MapRevision,
+    pose: &PlannedPose,
+    depression_rad: f64,
+    bytes: &[u8],
+) -> Result<ReferenceView, RenderError> {
+    let (width, height, luma, depth_m) = decode_view(bytes)?;
+    let image = image::GrayImage::from_raw(width, height, luma)
+        .ok_or(RenderError::Invalid("keyframe view encoding"))?;
+    let ([lat, lon], altitude, heading) = pose.to_si();
+    let frame = LocalFrame::wgs84_enu(lat, lon)?;
+    Ok(ReferenceView {
+        map,
+        frame,
+        pose: CameraPose {
+            position: frame.local([lat, lon, altitude])?,
+            orientation: camera_orientation(heading, depression_rad),
+        },
+        image,
+        depth_m,
+    })
+}
+
 /// The planned poses along the legs, at `spacing_m`, each with the heading
 /// of the leg at that point.
 fn planned_poses(legs: &[PlannedLeg], spacing_m: f64) -> Vec<PlannedPose> {
@@ -224,7 +301,8 @@ pub async fn build_keyframes<S: ReadPort + WritePort + ?Sized>(
         envelope: Some(spec.envelope),
         calibration: Some(spec.calibration()),
     };
-    let mut writer = ProductWriter::new(ProductKind::Keyframes, spec.recipe(), binding);
+    let recipe = spec.recipe(geoid.map(|(model, _)| model));
+    let mut writer = ProductWriter::new(ProductKind::Keyframes, recipe, binding);
     for (key, (pose, view)) in (0_u32..).zip(poses.iter().zip(&views)) {
         writer.add_entry(store, key, Some(*pose), view).await?;
     }
