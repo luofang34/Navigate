@@ -88,17 +88,18 @@ where
 /// (`InertialCore::update_vertical`). The body-fixed error state reads
 /// the vertical along the local up of the nominal position, and two
 /// points at the same height `d` apart differ along that up by the chord
-/// `−d²/(2R)`: 2 m at 5 km, 11 m at 12 km. At kilometers of horizontal
-/// error the chord is a residual that the linear model does not have,
-/// and a full-gain update spreads it through the vertical–horizontal
-/// cross-covariance. On a route with turns this shrinks the horizontal
-/// 1-sigma to a fifth of the error (horizontal NEES 91 at the end of the
-/// route); an altimeter that reads the height without the chord keeps
-/// the same full-gain filter in its band, which shows the chord as the
-/// cause. With the gain kept off the horizontal states, the horizontal
-/// NEES and the height NEES stay in their bands. The height still
-/// corrects the attitude and the biases, and those corrections reach the
-/// horizontal states through the dynamics.
+/// `−d²/(2R)`: 2 m at 5 km, 11 m at 12 km. With a full-gain update the
+/// height stays consistent but, at kilometers of horizontal error on a
+/// route with turns, the horizontal breaks: the horizontal 1-sigma
+/// shrinks to a fifth of the error (horizontal NEES 134 at the end of
+/// the route). An altimeter that reads the height without the chord
+/// keeps the same full-gain filter in its band, so the chord is the
+/// cause; an injection along geodetic coordinates instead of the
+/// body-fixed axes does not help (NEES 296). With the gain kept off the
+/// horizontal states, the horizontal NEES and the height NEES stay in
+/// their bands. The height still corrects the attitude and the biases,
+/// and those corrections reach the horizontal states through the
+/// dynamics.
 pub(super) fn altitude<const N: usize>(
     core: &InertialCore<N>,
     ellipsoid: BodyEllipsoid,
