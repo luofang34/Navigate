@@ -182,8 +182,16 @@ records by range.
   the layer correlation zoom), not by the package identity. Two packages
   cut from the same imagery have the same keys, so their fixes in one cell
   share error. The correlation zoom is per layer; zoom 16 is the default.
-  `navigate-visual` changes its `MapCell` key to this key when the visual
-  means of `navigate-onboard` lands.
+- `navigate_visual::session::MapCell` is the cell of one fix. A fix from
+  a package layer always has the cell `Source` with this key. The cell
+  `Local` is only for a map without a key: a tile catalog, and a tangent
+  frame at a pole or on another body, where no grid scheme applies (§8).
+  It is a square of the local frame of that one map. A `Source` cell and
+  a `Local` cell are never the same cell.
+- A fix in a cell with no earlier fix is taken as independent. This is
+  optimistic for orthoimagery: the registration error of a source has a
+  correlation length that is usually much larger than one cell. A filter
+  state for time-correlated position error replaces this rule (§15).
 - A Web Mercator cell is not of constant size: a zoom 16 cell is
   approximately 611 m on a side at the equator, 460 m at 41° latitude, and
   306 m at 60°.
@@ -340,6 +348,7 @@ Rules of both traits:
 | Licence enforcement | The descriptor carries the terms; the host enforces them. |
 | Polar and other-body grids | The grid scheme value (§8). |
 | Representation L in a navigator | The data requirements of a navigator (§13). |
+| Fusion of fixes that share map error | A filter state for time-correlated position error. A source then declares its correlated error, and a fix in a cell that has a fix is fused with that declaration and is not withheld. |
 
 ### Relation to Pilotage
 

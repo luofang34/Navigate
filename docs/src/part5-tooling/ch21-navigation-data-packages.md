@@ -176,7 +176,25 @@ size: a zoom 16 cell is approximately 611 m on a side at the equator,
 Map error is taken as shared inside one correlation cell and independent
 between cells. The key of a cell is (source, revision, cell at the
 `correlation_zoom` of the layer): two packages cut from the same imagery
-give the same keys.
+give the same keys. `visual-pipeline package` writes zoom 16
+(`DEFAULT_CORRELATION_ZOOM`), and `prepare` writes the zoom of the layer
+spec that its caller gives.
+
+`navigate_visual::session::MapCell` is the cell of one fix:
+
+- `MapCell::Source(key)` for a fix from a package layer, with the key from
+  `Layer::correlation_key` (`MapCell::of_layer`). A session anchor takes
+  it with `AnchorObservation::with_correlation`.
+- `MapCell::Local { .. }` only for a map without a key: a tile catalog,
+  or a tangent frame at a pole or on another body. The cell is a square
+  of the local frame of that one map (`MapCell::local`). A `Local` cell
+  is never equal to a `Source` cell.
+
+`MapCellLedger` records the first fix of each cell. `label` gives
+`Independent`, `SharedMapError` (with the earlier frame), or `Untracked`
+(the ledger is full), and it does not change the ledger. `commit` records
+a fix. A caller that offers a fix to a filter calls `commit` only when
+the filter accepts the fix.
 
 ## 8. Ports
 
