@@ -3,6 +3,7 @@
 
 use nalgebra::Vector3;
 use navigate_camera::CameraMount;
+use navigate_contract::MonotonicNanos;
 use navigate_fusion::RejectionReason;
 
 use super::flight::{CAMERA, Flight, RATE, at, fly, load, navigator, request, show_events};
@@ -263,35 +264,25 @@ fn a_frame_older_than_the_history_of_the_filter_takes_the_moved_back_belief() {
     let world = World::build(&WorldSpec::default());
     let flight = across_cells();
     let mut navigator = navigator(&flight, belly(), [15.0, -20.0, 5.0], 30.0);
-    // The host accepts frames up to a second old.
-    let patient = TerrainMapRequest {
-        config: TerrainConfig {
-            max_capture_lag_s: 1.0,
-            ..request(&world).config
-        },
-        ..request(&world)
-    };
-    navigator
-        .load_terrain_map(std::sync::Arc::clone(&world.store), &patient, None)
-        .unwrap();
+    load(&mut navigator, &world);
     let mut sink = Vec::new();
-    // The frame of step 25 comes 0.8 s later, after 40 more increments:
-    // more than the history of the filter holds.
-    for step in 1..=65 {
+    for step in 1..=5 {
         navigator
             .ingest(&flight.increment(step), &mut sink)
             .unwrap();
     }
-    assert!(navigator.filter().state_at(at(25)).is_err());
-    navigator
-        .ingest(&flight.frame(&world, &belly(), 25, 40), &mut sink)
-        .unwrap();
+    // The exposure is 100 ms before the first state of the filter, so the
+    // history of the filter does not hold it, whatever its depth.
+    let mut frame = flight.frame(&world, &belly(), 0, 5);
+    frame.acquired_at = MonotonicNanos::from_nanos(at(0).as_nanos() - 100_000_000);
+    assert!(navigator.filter().state_at(frame.acquired_at).is_err());
+    navigator.ingest(&frame, &mut sink).unwrap();
     assert_eq!(
         navigator.terrain_belief_source(CAMERA),
         Some(BeliefSource::MovedBackFromDelivery)
     );
     // The frame is matched from the moved-back belief: the vehicle went
-    // 30 m in the 0.8 s. The filter then judges the age of the fix.
+    // 8 m in the 0.2 s. The filter then judges the time of the fix.
     let records = terrain(&sink);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].1, Some("render"), "{records:?}");
