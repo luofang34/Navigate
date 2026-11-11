@@ -1,3 +1,4 @@
+mod bias_prior;
 mod coast;
 mod deep_space;
 mod frame_change;
