@@ -23,13 +23,8 @@ use crate::{
 mod aligner;
 mod stars;
 #[cfg(feature = "terrain-camera")]
-mod terrain;
+pub(crate) mod terrain;
 pub use stars::{StarCatalogueConfig, own_prior};
-#[cfg(feature = "terrain-camera")]
-pub use terrain::{
-    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
-    TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
-};
 
 use aligner::Aligner;
 use stars::{Sighting, StarChannel};
