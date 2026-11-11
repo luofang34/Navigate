@@ -464,6 +464,7 @@ the context `keyframe` or `render`:
 | `Unused("shared_map_error")` | An earlier fix carries the map error of the cell. The fix is not offered to the filter. |
 | `Unused("untracked_map_cell")` | The ledger of cells is full. |
 | `Unused("outside_coverage")` | Less than `min_view_coverage` of the reference shows the map. |
+| `Unused("featureless_frame")` | The frame is flat or has only the contrast of noise, as at night. It is found before any other work: no reference, no match. |
 | `Unused("capture_lag")` | The frame came later after its exposure than `max_capture_lag_s`. |
 | `Unused("acquired_after_delivery")` | The acquisition time is after the delivery time. |
 | `Unused("no_solution")` | The navigator has no solution with an attitude. |
@@ -501,6 +502,17 @@ the limit. Example: a camera of 800 by 600 pixels and 67° at 1 700 m sees
 2.8 m for each pixel; over zoom 15 imagery (3.6 m) the map texel asks for
 635 by 477 pixels, and the default bound of 76 800 pixels gives 320 by
 240 with pixels of 7.1 m.
+
+The first check of a frame is its content. The navigator compares the
+contrast between blocks of 8 by 8 pixels with the contrast from one pixel
+to the next. White noise averages over a block, so a frame of noise alone
+has a block contrast of one eighth of its pixel contrast, at each noise
+level: a structure of one. Ground texture is wider than a block. A frame
+with a structure below `TerrainConfig::min_structure` (2), or with less
+than a quarter of a count between blocks, is recorded as
+`Unused("featureless_frame")`. Measured: frames of an offset and noise of
+1, 3, and 10 counts have a structure of 1.03 to 1.09; a frame of the test
+ground has 42, and 9 when its contrast is reduced to 6 %.
 
 Before a reference is made, the navigator finds the ground point of the
 believed optical axis and each correlation cell within the search disk

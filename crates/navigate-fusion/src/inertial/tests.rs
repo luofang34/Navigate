@@ -1,4 +1,5 @@
 mod bias_prior;
+mod checkpoints;
 mod coast;
 mod deep_space;
 mod frame_change;

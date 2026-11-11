@@ -75,6 +75,11 @@ pub struct TerrainConfig {
     pub luma_edge: u8,
     /// Relative depth step that the renderer refines.
     pub depth_edge: f32,
+    /// Smallest structure of a frame that is matched: the contrast between
+    /// blocks of 8 by 8 pixels as a multiple of the block contrast of white
+    /// noise with the pixel contrast of the frame. A frame of noise alone
+    /// has one.
+    pub min_structure: f64,
     /// Largest count of pixels of the reference view and of the match: the
     /// bound of the cost of one frame.
     pub max_match_pixels: u32,
@@ -101,6 +106,7 @@ impl Default for TerrainConfig {
             stride: 4,
             luma_edge: u8::MAX,
             depth_edge: 0.02,
+            min_structure: 2.0,
             max_match_pixels: 320 * 240,
             min_match_pixels: 160 * 120,
         }
@@ -171,6 +177,7 @@ impl TerrainConfig {
             self.max_search_radius_m,
             self.attitude_radius_rad,
             self.far_m,
+            self.min_structure,
             f64::from(self.depth_edge),
         ]
         .iter()

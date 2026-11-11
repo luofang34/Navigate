@@ -8,6 +8,7 @@ fn the_record_names_do_not_change() {
     assert_eq!([KEYFRAME, RENDER], ["keyframe", "render"]);
     assert_eq!(
         [
+            FEATURELESS_FRAME,
             ACQUIRED_AFTER_DELIVERY,
             CAPTURE_LAG,
             NO_SOLUTION,
@@ -20,6 +21,7 @@ fn the_record_names_do_not_change() {
             FIX_REFUSED,
         ],
         [
+            "featureless_frame",
             "acquired_after_delivery",
             "capture_lag",
             "no_solution",
