@@ -14,23 +14,23 @@ use navigate_fusion::{
 };
 use navigate_startrack::line_of_sight_observations;
 
-use navigate_data::LayerKind;
-use navigate_data::product::ProductKind;
-
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, DataRequirement, ErrorBudget, Navigator, Need,
-    OnboardError, Outcome, ProductReport, SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, ErrorBudget, Navigator, OnboardError, Outcome,
+    SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
 mod stars;
+#[cfg(feature = "terrain-camera")]
 mod terrain;
 pub use stars::{StarCatalogueConfig, own_prior};
+#[cfg(feature = "terrain-camera")]
 pub use terrain::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainConfig,
     TerrainMapRequest,
 };
 
 use stars::{Sighting, StarChannel};
+#[cfg(feature = "terrain-camera")]
 use terrain::TerrainMeans;
 
 /// The reference composition. Each sensor of the suite feeds the one
@@ -45,6 +45,7 @@ pub struct ReferenceNavigator {
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
     stars: BTreeMap<u32, StarChannel>,
+    #[cfg(feature = "terrain-camera")]
     terrain: TerrainMeans,
 }
 
@@ -90,7 +91,9 @@ impl ReferenceNavigator {
     ///
     /// Refuses a suite without an IMU budget, a star camera without a
     /// catalogue configuration, and a terrain camera that is not a visible
-    /// camera with usable intrinsics.
+    /// camera with usable intrinsics. Without the feature `terrain-camera`
+    /// it refuses each terrain camera
+    /// ([`OnboardError::FeatureDisabled`]).
     pub fn new(
         suite: SensorSuite,
         clock: ClockDomainId,
@@ -108,7 +111,16 @@ impl ReferenceNavigator {
             })?;
             channels.insert(spec.id.get(), StarChannel::new(spec, catalogue)?);
         }
+        #[cfg(not(feature = "terrain-camera"))]
+        if let Some(spec) = suite.of_kind(SensorKind::TerrainCamera).next() {
+            return Err(OnboardError::FeatureDisabled {
+                sensor: spec.id,
+                kind: spec.kind.name(),
+                feature: "terrain-camera",
+            });
+        }
         Ok(Self {
+            #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
             filter: Box::new(InertialNavigationFilter::new_surface(
                 config,
@@ -361,6 +373,7 @@ impl Navigator for ReferenceNavigator {
             (SensorData::StarCentroids { .. }, SensorKind::StarCamera) => {
                 self.star_frame(input, sink)
             }
+            #[cfg(feature = "terrain-camera")]
             (SensorData::TerrainFrame { .. }, SensorKind::TerrainCamera) => {
                 self.terrain_frame(input, sink)
             }
@@ -376,32 +389,14 @@ impl Navigator for ReferenceNavigator {
         self.filter.tick(now)
     }
 
-    fn requirements(&self) -> Vec<DataRequirement> {
-        if !self.terrain.has_cameras() {
-            return Vec::new();
-        }
-        let layer = |kind| DataRequirement {
-            layer: Some(kind),
-            product: None,
-            altitude_bands: None,
-            need: Need::Required,
-        };
-        vec![
-            layer(LayerKind::Imagery),
-            layer(LayerKind::Elevation),
-            DataRequirement {
-                layer: None,
-                product: Some(ProductKind::Keyframes),
-                altitude_bands: None,
-                need: Need::Optional,
-            },
-        ]
+    #[cfg(feature = "terrain-camera")]
+    fn requirements(&self) -> Vec<crate::DataRequirement> {
+        self.terrain.requirements()
     }
 
-    fn load_report(&self) -> &[ProductReport] {
-        self.terrain
-            .report()
-            .map_or(&[], |report| report.products.as_slice())
+    #[cfg(feature = "terrain-camera")]
+    fn load_report(&self) -> &[crate::ProductReport] {
+        self.terrain.products()
     }
 
     fn snapshot(&self) -> Box<dyn Navigator> {

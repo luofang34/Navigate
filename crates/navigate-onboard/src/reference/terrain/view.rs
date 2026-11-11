@@ -14,11 +14,7 @@ use navigate_visual_render::{RenderError, SceneRequest, SceneWindow, SparseScene
 use super::belief::Belief;
 use super::keyframes::{HeldKeyframe, KeyframeError, view_of};
 use super::map::TerrainMap;
-
-/// The record context of a fix from a stored keyframe.
-pub(crate) const KEYFRAME: &str = "keyframe";
-/// The record context of a fix from a rendered reference.
-pub(crate) const RENDER: &str = "render";
+use super::names::{BELIEF_OUT_OF_RANGE, KEYFRAME, OUTSIDE_COVERAGE, RENDER, RENDER_REFUSED};
 
 /// A new scene window is this much larger than the frame needs, so that
 /// the next frames of a moving vehicle stay inside it.
@@ -145,7 +141,7 @@ impl Views {
         let config = &map.config;
         let (eye, reach_m, footprint_m) =
             reach_and_footprint_m(camera, belief, mount, config.far_m)
-                .ok_or(NoView::Unused("belief_out_of_range"))?;
+                .ok_or(NoView::Unused(BELIEF_OUT_OF_RANGE))?;
         let resident = self.window(map, eye, reach_m + radius_m, footprint_m)?;
         let scene = &resident.window.scene;
         let refused = |error: RenderError| match error {
@@ -153,12 +149,12 @@ impl Views {
             RenderError::Decode(e) => NoView::Read(e.to_string()),
             other => {
                 tracing::debug!(error = %other, "the terrain reference was not rendered");
-                NoView::Unused("render_refused")
+                NoView::Unused(RENDER_REFUSED)
             }
         };
         let pose = belief
             .camera_in(scene.frame, mount)
-            .map_err(|_| NoView::Unused("belief_out_of_range"))?;
+            .map_err(|_| NoView::Unused(BELIEF_OUT_OF_RANGE))?;
         let (view, _) =
             SparseSceneSampler::new(scene, config.far_m, config.steps, config.refinements)
                 .and_then(|sampler| {
@@ -173,7 +169,7 @@ impl Views {
                 .map_err(refused)?;
         let seen = view.depth_m.iter().filter(|d| **d > 0.0).count();
         if (seen as f64) < config.min_view_coverage * view.depth_m.len() as f64 {
-            return Err(NoView::Unused("outside_coverage"));
+            return Err(NoView::Unused(OUTSIDE_COVERAGE));
         }
         Ok(Reference {
             view: Arc::new(view),
@@ -190,7 +186,7 @@ impl Views {
         need_m: f64,
         footprint_m: f64,
     ) -> Result<Arc<Resident>, NoView> {
-        let no_tiles = NoView::Unused("outside_coverage");
+        let no_tiles = NoView::Unused(OUTSIDE_COVERAGE);
         let (Some(imagery_zoom), Some(elevation_zoom)) = (
             map.imagery.zoom_for(footprint_m),
             map.elevation.zooms.last().copied(),
@@ -219,7 +215,7 @@ impl Views {
             RenderError::Decode(e) => NoView::Read(e.to_string()),
             other => {
                 tracing::debug!(error = %other, "no scene window for the terrain reference");
-                NoView::Unused("outside_coverage")
+                NoView::Unused(OUTSIDE_COVERAGE)
             }
         })?;
         let resident = Arc::new(Resident {

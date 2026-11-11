@@ -15,6 +15,8 @@ cargo fmt --all --check
 
 echo "== cargo clippy =="
 cargo clippy --all-targets -- -D warnings
+# The workspace run has navigate-onboard without its terrain-camera means.
+cargo clippy -p navigate-onboard --features terrain-camera --all-targets -- -D warnings
 
 echo "== bare-metal no_std (core navigation crates) =="
 for target in thumbv8m.main-none-eabihf riscv32imac-unknown-none-elf; do
@@ -72,10 +74,13 @@ cargo test --release -p navigate-celestial --test eclipse_canon
 
 echo "== cargo test =="
 cargo test --all-targets
+cargo test -p navigate-onboard --features terrain-camera
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
     cargo doc --no-deps --workspace
+RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
+    cargo doc --no-deps -p navigate-onboard --features terrain-camera
 
 echo "== wasm32 (visual locator, matchers, and segmentation) =="
 cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
