@@ -13,6 +13,13 @@
 //! the tiles for each square kilometre, so a higher leg costs less for
 //! each kilometre. The far field of an oblique camera uses coarser levels
 //! than its near field.
+//!
+//! The size of a plan is [`estimate_size`]: the count of planned tiles of
+//! each layer and zoom times the size of one tile of that layer. A whole
+//! tile is fetched however little of it a strip covers, so a size from the
+//! strip area is too small on short legs and at coarse zooms. The estimate
+//! uses the typical tile size and the upper bound the upper tile size; a
+//! storage budget is judged on the upper bound.
 
 use alloc::vec::Vec;
 use core::f64::consts::{FRAC_PI_2, LN_2};
@@ -23,7 +30,9 @@ use serde::{Deserialize, Serialize};
 use crate::{DataError, LayerKind};
 
 mod geometry;
+mod size;
 pub use geometry::{great_circle_m, point_along};
+pub use size::{LayerSize, SizeEstimate, estimate_size, layer_size};
 
 /// Equatorial circumference of the WGS84 ellipsoid in metres.
 pub const EQUATOR_M: f64 = 40_075_016.685_578_49;
@@ -81,7 +90,7 @@ pub struct PlannedLeg {
     pub to: [f64; 3],
 }
 
-/// The limits and the measured size of one source layer.
+/// The limits and the measured tile size of one source layer.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LayerLimits {
     /// Pixels on one side of a tile.
@@ -90,49 +99,40 @@ pub struct LayerLimits {
     pub min_zoom: u32,
     /// Finest zoom that the source has.
     pub max_zoom: u32,
-    /// Measured encoded size in bytes for each square kilometre at
-    /// `reference_zoom`.
-    pub bytes_per_km2: f64,
-    /// The zoom of `bytes_per_km2`.
-    pub reference_zoom: u32,
-    /// Size ratio between one zoom and the next coarser one.
-    pub growth_per_zoom: f64,
+    /// Typical encoded size of one tile, bytes: the estimate.
+    pub typical_tile_bytes: u64,
+    /// Encoded size of one tile above each measured tile of the source,
+    /// bytes: the value for budget decisions.
+    pub upper_tile_bytes: u64,
 }
 
 impl LayerLimits {
-    /// Measured imagery: approximately 18 KB/km² at zoom 15 and 70 KB/km²
-    /// at zoom 16.
+    /// Esri World Imagery JPEG tiles of 256 pixels. Measured on the
+    /// Zaragoza package (809 tiles at zooms 16 and 17): 15.5 to 17.3 kB a
+    /// tile. Typical 16 kB, upper 20 kB.
     #[must_use]
     pub const fn imagery() -> Self {
         Self {
             tile_pixels: 256,
             min_zoom: 8,
             max_zoom: 19,
-            bytes_per_km2: 18_000.0,
-            reference_zoom: 15,
-            growth_per_zoom: 3.9,
+            typical_tile_bytes: 16_000,
+            upper_tile_bytes: 20_000,
         }
     }
 
-    /// Measured Terrarium elevation: approximately 2 KB/km² at zoom 12 and
-    /// 7.5 KB/km² at zoom 13.
+    /// Mapzen Terrarium PNG tiles of 256 pixels. Measured on the Zaragoza
+    /// package (24 tiles at zooms 13 and 14): 76 to 100 kB a tile. Typical
+    /// 90 kB, upper 110 kB.
     #[must_use]
     pub const fn terrarium() -> Self {
         Self {
             tile_pixels: 256,
             min_zoom: 6,
             max_zoom: 15,
-            bytes_per_km2: 2_000.0,
-            reference_zoom: 12,
-            growth_per_zoom: 3.75,
+            typical_tile_bytes: 90_000,
+            upper_tile_bytes: 110_000,
         }
-    }
-
-    /// Estimated bytes for each square kilometre at `zoom`.
-    #[must_use]
-    pub fn bytes_per_km2_at(&self, zoom: u32) -> f64 {
-        let levels = i64::from(zoom) - i64::from(self.reference_zoom);
-        self.bytes_per_km2 * powi(self.growth_per_zoom, levels as i32)
     }
 }
 
@@ -173,8 +173,6 @@ pub struct ZoomBand {
     pub half_width_m: f64,
     /// Area of the strip in square kilometres.
     pub area_km2: f64,
-    /// Estimated encoded size in bytes.
-    pub bytes: f64,
 }
 
 /// What one leg needs.
@@ -192,18 +190,14 @@ pub struct LegResources {
     pub bands: Vec<ZoomBand>,
     /// Widest strip half width of the leg, metres.
     pub corridor_half_width_m: f64,
-    /// Estimated encoded size in bytes.
-    pub bytes: f64,
 }
 
 /// What the flight needs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResourcePlan {
-    /// One entry for each leg.
+    /// One entry for each leg. The size of the plan is
+    /// [`estimate_size`] of its tiles.
     pub legs: Vec<LegResources>,
-    /// Estimated encoded size in bytes. Strips of one zoom that overlap
-    /// between legs are counted once for each leg.
-    pub bytes: f64,
 }
 
 /// The heights of the ground that the host knows before the fetch, for
@@ -229,8 +223,7 @@ pub fn plan_resources<G: GroundHeight + ?Sized>(
     for (index, leg) in request.legs.iter().enumerate() {
         legs.push(leg_resources(request, ground, index, leg)?);
     }
-    let bytes = legs.iter().map(|l| l.bytes).sum();
-    Ok(ResourcePlan { legs, bytes })
+    Ok(ResourcePlan { legs })
 }
 
 fn invalid(field: &'static str, detail: alloc::string::String) -> DataError {
@@ -332,15 +325,9 @@ fn leg_resources<G: GroundHeight + ?Sized>(
         band.half_width_m += margin;
         let strip_m = length_m + band.far_m;
         band.area_km2 = strip_m * 2.0 * band.half_width_m / 1e6;
-        let limits = match band.layer {
-            LayerKind::Elevation => &request.elevation,
-            _ => &request.imagery,
-        };
-        band.bytes = band.area_km2 * limits.bytes_per_km2_at(band.zoom);
         bands.push(band);
     }
     let corridor_half_width_m = bands.iter().map(|b| b.half_width_m).fold(0.0, f64::max);
-    let bytes = bands.iter().map(|b| b.bytes).sum();
     Ok(LegResources {
         leg: index,
         length_m,
@@ -348,7 +335,6 @@ fn leg_resources<G: GroundHeight + ?Sized>(
         altitude_band: altitude_band(agl_m),
         bands,
         corridor_half_width_m,
-        bytes,
     })
 }
 
@@ -424,7 +410,6 @@ fn camera_bands(
             far_m: ground_of(hi),
             half_width_m: hi * tan(half_h),
             area_km2: 0.0,
-            bytes: 0.0,
         });
     }
     bands

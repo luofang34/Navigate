@@ -69,8 +69,8 @@ pub use manifest::{IndexRef, Layer, LayerKey, Manifest, PACKAGE_FORMAT, PACKAGE_
 pub use package::{LayerSpec, Package, PackageWriter, TileRead, read_blob};
 pub use prepare::{PlannedTiles, PrepareSummary, plan_tiles, prepare};
 pub use resource::{
-    GroundHeight, LayerLimits, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
-    ResourceRequest, ZoomBand, plan_resources,
+    GroundHeight, LayerLimits, LayerSize, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
+    ResourceRequest, SizeEstimate, ZoomBand, estimate_size, plan_resources,
 };
 pub use source::{
     Encoding, LayerKind, Revision, SOURCE_FORMAT, SOURCE_FORMAT_VERSION, SourceDeclaration,

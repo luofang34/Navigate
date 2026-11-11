@@ -73,13 +73,13 @@ fn a_higher_leg_needs_coarser_tiles_and_costs_less_per_kilometre() {
         finest(&high),
         finest(&low)
     );
-    let per_km = |p: &ResourcePlan| p.bytes / (p.legs[0].length_m / 1000.0);
-    assert!(
-        per_km(&high) < per_km(&low),
-        "{} {}",
-        per_km(&high),
-        per_km(&low)
-    );
+    let per_km = |altitude: f64, p: &ResourcePlan| {
+        let request = request(altitude, 90.0);
+        let tiles = crate::plan_tiles(&request.legs, p).unwrap();
+        estimate_size(&request, &tiles).estimate_bytes as f64 / (p.legs[0].length_m / 1000.0)
+    };
+    let (high_km, low_km) = (per_km(3_300.0, &high), per_km(800.0, &low));
+    assert!(high_km < low_km, "{high_km} {low_km}");
     assert_eq!(low.legs[0].agl_m, 500.0);
     assert_eq!(low.legs[0].altitude_band, 2);
     assert_eq!(high.legs[0].altitude_band, 4);
@@ -111,7 +111,7 @@ fn elevation_follows_imagery_at_the_offset_and_the_strip_includes_the_margins() 
             .any(|b| b.layer == LayerKind::Elevation && b.zoom == fine.zoom - 3)
     );
     assert!(fine.half_width_m > 300.0);
-    assert!(leg.bytes > 0.0 && (plan.bytes - leg.bytes).abs() < 1e-6);
+    assert!(leg.bands.iter().all(|b| b.area_km2 > 0.0));
 }
 
 #[test]
@@ -130,4 +130,49 @@ fn unusable_requests_are_refused() {
     let mut nan = request(800.0, 90.0);
     nan.search_radius_m = f64::NAN;
     assert!(plan_resources(&nan, &Flat(0.0)).is_err());
+}
+
+/// The Zaragoza package: three 4 km legs about 960, 995, and 1 455 m above
+/// ground, a nadir camera of 60° and 1 024 pixels, a 300 m corridor
+/// margin, Esri World Imagery JPEG and Mapzen Terrarium PNG of 256 pixels.
+/// Rows: layer, zoom, tiles, measured bytes.
+const ZARAGOZA: [(LayerKind, u32, u64, f64); 4] = [
+    (LayerKind::Imagery, 17, 653, 10.11e6),
+    (LayerKind::Imagery, 16, 156, 2.70e6),
+    (LayerKind::Elevation, 14, 17, 1.29e6),
+    (LayerKind::Elevation, 13, 7, 0.70e6),
+];
+
+#[test]
+fn the_tile_size_estimate_matches_the_measured_zaragoza_package() {
+    let mut total = (0_u64, 0.0_f64);
+    for (layer, zoom, tiles, measured) in ZARAGOZA {
+        let limits = match layer {
+            LayerKind::Elevation => LayerLimits::terrarium(),
+            _ => LayerLimits::imagery(),
+        };
+        let size = layer_size(layer, zoom, tiles, &limits);
+        let ratio = size.estimate_bytes as f64 / measured;
+        assert!((0.7..=1.5).contains(&ratio), "{layer:?} z{zoom}: {ratio}");
+        assert!(
+            size.upper_bytes as f64 >= measured,
+            "{layer:?} z{zoom}: upper below measured"
+        );
+        total = (total.0 + size.estimate_bytes, total.1 + measured);
+    }
+    let ratio = total.0 as f64 / total.1;
+    assert!((0.9..=1.1).contains(&ratio), "{ratio}");
+}
+
+#[test]
+fn the_size_counts_planned_tiles_and_the_budget_uses_the_upper_bound() {
+    let request = request(1_300.0, 90.0);
+    let plan = plan_resources(&request, &Flat(300.0)).unwrap();
+    let tiles = crate::plan_tiles(&request.legs, &plan).unwrap();
+    let size = estimate_size(&request, &tiles);
+    let planned: u64 = tiles.values().map(|set| set.len() as u64).sum();
+    assert_eq!(size.layers.iter().map(|l| l.tiles).sum::<u64>(), planned);
+    assert!(size.estimate_bytes < size.upper_bytes);
+    assert!(size.fits(size.upper_bytes));
+    assert!(!size.fits(size.estimate_bytes));
 }

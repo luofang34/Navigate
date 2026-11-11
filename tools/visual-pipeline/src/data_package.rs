@@ -12,8 +12,8 @@ use crate::{PipelineError, json_file::read_json};
 use navigate_data::{
     Accuracy, DEFAULT_CORRELATION_ZOOM, Descriptor, DirectoryStore, Encoding, GeoidModel,
     HorizontalDatum, LayerKey, LayerKind, LayerLabel, LayerLimits, LayerSpec, PlannedCamera,
-    PlannedLeg, ResourceRequest, Revision, SourceKey, TileKey, VerticalDatum, plan_resources,
-    plan_tiles, prepare,
+    PlannedLeg, ResourceRequest, Revision, SourceKey, TileKey, VerticalDatum, estimate_size,
+    plan_resources, plan_tiles, prepare,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -232,7 +232,8 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
     let plan = plan_resources(&request, &ground)?;
     let tiles = plan_tiles(&request.legs, &plan)?;
     let count: usize = tiles.values().map(std::collections::BTreeSet::len).sum();
-    let mut out = json!({ "resource_plan": plan, "planned_tiles": count });
+    let size = estimate_size(&request, &tiles);
+    let mut out = json!({ "resource_plan": plan, "planned_tiles": count, "size": size });
     if options.plan_only {
         return Ok(out);
     }
