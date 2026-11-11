@@ -45,6 +45,41 @@ where
     if !core.regime.supports(kind) {
         return Err(RejectionReason::UnsupportedMeasurement { kind });
     }
+    let Some(declared) = &obs.correlated else {
+        return apply_white(core, obs, config, mode);
+    };
+    let mut candidate = *core;
+    let pending = match candidate.prepare_correlated(&obs.stamp, &obs.value, declared) {
+        Ok(pending) => pending,
+        // A delayed fix of another source can take a block before this
+        // fix in the replay, as it would have in order. The fix then has
+        // no place, as it would have had none in order, and the replay
+        // goes on without it.
+        Err(
+            RejectionReason::CorrelatedErrorRepeated { .. }
+            | RejectionReason::CorrelatedSourceUntracked,
+        ) if mode == Mode::Replay => return Ok(0.0),
+        Err(reason) => return Err(reason),
+    };
+    candidate.pending = Some(pending.plan);
+    let chi2 = apply_white(&mut candidate, obs, config, mode)?;
+    candidate.pending = None;
+    candidate.correlated.commit(&pending);
+    *core = candidate;
+    Ok(chi2)
+}
+
+/// Updates `core` with the model of `obs`, as [`apply_observation`]
+/// does after the correlated error of `obs` is prepared.
+fn apply_white<const N: usize>(
+    core: &mut InertialCore<N>,
+    obs: &Observation,
+    config: &InertialConfig,
+    mode: Mode,
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let fusion = &config.fusion;
     match &obs.value {
         ObservationValue::CartesianPositionFix { .. }

@@ -10,7 +10,7 @@ use crate::float_math::atan2;
 use nalgebra::{Matrix3, Quaternion, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::AttitudeQuaternion;
 
-use super::layout::StateLayout;
+use super::layout::{MAX_CORRELATED_BLOCKS, StateLayout};
 
 /// Dimension of the error state of [`StateLayout::FULL`].
 pub(crate) const FULL_STATES: usize = 22;
@@ -74,6 +74,8 @@ pub(crate) struct InertialNominal {
     pub(crate) clock_bias_m: f64,
     /// Receiver clock range-rate drift `c·δṫ` in m/s.
     pub(crate) clock_drift_mps: f64,
+    /// The mean of each correlated-error block, in the axes of its kind.
+    pub(crate) correlated: [Vector3<f64>; MAX_CORRELATED_BLOCKS],
 }
 
 impl InertialNominal {
@@ -91,6 +93,7 @@ impl InertialNominal {
             a_dmc: Vector3::zeros(),
             clock_bias_m: 0.0,
             clock_drift_mps: 0.0,
+            correlated: [Vector3::zeros(); MAX_CORRELATED_BLOCKS],
         }
     }
 
@@ -111,6 +114,7 @@ impl InertialNominal {
                 .map_or(self.a_dmc, |i| self.a_dmc + dx.fixed_rows::<3>(i)),
             clock_bias_m: scalar(layout.clock(), self.clock_bias_m),
             clock_drift_mps: scalar(layout.clock().map(|i| i + 1), self.clock_drift_mps),
+            correlated: inject_correlated(&self.correlated, dx, layout),
         }
     }
 
@@ -118,6 +122,22 @@ impl InertialNominal {
     pub(crate) fn c_b_to_f(&self) -> Matrix3<f64> {
         self.q.to_rotation_matrix().into_inner()
     }
+}
+
+/// The correlated-error means with the estimate `dx` of each block of
+/// `layout` added.
+fn inject_correlated<const N: usize>(
+    means: &[Vector3<f64>; MAX_CORRELATED_BLOCKS],
+    dx: &ErrorVec<N>,
+    layout: &StateLayout,
+) -> [Vector3<f64>; MAX_CORRELATED_BLOCKS] {
+    let mut injected = *means;
+    for (mean, offset) in injected.iter_mut().zip(layout.correlated()) {
+        if let Some(i) = offset {
+            *mean += dx.fixed_rows::<3>(i);
+        }
+    }
+    injected
 }
 
 /// The covariance of the error state after the injection of `dx`:

@@ -30,3 +30,4 @@ lifecycle rules.
 | [0020](0020-visual-stack-consolidation-polar-trn-and-visual-pose.md) | Six crates hold the visual stack; an exact body tangent frame serves polar terrain-relative navigation; a camera pose enters the inertial filter as one visual pose | Proposed |
 | [0021](0021-one-imaging-sensor-model-and-star-sightings.md) | One imaging sensor model, and star sightings enter fusion as lines of sight | Proposed |
 | [0022](0022-navigation-data-contract-mission-packages-and-the-onboard-boundary.md) | One navigation data contract, content-addressed mission packages, and one onboard boundary | Proposed |
+| [0023](0023-optional-error-state-blocks-and-correlated-source-errors.md) | Optional error-state blocks, and time-correlated source errors | Proposed |

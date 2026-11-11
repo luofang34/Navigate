@@ -77,7 +77,7 @@ const ALIGNMENT: Alignment = Alignment {
 /// step when `baro` holds.
 fn run(seed: u32, baro: bool) -> Vec<[f64; 4]> {
     let config = tactical();
-    let mut flight = Flight::new(ROUTE, seed, config, ALIGNMENT);
+    let mut flight = Flight::<22>::new(ROUTE, seed, config, ALIGNMENT);
     let baro_bias = config.baro_bias.sigma() * gauss(seed, FREE_INDEX);
     let steps = ROUTE.steps();
     let per_report = (100.0 / ROUTE.step_s).round() as u32;

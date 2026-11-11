@@ -3,6 +3,8 @@ mod baro_maneuver;
 mod bias_prior;
 mod checkpoints;
 mod coast;
+mod correlated;
+mod correlated_gnss;
 mod deep_space;
 mod flight_truth;
 mod frame_change;
@@ -94,7 +96,7 @@ fn surface_filter(
     filter
 }
 
-fn core(filter: &InertialNavigationFilter) -> &InertialCore {
+fn core<const N: usize>(filter: &InertialNavigationFilter<N>) -> &InertialCore<N> {
     filter.core.as_ref().expect("initialized")
 }
 

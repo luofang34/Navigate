@@ -226,6 +226,12 @@ impl NavigationFilter {
                 kind: obs.value.kind(),
             });
         }
+        if obs.correlated.is_some() {
+            // This filter has no correlated-error states.
+            return Err(RejectionReason::CorrelationNotModelled {
+                kind: obs.value.kind(),
+            });
+        }
         check_value(&obs.value)?;
         check_freshness(&obs.stamp, now, self.config.staleness_bound)?;
         self.ledger.check_source_ordering(&obs.stamp)?;

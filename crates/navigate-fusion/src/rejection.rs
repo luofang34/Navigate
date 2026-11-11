@@ -229,6 +229,29 @@ pub enum RejectionReason {
     /// accelerometers already sense a burn.
     #[error("the event needs the other propagation mode")]
     PropagationModeMismatch,
+    /// The observation declares a time-correlated error, and its model
+    /// has no correlated-error form (ADR-0023). Taking the value as
+    /// white would make the filter over-confident.
+    #[error("measurement model {kind:?} has no correlated-error form")]
+    CorrelationNotModelled {
+        /// The measurement model the observation needs.
+        kind: MeasurementKind,
+    },
+    /// The source of a time-correlated error has no block, and its last
+    /// accepted fix is so recent that this fix adds almost no
+    /// information: the inflation factor `(1+ρ)/(1−ρ)` is above its
+    /// bound (ADR-0023).
+    #[error("the correlated error repeats: inflation factor {factor}")]
+    CorrelatedErrorRepeated {
+        /// The inflation factor of the fix.
+        factor: f64,
+    },
+    /// The source of a time-correlated error has no block, and the
+    /// table of the sources without a block is full (ADR-0023). The
+    /// filter cannot inflate a fix of a source whose last fix it does
+    /// not know.
+    #[error("no block and no room to track a new correlated source")]
+    CorrelatedSourceUntracked,
 }
 
 /// Per-reason rejection counters; every refusal increments exactly one.
@@ -281,6 +304,12 @@ pub struct RejectionCounters {
     pub clock_state_disabled: u64,
     /// Refusals of an event in the wrong propagation mode.
     pub propagation_mode_mismatch: u64,
+    /// Refusals of a correlated error in a model without its form.
+    pub correlation_not_modelled: u64,
+    /// Refusals of a repeated correlated error above the inflation bound.
+    pub correlated_error_repeated: u64,
+    /// Refusals of a correlated source that the filter cannot track.
+    pub correlated_source_untracked: u64,
 }
 
 impl RejectionCounters {
@@ -311,6 +340,9 @@ impl RejectionCounters {
             RejectionReason::SourceCapacityExceeded { .. } => &mut self.source_capacity_exceeded,
             RejectionReason::ClockStateDisabled { .. } => &mut self.clock_state_disabled,
             RejectionReason::PropagationModeMismatch => &mut self.propagation_mode_mismatch,
+            RejectionReason::CorrelationNotModelled { .. } => &mut self.correlation_not_modelled,
+            RejectionReason::CorrelatedErrorRepeated { .. } => &mut self.correlated_error_repeated,
+            RejectionReason::CorrelatedSourceUntracked => &mut self.correlated_source_untracked,
         };
         *counter = counter.wrapping_add(1);
     }

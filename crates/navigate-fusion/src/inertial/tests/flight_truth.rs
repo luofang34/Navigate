@@ -8,14 +8,14 @@
 //! alignment error, the IMU biases, and the IMU white noise from the
 //! filter's own initial covariance and noise model.
 
-use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, Rotation3, UnitQuaternion, Vector3};
 use navigate_contract::SymmetricCov3;
 use navigate_geodesy::{BodyEllipsoid, BodyFixedPosition, body_fixed_to_geodetic};
 
 use super::*;
 use crate::inertial::local_level::{LocalLevel, quaternion_of};
 use crate::inertial::mechanization::{ImuRates, mechanize};
-use crate::inertial::nominal::{ATT, rotation_vector};
+use crate::inertial::nominal::{ATT, FULL_STATES, POS, rotation_vector};
 use crate::inertial::regime::Regime;
 use crate::kalman::FogmBias;
 
@@ -118,11 +118,12 @@ const IMU_NOISE: u32 = 100_000;
 /// indices per step, and no route here has a million steps.
 pub(super) const FREE_INDEX: u32 = 10_000_000;
 
-/// One run: the truth, the filter, and the IMU errors of one seed.
-pub(super) struct Flight {
+/// One run: the truth, the filter, and the IMU errors of one seed. The
+/// filter has the layout of its configuration and the dimension `N`.
+pub(super) struct Flight<const N: usize = FULL_STATES> {
     pub(super) route: Route,
     pub(super) seed: u32,
-    pub(super) filter: InertialNavigationFilter,
+    pub(super) filter: InertialNavigationFilter<N>,
     pub(super) truth: InertialNominal,
     config: InertialConfig,
     regime: Regime,
@@ -134,7 +135,10 @@ pub(super) struct Flight {
     step: u32,
 }
 
-impl Flight {
+impl<const N: usize> Flight<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// A flight of `route` that starts north at `earth_origin`, and a
     /// filter aligned with the errors of `alignment`.
     pub(super) fn new(
@@ -143,12 +147,7 @@ impl Flight {
         config: InertialConfig,
         alignment: Alignment,
     ) -> Self {
-        let regime = core(&surface_filter(
-            config,
-            PlanetaryBody::EARTH_WGS84,
-            earth_origin(),
-        ))
-        .regime;
+        let regime = Regime::surface_of(&PlanetaryBody::EARTH_WGS84);
         let level = LocalLevel::at(earth_origin());
         let speed = route.speed_mps;
         let truth = InertialNominal::at(
@@ -174,8 +173,12 @@ impl Flight {
             velocity_mps.powi(2),
             attitude_rad.powi(2),
         );
-        let mut filter =
-            InertialNavigationFilter::new_surface(config, CLOCK, PlanetaryBody::EARTH_WGS84);
+        let mut filter = InertialNavigationFilter::<N>::surface_with_layout(
+            config,
+            CLOCK,
+            PlanetaryBody::EARTH_WGS84,
+        )
+        .expect("a layout of dimension N");
         filter
             .initialize_surface(
                 start,
@@ -298,6 +301,16 @@ impl Flight {
         };
         let error = height(&core(&self.filter).nominal.p) - height(&self.truth.p);
         error * error / vertical
+    }
+
+    /// The NEES of the 3-D position error in the frame axes against the
+    /// position block of the error covariance.
+    pub(super) fn position_nees(&self) -> f64 {
+        let core = core(&self.filter);
+        let error = core.nominal.p - self.truth.p;
+        let p = core.p.fixed_view::<3, 3>(POS, POS).into_owned();
+        p.try_inverse()
+            .map_or(f64::INFINITY, |inverse| error.dot(&(inverse * error)))
     }
 
     /// The attitude NEES: the rotation from the filter attitude to the

@@ -63,7 +63,9 @@ pub use navigate_astrodynamics::{
     CannonballSrp, CentralBodyGravity, ExponentialDrag, PlanetaryBody, PointMassBody,
     SpaceEnvironment, SpaceGravityModel, SphericalHarmonicField, ThirdBodySet,
 };
-pub use observation::{LineOfSightReference, MeasurementKind, Observation, ObservationValue};
+pub use observation::{
+    CorrelatedError, LineOfSightReference, MeasurementKind, Observation, ObservationValue,
+};
 pub use particle::{
     MarginalizedParticleFilter, MpfConfig, MpfError, MpfEstimate, MpfParticle, ParticlePool,
     ScalarFieldMap,

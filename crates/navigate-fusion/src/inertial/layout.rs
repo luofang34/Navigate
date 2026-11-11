@@ -6,7 +6,9 @@
 //! accelerometer and gyroscope biases: 15 states at fixed indices. Each
 //! optional block has an offset or none: the barometric altitude bias,
 //! the magnetic map bias, the empirical acceleration of the dynamic
-//! model compensation, and the receiver clock. A filter stores its
+//! model compensation, the receiver clock, and up to
+//! [`MAX_CORRELATED_BLOCKS`] blocks of a time-correlated source error.
+//! A filter stores its
 //! covariance with the dimension of its layout, so a layout without a
 //! block does not pay for it.
 //!
@@ -20,6 +22,10 @@
 //!   propagation when `InertialConfig::dmc` is set. A layout without the
 //!   block refuses that configuration; without `dmc` the block has zero
 //!   rows and is equivalent to its absence.
+//! - A correlated-error block has no term in the dynamics of the core
+//!   block. A source that declares a correlated error binds one block,
+//!   and only its own measurements read it. A source without a block
+//!   has its covariance inflated instead (`inertial::correlated`).
 
 use nalgebra::{Const, DimMin};
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
@@ -33,6 +39,9 @@ use super::regime::Regime;
 /// The number of states of the core block.
 pub const CORE_STATES: usize = 15;
 
+/// The largest number of correlated-error blocks of one layout.
+pub const MAX_CORRELATED_BLOCKS: usize = 2;
+
 /// The offsets of the error-state blocks of one filter. The core block
 /// is at fixed indices; each optional block has an offset or none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,6 +52,7 @@ pub struct StateLayout {
     mag_bias: Option<usize>,
     dmc: Option<usize>,
     clock: Option<usize>,
+    correlated: [Option<usize>; MAX_CORRELATED_BLOCKS],
 }
 
 impl StateLayout {
@@ -55,6 +65,7 @@ impl StateLayout {
         mag_bias: Some(16),
         dmc: Some(17),
         clock: Some(20),
+        correlated: [None; MAX_CORRELATED_BLOCKS],
     };
 
     /// The core block alone, 15 states: an IMU with any means that
@@ -67,6 +78,7 @@ impl StateLayout {
         mag_bias: None,
         dmc: None,
         clock: None,
+        correlated: [None; MAX_CORRELATED_BLOCKS],
     };
 
     /// The core block and the barometric altitude bias (15), 16 states:
@@ -77,7 +89,47 @@ impl StateLayout {
         mag_bias: None,
         dmc: None,
         clock: None,
+        correlated: [None; MAX_CORRELATED_BLOCKS],
     };
+
+    /// This layout with `count` correlated-error blocks of three states
+    /// each after its other blocks, at most [`MAX_CORRELATED_BLOCKS`].
+    /// For example, `AVIATION.with_correlated_blocks(1)` has 19 states.
+    #[must_use]
+    pub const fn with_correlated_blocks(self, count: usize) -> Self {
+        let base = self.base_dimension();
+        let first = if count >= 1 { Some(base) } else { None };
+        let second = if count >= 2 { Some(base + 3) } else { None };
+        let blocks = if count < MAX_CORRELATED_BLOCKS {
+            count
+        } else {
+            MAX_CORRELATED_BLOCKS
+        };
+        Self {
+            dimension: base + 3 * blocks,
+            correlated: [first, second],
+            ..self
+        }
+    }
+
+    /// The dimension without the correlated-error blocks.
+    const fn base_dimension(&self) -> usize {
+        let [first, second] = self.correlated;
+        let mut dimension = self.dimension;
+        if first.is_some() {
+            dimension -= 3;
+        }
+        if second.is_some() {
+            dimension -= 3;
+        }
+        dimension
+    }
+
+    /// First index of each correlated-error block, or none.
+    #[must_use]
+    pub const fn correlated(&self) -> [Option<usize>; MAX_CORRELATED_BLOCKS] {
+        self.correlated
+    }
 
     /// The number of error states.
     #[must_use]
@@ -150,11 +202,14 @@ impl StateLayout {
         if self.dimension != n || n < CORE_STATES {
             return false;
         }
+        let [first, second] = self.correlated;
         let blocks = [
             (self.alt_bias, 1),
             (self.mag_bias, 1),
             (self.dmc, 3),
             (self.clock, 2),
+            (first, 3),
+            (second, 3),
         ];
         let mut used = [false; 64];
         if n > used.len() {

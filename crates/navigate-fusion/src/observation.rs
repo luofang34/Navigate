@@ -9,6 +9,10 @@
 //! of ADR-0018 are in the Cartesian frame of
 //! [`crate::InertialNavigationFilter`], which has their models.
 
+mod correlated;
+
+pub use correlated::CorrelatedError;
+
 use navigate_contract::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, FrameId, GeodeticPosition,
     NedVelocity, ObservationStamp, SourceComposition, SymmetricCov3,
@@ -405,6 +409,9 @@ pub struct Observation {
     /// bias when the source or the revision changes. `None` declares no
     /// revision.
     pub map_revision: Option<u64>,
+    /// The time-correlated part of the error, when the source declares
+    /// one (ADR-0023). `None` declares a white error.
+    pub correlated: Option<CorrelatedError>,
 }
 
 impl Observation {
@@ -421,6 +428,7 @@ impl Observation {
             composition,
             frame: None,
             map_revision: None,
+            correlated: None,
         }
     }
 
@@ -446,6 +454,14 @@ impl Observation {
     #[must_use]
     pub const fn with_map_revision(mut self, map_revision: u64) -> Self {
         self.map_revision = Some(map_revision);
+        self
+    }
+
+    /// This observation with the time-correlated error `correlated`
+    /// declared.
+    #[must_use]
+    pub const fn with_correlated_error(mut self, correlated: CorrelatedError) -> Self {
+        self.correlated = Some(correlated);
         self
     }
 }

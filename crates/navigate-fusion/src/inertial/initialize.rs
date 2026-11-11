@@ -165,6 +165,8 @@ where
             state_at: at,
             last_rates: None,
             mag_key: None,
+            correlated: super::correlated::CorrelatedSources::default(),
+            pending: None,
             mode: self.setup_mode,
         });
         self.history.initialize(at);
