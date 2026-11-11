@@ -5,8 +5,13 @@ use navigate_contract::{
     NedVelocity, SolutionStamp, WrappingSequence,
 };
 
+use nalgebra::{Matrix3, UnitQuaternion, Vector3};
+use navigate_contract::SourceComposition;
+use navigate_geodesy::BodyEllipsoid;
+
 use super::InertialNavigationFilter;
 use super::estimate::InertialCore;
+use super::local_level::LocalLevel;
 use super::models::vehicle_level;
 use super::nominal::{ATT, POS, VEL, to_contract};
 use crate::integrity;
@@ -30,37 +35,19 @@ impl InertialNavigationFilter {
     pub fn tick(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
         let core = self.propagated(now)?;
         let ellipsoid = core.regime.surface?;
-        let local = vehicle_level(&core, ellipsoid);
-        let r = local.bf_to_ned();
-        let pos_cov = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(POS, POS).into_owned());
-        let vel_cov = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(VEL, VEL).into_owned());
-        let v = r * core.nominal.v;
-        let attitude = local.bf_to_ned_quaternion() * core.nominal.q;
-        let c_bl = attitude.to_rotation_matrix().into_inner();
-        let p_theta = core.p.fixed_view::<3, 3>(ATT, ATT).into_owned();
-        let att_cov = c_bl * p_theta * c_bl.transpose();
+        let state = SurfaceState::of(&core, ellipsoid);
         let integrity = self.assess(
-            horizontal_1sigma_m(&pos_cov),
-            vertical_1sigma_m(&pos_cov),
+            horizontal_1sigma_m(&state.pos_cov),
+            vertical_1sigma_m(&state.pos_cov),
             now,
         );
-        let stamp = self.stamp(now);
-        Some(
-            self.sequencer.surface(
-                NavigationSolution::new(
-                    stamp,
-                    local.position,
-                    NedVelocity::new(v.x, v.y, v.z),
-                    matrix_to_cov3(&pos_cov),
-                    matrix_to_cov3(&vel_cov),
-                    integrity,
-                    self.ledger.epoch_composition(),
-                    ellipsoid.contract(),
-                )
-                .with_attitude(to_contract(&attitude))
-                .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
-            ),
-        )
+        let solution = state.solution(
+            self.stamp(now),
+            integrity,
+            self.ledger.epoch_composition(),
+            ellipsoid,
+        );
+        Some(self.sequencer.surface(solution))
     }
 
     /// Publishes the Cartesian solution for `now` in the active frame.
@@ -140,5 +127,71 @@ impl InertialNavigationFilter {
     /// The stamp for `now`. The sequencer sets its sequence.
     const fn stamp(&self, now: MonotonicNanos) -> SolutionStamp {
         SolutionStamp::new(self.epoch, WrappingSequence::new(0), now, self.clock)
+    }
+}
+
+/// The geodetic state of one core at the vehicle: the position, and the
+/// velocity, the attitude, and the covariances in the local NED axes.
+pub(super) struct SurfaceState {
+    /// The local axes and the geodetic position at the vehicle.
+    pub(super) local: LocalLevel,
+    /// Velocity in m/s, NED.
+    pub(super) velocity: Vector3<f64>,
+    /// Attitude from the body axes to the local NED axes.
+    pub(super) attitude: UnitQuaternion<f64>,
+    /// Position covariance in m², NED.
+    pub(super) pos_cov: Matrix3<f64>,
+    /// Velocity covariance in (m/s)², NED.
+    pub(super) vel_cov: Matrix3<f64>,
+    /// Attitude covariance in rad², about the NED axes.
+    pub(super) att_cov: Matrix3<f64>,
+    /// Cross-covariance of the NED position and the attitude about the
+    /// NED axes, in m·rad.
+    pub(super) pos_att_cov: Matrix3<f64>,
+}
+
+impl SurfaceState {
+    /// `v = R_fl·v_frame`, `q = q_frame→local ⊗ q`, `P = R_fl·P_frame·R_flᵀ`,
+    /// `P_att = C_bl·P_θ·C_blᵀ`, and `P_pos,att = R_fl·P_p,θ·C_blᵀ`.
+    pub(super) fn of(core: &InertialCore, ellipsoid: BodyEllipsoid) -> Self {
+        let local = vehicle_level(core, ellipsoid);
+        let r = local.bf_to_ned();
+        let attitude = local.bf_to_ned_quaternion() * core.nominal.q;
+        let c_bl = attitude.to_rotation_matrix().into_inner();
+        let p_theta = core.p.fixed_view::<3, 3>(ATT, ATT).into_owned();
+        let att_cov = c_bl * p_theta * c_bl.transpose();
+        let p_pos_theta = core.p.fixed_view::<3, 3>(POS, ATT).into_owned();
+        Self {
+            velocity: r * core.nominal.v,
+            attitude,
+            pos_cov: local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(POS, POS).into_owned()),
+            vel_cov: local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(VEL, VEL).into_owned()),
+            att_cov: (att_cov + att_cov.transpose()) * 0.5,
+            pos_att_cov: r * p_pos_theta * c_bl.transpose(),
+            local,
+        }
+    }
+
+    /// The contract solution of this state.
+    pub(super) fn solution(
+        &self,
+        stamp: SolutionStamp,
+        integrity: IntegrityAssessment,
+        composition: SourceComposition,
+        ellipsoid: BodyEllipsoid,
+    ) -> NavigationSolution {
+        let v = self.velocity;
+        NavigationSolution::new(
+            stamp,
+            self.local.position,
+            NedVelocity::new(v.x, v.y, v.z),
+            matrix_to_cov3(&self.pos_cov),
+            matrix_to_cov3(&self.vel_cov),
+            integrity,
+            composition,
+            ellipsoid.contract(),
+        )
+        .with_attitude(to_contract(&self.attitude))
+        .with_attitude_cov(matrix_to_cov3(&self.att_cov))
     }
 }

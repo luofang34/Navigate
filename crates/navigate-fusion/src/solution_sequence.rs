@@ -63,6 +63,16 @@ impl SolutionSequencer {
         solution
     }
 
+    /// The sequence of the last published solution, and zero before the
+    /// first one.
+    pub(crate) fn last(&self) -> WrappingSequence {
+        match self.last {
+            Some(Published::Surface(solution)) => solution.stamp.sequence,
+            Some(Published::Space(solution)) => solution.stamp.sequence,
+            None => WrappingSequence::new(0),
+        }
+    }
+
     fn advance(&mut self) -> WrappingSequence {
         let sequence = self.next;
         self.next = sequence.next();

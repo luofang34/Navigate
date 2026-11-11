@@ -85,6 +85,43 @@ impl History {
             .push_back(HistoryEntry { at, before, event }, capacity);
     }
 
+    /// The core that the replay of a delayed observation at `at`
+    /// starts from, and the rates of the IMU event whose interval holds
+    /// `at`: the core before the first entry later than `at`, or
+    /// `current` when no entry is later. The error is the oldest time
+    /// the history can give a state for.
+    pub(crate) fn base_at(
+        &self,
+        current: &InertialCore,
+        at: MonotonicNanos,
+        capacity: usize,
+    ) -> Result<(InertialCore, Option<ImuRates>), MonotonicNanos> {
+        let oldest = self.oldest(current, capacity);
+        if capacity == 0 || at < oldest {
+            return Err(oldest);
+        }
+        let index = self.entries.partition_point(|e| e.at <= at);
+        let base = self.entries.get(index).map_or(*current, |e| e.before);
+        if base.state_at > at {
+            return Err(oldest);
+        }
+        Ok((base, self.covering_rates(index, at)))
+    }
+
+    /// The oldest time the history can give a state for: the state time
+    /// before the oldest entry, the initialization time without
+    /// entries, and the state time of `current` when replay is disabled.
+    pub(crate) fn oldest(&self, current: &InertialCore, capacity: usize) -> MonotonicNanos {
+        if capacity == 0 {
+            return current.state_at;
+        }
+        self.entries
+            .front()
+            .map(|e| e.before.state_at)
+            .or(self.anchor)
+            .unwrap_or(current.state_at)
+    }
+
     /// Applies `event` at `at`, before the state time of `current`. On
     /// success the result is the new core and the chi-square statistic of
     /// an observation, and the history holds the replayed entries. On an
