@@ -272,4 +272,3 @@ fn a_fork_continues_as_the_original_with_its_bound_and_inflated_sources() {
         .expect("a test thread");
     assert_eq!(forks.join().expect("no panic"), (true, true));
 }
-
