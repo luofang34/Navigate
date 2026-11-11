@@ -335,7 +335,12 @@ blob is:
 ```
 
 The depth is along the optical axis, in metres. Zero marks sky or missing
-data.
+data. The recipe parameter `geoid_model` states the geoid model that the
+builder had for orthometric heights (0 none, 1 EGM96, 2 EGM2008), because
+the depth follows from the terrain heights.
+`navigate_visual_render::keyframes::reference_view` gives the reference
+view of one entry, and `KeyframeSpec::rendering` reads the camera
+depression and the geoid model from a recipe.
 
 ### Corridor landmarks
 
@@ -422,9 +427,11 @@ levels, pixel size, tile and gap counts, the one-sigma on the present day
 and if the package or the host stated it), the bound of an unknown
 undulation, and the decision for each chunk of the product list. A
 keyframe chunk is used when the package holds each of its input blobs,
-its calibration is that of a declared terrain camera, and its recipe is
-that of `build_keyframes`. `TerrainMapRequest::route` limits the use to
-the chunks of one route.
+its calibration is that of a declared terrain camera, its recipe is that
+of `build_keyframes`, and its builder converted the heights of the
+elevation layer as the navigator does (with the geoid model of the
+vertical datum, or with none). `TerrainMapRequest::route` limits the use
+to the chunks of one route.
 
 Give each frame as `SensorData::TerrainFrame { width, height, luma }`:
 eight-bit luminance, row-major, top row first, undistorted, of the
