@@ -341,6 +341,7 @@ impl MovingState {
                 ),
                 attitude_cov: SymmetricCov3::from_diagonal(tilt_var, tilt_var, heading_var),
                 at: fix.at,
+                imu_bias_prior: None,
             },
             record: AlignmentRecord {
                 at: fix.at,
@@ -352,7 +353,6 @@ impl MovingState {
                 gyro_bias_rad_s: None,
                 gyro_bias_sigma_rad_s: None,
             },
-            biases: None,
         }
     }
 }

@@ -5,6 +5,7 @@
 //! GNSS.
 
 use navigate_data::VerticalDatum;
+use navigate_fusion::ImuBiasPrior;
 
 /// What a speed is measured against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +58,11 @@ pub struct DeclaredStart {
     pub heading_sigma_rad: f64,
     /// The speed.
     pub speed: DeclaredSpeed,
+    /// The IMU biases at the start, with their covariances, in the body
+    /// axes: for example the gyroscope turn-on bias that a ground
+    /// calibration measured before an in-air start. `None` starts the
+    /// biases at zero.
+    pub imu_bias_prior: Option<ImuBiasPrior>,
 }
 
 impl DeclaredStart {

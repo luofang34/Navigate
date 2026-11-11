@@ -20,6 +20,7 @@ fn solution(attitude: UnitQuaternion<f64>, velocity: NedVelocity) -> NavigationS
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator.solution(at(0)).unwrap()

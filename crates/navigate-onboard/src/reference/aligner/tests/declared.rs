@@ -19,13 +19,13 @@ use crate::{
 
 const OPERATOR: SourceId = SourceId::new(5);
 /// The step of the statement: three seconds of flight.
-const STATED_AT: u64 = 300;
+pub(super) const STATED_AT: u64 = 300;
 /// The crab allowance of a fixed wing in the air, radians.
-const CRAB_SIGMA_RAD: f64 = 0.09;
+pub(super) const CRAB_SIGMA_RAD: f64 = 0.09;
 
 /// A navigator with an inertial unit and an operator, whose course is its
 /// heading to `crab`.
-fn navigator(crab: Option<f64>) -> ReferenceNavigator {
+pub(super) fn navigator(crab: Option<f64>) -> ReferenceNavigator {
     let declared = Rig::new([0.0; 3], 0, 1.0).suite(None);
     let imu = declared.of_kind(SensorKind::Imu).next().unwrap().clone();
     let operator = SensorSpec {
@@ -47,7 +47,12 @@ fn navigator(crab: Option<f64>) -> ReferenceNavigator {
 
 /// The statement of the true state `truth`, each part moved by a draw of
 /// its declared one-sigma times `honesty`; zero gives the truth.
-fn statement(truth: &Truth, airspeed: f64, noise: &mut Noise, honesty: f64) -> DeclaredStart {
+pub(super) fn statement(
+    truth: &Truth,
+    airspeed: f64,
+    noise: &mut Noise,
+    honesty: f64,
+) -> DeclaredStart {
     let [lat, lon, height] = truth.position;
     let heading = truth.body_to_ned.euler_angles().2;
     let (h, v, psi, speed) = (30.0, 15.0, 0.05, 2.0);
@@ -67,12 +72,13 @@ fn statement(truth: &Truth, airspeed: f64, noise: &mut Noise, honesty: f64) -> D
             speed_m_s: airspeed + noise.normal() * speed * honesty,
             sigma_m_s: speed,
         },
+        imu_bias_prior: None,
     }
 }
 
 /// Flies to the statement, delivers it `late` steps after its stamp, and
 /// gives the truth at the stamp and the solution at the delivery.
-fn declare<F: Fn(f64) -> Profile>(
+pub(super) fn declare<F: Fn(f64) -> Profile>(
     navigator: &mut ReferenceNavigator,
     vehicle: &mut Vehicle<F>,
     start: impl Fn(&Truth) -> DeclaredStart,
@@ -99,7 +105,7 @@ fn declare<F: Fn(f64) -> Profile>(
 
 /// Straight flight at 55 m/s through the air on `heading`, climbing at
 /// `climb` m/s.
-fn cruise(heading: f64, climb: f64) -> impl Fn(f64) -> Profile {
+pub(super) fn cruise(heading: f64, climb: f64) -> impl Fn(f64) -> Profile {
     move |_| Profile {
         speed_m_s: 55.0,
         heading_rad: heading,

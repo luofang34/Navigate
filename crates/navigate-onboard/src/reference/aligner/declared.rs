@@ -94,6 +94,10 @@ pub(crate) fn solve(
     let q = attitude.quaternion();
     let tilt_var = tilt_sigma_rad.powi(2);
     let heading_var = start.heading_sigma_rad.powi(2);
+    let gyro = start.imu_bias_prior.map(|prior| {
+        let (x, y, z) = prior.gyro_cov_body.diagonal();
+        (prior.gyro_bias_body_rad_s, x.max(y).max(z).max(0.0).sqrt())
+    });
     Ok(Moving {
         solved: Solved {
             alignment: Alignment {
@@ -108,6 +112,7 @@ pub(crate) fn solve(
                 velocity_cov,
                 attitude_cov: SymmetricCov3::from_diagonal(tilt_var, tilt_var, heading_var),
                 at,
+                imu_bias_prior: start.imu_bias_prior,
             },
             record: AlignmentRecord {
                 at,
@@ -116,10 +121,9 @@ pub(crate) fn solve(
                 position: Some(PositionSource::Declared),
                 tilt_sigma_rad,
                 heading_sigma_rad: start.heading_sigma_rad,
-                gyro_bias_rad_s: None,
-                gyro_bias_sigma_rad_s: None,
+                gyro_bias_rad_s: gyro.map(|(bias, _)| bias),
+                gyro_bias_sigma_rad_s: gyro.map(|(_, sigma)| sigma),
             },
-            biases: None,
         },
         later: motion.after(at),
     })

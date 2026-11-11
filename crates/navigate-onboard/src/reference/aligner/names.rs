@@ -3,6 +3,8 @@
 //! alignment waits for. A host shows and counts them, so a name never
 //! changes; a new case gets a new name.
 
+use crate::SensorData;
+
 /// Record reason: the input came before the first state, and the
 /// alignment took what it can use of it.
 pub(crate) const ALIGNMENT: &str = "alignment";
@@ -16,6 +18,22 @@ pub(crate) const SURVEYED_POSITION: &str = "surveyed_position";
 pub(crate) const DECLARED_START: &str = "declared_start";
 /// Measurement name of a known-position record.
 pub(crate) const KNOWN_POSITION: &str = "known_position";
+
+/// The measurement name of an input that the alignment records.
+pub(in crate::reference) const fn measurement(data: &SensorData) -> &'static str {
+    match data {
+        SensorData::GnssFix { .. } => "gnss_position",
+        SensorData::BaroAltitude { .. } => "baro_altitude",
+        SensorData::MagneticField { .. } => MAGNETIC_FIELD,
+        SensorData::SurveyedPosition { .. } => SURVEYED_POSITION,
+        SensorData::KnownPosition { .. } => KNOWN_POSITION,
+        SensorData::DeclaredStart(_) => DECLARED_START,
+        SensorData::StarCentroids { .. } => "star_line_of_sight",
+        #[cfg(feature = "terrain-camera")]
+        SensorData::TerrainFrame { .. } => crate::reference::terrain::MEASUREMENT,
+        _ => "observation",
+    }
+}
 
 #[cfg(test)]
 mod tests {

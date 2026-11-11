@@ -155,13 +155,14 @@ pub struct AlignmentRecord {
     pub tilt_sigma_rad: f64,
     /// One-sigma of the heading, radians.
     pub heading_sigma_rad: f64,
-    /// The gyroscope bias that the rest window gave, rad/s, in the body
-    /// axes: the mean rate less the Earth rate. The filter starts its
-    /// gyroscope bias from it; `None` for a state that the host gave,
-    /// after which the filter starts the biases at zero.
+    /// The gyroscope bias that the filter starts from, rad/s, in the body
+    /// axes: the mean rate less the Earth rate of the rest window, or the
+    /// bias prior of a transfer alignment; `None` for a transfer alignment
+    /// without one, after which the filter starts the biases at zero.
     pub gyro_bias_rad_s: Option<[f64; 3]>,
-    /// One-sigma of that bias on each axis, rad/s: the gyroscope noise
-    /// over the window and the Earth rate turned by the attitude error.
+    /// One-sigma of that bias on each axis, rad/s: for a rest window, the
+    /// gyroscope noise over the window and the Earth rate turned by the
+    /// attitude error; for a prior, its largest axis.
     pub gyro_bias_sigma_rad_s: Option<f64>,
 }
 

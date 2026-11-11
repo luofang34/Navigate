@@ -153,6 +153,11 @@ impl<F: Fn(f64) -> Profile> Vehicle<F> {
         )
     }
 
+    /// The gyroscope bias that the vehicle's unit has, rad/s, body axes.
+    pub(crate) const fn gyro_bias(&self) -> Vector3<f64> {
+        self.gyro_bias
+    }
+
     /// The true state at the end of the last step.
     pub(crate) fn truth(&self) -> Truth {
         let t = self.step as f64 * STEP_S;

@@ -79,6 +79,7 @@ fn a_declared_terrain_camera_without_frames_changes_no_value() {
                 velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
                 attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
                 at: at(0),
+                imu_bias_prior: None,
             })
             .unwrap();
         for step in 1..=100 {

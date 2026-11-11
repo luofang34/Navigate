@@ -452,7 +452,10 @@ window (the mean rate less the Earth rate) with its one-sigma. The filter
 starts its gyroscope bias from that value and one-sigma, and its
 accelerometer bias at zero with the declared one-sigma, because a
 levelled tilt holds the accelerometer bias. A transfer alignment starts
-both biases at zero. After the state, a magnetometer, surveyed-point, or
+the biases from `Alignment::imu_bias_prior`, for example a ground
+calibration of the gyroscope turn-on bias before an in-air start; without
+a prior it starts them at zero and clears the prior of an earlier
+alignment. After the state, a magnetometer, surveyed-point, or
 known-position input gives a record `Unused("alignment_only")`.
 
 A vehicle that moves along its nose also aligns in motion. The host
@@ -487,7 +490,9 @@ sensor, valid at the acquisition stamp of its input. It states the
 position with a horizontal one-sigma, the height with its
 `VerticalDatum` and one-sigma, the true heading with its one-sigma, and
 the speed, marked `SpeedKind::Airspeed` or `SpeedKind::GroundSpeed`,
-with its one-sigma. The navigator levels from its own inertial data over
+with its one-sigma; `imu_bias_prior` carries the IMU biases of a ground
+calibration, as `Alignment::imu_bias_prior` does. The navigator levels
+from its own inertial data over
 the `window_s` before the stamp and takes the rest from the statement;
 the record has `AlignmentSource::Declared`. A statement that comes late
 gives the state at its stamp, and the increments after it go into the

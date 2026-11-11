@@ -21,14 +21,15 @@ use navigate_fusion::ImuBiasPrior;
 
 use crate::{
     Alignment, AlignmentConfig, AlignmentNeed, AlignmentPhase, AlignmentRecord, AlignmentSource,
-    DeclaredStart, ErrorBudget, HeadingSource, MagneticReference, PositionSource, SensorData,
-    SensorKind, SensorSuite,
+    DeclaredStart, ErrorBudget, HeadingSource, MagneticReference, PositionSource, SensorKind,
+    SensorSuite,
 };
 
 mod declared;
 mod heading;
 mod motion;
 pub(crate) mod names;
+pub(super) use names::measurement;
 mod rest;
 mod state;
 mod window;
@@ -39,13 +40,12 @@ use motion::{Motion, VelocityFix};
 use rest::{EARTH_RATE_RAD_S, Inertial};
 use window::{Velocity, Window, seconds_between};
 
-/// A state that one rest window gave.
+/// A state that one rest window gave, with the IMU biases of the window
+/// in its bias prior.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Solved {
     pub alignment: Alignment,
     pub record: AlignmentRecord,
-    /// The IMU biases that the alignment measured, for the filter.
-    pub biases: Option<ImuBiasPrior>,
 }
 
 /// What the alignment waits for.
@@ -447,6 +447,7 @@ impl Aligner {
                     heading_sigma_rad * heading_sigma_rad,
                 ),
                 at,
+                imu_bias_prior: Some(biases),
             },
             record: AlignmentRecord {
                 at,
@@ -458,14 +459,18 @@ impl Aligner {
                 gyro_bias_rad_s: Some(gyro_bias.into()),
                 gyro_bias_sigma_rad_s: Some(gyro_bias_var.sqrt()),
             },
-            biases: Some(biases),
         })
     }
 }
 
-/// What a transfer alignment states: the host gave each part.
+/// What a transfer alignment states: the host gave each part, and the
+/// gyroscope bias of its prior, if it has one.
 pub(crate) fn transfer_record(a: &Alignment) -> AlignmentRecord {
     let (north, east, down) = a.attitude_cov.diagonal();
+    let gyro = a.imu_bias_prior.map(|prior| {
+        let (x, y, z) = prior.gyro_cov_body.diagonal();
+        (prior.gyro_bias_body_rad_s, x.max(y).max(z).max(0.0).sqrt())
+    });
     AlignmentRecord {
         at: a.at,
         source: AlignmentSource::Transfer,
@@ -473,24 +478,8 @@ pub(crate) fn transfer_record(a: &Alignment) -> AlignmentRecord {
         position: None,
         tilt_sigma_rad: ((north + east) / 2.0).max(0.0).sqrt(),
         heading_sigma_rad: down.max(0.0).sqrt(),
-        gyro_bias_rad_s: None,
-        gyro_bias_sigma_rad_s: None,
-    }
-}
-
-/// The measurement name of an input that the alignment records.
-pub(super) const fn measurement(data: &SensorData) -> &'static str {
-    match data {
-        SensorData::GnssFix { .. } => "gnss_position",
-        SensorData::BaroAltitude { .. } => "baro_altitude",
-        SensorData::MagneticField { .. } => names::MAGNETIC_FIELD,
-        SensorData::SurveyedPosition { .. } => names::SURVEYED_POSITION,
-        SensorData::KnownPosition { .. } => names::KNOWN_POSITION,
-        SensorData::DeclaredStart(_) => names::DECLARED_START,
-        SensorData::StarCentroids { .. } => "star_line_of_sight",
-        #[cfg(feature = "terrain-camera")]
-        SensorData::TerrainFrame { .. } => super::terrain::MEASUREMENT,
-        _ => "observation",
+        gyro_bias_rad_s: gyro.map(|(bias, _)| bias),
+        gyro_bias_sigma_rad_s: gyro.map(|(_, sigma)| sigma),
     }
 }
 

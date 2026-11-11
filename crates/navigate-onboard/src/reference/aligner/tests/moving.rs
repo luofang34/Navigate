@@ -144,6 +144,7 @@ fn the_inertial_data_of_the_truth_keep_a_true_state_on_the_truth() {
                 velocity_cov: small(0.001),
                 attitude_cov: small(1e-5),
                 at: at(0),
+                imu_bias_prior: None,
             })
             .unwrap();
         let mut sink = Vec::new();
