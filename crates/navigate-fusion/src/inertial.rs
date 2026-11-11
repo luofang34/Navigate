@@ -47,6 +47,7 @@ mod frame_change;
 mod history;
 mod imu;
 mod initialize;
+mod layout;
 mod local_level;
 pub(crate) mod mechanization;
 mod models;
@@ -62,11 +63,13 @@ mod update;
 #[cfg(test)]
 mod tests;
 
+use nalgebra::{Const, DimMin};
 use navigate_contract::{
     ClockDomainId, FrameId, MonotonicNanos, ObservationStamp, SourceComposition, SourceEpoch,
 };
 
 use self::estimate::InertialCore;
+use self::nominal::FULL_STATES;
 use crate::InnovationStats;
 use crate::admission::{check_clock, check_composition, check_freshness, check_value};
 use crate::kinematic::stats::StatsTable;
@@ -81,15 +84,12 @@ pub use frame_change::FrameChange;
 use history::History;
 pub use history::MAX_INERTIAL_HISTORY;
 pub use imu::{ImuIncrement, ImuSample};
+pub use layout::{CORE_STATES, StateLayout};
 pub use local_level::ned_to_body_fixed_dcm;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
 pub use past::{PastState, PastStateRefusal};
 pub use propagation::{ForceModelCoast, PropagationMode};
-pub use reference::{
-    ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_CLOCK_BIAS, ERROR_CLOCK_DRIFT,
-    ERROR_DMC, ERROR_GYRO_BIAS, ERROR_MAG_BIAS, ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY,
-    ErrorMatrix, NominalPoint, error_transition, initial_error_covariance,
-};
+pub use reference::{ErrorMatrix, NominalPoint, error_transition, initial_error_covariance};
 use regime::Regime;
 use update::Event;
 
@@ -99,7 +99,7 @@ use update::Event;
 /// All time is caller-supplied [`MonotonicNanos`] on the clock domain of
 /// the filter. Identical event scripts give identical solutions.
 #[derive(Debug, Clone)]
-pub struct InertialNavigationFilter {
+pub struct InertialNavigationFilter<const N: usize = 22> {
     config: InertialConfig,
     clock: ClockDomainId,
     /// The regime before the initialization and after a reset.
@@ -110,23 +110,25 @@ pub struct InertialNavigationFilter {
     sequencer: SolutionSequencer,
     rejections: RejectionCounters,
     ledger: ProvenanceLedger,
-    core: Option<InertialCore>,
-    history: History,
+    core: Option<InertialCore<N>>,
+    history: History<N>,
     stats: StatsTable,
     /// The IMU bias prior of the next initialization.
     bias_prior: Option<ImuBiasPrior>,
 }
 
-impl InertialNavigationFilter {
+impl InertialNavigationFilter<FULL_STATES> {
     /// Builds an uninitialized filter in the rotating body-fixed frame of
     /// `body`, from [`SpaceEnvironment::from_body`], with the ellipsoid of
     /// `body` attached. A body that is not on
     /// [`navigate_geodesy::BodyEllipsoid::WGS84`] sets
     /// `config.fusion.require_explicit_frame` to `true`, as
-    /// [`crate::NavigationFilter::new_for_ellipsoid`] does.
+    /// [`crate::NavigationFilter::new_for_ellipsoid`] does. The error
+    /// state has every block: [`StateLayout::FULL`].
     #[must_use]
     pub fn new_surface(config: InertialConfig, clock: ClockDomainId, body: PlanetaryBody) -> Self {
         let mut config = config;
+        config.layout = StateLayout::FULL;
         if body.ellipsoid != navigate_geodesy::BodyEllipsoid::WGS84 {
             config.fusion.require_explicit_frame = true;
         }
@@ -135,14 +137,21 @@ impl InertialNavigationFilter {
 
     /// Builds an uninitialized filter in the frame of `env` without a
     /// reference ellipsoid. The filter sets
-    /// `config.fusion.require_explicit_frame` to `true`.
+    /// `config.fusion.require_explicit_frame` to `true`. The error state
+    /// has every block: [`StateLayout::FULL`].
     #[must_use]
     pub fn new_space(config: InertialConfig, clock: ClockDomainId, env: SpaceEnvironment) -> Self {
         let mut config = config;
+        config.layout = StateLayout::FULL;
         config.fusion.require_explicit_frame = true;
         Self::build(config, clock, Regime::space(env))
     }
+}
 
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     fn build(config: InertialConfig, clock: ClockDomainId, setup: Regime) -> Self {
         Self {
             config,

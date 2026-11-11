@@ -10,6 +10,7 @@
 //! the filter has ingested. A later delayed measurement can change the
 //! answer of a later query.
 
+use nalgebra::{Const, DimMin};
 use navigate_contract::{DurationNanos, MonotonicNanos, NavigationSolution, SolutionStamp};
 use thiserror::Error;
 
@@ -85,7 +86,10 @@ pub enum PastStateRefusal {
     },
 }
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// The state at `at`, which is at or before the state time and at or
     /// after the oldest kept state.
     ///

@@ -7,7 +7,7 @@ use navigate_contract::{CartesianPosition, CartesianVelocity, DurationNanos, Sym
 
 use super::*;
 use crate::inertial::coast::{coast, coast_transition};
-use crate::inertial::nominal::{ErrorMat, ErrorVec, N, VEL};
+use crate::inertial::nominal::{ErrorMat, ErrorVec, FULL_STATES as N, VEL};
 use crate::inertial::{ClockNoiseModel, ForceModelCoast, PropagationMode};
 use crate::kalman::FogmBias;
 use crate::observation::{Observation, ObservationValue};
@@ -101,12 +101,26 @@ fn the_coast_transition_matches_finite_differences_in_both_frames() {
         let dt_s = 10.0;
         let (next, phi, q_d) =
             coast_transition(&x, dt_s, &model, &settings(), &config).expect("finite");
-        let mut numeric = ErrorMat::zeros();
+        let mut numeric = ErrorMat::<22>::zeros();
         for j in 0..N {
-            let mut dx = ErrorVec::zeros();
+            let mut dx = ErrorVec::<22>::zeros();
             dx[j] = epsilon(j);
-            let plus = coast(&x.inject(&dx), dt_s, &model, &settings(), &config).0;
-            let minus = coast(&x.inject(&(-dx)), dt_s, &model, &settings(), &config).0;
+            let plus = coast(
+                &x.inject(&dx, &crate::inertial::StateLayout::FULL),
+                dt_s,
+                &model,
+                &settings(),
+                &config,
+            )
+            .0;
+            let minus = coast(
+                &x.inject(&(-dx), &crate::inertial::StateLayout::FULL),
+                dt_s,
+                &model,
+                &settings(),
+                &config,
+            )
+            .0;
             let column =
                 (error_between(&plus, &next) - error_between(&minus, &next)) / (2.0 * epsilon(j));
             numeric.set_column(j, &column);

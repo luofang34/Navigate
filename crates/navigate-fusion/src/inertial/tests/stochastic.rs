@@ -69,7 +69,7 @@ fn a_state_without_a_model_has_zero_blocks() {
     let (f, q_c) = jacobian_and_noise(&InertialConfig::default());
     let (phi, q_d) = van_loan(&f, &q_c, 10.0).expect("finite");
     for state in [DMC, DMC + 1, DMC + 2, CLOCK_BIAS, CLOCK_DRIFT] {
-        for other in 0..super::super::nominal::N {
+        for other in 0..super::super::nominal::FULL_STATES {
             let identity = if state == other { 1.0 } else { 0.0 };
             assert_eq!(phi[(state, other)], identity);
             assert_eq!(phi[(other, state)], identity);

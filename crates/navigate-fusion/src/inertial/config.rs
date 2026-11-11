@@ -3,6 +3,7 @@
 
 use super::clock::ClockNoiseModel;
 use super::history::MAX_INERTIAL_HISTORY;
+use super::layout::StateLayout;
 use crate::config::FusionConfig;
 use crate::kalman::FogmBias;
 
@@ -48,6 +49,10 @@ pub struct InertialConfig {
     /// The one-way radiometric models need it. `None` keeps the two
     /// states at zero without variance.
     pub clock_model: Option<ClockNoiseModel>,
+    /// The blocks of the error state and their offsets. Its dimension is
+    /// the dimension of the filter; the constructor refuses a layout that
+    /// does not fit it.
+    pub layout: StateLayout,
 }
 
 impl Default for InertialConfig {
@@ -74,6 +79,7 @@ impl Default for InertialConfig {
             initial_attitude_sigma_rad: [1e-6; 3],
             dmc: None,
             clock_model: None,
+            layout: StateLayout::FULL,
         }
     }
 }

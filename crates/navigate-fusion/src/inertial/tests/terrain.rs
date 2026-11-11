@@ -15,7 +15,7 @@ use crate::inertial::estimate::InertialCore;
 use crate::inertial::local_level::LocalLevel;
 use crate::inertial::models::terrain_clearance;
 use crate::inertial::nominal::{
-    ALT_BIAS, ATT, ErrorMat, ErrorVec, InertialNominal, N, POS, rotation_vector,
+    ALT_BIAS, ATT, ErrorMat, ErrorVec, FULL_STATES as N, InertialNominal, POS, rotation_vector,
 };
 use crate::inertial::regime::Regime;
 use crate::observation::{Observation, ObservationValue};
@@ -42,7 +42,8 @@ fn sloped_core() -> InertialCore {
                 LocalLevel::at(vehicle).bf_to_ned_quaternion().inverse() * q_local,
             )
         },
-        p: ErrorMat::identity(),
+        p: ErrorMat::<22>::identity(),
+        layout: crate::inertial::StateLayout::FULL,
         state_at: t(0),
         last_rates: None,
         mode: crate::inertial::PropagationMode::SensedImu,
@@ -65,7 +66,7 @@ fn clearance_value(clearance_m: f64) -> ObservationValue {
 /// stay the axes at the nominal vehicle.
 fn true_range(core: &InertialCore, dx: &ErrorVec) -> f64 {
     let nominal = core.nominal;
-    let perturbed = nominal.inject(dx);
+    let perturbed = nominal.inject(dx, &crate::inertial::StateLayout::FULL);
     let geodetic = |p: Vector3<f64>| {
         body_fixed_to_geodetic(&BodyFixedPosition::new(p.x, p.y, p.z), BodyEllipsoid::WGS84)
     };
@@ -83,14 +84,14 @@ fn true_range(core: &InertialCore, dx: &ErrorVec) -> f64 {
 #[test]
 fn terrain_clearance_jacobian_matches_finite_differences() {
     let core = sloped_core();
-    let rho = true_range(&core, &ErrorVec::zeros());
+    let rho = true_range(&core, &ErrorVec::<22>::zeros());
     let model = terrain_clearance(&core, BodyEllipsoid::WGS84, &clearance_value(rho))
         .expect("valid geometry");
     assert!(model.residual[0].abs() < 1e-6, "{}", model.residual[0]);
     let mut numeric = SMatrix::<f64, 1, N>::zeros();
     for j in (POS..POS + 3).chain(ATT..ATT + 3).chain([ALT_BIAS]) {
         let eps = if j < ATT { 0.5 } else { 1e-6 };
-        let mut dx = ErrorVec::zeros();
+        let mut dx = ErrorVec::<22>::zeros();
         dx[j] = eps;
         numeric[(0, j)] = (true_range(&core, &dx) - true_range(&core, &(-dx))) / (2.0 * eps);
     }

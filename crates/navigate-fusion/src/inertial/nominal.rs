@@ -10,8 +10,10 @@ use crate::float_math::atan2;
 use nalgebra::{Matrix3, Quaternion, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::AttitudeQuaternion;
 
-/// Dimension of the error state.
-pub(crate) const N: usize = 22;
+use super::layout::StateLayout;
+
+/// Dimension of the error state of [`StateLayout::FULL`].
+pub(crate) const FULL_STATES: usize = 22;
 /// First index of the position error in meters, in the frame axes.
 pub(crate) const POS: usize = 0;
 /// First index of the velocity error in m/s, in the frame axes.
@@ -22,20 +24,27 @@ pub(crate) const ATT: usize = 6;
 pub(crate) const ACCEL_BIAS: usize = 9;
 /// First index of the gyroscope bias error in rad/s, in the body axes.
 pub(crate) const GYRO_BIAS: usize = 12;
-/// Index of the barometric altitude bias error in meters.
+/// Index of the barometric altitude bias error of [`StateLayout::FULL`].
+#[cfg(test)]
 pub(crate) const ALT_BIAS: usize = 15;
-/// Index of the scalar magnetic map bias error in tesla.
+/// Index of the magnetic map bias error of [`StateLayout::FULL`].
+#[cfg(test)]
 pub(crate) const MAG_BIAS: usize = 16;
-/// First index of the empirical acceleration error of the dynamic model
-/// compensation in m/s², in the frame axes.
+/// First index of the empirical acceleration error of
+/// [`StateLayout::FULL`].
+#[cfg(test)]
 pub(crate) const DMC: usize = 17;
-/// Index of the receiver clock range bias error `c·δt` in meters.
+/// Index of the receiver clock bias error of [`StateLayout::FULL`].
+#[cfg(test)]
 pub(crate) const CLOCK_BIAS: usize = 20;
-/// Index of the receiver clock range-rate drift error `c·δṫ` in m/s.
+/// Index of the receiver clock drift error of [`StateLayout::FULL`].
+#[cfg(test)]
 pub(crate) const CLOCK_DRIFT: usize = 21;
 
-pub(crate) type ErrorVec = SVector<f64, N>;
-pub(crate) type ErrorMat = SMatrix<f64, N, N>;
+/// An error-state vector of dimension `N`.
+pub(crate) type ErrorVec<const N: usize = FULL_STATES> = SVector<f64, N>;
+/// An error-state matrix of dimension `N`.
+pub(crate) type ErrorMat<const N: usize = FULL_STATES> = SMatrix<f64, N, N>;
 
 /// Below this rotation-vector norm, [`rotation_vector`] uses the
 /// small-angle form.
@@ -85,19 +94,23 @@ impl InertialNominal {
         }
     }
 
-    /// The nominal state with the error estimate `dx` injected.
-    pub(crate) fn inject(&self, dx: &ErrorVec) -> Self {
+    /// The nominal state with the error estimate `dx` of `layout`
+    /// injected. A block that the layout does not have keeps its value.
+    pub(crate) fn inject<const N: usize>(&self, dx: &ErrorVec<N>, layout: &StateLayout) -> Self {
+        let scalar = |offset: Option<usize>, value: f64| offset.map_or(value, |i| value + dx[i]);
         Self {
             p: self.p + dx.fixed_rows::<3>(POS),
             v: self.v + dx.fixed_rows::<3>(VEL),
             q: renormalized(self.q * exp_rotation(&dx.fixed_rows::<3>(ATT).into_owned())),
             b_a: self.b_a + dx.fixed_rows::<3>(ACCEL_BIAS),
             b_g: self.b_g + dx.fixed_rows::<3>(GYRO_BIAS),
-            b_alt: self.b_alt + dx[ALT_BIAS],
-            b_mag: self.b_mag + dx[MAG_BIAS],
-            a_dmc: self.a_dmc + dx.fixed_rows::<3>(DMC),
-            clock_bias_m: self.clock_bias_m + dx[CLOCK_BIAS],
-            clock_drift_mps: self.clock_drift_mps + dx[CLOCK_DRIFT],
+            b_alt: scalar(layout.alt_bias(), self.b_alt),
+            b_mag: scalar(layout.mag_bias(), self.b_mag),
+            a_dmc: layout
+                .dmc()
+                .map_or(self.a_dmc, |i| self.a_dmc + dx.fixed_rows::<3>(i)),
+            clock_bias_m: scalar(layout.clock(), self.clock_bias_m),
+            clock_drift_mps: scalar(layout.clock().map(|i| i + 1), self.clock_drift_mps),
         }
     }
 
@@ -110,7 +123,7 @@ impl InertialNominal {
 /// The covariance of the error state after the injection of `dx`:
 /// `P' = J·P·Jᵀ` with `J = I` except `J_θθ = I − ½·[δθ×]`. The result is
 /// symmetric.
-pub(crate) fn reset_covariance(p: &ErrorMat, dx: &ErrorVec) -> ErrorMat {
+pub(crate) fn reset_covariance<const N: usize>(p: &ErrorMat<N>, dx: &ErrorVec<N>) -> ErrorMat<N> {
     let j = reset_jacobian(&dx.fixed_rows::<3>(ATT).into_owned());
     let reset = j * p * j.transpose();
     (reset + reset.transpose()) * 0.5
@@ -118,8 +131,8 @@ pub(crate) fn reset_covariance(p: &ErrorMat, dx: &ErrorVec) -> ErrorMat {
 
 /// The Jacobian of the closed-loop reset for the attitude error
 /// `dtheta`.
-pub(crate) fn reset_jacobian(dtheta: &Vector3<f64>) -> ErrorMat {
-    let mut j = ErrorMat::identity();
+pub(crate) fn reset_jacobian<const N: usize>(dtheta: &Vector3<f64>) -> ErrorMat<N> {
+    let mut j = ErrorMat::<N>::identity();
     j.fixed_view_mut::<3, 3>(ATT, ATT)
         .copy_from(&(Matrix3::identity() - 0.5 * dtheta.cross_matrix()));
     j

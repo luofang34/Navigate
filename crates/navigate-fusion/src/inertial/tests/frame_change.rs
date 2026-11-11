@@ -9,7 +9,7 @@ use navigate_geodesy::BodyEllipsoid;
 use super::*;
 use crate::inertial::FrameChange;
 use crate::inertial::frame_change::{frame_change_jacobian, transformed_nominal};
-use crate::inertial::nominal::{DMC, ErrorMat, N, POS, VEL, to_contract};
+use crate::inertial::nominal::{DMC, ErrorMat, FULL_STATES as N, POS, VEL, to_contract};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
 use navigate_astrodynamics::{SpaceEnvironment, SpaceGravityModel};
@@ -72,16 +72,20 @@ fn the_jacobian_matches_finite_differences_of_the_change() {
         clock_drift_mps: 0.4,
     };
     let next = transformed_nominal(&x, &change);
-    let mut numeric = ErrorMat::zeros();
+    let mut numeric = ErrorMat::<22>::zeros();
     for j in 0..N {
-        let mut dx = ErrorVec::zeros();
+        let mut dx = ErrorVec::<22>::zeros();
         dx[j] = epsilon(j);
-        let plus = transformed_nominal(&x.inject(&dx), &change);
-        let minus = transformed_nominal(&x.inject(&(-dx)), &change);
+        let plus =
+            transformed_nominal(&x.inject(&dx, &crate::inertial::StateLayout::FULL), &change);
+        let minus = transformed_nominal(
+            &x.inject(&(-dx), &crate::inertial::StateLayout::FULL),
+            &change,
+        );
         let column = (error_between(&plus, &next) - error_between(&minus, &next)) / (2.0 * dx[j]);
         numeric.set_column(j, &column);
     }
-    let analytic = frame_change_jacobian(&change);
+    let analytic = frame_change_jacobian(&change, &crate::inertial::StateLayout::FULL);
     let error = (analytic - numeric).abs().max();
     assert!(error < 1e-6, "{error}\n{}", analytic - numeric);
     // The rate couples the position error into the velocity error.

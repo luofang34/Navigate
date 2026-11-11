@@ -13,8 +13,8 @@ use crate::inertial::mechanization::{
     ImuRates, continuous_jacobian, continuous_noise, mechanize, transition,
 };
 use crate::inertial::nominal::{
-    ALT_BIAS, ErrorMat, ErrorVec, InertialNominal, MAG_BIAS, N, exp_rotation, reset_jacobian,
-    rotation_vector,
+    ALT_BIAS, ErrorMat, ErrorVec, FULL_STATES as N, InertialNominal, MAG_BIAS, exp_rotation,
+    reset_jacobian, rotation_vector,
 };
 use crate::kalman::FogmBias;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
@@ -93,13 +93,27 @@ fn transition_matrix_matches_finite_differences_of_the_mechanization() {
     let x = nominal();
     let dt_s = 0.005;
     let (next, phi, _) = transition(&x, &rates(), dt_s, &field, &config).expect("finite");
-    let mut numeric = ErrorMat::zeros();
+    let mut numeric = ErrorMat::<22>::zeros();
     for j in 0..N {
         let eps = epsilon(j);
-        let mut dx = ErrorVec::zeros();
+        let mut dx = ErrorVec::<22>::zeros();
         dx[j] = eps;
-        let plus = mechanize(&x.inject(&dx), &rates(), dt_s, &field, &config).0;
-        let minus = mechanize(&x.inject(&(-dx)), &rates(), dt_s, &field, &config).0;
+        let plus = mechanize(
+            &x.inject(&dx, &crate::inertial::StateLayout::FULL),
+            &rates(),
+            dt_s,
+            &field,
+            &config,
+        )
+        .0;
+        let minus = mechanize(
+            &x.inject(&(-dx), &crate::inertial::StateLayout::FULL),
+            &rates(),
+            dt_s,
+            &field,
+            &config,
+        )
+        .0;
         let column = (error_between(&plus, &next) - error_between(&minus, &next)) / (2.0 * eps);
         numeric.set_column(j, &column);
     }
@@ -130,7 +144,7 @@ fn the_frame_rotation_cancels_in_the_attitude_block() {
         angular_rate: omega_body,
     };
     let (_, midpoint) = mechanize(&x, &rates, 1.0, &field, &config);
-    let f = continuous_jacobian(&midpoint, &field, &config);
+    let f: crate::inertial::nominal::ErrorMat = continuous_jacobian(&midpoint, &field, &config);
     let block = f.fixed_view::<3, 3>(6, 6).into_owned();
     assert!((block + omega_body.cross_matrix()).norm() < 1e-18);
 }
@@ -150,7 +164,7 @@ fn the_reset_jacobian_matches_finite_differences_of_the_attitude_log() {
         };
         numeric.set_column(j, &((after(step) - after(-step)) / (2.0 * eps)));
     }
-    let analytic = reset_jacobian(&dtheta_hat)
+    let analytic = reset_jacobian::<22>(&dtheta_hat)
         .fixed_view::<3, 3>(6, 6)
         .into_owned();
     // The analytic form drops the second-order term `[δθ×]²/12`.
@@ -185,7 +199,7 @@ fn discrete_bias_noise_equals_the_gauss_markov_step() {
     let config = short_bias_config();
     let x = nominal();
     let (_, midpoint) = mechanize(&x, &rates(), 0.5, &field, &config);
-    let f = continuous_jacobian(&midpoint, &field, &config);
+    let f: crate::inertial::nominal::ErrorMat = continuous_jacobian(&midpoint, &field, &config);
     for dt_s in [0.01, 0.5, 2.0] {
         let (phi, q_d) = van_loan(&f, &continuous_noise(&config), dt_s).expect("finite");
         for (index, bias) in [(ALT_BIAS, config.baro_bias), (MAG_BIAS, config.mag_bias)] {
@@ -214,7 +228,7 @@ fn the_block_van_loan_equals_the_dense_one_to_rounding() {
     let mut worst = (0.0_f64, 0.0_f64);
     for config in [InertialConfig::default(), short_bias_config()] {
         let (_, midpoint) = mechanize(&nominal(), &rates(), 0.5, &field, &config);
-        let f = continuous_jacobian(&midpoint, &field, &config);
+        let f: crate::inertial::nominal::ErrorMat = continuous_jacobian(&midpoint, &field, &config);
         let q_c = continuous_noise(&config);
         for dt_s in [0.002, 0.01, 0.1, 1.0, 10.0, 60.0] {
             let (phi, q_d) = van_loan(&f, &q_c, dt_s).expect("finite");

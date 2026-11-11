@@ -142,7 +142,7 @@ fn assert_accepted(outcome: IngestOutcome) {
 /// The error state of `x` relative to `reference`, with the attitude
 /// as the body-axis rotation vector.
 fn error_between(x: &InertialNominal, reference: &InertialNominal) -> ErrorVec {
-    let mut dx = ErrorVec::zeros();
+    let mut dx = ErrorVec::<22>::zeros();
     dx.fixed_rows_mut::<3>(0).copy_from(&(x.p - reference.p));
     dx.fixed_rows_mut::<3>(3).copy_from(&(x.v - reference.v));
     dx.fixed_rows_mut::<3>(6)

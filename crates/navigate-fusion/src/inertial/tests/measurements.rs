@@ -10,7 +10,7 @@ use crate::inertial::PropagationMode;
 use crate::inertial::estimate::InertialCore;
 use crate::inertial::models::line_of_sight::{line_of_sight, tangent_basis};
 use crate::inertial::models::radiometric::{linearize, shapiro_delay};
-use crate::inertial::nominal::{ErrorVec, InertialNominal, N};
+use crate::inertial::nominal::{ErrorVec, FULL_STATES as N, InertialNominal};
 use crate::inertial::regime::Regime;
 use crate::observation::{LineOfSightReference, ObservationValue};
 use crate::rejection::RejectionReason;
@@ -44,7 +44,8 @@ fn test_core() -> InertialCore {
             SpaceGravityModel::Zero,
         )),
         nominal,
-        p: crate::inertial::nominal::ErrorMat::identity(),
+        p: crate::inertial::nominal::ErrorMat::<22>::identity(),
+        layout: crate::inertial::StateLayout::FULL,
         state_at: t(0),
         last_rates: None,
         mag_key: None,
@@ -73,10 +74,18 @@ fn numeric_rows<const M: usize>(
 ) -> SMatrix<f64, M, N> {
     let mut rows = SMatrix::<f64, M, N>::zeros();
     for j in 0..N {
-        let mut dx = ErrorVec::zeros();
+        let mut dx = ErrorVec::<22>::zeros();
         dx[j] = epsilon(j);
-        let plus = measure(&core.nominal.inject(&dx));
-        let minus = measure(&core.nominal.inject(&(-dx)));
+        let plus = measure(
+            &core
+                .nominal
+                .inject(&dx, &crate::inertial::StateLayout::FULL),
+        );
+        let minus = measure(
+            &core
+                .nominal
+                .inject(&(-dx), &crate::inertial::StateLayout::FULL),
+        );
         rows.set_column(j, &((plus - minus) / (2.0 * epsilon(j))));
     }
     rows

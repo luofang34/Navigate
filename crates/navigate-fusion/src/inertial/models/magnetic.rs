@@ -10,14 +10,14 @@
 //! the candidate state, so a refused observation does not reset the
 //! bias.
 
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::{Const, DimMin, SMatrix, Vector3};
 use navigate_geodesy::BodyEllipsoid;
 
 use super::{scalar, vehicle_level};
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Mode};
 use crate::inertial::local_level::{LocalLevel, body_fixed};
-use crate::inertial::nominal::{MAG_BIAS, N, POS};
+use crate::inertial::nominal::POS;
 use crate::kalman::{check_gradient_information, check_linearization_region, horizontal_1sigma_m};
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
@@ -25,13 +25,16 @@ use crate::rejection::RejectionReason;
 /// Applies a magnetic anomaly. The gated mode checks the linearization
 /// region with the horizontal 1-sigma in the local NED axes at the
 /// vehicle, and the information of the gradient.
-pub(super) fn apply(
-    core: &mut InertialCore,
+pub(super) fn apply<const N: usize>(
+    core: &mut InertialCore<N>,
     ellipsoid: BodyEllipsoid,
     obs: &Observation,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::MagneticAnomaly {
         measured_t,
         map_t_at_lin,
@@ -45,12 +48,17 @@ pub(super) fn apply(
             kind: obs.value.kind(),
         });
     };
+    let Some(mag_bias) = core.layout.mag_bias() else {
+        return Err(RejectionReason::UnsupportedMeasurement {
+            kind: obs.value.kind(),
+        });
+    };
     let p_lin = body_fixed(&linearization_point, ellipsoid);
     let g = LocalLevel::at(linearization_point).ned_to_bf * Vector3::from(gradient_ned_t_per_m);
     let key = (obs.stamp.source, obs.map_revision);
     let mut candidate = *core;
     if candidate.mag_key.is_some_and(|active| active != key) {
-        start_new_bias(&mut candidate, config);
+        start_new_bias(&mut candidate, mag_bias, config);
     }
     let offset = candidate.nominal.p - p_lin;
     if mode == Mode::Gated {
@@ -67,7 +75,7 @@ pub(super) fn apply(
     let predicted = map_t_at_lin + g.dot(&offset) + candidate.nominal.b_mag;
     let mut h = SMatrix::<f64, 1, N>::zeros();
     h.fixed_view_mut::<1, 3>(0, POS).copy_from(&g.transpose());
-    h[(0, MAG_BIAS)] = 1.0;
+    h[(0, mag_bias)] = 1.0;
     let linearized = scalar(measured_t - predicted, h, variance_t2);
     let chi2 = candidate.update(&linearized, config.fusion.scalar_gate_chi2, mode)?;
     candidate.mag_key = Some(key);
@@ -77,9 +85,13 @@ pub(super) fn apply(
 
 /// Starts a new bias: zero mean, the stationary variance, and no
 /// correlation with the other states.
-fn start_new_bias(core: &mut InertialCore, config: &InertialConfig) {
+fn start_new_bias<const N: usize>(
+    core: &mut InertialCore<N>,
+    index: usize,
+    config: &InertialConfig,
+) {
     core.nominal.b_mag = 0.0;
-    core.p.row_mut(MAG_BIAS).fill(0.0);
-    core.p.column_mut(MAG_BIAS).fill(0.0);
-    core.p[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.stationary_variance();
+    core.p.row_mut(index).fill(0.0);
+    core.p.column_mut(index).fill(0.0);
+    core.p[(index, index)] = config.mag_bias.stationary_variance();
 }

@@ -10,13 +10,12 @@
 //! core that they update, so a replay after a frame change uses the
 //! frame of the replayed core.
 
-use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_geodesy::BodyEllipsoid;
 
 use super::config::InertialConfig;
 use super::estimate::{InertialCore, Linearized, Mode};
 use super::local_level::LocalLevel;
-use super::nominal::N;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
 
@@ -33,12 +32,15 @@ pub(crate) use terrain::terrain_clearance;
 
 /// Updates `core` with `obs` at the state time of `core` and returns the
 /// chi-square statistic. On an error, `core` is not changed.
-pub(crate) fn apply_observation(
-    core: &mut InertialCore,
+pub(crate) fn apply_observation<const N: usize>(
+    core: &mut InertialCore<N>,
     obs: &Observation,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let kind = obs.value.kind();
     if !core.regime.supports(kind) {
         return Err(RejectionReason::UnsupportedMeasurement { kind });
@@ -77,12 +79,15 @@ pub(crate) fn apply_observation(
 }
 
 /// Applies a model that needs the reference ellipsoid of the regime.
-fn apply_geodetic(
-    core: &mut InertialCore,
+fn apply_geodetic<const N: usize>(
+    core: &mut InertialCore<N>,
     obs: &Observation,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let unsupported = RejectionReason::UnsupportedMeasurement {
         kind: obs.value.kind(),
     };
@@ -121,12 +126,15 @@ fn apply_geodetic(
 }
 
 /// The geodetic position and the local NED axes of the nominal state.
-pub(crate) fn vehicle_level(core: &InertialCore, ellipsoid: BodyEllipsoid) -> LocalLevel {
+pub(crate) fn vehicle_level<const N: usize>(
+    core: &InertialCore<N>,
+    ellipsoid: BodyEllipsoid,
+) -> LocalLevel {
     LocalLevel::at_body_fixed(&core.nominal.p, ellipsoid)
 }
 
 /// A scalar update with the row `h` and the variance `variance`.
-fn scalar(residual: f64, h: SMatrix<f64, 1, N>, variance: f64) -> Linearized<1> {
+fn scalar<const N: usize>(residual: f64, h: SMatrix<f64, 1, N>, variance: f64) -> Linearized<1, N> {
     Linearized {
         residual: SVector::<f64, 1>::new(residual),
         h,
@@ -135,7 +143,11 @@ fn scalar(residual: f64, h: SMatrix<f64, 1, N>, variance: f64) -> Linearized<1> 
 }
 
 /// A direct update of the three error components at `offset`.
-fn block(residual: Vector3<f64>, offset: usize, r: Matrix3<f64>) -> Linearized<3> {
+fn block<const N: usize>(
+    residual: Vector3<f64>,
+    offset: usize,
+    r: Matrix3<f64>,
+) -> Linearized<3, N> {
     let mut h = SMatrix::<f64, 3, N>::zeros();
     h.fixed_view_mut::<3, 3>(0, offset)
         .copy_from(&Matrix3::identity());
@@ -143,12 +155,15 @@ fn block(residual: Vector3<f64>, offset: usize, r: Matrix3<f64>) -> Linearized<3
 }
 
 /// The range row: the unit line of sight on the position error.
-fn range(
+fn range<const N: usize>(
     p: &Vector3<f64>,
     target: &Vector3<f64>,
     range_m: f64,
     variance_m2: f64,
-) -> Result<Linearized<1>, RejectionReason> {
+) -> Result<Linearized<1, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let los = p - target;
     let distance = los.norm();
     if distance < MIN_RANGE_M {

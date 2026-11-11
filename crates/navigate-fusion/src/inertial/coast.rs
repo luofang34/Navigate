@@ -22,12 +22,12 @@
 //! [`stochastic`]. No IMU drives the state, so the IMU biases do not
 //! couple into the velocity and the attitude.
 
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, Vector3};
 use navigate_astrodynamics::OrbitalForceModel;
 
 use super::config::InertialConfig;
 use super::discretization::van_loan;
-use super::nominal::{ATT, DMC, ErrorMat, InertialNominal, POS, VEL, exp_rotation, renormalized};
+use super::nominal::{ATT, ErrorMat, InertialNominal, POS, VEL, exp_rotation, renormalized};
 use super::propagation::ForceModelCoast;
 use super::stochastic;
 use crate::float_math::powi;
@@ -72,22 +72,22 @@ pub(crate) fn coast(
 }
 
 /// The continuous Jacobian `F` of the coast at `midpoint`.
-pub(crate) fn coast_jacobian(
+pub(crate) fn coast_jacobian<const N: usize>(
     midpoint: &CoastMidpoint,
     model: &OrbitalForceModel<'_>,
     settings: &ForceModelCoast,
     config: &InertialConfig,
-) -> ErrorMat {
+) -> ErrorMat<N> {
     let forces = model.evaluate(&midpoint.p_mid, &midpoint.v_mid);
     let identity = Matrix3::identity();
-    let mut f = ErrorMat::zeros();
+    let mut f = ErrorMat::<N>::zeros();
     f.fixed_view_mut::<3, 3>(POS, VEL).copy_from(&identity);
     f.fixed_view_mut::<3, 3>(VEL, POS)
         .copy_from(&forces.position_jacobian);
     f.fixed_view_mut::<3, 3>(VEL, VEL)
         .copy_from(&forces.velocity_jacobian);
-    if config.dmc.is_some() {
-        f.fixed_view_mut::<3, 3>(VEL, DMC).copy_from(&identity);
+    if let (Some(_), Some(dmc)) = (&config.dmc, config.layout.dmc()) {
+        f.fixed_view_mut::<3, 3>(VEL, dmc).copy_from(&identity);
     }
     let body_rate = Vector3::from(settings.body_rate_rad_s);
     f.fixed_view_mut::<3, 3>(ATT, ATT)
@@ -99,10 +99,13 @@ pub(crate) fn coast_jacobian(
 /// The continuous noise density `Q_c` of the coast: the white
 /// acceleration of the unmodeled forces, the white noise of the body
 /// rate, and the bias, empirical acceleration, and clock densities.
-pub(crate) fn coast_noise(settings: &ForceModelCoast, config: &InertialConfig) -> ErrorMat {
+pub(crate) fn coast_noise<const N: usize>(
+    settings: &ForceModelCoast,
+    config: &InertialConfig,
+) -> ErrorMat<N> {
     let accel = powi(settings.acceleration_noise_sigma_mps2_sqrt_hz, 2);
     let rate = powi(settings.body_rate_noise_sigma_rad_s_sqrt_hz, 2);
-    let mut q = ErrorMat::zeros();
+    let mut q = ErrorMat::<N>::zeros();
     for axis in 0..3 {
         q[(VEL + axis, VEL + axis)] = accel;
         q[(ATT + axis, ATT + axis)] = rate;
@@ -113,13 +116,16 @@ pub(crate) fn coast_noise(settings: &ForceModelCoast, config: &InertialConfig) -
 
 /// One coast step: the next nominal state, the transition `Φ`, and the
 /// discrete noise `Q_d`. `None` when the discretization fails.
-pub(crate) fn coast_transition(
+pub(crate) fn coast_transition<const N: usize>(
     x: &InertialNominal,
     dt_s: f64,
     model: &OrbitalForceModel<'_>,
     settings: &ForceModelCoast,
     config: &InertialConfig,
-) -> Option<(InertialNominal, ErrorMat, ErrorMat)> {
+) -> Option<(InertialNominal, ErrorMat<N>, ErrorMat<N>)>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let (next, midpoint) = coast(x, dt_s, model, settings, config);
     let f = coast_jacobian(&midpoint, model, settings, config);
     let (phi, q_d) = van_loan(&f, &coast_noise(settings, config), dt_s)?;

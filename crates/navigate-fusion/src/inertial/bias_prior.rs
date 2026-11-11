@@ -6,7 +6,7 @@
 //! vehicle moves, so it knows them better than that. The prior gives the
 //! filter that knowledge at the initialization.
 
-use nalgebra::Vector3;
+use nalgebra::{Const, DimMin, Vector3};
 use navigate_contract::SymmetricCov3;
 
 use super::InertialNavigationFilter;
@@ -64,7 +64,7 @@ impl ImuBiasPrior {
 
     /// Puts the biases into `nominal` and the covariances into `p`, in
     /// place of the zero biases and their stationary variances.
-    pub(super) fn apply(&self, nominal: &mut InertialNominal, p: &mut ErrorMat) {
+    pub(super) fn apply<const N: usize>(&self, nominal: &mut InertialNominal, p: &mut ErrorMat<N>) {
         nominal.b_a = Vector3::from(self.accel_bias_body_mps2);
         nominal.b_g = Vector3::from(self.gyro_bias_body_rad_s);
         p.fixed_view_mut::<3, 3>(ACCEL_BIAS, ACCEL_BIAS)
@@ -74,7 +74,10 @@ impl ImuBiasPrior {
     }
 }
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Sets the IMU bias prior of the next initialization, or removes it
     /// with `None`. It does not change a state that the filter already
     /// has. The prior stays for the initializations after a

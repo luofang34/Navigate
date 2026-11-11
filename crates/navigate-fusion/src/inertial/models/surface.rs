@@ -1,7 +1,7 @@
 //! Geodetic position, velocity, range, and altitude in the body-fixed
 //! frame of a reference ellipsoid (ADR-0017).
 
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::{Const, DimMin, SMatrix, Vector3};
 use navigate_contract::{SensorClass, SourceComposition};
 use navigate_geodesy::BodyEllipsoid;
 
@@ -9,7 +9,7 @@ use super::{block, range, scalar, vehicle_level};
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Linearized, Mode};
 use crate::inertial::local_level::{LocalLevel, body_fixed};
-use crate::inertial::nominal::{ALT_BIAS, N, POS, VEL};
+use crate::inertial::nominal::{POS, VEL};
 use crate::kalman::cov3_to_matrix;
 use crate::observation::{Observation, ObservationValue};
 use crate::rejection::RejectionReason;
@@ -26,13 +26,16 @@ use crate::rejection::RejectionReason;
 ///   pole a small position error turns the local axes, so a NED velocity
 ///   has little value there.
 /// - A range converts the station into the body-fixed frame.
-pub(super) fn apply_vector_or_range(
-    core: &mut InertialCore,
+pub(super) fn apply_vector_or_range<const N: usize>(
+    core: &mut InertialCore<N>,
     ellipsoid: BodyEllipsoid,
     obs: &Observation,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let vector_gate = config.fusion.innovation_gate_chi2;
     match &obs.value {
         ObservationValue::PositionFix {
@@ -104,21 +107,33 @@ pub(super) fn apply_vector_or_range(
 /// error and 85 at 15 km on a route with turns. The error state measures
 /// the vertical along the local up of the nominal position, not as the
 /// geodetic height difference.
-pub(super) fn altitude(
-    core: &InertialCore,
+pub(super) fn altitude<const N: usize>(
+    core: &InertialCore<N>,
     ellipsoid: BodyEllipsoid,
     altitude_m: f64,
     variance_m2: f64,
     composition: SourceComposition,
-) -> Linearized<1> {
+) -> Linearized<1, N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let local = vehicle_level(core, ellipsoid);
-    let barometric = composition.contains(SensorClass::Barometric);
-    let bias = if barometric { core.nominal.b_alt } else { 0.0 };
+    // A layout without the altitude bias block reads a barometric
+    // altitude as a height without a bias.
+    let bias_index = core
+        .layout
+        .alt_bias()
+        .filter(|_| composition.contains(SensorClass::Barometric));
+    let bias = if bias_index.is_some() {
+        core.nominal.b_alt
+    } else {
+        0.0
+    };
     let mut h = SMatrix::<f64, 1, N>::zeros();
     h.fixed_view_mut::<1, 3>(0, POS)
         .copy_from(&local.up().transpose());
-    if barometric {
-        h[(0, ALT_BIAS)] = 1.0;
+    if let Some(index) = bias_index {
+        h[(0, index)] = 1.0;
     }
     let (mean_m, variance_term_m2) = curvature_term(core, &local, ellipsoid);
     scalar(
@@ -130,7 +145,11 @@ pub(super) fn altitude(
 
 /// The mean and the variance of the second-order height term
 /// `½·δₕᵀ·K·δₕ` for a horizontal position error `δₕ ~ N(0, P_h)`.
-fn curvature_term(core: &InertialCore, local: &LocalLevel, ellipsoid: BodyEllipsoid) -> (f64, f64) {
+fn curvature_term<const N: usize>(
+    core: &InertialCore<N>,
+    local: &LocalLevel,
+    ellipsoid: BodyEllipsoid,
+) -> (f64, f64) {
     let position = local.position;
     let (meridian_m, prime_vertical_m) = ellipsoid.radii_of_curvature_m(position.latitude_rad);
     let k_north = 1.0 / (meridian_m + position.altitude_m);
