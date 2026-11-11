@@ -29,7 +29,9 @@ pub struct ClearanceConfig {
     /// Maximum vertical 1-sigma uncertainty in meters accepted for terrain
     /// clearance scoring. A larger uncertainty is refused with
     /// [`crate::ClearanceUnavailable::VerticalUncertaintyExceeded`].
-    /// Defaults to 30.0 m.
+    /// Defaults to 30.0 m. [`f64::INFINITY`] removes the bound
+    /// explicitly. A NaN bound refuses every solution. The bound is
+    /// independent of [`Self::minimum_quality`].
     pub max_vertical_1sigma_m: f64,
 }
 
