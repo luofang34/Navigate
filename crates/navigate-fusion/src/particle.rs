@@ -27,6 +27,7 @@ use crate::kalman::{
     FogmBias, cov3_to_matrix, horizontal_1sigma_m, is_positive_definite, matrix_to_cov3,
 };
 use crate::kinematic::reanchor::plane_to_vehicle;
+use crate::solution_sequence::SolutionSequencer;
 
 mod pool;
 mod propagate;
@@ -168,7 +169,7 @@ pub struct MarginalizedParticleFilter<'a> {
     rng: SplitMix64,
     pool: ParticlePool<'a>,
     p_l: LinearCov,
-    next_sequence: WrappingSequence,
+    sequencer: SolutionSequencer,
 }
 
 impl<'a> MarginalizedParticleFilter<'a> {
@@ -235,7 +236,7 @@ impl<'a> MarginalizedParticleFilter<'a> {
             rng,
             pool,
             p_l,
-            next_sequence: WrappingSequence::new(0),
+            sequencer: SolutionSequencer::new(),
         })
     }
 
@@ -321,10 +322,8 @@ impl<'a> MarginalizedParticleFilter<'a> {
             vertical,
             FaultDetection::Unavailable,
         );
-        let sequence = self.next_sequence;
-        self.next_sequence = sequence.next();
-        NavigationSolution::new(
-            SolutionStamp::new(SourceEpoch::new(0), sequence, now, clock),
+        self.sequencer.surface(NavigationSolution::new(
+            SolutionStamp::new(SourceEpoch::new(0), WrappingSequence::new(0), now, clock),
             estimate.position,
             estimate.velocity,
             estimate.position_cov,
@@ -332,7 +331,7 @@ impl<'a> MarginalizedParticleFilter<'a> {
             integrity,
             composition,
             self.plane.ellipsoid().contract(),
-        )
+        ))
     }
 }
 

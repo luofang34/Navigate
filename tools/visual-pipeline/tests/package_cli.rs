@@ -114,6 +114,11 @@ fn package_subcommand_plans_fetches_and_seals_a_package() {
         &["--plan-only"],
     );
     assert!(only["planned_tiles"].as_u64().unwrap() > 0, "{only}");
+    let size = &only["size"];
+    assert!(
+        size["upper_bytes"].as_u64().unwrap() > size["estimate_bytes"].as_u64().unwrap(),
+        "{only}"
+    );
     assert_eq!(
         only["resource_plan"]["legs"][0]["agl_m"].as_f64(),
         Some(1000.0)

@@ -9,6 +9,7 @@ mod orbit_determination;
 mod polar;
 mod regimes;
 mod schuler;
+mod sequence;
 mod space;
 mod stochastic;
 mod surface;

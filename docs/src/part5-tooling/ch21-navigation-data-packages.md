@@ -199,7 +199,7 @@ and a rename.
 fetch. Its inputs are the legs (position and altitude), the cameras
 (focal length, image size, depression of the optical axis), the search
 radius, the allowed deviation, the farthest slant range, and the limits
-and measured sizes of the imagery and elevation sources. A
+and tile sizes of the imagery and elevation sources. A
 `GroundHeight` port supplies the ground heights, for example from coarse
 Terrarium tiles.
 
@@ -220,9 +220,14 @@ shallowest ray and gives one band for each zoom between them. Each band
 has a ground range ahead of the vehicle and a half width: the slant range
 at the far edge times the tangent of the horizontal half field of view,
 plus the search radius and the deviation. The elevation band of an
-imagery band is `elevation_offset` levels coarser. The size estimate uses
-the measured size of each source at a reference zoom and a growth factor
-for each level.
+imagery band is `elevation_offset` levels coarser.
+
+`estimate_size` gives the size from the tiles that `plan_tiles` selects:
+for each layer and zoom, the tile count times the typical tile size of
+the layer (the estimate) and times the upper tile size (the upper bound).
+`SizeEstimate::fits` judges a storage budget on the upper bound. The
+defaults come from the Zaragoza package: imagery JPEG 16 kB typical and
+20 kB upper, Terrarium PNG 90 kB typical and 110 kB upper.
 
 A higher leg needs coarser levels, and costs less for each kilometre. The
 far field of an oblique camera uses coarser levels than its near field.

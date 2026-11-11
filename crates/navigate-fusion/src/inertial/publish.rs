@@ -2,7 +2,7 @@
 
 use navigate_contract::{
     CartesianPosition, CartesianSolution, CartesianVelocity, MonotonicNanos, NavigationSolution,
-    NedVelocity, SolutionStamp,
+    NedVelocity, SolutionStamp, WrappingSequence,
 };
 
 use super::InertialNavigationFilter;
@@ -44,20 +44,22 @@ impl InertialNavigationFilter {
             vertical_1sigma_m(&pos_cov),
             now,
         );
-        let stamp = self.next_stamp(now);
+        let stamp = self.stamp(now);
         Some(
-            NavigationSolution::new(
-                stamp,
-                local.position,
-                NedVelocity::new(v.x, v.y, v.z),
-                matrix_to_cov3(&pos_cov),
-                matrix_to_cov3(&vel_cov),
-                integrity,
-                self.ledger.epoch_composition(),
-                ellipsoid.contract(),
-            )
-            .with_attitude(to_contract(&attitude))
-            .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
+            self.sequencer.surface(
+                NavigationSolution::new(
+                    stamp,
+                    local.position,
+                    NedVelocity::new(v.x, v.y, v.z),
+                    matrix_to_cov3(&pos_cov),
+                    matrix_to_cov3(&vel_cov),
+                    integrity,
+                    self.ledger.epoch_composition(),
+                    ellipsoid.contract(),
+                )
+                .with_attitude(to_contract(&attitude))
+                .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
+            ),
         )
     }
 
@@ -81,20 +83,22 @@ impl InertialNavigationFilter {
         let v_inertial = x.v + core.regime.frame_rotation().cross(&x.p);
         let uncertainty = integrity::space_uncertainty(x.p, v_inertial, pos_cov);
         let integrity = self.assess_space(uncertainty, now);
-        let stamp = self.next_stamp(now);
+        let stamp = self.stamp(now);
         Some(
-            CartesianSolution::new(
-                stamp,
-                frame,
-                CartesianPosition::new(x.p.x, x.p.y, x.p.z),
-                CartesianVelocity::new(x.v.x, x.v.y, x.v.z),
-                matrix_to_cov3(&pos_cov),
-                matrix_to_cov3(&vel_cov),
-                integrity,
-                self.ledger.epoch_composition(),
-            )
-            .with_attitude(to_contract(&x.q))
-            .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
+            self.sequencer.space(
+                CartesianSolution::new(
+                    stamp,
+                    frame,
+                    CartesianPosition::new(x.p.x, x.p.y, x.p.z),
+                    CartesianVelocity::new(x.v.x, x.v.y, x.v.z),
+                    matrix_to_cov3(&pos_cov),
+                    matrix_to_cov3(&vel_cov),
+                    integrity,
+                    self.ledger.epoch_composition(),
+                )
+                .with_attitude(to_contract(&x.q))
+                .with_attitude_cov(matrix_to_cov3(&((att_cov + att_cov.transpose()) * 0.5))),
+            ),
         )
     }
 
@@ -133,9 +137,8 @@ impl InertialNavigationFilter {
         integrity::derive_space(&self.ledger, now, uncertainty, &fusion)
     }
 
-    fn next_stamp(&mut self, now: MonotonicNanos) -> SolutionStamp {
-        let sequence = self.next_solution_sequence;
-        self.next_solution_sequence = sequence.next();
-        SolutionStamp::new(self.epoch, sequence, now, self.clock)
+    /// The stamp for `now`. The sequencer sets its sequence.
+    const fn stamp(&self, now: MonotonicNanos) -> SolutionStamp {
+        SolutionStamp::new(self.epoch, WrappingSequence::new(0), now, self.clock)
     }
 }

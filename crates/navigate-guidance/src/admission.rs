@@ -74,9 +74,12 @@ pub(crate) fn admit_leg(
 ) -> Result<AdmittedLeg, GuidanceRefusal> {
     let ellipsoid = admit_solution(solution, now, now_clock, config)?;
     let vertical_1sigma_m = solution.integrity.vertical_1sigma_m;
+    // A positive infinite limit is the explicit "no vertical limit" of
+    // the caller. A NaN limit is a configuration defect and refuses, and
+    // a non-finite sigma always refuses.
     if leg_to.altitude.is_some()
         && (!vertical_1sigma_m.is_finite()
-            || !config.max_vertical_1sigma_m.is_finite()
+            || config.max_vertical_1sigma_m.is_nan()
             || vertical_1sigma_m > config.max_vertical_1sigma_m)
     {
         return Err(GuidanceRefusal::VerticalUncertaintyExceeded {

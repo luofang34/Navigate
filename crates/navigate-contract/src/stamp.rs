@@ -156,7 +156,10 @@ impl ObservationStamp {
 pub struct SolutionStamp {
     /// Filter restart epoch: solutions across epochs never mix.
     pub epoch: SourceEpoch,
-    /// Wrap-aware solution sequence within the epoch.
+    /// Wrap-aware solution sequence within the epoch. It advances when
+    /// the published solution changes. Two publications that are equal
+    /// in every other field, such as two reads of one state at one time,
+    /// have the same sequence.
     pub sequence: WrappingSequence,
     /// Monotonic time the solution state refers to, on `clock`.
     pub solved_at: MonotonicNanos,

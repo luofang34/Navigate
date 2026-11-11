@@ -14,6 +14,11 @@ pub struct GuidanceConfig {
     /// Minimum solution quality guidance accepts, under the ordering
     /// `Good` > `Degraded` > `Unusable`.
     ///
+    /// This floor governs the quality class only. It does not change
+    /// [`Self::max_vertical_1sigma_m`]: a floor of `Unusable` still
+    /// refuses an altitude-constrained leg when the vertical uncertainty
+    /// is above that limit.
+    ///
     /// Defaults to [`SolutionQuality::Degraded`]: `Unusable` solutions
     /// are refused while degraded ones still guide. Requiring `Good`
     /// is a per-deployment tightening for maneuvers that need it, not
@@ -24,6 +29,14 @@ pub struct GuidanceConfig {
     pub max_solution_age: DurationNanos,
     /// Maximum vertical 1-sigma uncertainty in meters accepted when the
     /// target waypoint carries an altitude constraint. Defaults to 50.0 m.
+    ///
+    /// This limit is independent of [`Self::minimum_quality`]. A refusal
+    /// on this limit is
+    /// [`crate::GuidanceRefusal::VerticalUncertaintyExceeded`], which
+    /// gives the sigma and this limit. Set [`f64::INFINITY`] to remove
+    /// the limit explicitly. A NaN limit refuses every
+    /// altitude-constrained leg, and a non-finite sigma is refused with
+    /// every limit.
     pub max_vertical_1sigma_m: f64,
     /// Expected reference ellipsoid of the active flight plan when the
     /// caller requires ellipsoid agreement (ADR-0015). `None` accepts any
@@ -47,6 +60,7 @@ impl GuidanceConfig {
     }
 
     /// Sets the vertical 1-sigma uncertainty ceiling in meters.
+    /// [`f64::INFINITY`] removes the ceiling explicitly.
     #[must_use]
     pub const fn with_max_vertical_1sigma_m(mut self, max_vertical_1sigma_m: f64) -> Self {
         self.max_vertical_1sigma_m = max_vertical_1sigma_m;
