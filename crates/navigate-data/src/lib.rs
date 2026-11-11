@@ -72,7 +72,10 @@ pub use resource::{
     GroundHeight, LayerLimits, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
     ResourceRequest, ZoomBand, plan_resources,
 };
-pub use source::{Encoding, LayerKind, Revision, SourceKey};
+pub use source::{
+    Encoding, LayerKind, Revision, SOURCE_FORMAT, SOURCE_FORMAT_VERSION, SourceDeclaration,
+    SourceKey,
+};
 #[cfg(feature = "std")]
 pub use store::{DirectoryFile, DirectoryStore};
 pub use store::{

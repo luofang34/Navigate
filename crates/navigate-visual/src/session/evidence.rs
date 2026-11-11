@@ -60,3 +60,6 @@ impl Ledger {
         self.first.len()
     }
 }
+
+#[cfg(test)]
+mod tests;

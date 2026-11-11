@@ -93,9 +93,16 @@ The descriptor is a JSON file beside the manifest at
 reads it for display and licence text. It does not change the identity,
 and Navigate never uses it to navigate.
 
-A source key comes from a small registry in `navigate-data`, for example
-`esri-world-imagery` and `mapzen-terrarium`. A new provider is a new
-registry entry. A source revision is a provider release number, a
+A source key is a name from a small registry in `navigate-data`, for
+example `esri_world_imagery` and `mapzen_terrarium`, or a declared source,
+`declared:<sha256>`. A host with its own data (a private survey, a
+national orthophoto, a simulated world) writes a source declaration: a
+canonical document with closed integer fields (layer kind, nominal ground
+sample distance in millimetres, the accuracy that the provider states, the
+collection day, and the digest of a stable identifier that the provider
+chooses). The digest of the declaration is the key. Hosts that declare the
+same source with the same values get the same key, so correlation keys are
+defined for every source without a change to Navigate. A source revision is a provider release number, a
 collection date, or `unversioned`. The blob digests are the content
 identity; the revision only tells a reader when the provider changes
 content under the same key.
@@ -166,6 +173,11 @@ records by range.
   the date of collection as a day number, the growth of the error in
   millimetres per year, and the surface model (bare earth or first
   return). Each value can be absent (`null`), which means unknown.
+- The validity of a package in time belongs to the host and its trust
+  layer. A navigator computes the present one-sigma of a layer from the
+  collection day and the growth, and each reader function that depends on
+  time takes the present day as an argument (for example
+  `Accuracy::horizontal_sigma_m(today)`). No reader reads a wall clock.
 - Correlated error is keyed by (source key, source revision, grid cell at
   the layer correlation zoom), not by the package identity. Two packages
   cut from the same imagery have the same keys, so their fixes in one cell
