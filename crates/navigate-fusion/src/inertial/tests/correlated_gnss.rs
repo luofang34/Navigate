@@ -226,7 +226,7 @@ fn monte_carlo_a_correlated_gnss_error_declared_as_white_makes_the_position_over
     let nees = mean_nees::<22>(StateLayout::FULL, Declared::AllWhite);
     // The white model averages the correlated error over many fixes it
     // takes as independent, so the covariance shrinks below the error:
-    // the mean NEES is 17–29 after the first correlation time in the
+    // the mean NEES is 16–28 after the first correlation time in the
     // release sample. One debug run cannot show it.
     if !cfg!(debug_assertions) {
         assert!(
