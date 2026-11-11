@@ -52,7 +52,7 @@ Each layer:
 | Field | Type | Content |
 |---|---|---|
 | `key.kind` | name | `imagery` or `elevation` |
-| `key.source` | name | a registry source: `esri_world_imagery`, `mapzen_terrarium`, `synthetic` |
+| `key.source` | name | a registry source (`esri_world_imagery`, `mapzen_terrarium`, `synthetic`) or `declared:<sha256>` of a source declaration |
 | `revision` | name or object | `"unversioned"`, `{"release": n}`, or `{"collected": day}` |
 | `horizontal_datum` | name | `wgs84` |
 | `vertical_datum` | object or `null` | elevation: `{"kind": "ellipsoidal"}`, `{"kind": "orthometric", "geoid": "egm96"}`, or `{"kind": "unknown"}`; imagery: `null` |
@@ -63,6 +63,20 @@ Each layer:
 | `index` | object | `blob` (digest), `bytes`, `tiles`, `gaps` |
 
 A day is a whole number of days from 2000-01-01.
+
+### Source declaration
+
+A source outside the registry has the key `declared:<sha256>`, the digest
+of the canonical bytes of its declaration:
+
+| Field | Type | Content |
+|---|---|---|
+| `version` | integer | `1` |
+| `kind` | name | `imagery` or `elevation` |
+| `ground_sample_mm` | integer | nominal ground sample distance, above zero |
+| `horizontal_mm`, `vertical_mm` | integer or `null` | one-sigma that the provider states |
+| `collected` | integer or `null` | collection day |
+| `provider_id` | digest | digest of a stable identifier that the provider chooses |
 
 ### Canonical form
 
