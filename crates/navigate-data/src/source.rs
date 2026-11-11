@@ -105,8 +105,8 @@ impl Serialize for SourceKey {
 
 impl<'de> Deserialize<'de> for SourceKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = <&str>::deserialize(deserializer)?;
-        Ok(Self::parse(text))
+        let text = String::deserialize(deserializer)?;
+        Ok(Self::parse(&text))
     }
 }
 

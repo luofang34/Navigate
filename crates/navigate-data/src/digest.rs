@@ -72,7 +72,7 @@ impl Serialize for Sha256Digest {
 
 impl<'de> Deserialize<'de> for Sha256Digest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = <&str>::deserialize(deserializer)?;
+        let text = String::deserialize(deserializer)?;
         text.parse().map_err(serde::de::Error::custom)
     }
 }

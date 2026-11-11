@@ -327,3 +327,36 @@ the `NVKTILE1` bank, and `write_corridor_product` stores the bank as a
 `corridor_landmarks` chunk with its recipe. The bank tiles are in an east,
 north, up frame at the centre of the surface, not on the fixed grid, so
 one bank is one chunk with `cell` set to `null`.
+
+## 12. The onboard boundary
+
+`navigate-onboard` holds the composition that a host links:
+
+- `Navigator` takes `SensorInput`s and gives a `NavigationSolution`. It
+  writes one `AcceptanceRecord` for each measurement into a sink that the
+  caller supplies: `Accepted`, `Rejected` with Navigate's reason, or
+  `Unused` with a reason.
+- `FlightDirector` sequences the route and gives the guidance setpoint
+  from a solution. It holds no control authority. `RouteDirector` owns its
+  waypoints, keeps the active index and the completion flag, and resumes a
+  `navigate_route::PlanExecution` from them at each step, with
+  `navigate_guidance::guide` or `guide_velocity`.
+- Both traits give `snapshot` and `restore`, so that a host can fork a run
+  and restore it. A navigator gives its data requirements before load and
+  a report for each product chunk after load.
+- `Onboard` owns one of each as trait objects.
+
+The host declares the `SensorSuite` once: for each sensor, the
+identifier, the kind, the imager model and the mount of a camera, the
+rate, and the error budget. An input carries the sensor identifier, the
+acquisition and delivery times, and the data. A sensor is unavailable only
+when its inputs do not come.
+
+`ReferenceNavigator` feeds every declared sensor into one 22-state
+inertial filter on WGS84: IMU increments, GNSS position and velocity
+fixes (with the declared budget when a fix has no covariance), barometric
+altitude (with the barometer bias state), star-camera frames (identified
+lost in space or with the navigator's own attitude as the prior, then one
+line of sight for each star, with consecutive sequence numbers; each
+record of a star frame names its identification mode, `tracking` or
+`lost_in_space`), and observations that a sensor makes itself.
