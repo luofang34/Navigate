@@ -26,12 +26,15 @@ use crate::{
 };
 
 mod heading;
+mod motion;
 pub(crate) mod names;
 mod rest;
 mod state;
 mod window;
 
 use heading::Magnetometer;
+pub(crate) use motion::{Increment, Moving};
+use motion::{Motion, VelocityFix};
 use rest::{EARTH_RATE_RAD_S, Inertial};
 use window::{Velocity, Window, seconds_between};
 
@@ -40,8 +43,8 @@ use window::{Velocity, Window, seconds_between};
 pub(crate) struct Solved {
     pub alignment: Alignment,
     pub record: AlignmentRecord,
-    /// The IMU biases of the window for the filter.
-    pub biases: ImuBiasPrior,
+    /// The IMU biases that the alignment measured, for the filter.
+    pub biases: Option<ImuBiasPrior>,
 }
 
 /// What the alignment waits for.
@@ -56,6 +59,10 @@ pub(crate) struct Aligner {
     /// The field that the host states for the place.
     pub(crate) reference: Option<MagneticReference>,
     window: Window,
+    motion: Motion,
+    /// What the alignment in motion lacked at the last fix of a moving
+    /// vehicle, or `None` when the last fix was of a vehicle near rest.
+    motion_need: Option<Waiting>,
     waiting: Waiting,
 }
 
@@ -93,6 +100,8 @@ impl Aligner {
             magnetometer,
             reference: None,
             window: Window::default(),
+            motion: Motion::default(),
+            motion_need: None,
             waiting: (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements),
         }
     }
@@ -100,6 +109,8 @@ impl Aligner {
     /// Forgets the window.
     pub(crate) fn restart(&mut self) {
         self.window = Window::default();
+        self.motion = Motion::default();
+        self.motion_need = None;
         self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements);
     }
 
@@ -108,18 +119,21 @@ impl Aligner {
         self.waiting
     }
 
-    /// Takes one inertial increment that ends at `at`. At the end of a
-    /// rest window it gives the state of that window, if the window has
-    /// one.
-    pub(crate) fn increment(
-        &mut self,
-        at: MonotonicNanos,
-        dt_s: f64,
-        delta_theta_rad: [f64; 3],
-        delta_velocity_m_s: [f64; 3],
-    ) -> Option<Solved> {
+    /// Takes one inertial increment. At the end of a rest window it gives
+    /// the state of that window, if the window has one.
+    pub(crate) fn increment(&mut self, step: Increment) -> Option<Solved> {
+        let Increment {
+            acquired_at: at,
+            dt_s,
+            delta_theta_rad,
+            delta_velocity_m_s,
+            ..
+        } = step;
         if !(dt_s.is_finite() && dt_s > 0.0) {
             return None;
+        }
+        if self.config.course_heading_sigma_rad.is_some() {
+            self.motion.increment(step);
         }
         let begins =
             MonotonicNanos::from_nanos(at.as_nanos().saturating_sub((dt_s * 1e9).round() as u64));
@@ -152,6 +166,12 @@ impl Aligner {
             .from(MonotonicNanos::from_nanos(at.as_nanos().saturating_add(1)));
         match solved {
             Ok(solved) => Some(solved),
+            // A vehicle that moves is not at rest; what the alignment in
+            // motion lacks says more.
+            Err((_, AlignmentNeed::Rest)) if self.motion_need.is_some() => {
+                self.waiting = self.motion_need.unwrap_or(self.waiting);
+                None
+            }
             Err(waiting) => {
                 self.waiting = waiting;
                 None
@@ -161,14 +181,17 @@ impl Aligner {
 
     /// Takes a GNSS fix acquired at `at`. A velocity with a one-sigma says
     /// whether the vehicle is at rest; a covariance gives the position.
+    /// For a vehicle whose course is a heading, a fix in motion gives the
+    /// state at that fix when an earlier fix and the inertial increments
+    /// between the two permit it.
     pub(crate) fn gnss(
         &mut self,
         at: MonotonicNanos,
         position: GeodeticPosition,
-        velocity: Option<(NedVelocity, f64)>,
+        velocity: Option<(NedVelocity, Option<f64>)>,
         covariance: Option<SymmetricCov3>,
-    ) {
-        if let Some((v, sigma_m_s)) = velocity
+    ) -> Option<Moving> {
+        if let Some((v, Some(sigma_m_s))) = velocity
             && sigma_m_s.is_finite()
             && sigma_m_s > 0.0
         {
@@ -184,6 +207,72 @@ impl Aligner {
                 .positions
                 .push((at, (position, covariance, PositionSource::Gnss)));
         }
+        let crab_sigma = self.config.course_heading_sigma_rad?;
+        let outcome = self.moving(at, position, velocity, covariance, crab_sigma);
+        match outcome {
+            Ok(moving) => Some(moving),
+            Err(need) => {
+                self.motion_need = need;
+                if let Some(need) = need {
+                    self.waiting = need;
+                }
+                None
+            }
+        }
+    }
+
+    /// The state of a moving vehicle at a fix; or what the alignment in
+    /// motion lacks, `None` for a vehicle near rest, which the rest window
+    /// judges.
+    fn moving(
+        &mut self,
+        at: MonotonicNanos,
+        position: GeodeticPosition,
+        velocity: Option<(NedVelocity, Option<f64>)>,
+        covariance: Option<SymmetricCov3>,
+        crab_sigma: f64,
+    ) -> Result<Moving, Option<Waiting>> {
+        let Some((velocity, sigma)) = velocity else {
+            return Err(None);
+        };
+        let speed = Vector3::new(velocity.north_mps, velocity.east_mps, velocity.down_mps).norm();
+        let sigma = sigma.filter(|s| s.is_finite() && *s > 0.0);
+        // Near rest within the gate of the receiver noise, the rest window
+        // judges the vehicle.
+        if sigma.is_some_and(|s| speed <= rest::GATE_SIGMAS * s) {
+            return Err(None);
+        }
+        let Some(position_cov) = covariance else {
+            return Err(Some((
+                AlignmentPhase::Position,
+                AlignmentNeed::PositionSource,
+            )));
+        };
+        let Some(sigma) = sigma else {
+            return Err(Some((
+                AlignmentPhase::Levelling,
+                AlignmentNeed::VelocityAccuracy,
+            )));
+        };
+        let inertial = self.inertial.ok_or(Some((
+            AlignmentPhase::Levelling,
+            AlignmentNeed::InertialIncrements,
+        )))?;
+        let fix = VelocityFix {
+            at,
+            position,
+            position_cov,
+            velocity,
+            velocity_sigma_m_s: sigma,
+        };
+        self.motion
+            .fix(
+                &fix,
+                crab_sigma,
+                self.config.max_heading_sigma_rad,
+                &inertial,
+            )
+            .map_err(Some)
     }
 
     /// Takes the field of the magnetometer in the body axes, measured at
@@ -316,7 +405,7 @@ impl Aligner {
                 gyro_bias_rad_s: Some(gyro_bias.into()),
                 gyro_bias_sigma_rad_s: Some(gyro_bias_var.sqrt()),
             },
-            biases,
+            biases: Some(biases),
         })
     }
 }

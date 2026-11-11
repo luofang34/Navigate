@@ -455,6 +455,32 @@ levelled tilt holds the accelerometer bias. A transfer alignment starts
 both biases at zero. After the state, a magnetometer, surveyed-point, or
 known-position input gives a record `Unused("alignment_only")`.
 
+A vehicle that moves along its nose also aligns in motion. The host
+sets `AlignmentConfig::course_heading_sigma_rad` to the one-sigma of the
+angle between its course over the ground and its heading: a small value
+for wheels on the ground, the crab angle of the expected cross wind for a
+fixed wing in the air. The default is `None`: the course is not a
+heading, and a moving vehicle waits with `rest`. With a value, a vehicle
+near rest (a GNSS speed within four sigma of the receiver noise) still
+aligns by its rest window, and a GNSS fix of a moving vehicle gives the
+state of the instant of that fix when the alignment has:
+
+| Part | Source | `waiting_for` when it is absent |
+|---|---|---|
+| Position | the fix has a covariance, or the receiver has a declared budget | `position_source` |
+| Velocity | the fix has a velocity covariance, or the receiver has a declared velocity one-sigma | `velocity_accuracy` |
+| Course | a ground speed at which the noise of the course is not above `max_heading_sigma_rad` | `course_speed` |
+| Heading | the course; its one-sigma, the crab allowance with the noise of the course, is not above `max_heading_sigma_rad` | `heading_uncertain` |
+| Acceleration | an earlier fix with a velocity, of the last 10 s | `velocity_fixes` |
+| Roll, pitch | the inertial increments between the two fixes cover the span to one step, and their specific force agrees in size with that of the velocity change within four sigma | `inertial_gap`, `force_disagreement` |
+
+The spans to the earlier fixes are tried from the smallest tilt one-sigma
+up, so a span over a lost increment or a wrong velocity gives way to one
+that skips it. The record of such a state has `HeadingSource::GnssCourse`
+and no gyroscope bias, and the filter starts its biases at zero. The
+heading error of the state is the crab angle; the filter makes it smaller
+only when the vehicle has a horizontal acceleration.
+
 `Navigator::align` is a transfer alignment: the state of another
 estimator or of a survey. It replaces an alignment in progress and an
 earlier state. `Navigator::realign` forgets the state, and the sensors

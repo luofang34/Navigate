@@ -33,6 +33,11 @@ mod tests {
                 Need::FieldStrength,
                 Need::HeadingUncertain,
                 Need::PositionSource,
+                Need::VelocityFixes,
+                Need::VelocityAccuracy,
+                Need::InertialGap,
+                Need::ForceDisagreement,
+                Need::CourseSpeed,
             ]
             .map(Need::name),
             [
@@ -45,6 +50,11 @@ mod tests {
                 "field_strength",
                 "heading_uncertain",
                 "position_source",
+                "velocity_fixes",
+                "velocity_accuracy",
+                "inertial_gap",
+                "force_disagreement",
+                "course_speed",
             ]
         );
         assert_eq!([ALIGNMENT, ALIGNMENT_ONLY], ["alignment", "alignment_only"]);

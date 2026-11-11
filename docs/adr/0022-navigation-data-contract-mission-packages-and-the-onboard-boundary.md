@@ -365,6 +365,26 @@ The self-alignment of the reference navigator follows these rules:
   than a set limit is not used, and the alignment waits. Course over
   ground is not a heading: a multirotor moves in each direction at each
   heading.
+- **Motion.** Course over ground is not a heading by default: a
+  multirotor moves in each direction at each heading. The host of a
+  vehicle that moves along its nose (wheels on the ground, a fixed wing
+  in the air) sets the one-sigma of the angle between course and
+  heading: the crab angle in wind. Such a vehicle also aligns in motion,
+  from two GNSS fixes with a velocity. The change of the velocity is the
+  acceleration, so the mean specific force of the span is known in the
+  north, east, down axes; the alignment does not take the vehicle as not
+  accelerated. The inertial increments of the span, summed in the body
+  axes of one instant, give the same vector in the body axes. The two
+  vectors and the course give the attitude. The span is the one whose
+  tilt one-sigma is the smallest by the declared budgets: the velocity
+  noise as an acceleration, the accelerometer noise and bias, and the
+  turn of the sum by the gyroscope bias and noise. The tilt one-sigma
+  also holds the heading error on the horizontal acceleration; the
+  heading one-sigma holds the crab allowance and the noise of the
+  course. Each part of the state is for the instant of the second fix;
+  increments that came after that fix go into the filter after the
+  state is set. The filter makes the heading better only when the
+  vehicle has a horizontal acceleration.
 - **Position.** A GNSS fix with a covariance, or the surveyed point. The
   velocity is zero, with a one-sigma that covers each velocity the tests
   of rest let through.

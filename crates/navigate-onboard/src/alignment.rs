@@ -23,8 +23,11 @@ pub enum AlignmentSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HeadingSource {
-    /// The magnetometer at rest, with the declared declination.
+    /// The magnetometer at rest, with the field that the host states.
     Magnetometer,
+    /// The course over the ground of a vehicle that moves along its nose,
+    /// to the configured allowance for its crab angle.
+    GnssCourse,
 }
 
 /// What gave the position of a self-alignment.
@@ -81,6 +84,22 @@ pub enum AlignmentNeed {
     /// No GNSS fix with a covariance, no surveyed point, and no known
     /// position has come.
     PositionSource,
+    /// The vehicle moves, and the alignment has not two GNSS fixes with a
+    /// velocity a usable time apart.
+    VelocityFixes,
+    /// A GNSS velocity of a moving vehicle has no stated or declared
+    /// one-sigma.
+    VelocityAccuracy,
+    /// The inertial increments do not cover the span between two GNSS
+    /// fixes of a moving vehicle.
+    InertialGap,
+    /// The specific force of the inertial increments between two fixes and
+    /// that of the change of the GNSS velocity differ in size by more than
+    /// their declared errors explain.
+    ForceDisagreement,
+    /// The vehicle moves too slowly for its course to be a heading as well
+    /// as the alignment needs.
+    CourseSpeed,
 }
 
 impl AlignmentNeed {
@@ -97,6 +116,11 @@ impl AlignmentNeed {
             Self::FieldStrength => "field_strength",
             Self::HeadingUncertain => "heading_uncertain",
             Self::PositionSource => "position_source",
+            Self::VelocityFixes => "velocity_fixes",
+            Self::VelocityAccuracy => "velocity_accuracy",
+            Self::InertialGap => "inertial_gap",
+            Self::ForceDisagreement => "force_disagreement",
+            Self::CourseSpeed => "course_speed",
         }
     }
 }
@@ -198,6 +222,15 @@ pub struct AlignmentConfig {
     /// Count of GNSS positions in a row that the filter refuses at its
     /// innovation gate before the alignment is suspect.
     pub suspect_after: u32,
+    /// One-sigma of the angle between the course over the ground and the
+    /// heading of a moving vehicle, radians: the crab angle in wind and
+    /// the sideslip. `None` says that the course is not a heading, as for
+    /// a multirotor, which moves in each direction at each heading; a
+    /// moving vehicle then waits for rest. A vehicle on its wheels in a
+    /// ground roll has a small value; a fixed wing in the air has the
+    /// crab angle of the wind that it can meet. The value is the host's
+    /// engineering choice for its vehicle.
+    pub course_heading_sigma_rad: Option<f64>,
 }
 
 impl Default for AlignmentConfig {
@@ -206,6 +239,7 @@ impl Default for AlignmentConfig {
             window_s: 2.0,
             max_heading_sigma_rad: 0.2,
             suspect_after: 5,
+            course_heading_sigma_rad: None,
         }
     }
 }
@@ -218,5 +252,8 @@ impl AlignmentConfig {
             .iter()
             .all(|v| v.is_finite() && *v > 0.0)
             && self.suspect_after > 0
+            && self
+                .course_heading_sigma_rad
+                .is_none_or(|v| v.is_finite() && v >= 0.0)
     }
 }

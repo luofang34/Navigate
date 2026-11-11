@@ -10,8 +10,12 @@ use crate::{
     HeadingSource, Navigator, Outcome, PositionSource, ReferenceNavigator,
 };
 
+mod envelope;
 mod inputs;
+mod lacks;
 mod motion;
+mod moving;
+mod path;
 mod rig;
 mod window;
 use rig::{GNSS, HEIGHT_M, LAT_DEG, LON_DEG, MAGNETOMETER, Rig, at};
