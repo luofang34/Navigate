@@ -25,7 +25,9 @@ use navigate_visual_render::{
 pub(crate) const CENTRE: [f64; 2] = [41.70, -1.00];
 /// Imagery zoom of the world: 3.6 m pixels at its latitude.
 mod elevation_error;
+mod texture;
 pub(crate) use elevation_error::DemError;
+pub(crate) use texture::Texture;
 
 pub(crate) const IMAGERY_ZOOM: u32 = 15;
 /// Elevation zoom of the world.
@@ -67,6 +69,8 @@ pub(crate) struct WorldSpec {
     /// The error of the elevation of the package against the ground of
     /// the frames.
     pub dem_error: DemError,
+    /// What the ground looks like.
+    pub texture: Texture,
 }
 
 impl Default for WorldSpec {
@@ -82,6 +86,7 @@ impl Default for WorldSpec {
             imagery_zoom: IMAGERY_ZOOM,
             relief_m: 80.0,
             dem_error: DemError::None,
+            texture: Texture::Farmland,
         }
     }
 }
@@ -137,12 +142,6 @@ fn noise(x: f64, y: f64, cell: f64, seed: u64) -> f64 {
 
 /// The luminance of the ground at one global imagery pixel: fields and
 /// blocks of 50 m to 250 m, which a camera with 5 m pixels resolves.
-fn ground_luma(gx: f64, gy: f64) -> u8 {
-    let v =
-        0.5 * noise(gx, gy, 14.0, 1) + 0.3 * noise(gx, gy, 37.0, 2) + 0.2 * noise(gx, gy, 90.0, 3);
-    // Harder edges, as fields have: stretch the middle of the range.
-    ((v - 0.5) * 3.2 + 0.5).clamp(0.0, 1.0).mul_add(235.0, 10.0) as u8
-}
 
 /// The height of the ground above the ellipsoid at one global elevation
 /// pixel: hills of `relief_m` from valley to top, a kilometre apart.
@@ -156,9 +155,9 @@ fn png(image: &RgbImage) -> Vec<u8> {
     out.into_inner()
 }
 
-fn imagery_tile(a: TileAddress, pixels: u32) -> Vec<u8> {
+fn imagery_tile(a: TileAddress, pixels: u32, texture: Texture) -> Vec<u8> {
     png(&RgbImage::from_fn(pixels, pixels, |x, y| {
-        let v = ground_luma(f64::from(a.x * pixels + x), f64::from(a.y * pixels + y));
+        let v = texture.luma(f64::from(a.x * pixels + x), f64::from(a.y * pixels + y));
         Rgb([v, v, v])
     }))
 }
@@ -216,7 +215,7 @@ impl World {
         let mut tiles = BTreeSet::new();
         corridor_tiles(&[CENTRE], spec.radius_m, spec.imagery_zoom, &mut tiles).unwrap();
         for a in tiles {
-            let tile = imagery_tile(a, spec.imagery_tile_pixels);
+            let tile = imagery_tile(a, spec.imagery_tile_pixels, spec.texture);
             pollster::block_on(writer.add_tile(&mut store, IMAGERY, a, &tile)).unwrap();
         }
         if spec.elevation {

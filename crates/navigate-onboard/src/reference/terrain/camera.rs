@@ -370,7 +370,8 @@ impl TerrainCamera {
         match position_fix_observation_composed(&estimate, &self.identity, &external) {
             Ok(observation) => {
                 if self.inspect {
-                    self.pending.offered(&observation);
+                    let model_m = estimate.frame.model_error_m(estimate.pose.position);
+                    self.pending.offered(&observation, &external, model_m);
                 }
                 Sighting::Fix {
                     observation: Box::new(observation),

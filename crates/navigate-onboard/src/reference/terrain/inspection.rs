@@ -94,8 +94,16 @@ pub struct OfferedFix {
     /// The position of the body, the lever arm taken off.
     pub position: GeodeticPosition,
     /// Its covariance with every error term, local north, east, down,
-    /// square metres.
+    /// square metres: the image geometry of the match, the external terms,
+    /// and the frame model on each axis.
     pub covariance_ned: SymmetricCov3,
+    /// The external terms of [`Self::covariance_ned`]: the map, the tilt
+    /// of the elevation error, the relief, and the calibration.
+    pub external_ned: SymmetricCov3,
+    /// The one-sigma of the model error of the local frame of the match,
+    /// metres, on each axis of [`Self::covariance_ned`]. The rest of that
+    /// covariance is the image geometry of the match.
+    pub frame_model_m: f64,
 }
 
 /// A grey image held by the record.
@@ -207,15 +215,30 @@ impl Pending {
     }
 
     /// Keeps the fix offered to the filter.
-    pub(super) fn offered(&mut self, observation: &Observation) {
+    pub(super) fn offered(
+        &mut self,
+        observation: &Observation,
+        external: &nalgebra::Matrix3<f64>,
+        frame_model_m: f64,
+    ) {
         if let ObservationValue::PositionFix {
             position,
             covariance,
         } = observation.value
         {
+            let e = external;
             self.fix = Some(OfferedFix {
                 position,
                 covariance_ned: covariance,
+                external_ned: SymmetricCov3::from_upper_triangle([
+                    e[(0, 0)],
+                    e[(0, 1)],
+                    e[(0, 2)],
+                    e[(1, 1)],
+                    e[(1, 2)],
+                    e[(2, 2)],
+                ]),
+                frame_model_m,
             });
         }
     }

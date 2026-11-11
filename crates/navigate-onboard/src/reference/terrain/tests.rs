@@ -8,6 +8,7 @@ mod cost;
 mod dem;
 mod fixes;
 pub(crate) mod flight;
+mod geometry;
 mod inspection;
 mod load;
 mod precheck;
