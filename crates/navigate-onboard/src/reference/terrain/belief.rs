@@ -3,8 +3,11 @@
 
 use nalgebra::{Matrix3, Quaternion, Rotation3, UnitQuaternion, Vector3};
 use navigate_camera::{CameraMount, OpticalPose};
-use navigate_contract::NavigationSolution;
+use navigate_contract::{MonotonicNanos, NavigationSolution};
+use navigate_fusion::InertialNavigationFilter;
 use navigate_visual::{CameraPose, LocalFrame, VisualError};
+
+use super::names;
 
 /// The vehicle as the navigator believes it at the middle of an exposure.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,6 +23,66 @@ pub(crate) struct Belief {
     pub sigma_attitude_rad: Option<f64>,
 }
 
+/// Where the belief of a frame came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeliefSource {
+    /// The filter gave its state at the exposure: position and attitude
+    /// are those of the middle of the exposure.
+    FilterAtExposure,
+    /// The exposure is older than the history of the filter. The belief
+    /// is the solution on delivery with its position moved back along its
+    /// velocity; its attitude is that of the delivery. The search bounds
+    /// grow with the delay to hold the difference.
+    MovedBackFromDelivery,
+}
+
+/// The belief of one frame and what the search must add to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Exposure {
+    pub belief: Belief,
+    pub source: BeliefSource,
+    /// Time of vehicle motion that the belief does not hold, seconds: zero
+    /// for the state of the filter at the exposure.
+    pub unmodelled_lag_s: f64,
+}
+
+/// The belief of the navigator for a frame acquired at `acquired` and
+/// delivered at `delivered`, or the name of the reason why the frame is
+/// not matched.
+pub(crate) fn at_exposure(
+    filter: &mut InertialNavigationFilter,
+    (acquired, delivered): (MonotonicNanos, MonotonicNanos),
+    max_capture_lag_s: f64,
+) -> Result<Exposure, &'static str> {
+    let lag_ns = delivered
+        .as_nanos()
+        .checked_sub(acquired.as_nanos())
+        .ok_or(names::ACQUIRED_AFTER_DELIVERY)?;
+    let lag_s = lag_ns as f64 * 1e-9;
+    if lag_s > max_capture_lag_s {
+        return Err(names::CAPTURE_LAG);
+    }
+    let on_delivery = filter.tick(delivered);
+    let exposure = |solution: &NavigationSolution, source, unmodelled_lag_s| {
+        Belief::before(solution, unmodelled_lag_s).map(|belief| Exposure {
+            belief,
+            source,
+            unmodelled_lag_s,
+        })
+    };
+    let past = (lag_ns > 0)
+        .then(|| filter.state_at(acquired).ok())
+        .flatten()
+        .and_then(|past| exposure(&past.solution, BeliefSource::FilterAtExposure, 0.0));
+    let source = if lag_ns == 0 {
+        BeliefSource::FilterAtExposure
+    } else {
+        BeliefSource::MovedBackFromDelivery
+    };
+    past.or_else(|| exposure(on_delivery.as_ref()?, source, lag_s))
+        .ok_or(names::NO_SOLUTION)
+}
+
 /// Rotation from the north, east, down axes into the east, north, up axes.
 fn enu_from_ned() -> UnitQuaternion<f64> {
     UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(Matrix3::new(
@@ -28,11 +91,11 @@ fn enu_from_ned() -> UnitQuaternion<f64> {
 }
 
 impl Belief {
-    /// The belief `lag_s` before `solution`. The filter gives a solution
-    /// only at or after its state time, so the position goes back along
+    /// The belief `lag_s` before `solution`: the position goes back along
     /// the velocity of the solution, and the attitude is the attitude of
-    /// the solution. The belief seeds and bounds the search; the fix does
-    /// not contain it. `None` without an attitude.
+    /// the solution. A lag of zero is the solution itself. The belief
+    /// seeds and bounds the search; the fix does not contain it. `None`
+    /// without an attitude.
     pub(crate) fn before(solution: &NavigationSolution, lag_s: f64) -> Option<Self> {
         let q = solution.attitude?;
         let p = &solution.position;
