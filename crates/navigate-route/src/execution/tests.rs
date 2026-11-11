@@ -3,6 +3,7 @@ use navigate_contract::{Ellipsoid, Ident, PlanRole};
 use super::*;
 
 mod leg_paths;
+mod resume;
 
 /// Meters per degree of arc on the mean-radius sphere of [`Ellipsoid::WGS84`];
 /// exact along the equator, where these fixtures live.
