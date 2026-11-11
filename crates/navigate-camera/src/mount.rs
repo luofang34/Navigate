@@ -50,6 +50,29 @@ impl CameraMount {
         )
     }
 
+    /// A camera at the body reference point: the forward camera of
+    /// [`Self::forward`] turned as a rigid part by `yaw_rad` about the body
+    /// down axis, then by `pitch_rad` about its own image-right axis, then
+    /// by `roll_rad` about its own optical axis. This is the aerospace
+    /// yaw, pitch, roll order. A positive yaw turns the optical axis toward
+    /// the right wing. A positive pitch lifts the optical axis, so a pitch
+    /// of a negative right angle is [`Self::nadir`] and a pitch of `-d` is
+    /// [`Self::depressed`] with `d`. A positive roll lowers the right side
+    /// of the image.
+    #[must_use]
+    pub fn rotated_forward(roll_rad: f64, pitch_rad: f64, yaw_rad: f64) -> Self {
+        let (sr, cr) = (sin(roll_rad), cos(roll_rad));
+        let (sp, cp) = (sin(pitch_rad), cos(pitch_rad));
+        let (sy, cy) = (sin(yaw_rad), cos(yaw_rad));
+        // The columns of Rz(yaw)·Ry(pitch)·Rx(roll): the body-axis
+        // directions of the optical axis, the image right, and the image
+        // down of the turned camera.
+        let optical = Vector3::new(cy * cp, sy * cp, -sp);
+        let right = Vector3::new(cy * sp * sr - sy * cr, sy * sp * sr + cy * cr, cp * sr);
+        let down = Vector3::new(cy * sp * cr + sy * sr, sy * sp * cr - cy * sr, cp * cr);
+        Self::from_axes(right, down, optical)
+    }
+
     /// A camera at the body reference point that looks up, with the image
     /// top toward the nose.
     #[must_use]
@@ -94,3 +117,6 @@ impl CameraMount {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
