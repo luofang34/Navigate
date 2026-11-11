@@ -81,6 +81,13 @@ impl ReferenceNavigator {
             } => self
                 .aligner
                 .surveyed(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
+            SensorData::KnownPosition {
+                position,
+                horizontal_sigma_m,
+                vertical_sigma_m,
+            } => self
+                .aligner
+                .known(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
             _ => {}
         }
         sink.record(AcceptanceRecord {
@@ -177,11 +184,10 @@ impl ReferenceNavigator {
     }
 
     /// Sets how the navigator aligns itself.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a value that is not finite and positive.
-    pub fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+    pub(in crate::reference) fn configure_alignment(
+        &mut self,
+        config: AlignmentConfig,
+    ) -> Result<(), OnboardError> {
         if !config.is_usable() {
             return Err(OnboardError::Config {
                 field: "alignment configuration",

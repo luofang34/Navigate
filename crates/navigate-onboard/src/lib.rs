@@ -35,8 +35,8 @@ mod sensor;
 
 pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
 pub use alignment::{
-    AlignmentConfig, AlignmentPhase, AlignmentRecord, AlignmentSource, AlignmentStatus,
-    HeadingSource, PositionSource,
+    AlignmentConfig, AlignmentNeed, AlignmentPhase, AlignmentRecord, AlignmentSource,
+    AlignmentStatus, HeadingSource, MagneticReference, PositionSource,
 };
 pub use bundle::Onboard;
 pub use director::{

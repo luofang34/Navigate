@@ -6,8 +6,8 @@ use navigate_contract::{NavigationSolution, SymmetricCov3};
 
 use super::names;
 use crate::{
-    AcceptanceRecord, AlignmentPhase, AlignmentSource, AlignmentStatus, HeadingSource, Navigator,
-    Outcome, PositionSource, ReferenceNavigator,
+    AcceptanceRecord, AlignmentNeed, AlignmentPhase, AlignmentSource, AlignmentStatus,
+    HeadingSource, Navigator, Outcome, PositionSource, ReferenceNavigator,
 };
 
 mod inputs;
@@ -79,7 +79,7 @@ fn a_vehicle_at_rest_aligns_itself_from_its_sensors() {
         navigator.alignment_status(),
         Some(AlignmentStatus::Aligning {
             phase: AlignmentPhase::Levelling,
-            waiting_for: names::INERTIAL_INCREMENTS
+            waiting_for: AlignmentNeed::InertialIncrements
         })
     );
     feed(&mut navigator, &mut rig, 1..=150, &mut sink);
@@ -91,7 +91,7 @@ fn a_vehicle_at_rest_aligns_itself_from_its_sensors() {
         navigator.alignment_status(),
         Some(AlignmentStatus::Aligning {
             phase: AlignmentPhase::Levelling,
-            waiting_for: names::REST_WINDOW
+            waiting_for: AlignmentNeed::RestWindow
         })
     );
     // The inputs before the state are recorded as taken by the alignment.
@@ -238,7 +238,7 @@ fn a_declination_worse_than_declared_shows_in_the_normalized_error() {
 }
 
 #[cfg(test)]
-fn waiting(navigator: &ReferenceNavigator) -> (AlignmentPhase, &'static str) {
+fn waiting(navigator: &ReferenceNavigator) -> (AlignmentPhase, AlignmentNeed) {
     match navigator.alignment_status() {
         Some(AlignmentStatus::Aligning { phase, waiting_for }) => (phase, waiting_for),
         other => panic!("not aligned: {other:?}"),
@@ -262,7 +262,7 @@ fn an_alignment_names_what_it_lacks_and_gives_no_state_without_it() {
     }
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST_EVIDENCE)
+        (AlignmentPhase::Levelling, AlignmentNeed::RestEvidence)
     );
     // No magnetometer in the suite: no heading source at rest.
     let suite = rig.suite(None);
@@ -277,14 +277,15 @@ fn an_alignment_names_what_it_lacks_and_gives_no_state_without_it() {
     }
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Heading, names::HEADING_SOURCE)
+        (AlignmentPhase::Heading, AlignmentNeed::HeadingSource)
     );
     // A magnetometer with 17° of body disturbance is not a heading.
-    let mut navigator = ReferenceNavigator::new(rig.suite(Some(0.3)), rig::CLOCK, None).unwrap();
+    let mut navigator =
+        rig.told(ReferenceNavigator::new(rig.suite(Some(0.3)), rig::CLOCK, None).unwrap());
     feed(&mut navigator, &mut rig, 1..=200, &mut sink);
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Heading, names::HEADING_UNCERTAIN)
+        (AlignmentPhase::Heading, AlignmentNeed::HeadingUncertain)
     );
     assert!(navigator.solution(at(200)).is_none());
 }

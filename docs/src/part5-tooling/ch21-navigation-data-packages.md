@@ -395,10 +395,13 @@ makes itself.
 A navigator that the host does not align finds its first state from its
 sensors. `Navigator::alignment_status` gives `Aligning { phase,
 waiting_for }` or `Aligned { record, suspect }`; `solution` gives `None`
-before the state. Before the state as after it, an input whose data is
+before the state. `waiting_for` is an `AlignmentNeed`, whose `name()` is
+the stable text in the table below. `Navigator::set_alignment_config`
+and `Navigator::set_magnetic_reference` reach a navigator held as a trait
+object. Before the state as after it, an input whose data is
 not of the kind of its sensor is refused with `WrongData`. An inertial
-increment goes to the alignment. A GNSS fix, a magnetic field, and a
-surveyed position go to the alignment and give a record
+increment goes to the alignment. A GNSS fix, a magnetic field, a
+surveyed position, and a known position go to the alignment and give a record
 `Unused("alignment")`; a barometer altitude, a star frame, a terrain
 frame, and an observation give the same record and are not used. A star
 exposure mark holds no prior.
@@ -414,8 +417,12 @@ acquisition stamp. A window gives a state when it has:
 |---|---|---|
 | Rest | enough increments to judge their scatter; specific force scatter, mean specific force near gravity, and mean body rate within four sigma of the declared IMU budget; and the mean GNSS velocity of the window within four sigma of zero, or a `SurveyedPosition` input | `rest_samples`, `rest`, `rest_evidence` |
 | Roll, pitch | mean specific force | (`rest_window` while the window fills) |
-| Heading | `SensorKind::Magnetometer` with `SensorData::MagneticField`, and the declination of `ErrorBudget::Magnetometer` | `heading_source`, `heading_uncertain` |
-| Position | a GNSS fix with a covariance or a declared budget, or `SensorKind::SurveyedPoint` with `SensorData::SurveyedPosition` | `position_source` |
+| Heading | `SensorKind::Magnetometer` with `SensorData::MagneticField`, and the `MagneticReference` that the host states | `heading_source`, `field_strength`, `heading_uncertain` |
+| Position | a GNSS fix with a covariance or a declared budget, or `SensorKind::SurveyedPoint` with `SensorData::SurveyedPosition` or `SensorData::KnownPosition` | `position_source` |
+
+`SensorData::SurveyedPosition` says that the vehicle is at rest on the
+point; `SensorData::KnownPosition` gives a position and says nothing of
+rest.
 
 The velocity of a state of rest is zero. Its one-sigma on each axis is
 the noise of the rest evidence spread to the four-sigma gate, `σ·√(1 +
@@ -426,25 +433,34 @@ velocity of, `σ` is the accelerometer noise density times the root of
 the window length. A GNSS velocity with neither covariance nor budget is
 no evidence of rest.
 
-`ErrorBudget::Magnetometer` states four terms as heading errors: the
-noise of one sample, the disturbance of the body (a bias: hard and soft
-iron and motor currents), the declination, and its one-sigma. The host
-takes the declination from a field model. When the heading one-sigma is
-above `max_heading_sigma_rad`, the alignment waits with
-`heading_uncertain`. The `AlignmentRecord` states the sources, the
+`ErrorBudget::Magnetometer` states two fields on each axis, in tesla:
+the noise of one sample and the residual body field after calibration (a
+bias: hard and soft iron and motor currents). The field of the place is
+not a property of the sensor: the host states it with
+`Navigator::set_magnetic_reference` from a field model, as declination,
+total intensity, and their one-sigmas, and states it again when the place
+or the epoch changes it. A field across the horizontal component turns
+the heading by its ratio to that component, so the heading one-sigma
+holds the noise of the mean and the body field over the measured
+horizontal intensity, the declination one-sigma, and the tilt error
+through the dip. A mean field whose strength is more than four sigma from
+the stated intensity is disturbed, and the alignment waits with
+`field_strength`. When the heading one-sigma is above
+`max_heading_sigma_rad`, it waits with `heading_uncertain`. The `AlignmentRecord` states the sources, the
 one-sigma of the tilt and of the heading, and the gyroscope bias of the
 window (the mean rate less the Earth rate) with its one-sigma. The filter
 starts its gyroscope bias from that value and one-sigma, and its
 accelerometer bias at zero with the declared one-sigma, because a
 levelled tilt holds the accelerometer bias. A transfer alignment starts
-both biases at zero. After the state, a magnetometer or surveyed-point input
-gives a record `Unused("alignment_only")`.
+both biases at zero. After the state, a magnetometer, surveyed-point, or
+known-position input gives a record `Unused("alignment_only")`.
 
 `Navigator::align` is a transfer alignment: the state of another
 estimator or of a survey. It replaces an alignment in progress and an
 earlier state. `Navigator::realign` forgets the state, and the sensors
 give the next one. Each new state forgets the map cells that gave a
-terrain fix, and the prior and the lock of each star camera. `ReferenceNavigator::align_from_truth` exists only with the
+terrain fix, and the prior and the lock of each star camera.
+`ReferenceNavigator::align_from_truth` exists only with the
 Cargo feature `evaluation`: an evaluation uses it for a navigator with a
 known start, and a flight build does not have it.
 

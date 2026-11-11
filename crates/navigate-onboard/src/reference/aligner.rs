@@ -20,26 +20,20 @@ use navigate_contract::{
 use navigate_fusion::ImuBiasPrior;
 
 use crate::{
-    Alignment, AlignmentConfig, AlignmentPhase, AlignmentRecord, AlignmentSource, ErrorBudget,
-    HeadingSource, PositionSource, SensorData, SensorKind, SensorSuite,
+    Alignment, AlignmentConfig, AlignmentNeed, AlignmentPhase, AlignmentRecord, AlignmentSource,
+    ErrorBudget, HeadingSource, MagneticReference, PositionSource, SensorData, SensorKind,
+    SensorSuite,
 };
 
+mod heading;
 pub(crate) mod names;
 mod rest;
 mod state;
 mod window;
 
+use heading::Magnetometer;
 use rest::{EARTH_RATE_RAD_S, Inertial};
 use window::{Velocity, Window, seconds_between};
-
-/// The declared errors of the magnetometer.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Magnetometer {
-    noise_sigma_rad: f64,
-    disturbance_sigma_rad: f64,
-    declination_rad: f64,
-    declination_sigma_rad: f64,
-}
 
 /// A state that one rest window gave.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,7 +45,7 @@ pub(crate) struct Solved {
 }
 
 /// What the alignment waits for.
-type Waiting = (AlignmentPhase, &'static str);
+type Waiting = (AlignmentPhase, AlignmentNeed);
 
 /// The self-alignment of one navigator.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +53,8 @@ pub(crate) struct Aligner {
     pub(crate) config: AlignmentConfig,
     inertial: Option<Inertial>,
     magnetometer: Option<Magnetometer>,
+    /// The field that the host states for the place.
+    pub(crate) reference: Option<MagneticReference>,
     window: Window,
     waiting: Waiting,
 }
@@ -83,15 +79,11 @@ impl Aligner {
         };
         let magnetometer = match budget(SensorKind::Magnetometer) {
             Some(ErrorBudget::Magnetometer {
-                noise_sigma_rad,
-                disturbance_sigma_rad,
-                declination_rad,
-                declination_sigma_rad,
+                noise_sigma_t,
+                disturbance_sigma_t,
             }) => Some(Magnetometer {
-                noise_sigma_rad,
-                disturbance_sigma_rad,
-                declination_rad,
-                declination_sigma_rad,
+                noise_sigma_t,
+                disturbance_sigma_t,
             }),
             _ => None,
         };
@@ -99,15 +91,16 @@ impl Aligner {
             config: AlignmentConfig::default(),
             inertial,
             magnetometer,
+            reference: None,
             window: Window::default(),
-            waiting: (AlignmentPhase::Levelling, names::INERTIAL_INCREMENTS),
+            waiting: (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements),
         }
     }
 
     /// Forgets the window.
     pub(crate) fn restart(&mut self) {
         self.window = Window::default();
-        self.waiting = (AlignmentPhase::Levelling, names::INERTIAL_INCREMENTS);
+        self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements);
     }
 
     /// What the alignment waits for.
@@ -148,8 +141,8 @@ impl Aligner {
             .add(Vector3::from(delta_velocity_m_s) / dt_s);
         self.window.rate.add(Vector3::from(delta_theta_rad) / dt_s);
         if self.window.seconds() < self.config.window_s {
-            if self.waiting.1 == names::INERTIAL_INCREMENTS {
-                self.waiting = (AlignmentPhase::Levelling, names::REST_WINDOW);
+            if self.waiting.1 == AlignmentNeed::InertialIncrements {
+                self.waiting = (AlignmentPhase::Levelling, AlignmentNeed::RestWindow);
             }
             return None;
         }
@@ -202,6 +195,23 @@ impl Aligner {
         }
     }
 
+    /// Takes the statement that the vehicle was at `position` at `at`. It
+    /// says nothing of rest.
+    pub(crate) fn known(
+        &mut self,
+        at: MonotonicNanos,
+        position: GeodeticPosition,
+        sigmas_m: (f64, f64),
+    ) {
+        let (h, v) = sigmas_m;
+        if h.is_finite() && v.is_finite() && h > 0.0 && v > 0.0 {
+            let covariance = SymmetricCov3::from_diagonal(h * h, h * h, v * v);
+            self.window
+                .positions
+                .push((at, (position, covariance, PositionSource::KnownPosition)));
+        }
+    }
+
     /// Takes the statement, made at `at`, that the vehicle is at rest on a
     /// surveyed point.
     pub(crate) fn surveyed(
@@ -225,7 +235,7 @@ impl Aligner {
         let w = &self.window;
         let inertial = self
             .inertial
-            .ok_or((AlignmentPhase::Levelling, names::INERTIAL_INCREMENTS))?;
+            .ok_or((AlignmentPhase::Levelling, AlignmentNeed::InertialIncrements))?;
         let rest = rest::rest(w, &inertial).map_err(|name| (AlignmentPhase::Levelling, name))?;
         let force = w.force.mean();
         let gravity = force.norm();
@@ -237,7 +247,18 @@ impl Aligner {
         let tilt_sigma_rad =
             (inertial.accel_noise.powi(2) / w.seconds() + inertial.accel_bias.powi(2)).sqrt()
                 / gravity;
-        let (heading, heading_sigma_rad) = self.heading(roll, pitch, tilt_sigma_rad)?;
+        let (heading, heading_sigma_rad) = heading::heading(
+            &heading::Inputs {
+                magnetometer: self.magnetometer,
+                reference: self.reference,
+                window: w,
+                max_sigma_rad: self.config.max_heading_sigma_rad,
+            },
+            roll,
+            pitch,
+            tilt_sigma_rad,
+        )
+        .map_err(|need| (AlignmentPhase::Heading, need))?;
         let Some((position, position_cov, source)) = w
             .positions
             .iter()
@@ -245,7 +266,7 @@ impl Aligner {
             .max_by_key(|(stamp, _)| *stamp)
             .map(|(_, position)| *position)
         else {
-            return Err((AlignmentPhase::Position, names::POSITION_SOURCE));
+            return Err((AlignmentPhase::Position, AlignmentNeed::PositionSource));
         };
         let attitude = UnitQuaternion::from_euler_angles(roll, pitch, heading);
         let (sin_lat, cos_lat) = position.latitude_rad.sin_cos();
@@ -298,46 +319,6 @@ impl Aligner {
             biases,
         })
     }
-
-    /// The heading of the window, clockwise from true north, and its
-    /// one-sigma, from the mean field of the magnetometer.
-    fn heading(&self, roll: f64, pitch: f64, tilt_sigma_rad: f64) -> Result<(f64, f64), Waiting> {
-        let no_source = (AlignmentPhase::Heading, names::HEADING_SOURCE);
-        let magnetometer = self.magnetometer.ok_or(no_source)?;
-        let w = &self.window;
-        let (samples, sum) = w
-            .field
-            .iter()
-            .filter(|(at, _)| w.holds(*at))
-            .fold((0_u32, Vector3::zeros()), |(n, sum), (_, field)| {
-                (n.saturating_add(1), sum + field)
-            });
-        if samples == 0 {
-            return Err(no_source);
-        }
-        // The field in the axes of a level body with the same heading.
-        let level =
-            UnitQuaternion::from_euler_angles(roll, pitch, 0.0) * (sum / f64::from(samples));
-        let horizontal = level.x.hypot(level.y);
-        if !(horizontal.is_finite() && horizontal > 0.0) {
-            return Err(no_source);
-        }
-        let heading = magnetometer.declination_rad + (-level.y).atan2(level.x);
-        // A tilt error turns the vertical field into the horizontal
-        // plane: the heading error is the tilt error times the tangent of
-        // the dip. Noise averages over the samples; the disturbance of
-        // the body and the declination are biases and do not.
-        let dip = level.z / horizontal;
-        let variance = magnetometer.noise_sigma_rad.powi(2) / f64::from(samples)
-            + magnetometer.disturbance_sigma_rad.powi(2)
-            + magnetometer.declination_sigma_rad.powi(2)
-            + (tilt_sigma_rad * dip).powi(2);
-        let sigma = variance.sqrt();
-        if sigma.is_nan() || sigma > self.config.max_heading_sigma_rad {
-            return Err((AlignmentPhase::Heading, names::HEADING_UNCERTAIN));
-        }
-        Ok((heading, sigma))
-    }
 }
 
 /// What a transfer alignment states: the host gave each part.
@@ -362,6 +343,7 @@ pub(super) const fn measurement(data: &SensorData) -> &'static str {
         SensorData::BaroAltitude { .. } => "baro_altitude",
         SensorData::MagneticField { .. } => names::MAGNETIC_FIELD,
         SensorData::SurveyedPosition { .. } => names::SURVEYED_POSITION,
+        SensorData::KnownPosition { .. } => names::KNOWN_POSITION,
         SensorData::StarCentroids { .. } => "star_line_of_sight",
         #[cfg(feature = "terrain-camera")]
         SensorData::TerrainFrame { .. } => super::terrain::MEASUREMENT,

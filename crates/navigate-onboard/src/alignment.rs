@@ -35,6 +35,8 @@ pub enum PositionSource {
     Gnss,
     /// A surveyed point that the host measured before the flight.
     SurveyedPoint,
+    /// A position that the host states, with no statement of rest.
+    KnownPosition,
 }
 
 /// The part of a self-alignment that is not complete.
@@ -47,6 +49,56 @@ pub enum AlignmentPhase {
     Heading,
     /// The position.
     Position,
+}
+
+/// What an alignment in progress lacks. A host shows and counts these by
+/// [`AlignmentNeed::name`], which does not change; a new case gets a new
+/// variant and a new name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AlignmentNeed {
+    /// No inertial increment has come.
+    InertialIncrements,
+    /// The rest window is not complete.
+    RestWindow,
+    /// The window holds too few inertial increments to judge rest by
+    /// their scatter.
+    RestSamples,
+    /// The specific force, the body rate, or the GNSS velocity of the
+    /// window is not that of a vehicle at rest.
+    Rest,
+    /// No sensor says that the vehicle is at rest: a GNSS fix with a
+    /// velocity or a surveyed point.
+    RestEvidence,
+    /// No magnetometer is declared, or it gave no usable field, or the
+    /// host stated no magnetic reference.
+    HeadingSource,
+    /// The strength of the measured field is not that of the stated
+    /// reference: the field is disturbed.
+    FieldStrength,
+    /// The heading is less certain than the alignment accepts.
+    HeadingUncertain,
+    /// No GNSS fix with a covariance, no surveyed point, and no known
+    /// position has come.
+    PositionSource,
+}
+
+impl AlignmentNeed {
+    /// The name of the need, for a host to show and count.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::InertialIncrements => "inertial_increments",
+            Self::RestWindow => "rest_window",
+            Self::RestSamples => "rest_samples",
+            Self::Rest => "rest",
+            Self::RestEvidence => "rest_evidence",
+            Self::HeadingSource => "heading_source",
+            Self::FieldStrength => "field_strength",
+            Self::HeadingUncertain => "heading_uncertain",
+            Self::PositionSource => "position_source",
+        }
+    }
 }
 
 /// What a completed alignment used and how well it knows each part.
@@ -83,9 +135,8 @@ pub enum AlignmentStatus {
     Aligning {
         /// The part that is not complete.
         phase: AlignmentPhase,
-        /// The name of what that part lacks, for example `rest_evidence`.
-        /// The names do not change.
-        waiting_for: &'static str,
+        /// What that part lacks.
+        waiting_for: AlignmentNeed,
     },
     /// The state is set.
     Aligned {
@@ -97,6 +148,38 @@ pub enum AlignmentStatus {
         /// [`crate::Navigator::realign`].
         suspect: bool,
     },
+}
+
+/// The Earth's field at the place, as the host states it from a field
+/// model, for the heading of a magnetometer. The host states it again when
+/// the place or the epoch changes enough to change it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MagneticReference {
+    /// Declination, radians, east positive.
+    pub declination_rad: f64,
+    /// One-sigma of the declination, radians: the error of the model and
+    /// the local anomaly.
+    pub declination_sigma_rad: f64,
+    /// Total intensity of the field, tesla.
+    pub intensity_t: f64,
+    /// One-sigma of the intensity, tesla.
+    pub intensity_sigma_t: f64,
+}
+
+impl MagneticReference {
+    /// Whether each value is finite, the one-sigmas and the intensity
+    /// positive.
+    #[must_use]
+    pub fn is_usable(&self) -> bool {
+        self.declination_rad.is_finite()
+            && [
+                self.declination_sigma_rad,
+                self.intensity_t,
+                self.intensity_sigma_t,
+            ]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+    }
 }
 
 /// How a navigator aligns itself.

@@ -354,10 +354,14 @@ The self-alignment of the reference navigator follows these rules:
   one-sigma holds the whole declared accelerometer bias, which a mean
   does not make smaller, and the noise of the mean.
 - **Heading.** At rest the heading comes from the magnetometer and the
-  declination that the host declares from a field model. Its one-sigma
-  holds the noise of the mean, the declared disturbance of the body
-  (hard and soft iron, motor currents), the declination error, and the
-  tilt error through the dip of the field. A heading that is less certain
+  field of the place that the host states from a field model:
+  declination and intensity, with their one-sigmas. The sensor budget
+  holds only the sensor's own errors, in field units, so a new place or
+  epoch needs a new statement, not a new suite. Its one-sigma holds the
+  noise of the mean and the declared body field over the measured
+  horizontal intensity, the declination error, and the tilt error
+  through the dip of the field. A field whose strength is not the stated
+  one is disturbed and gives no heading. A heading that is less certain
   than a set limit is not used, and the alignment waits. Course over
   ground is not a heading: a multirotor moves in each direction at each
   heading.

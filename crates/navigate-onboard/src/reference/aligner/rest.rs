@@ -9,8 +9,8 @@
 
 use nalgebra::Vector3;
 
-use super::names;
 use super::window::Window;
+use crate::AlignmentNeed;
 
 /// Multiple of a stated one-sigma at which a test of rest refuses. On one
 /// axis an honest window passes a test of this width but about once in
@@ -55,7 +55,7 @@ fn spread(sigma: f64) -> f64 {
 
 /// Whether `window` is one of rest by the inertial unit `inertial` and the
 /// evidence of the other sensors, or the name of what it lacks.
-pub(crate) fn rest(window: &Window, inertial: &Inertial) -> Result<Rest, &'static str> {
+pub(crate) fn rest(window: &Window, inertial: &Inertial) -> Result<Rest, AlignmentNeed> {
     let samples = window.force.count();
     // The sample variance of n increments scatters by √(2/(n−1)) of the
     // variance; the test needs the gate inside one variance.
@@ -65,7 +65,7 @@ pub(crate) fn rest(window: &Window, inertial: &Inertial) -> Result<Rest, &'stati
         .largest_variance()
         .filter(|_| variance_gate <= 1.0)
     else {
-        return Err(names::REST_SAMPLES);
+        return Err(AlignmentNeed::RestSamples);
     };
     let seconds = window.seconds();
     let sample_variance =
@@ -82,7 +82,7 @@ pub(crate) fn rest(window: &Window, inertial: &Inertial) -> Result<Rest, &'stati
     let velocity = gnss_velocity(window);
     let moving = velocity.is_some_and(|(mean, sigma)| mean.amax() > GATE_SIGMAS * sigma);
     if !inertial_rest || moving {
-        return Err(names::REST);
+        return Err(AlignmentNeed::Rest);
     }
     if window.surveys.iter().any(|at| window.holds(*at)) {
         // No sensor measures the velocity on the point. The statement says
@@ -97,7 +97,7 @@ pub(crate) fn rest(window: &Window, inertial: &Inertial) -> Result<Rest, &'stati
         .map(|(_, sigma)| Rest {
             velocity_sigma_m_s: spread(sigma),
         })
-        .ok_or(names::REST_EVIDENCE)
+        .ok_or(AlignmentNeed::RestEvidence)
 }
 
 /// The mean of the GNSS velocities of the window and its one-sigma on each
