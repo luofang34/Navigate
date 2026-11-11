@@ -114,7 +114,9 @@ Waypoints carry turn types per the
 [procedure requirements](procedure-requirements.md): a fly-by fix
 sequences early by the distance of turn anticipation the bank-limit
 model earns at the commanded groundspeed, while fly-over and terminal
-fixes sequence only inside the capture radius. `navigate-guidance`
+fixes capture only inside the capture radius. A fix that the vehicle
+passes outside its capture distance sequences at the perpendicular
+through the fix. `navigate-guidance`
 turns the solution plus the active leg into setpoints — cross-track and
 course for lateral, altitude constraints (including between-altitude
 windows) for vertical, bounded by per-leg gradient and waypoint speed

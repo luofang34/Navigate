@@ -23,7 +23,7 @@ const RESERVED: [LegPath; 8] = [
     LegPath::VerticalLanding,
 ];
 
-fn eastbound_course(reference: CourseReference) -> LegPath {
+pub(super) fn eastbound_course(reference: CourseReference) -> LegPath {
     LegPath::CourseToFix {
         course_rad: EASTBOUND_RAD,
         reference,
@@ -146,7 +146,7 @@ fn nav_lg_008_an_initial_fix_flies_from_the_present_position() {
 }
 
 #[test]
-fn nav_lg_009_a_course_to_fix_leg_sequences_inside_the_capture_radius_only() {
+fn nav_lg_009_a_course_to_fix_leg_captures_inside_the_capture_radius_only() {
     let wps = [
         wp("W0", 0.0, 0.0),
         wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),

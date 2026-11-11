@@ -63,8 +63,9 @@ vehicle class.
   start guarantee is completed by activation: a plan whose fixed leg is
   no longer than the capture radius is refused rather than flown as a
   skip.
-- **NAV-TT-004** A fly-over waypoint sequences only within the capture
-  radius of the fix itself (no anticipation). After sequencing, guidance
+- **NAV-TT-004** A fly-over waypoint captures only within the capture
+  radius of the fix itself (no anticipation). NAV-TT-006 is the only
+  other rule that sequences it. After sequencing, guidance
   tracks the next leg from the overflown fix; the rejoin appears as
   honest lateral deviation that converges — no synthetic intercept path
   is fabricated.
@@ -76,6 +77,21 @@ vehicle class.
   when a sparse position sample lands inside the radius, so consumers
   (telemetry, tests, displays) can always distinguish an anticipated
   fly-by from a fly-over crossing.
+- **NAV-TT-006** A leg that has a fixed inbound course (`TrackToFix`
+  and `CourseToFix`) also ends when the vehicle passes its fix outside
+  the capture distance of NAV-TT-003 and NAV-TT-004. The vehicle has
+  passed the fix when it is beyond the perpendicular through the fix to
+  the inbound course: the along-track distance to go is less than zero.
+  A capture can no longer occur after this point, and guidance would
+  continue on the inbound course away from the fix. The event reason is
+  "passed", and it gives the signed cross-track miss (positive right of
+  the inbound course), so a consumer can see that the fix was not
+  captured. Capture has priority: a sample that satisfies both rules
+  gives one capture event. One position sample sequences one fix at
+  most. The rule applies to fly-by, fly-over, and terminal fixes. It
+  does not apply to a `DirectToFix` or an `InitialFix` leg, because
+  these legs have no fixed inbound course and guidance steers them to
+  the fix from the present position.
 
 ## Vertical and speed constraints
 

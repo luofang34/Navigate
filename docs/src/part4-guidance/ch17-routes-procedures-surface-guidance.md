@@ -25,7 +25,8 @@ $$R_{\text{turn}} = \frac{V_g^2}{g \tan\phi_{\max}}, \qquad d_{\text{lead}} = R_
 Because Mars has $38\%$ of Earth's gravity, an aircraft at the same speed and bank angle on Mars requires $2.63\times$ the turn radius and anticipation distance. `ExecutionConfig` takes $g$ explicitly so a route on Mars or Titan never uses Earth gravity by mistake.
 
 - **`TurnType::FlyBy`:** Sequences to the next leg early at distance $d_{\text{lead}}$ before the waypoint.
-- **`TurnType::FlyOver` and terminal waypoints:** Sequence only inside the capture radius `capture_radius_m`.
+- **`TurnType::FlyOver` and terminal waypoints:** Capture only inside the capture radius `capture_radius_m`.
+- **Passed fix (NAV-TT-006):** On a `TrackToFix` or `CourseToFix` leg, a fix that the vehicle passes outside its capture distance sequences when the vehicle crosses the perpendicular through the fix to the inbound course. The reason `SequenceReason::Passed` gives the signed cross-track miss.
 - **Zero-wind vs. wind-triangle assumption:** The expression $R_{\text{turn}} = V_g^2 / (g \tan\phi_{\max})$ holds exactly when wind is zero ($\mathbf{v}_w = \mathbf{0}$, so groundspeed $V_g$ equals true airspeed $V_a$) or when the inner loop regulates ground-track curvature directly. Under a steady wind vector $\mathbf{v}_w$ ($\mathbf{v}_g = \mathbf{v}_a + \mathbf{v}_w$) at a fixed air-mass bank limit $\phi_{\max}$, the ground trajectory is a trochoid whose worst-case tailwind ground turn radius expands to $(V_a + \|\mathbf{v}_w\|)^2 / (g \tan\phi_{\max})$. When operating in strong winds relative to airspeed, callers should pass an upper-bounded groundspeed or apply a conservative bank-angle margin in `ExecutionConfig`.
 
 ## 2. Surface guidance laws and integrity gating (`navigate-guidance`)

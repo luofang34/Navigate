@@ -9,8 +9,10 @@
 //! A fly-by waypoint between two track-to-fix legs sequences early by the
 //! distance of turn anticipation when the turn geometry earns it
 //! (NAV-TT-003, NAV-LG-010); a fly-over waypoint and the terminal waypoint
-//! sequence only inside the capture radius (NAV-TT-004). After the final
-//! waypoint captures, the execution is complete and further advances are
+//! capture only inside the capture radius (NAV-TT-004). A fix that the
+//! vehicle passes outside its capture distance sequences when the vehicle
+//! crosses the perpendicular through the fix (NAV-TT-006). After the final
+//! waypoint sequences, the execution is complete and further advances are
 //! inert.
 
 use navigate_contract::{
@@ -25,11 +27,13 @@ use crate::turn::{
 };
 
 mod activation;
+mod passing;
 
 #[cfg(test)]
 mod tests;
 
 use activation::{resolve_path, screen_leg_paths};
+use passing::passed_cross_track_m;
 
 /// Below this track separation a course is numerically meaningless and
 /// turn geometry is skipped (mirrors the geodesy degenerate-track floor).
@@ -138,7 +142,7 @@ impl Leg<'_> {
 }
 
 /// Why a waypoint sequenced (NAV-TT-005).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SequenceReason {
     /// The distance of turn anticipation drove an advance beyond the
@@ -148,15 +152,24 @@ pub enum SequenceReason {
     /// crossing, and any fly-by fix whose anticipation distance stays
     /// inside the capture radius.
     Overflown,
+    /// The vehicle crossed the perpendicular through the fix outside the
+    /// capture distance (NAV-TT-006). The fix can no longer capture, so
+    /// the leg ends here and does not wait for a capture.
+    Passed {
+        /// Signed cross-track distance from the inbound course line at
+        /// the sample that sequenced, in meters, positive right of the
+        /// course: the distance by which the vehicle missed the fix.
+        cross_track_m: f64,
+    },
 }
 
 /// What one call to [`PlanExecution::advance`] decided.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SequenceEvent {
-    /// No waypoint captured; the active leg is unchanged.
+    /// No waypoint sequenced; the active leg is unchanged.
     None,
-    /// The active `to` waypoint captured and the next leg is active.
+    /// The active `to` waypoint sequenced and the next leg is active.
     LegAdvanced {
         /// Index of the newly active `to` waypoint.
         to_index: usize,
@@ -165,12 +178,12 @@ pub enum SequenceEvent {
         /// Why it sequenced.
         reason: SequenceReason,
     },
-    /// The final waypoint captured; the plan is complete.
+    /// The final waypoint sequenced; the plan is complete.
     PlanComplete {
         /// How the terminal waypoint was flown.
         turn: TurnType,
-        /// Why it sequenced (always capture-driven: the terminal fix has
-        /// no onward course to anticipate).
+        /// Why it sequenced: a capture or a passed fix, never an
+        /// anticipation, because the terminal fix has no onward course.
         reason: SequenceReason,
     },
 }
@@ -278,11 +291,20 @@ impl<'a> PlanExecution<'a> {
     /// `max(capture_radius, min(DTA, half the shorter adjoining leg))`
     /// of the fix (NAV-TT-003); fly-over waypoints, the terminal
     /// waypoint, direct-to legs, and track changes beyond the
-    /// anticipation limit sequence within the capture radius only
-    /// (NAV-TT-004). A non-finite or negative groundspeed anticipates
-    /// nothing; a non-finite position captures nothing. Once complete,
-    /// every further call returns [`SequenceEvent::None`] without
-    /// mutating anything.
+    /// anticipation limit capture within the capture radius only
+    /// (NAV-TT-004). A track-to-fix or course-to-fix leg that does not
+    /// capture also sequences when the position is beyond the
+    /// perpendicular through its fix to the inbound course, and the
+    /// event reports the cross-track miss (NAV-TT-006). Capture has
+    /// priority, so a sample that satisfies both rules gives one capture
+    /// event. One call sequences one fix at most: a position beyond
+    /// several fixes sequences one of them per call. The rule is a
+    /// half-space test with no distance limit, so a position far beyond
+    /// the fix also sequences it; the screen of a bad position is the
+    /// integrity screen upstream of this sequencer. A non-finite or
+    /// negative groundspeed anticipates nothing; a non-finite position
+    /// sequences nothing. Once complete, every further call returns
+    /// [`SequenceEvent::None`] without mutating anything.
     pub fn advance(&mut self, position: &GeodeticPosition, groundspeed_mps: f64) -> SequenceEvent {
         let Some(leg) = self.active_leg() else {
             return SequenceEvent::None;
@@ -297,18 +319,21 @@ impl<'a> PlanExecution<'a> {
         let threshold = self.config.capture_radius_m.max(anticipation);
         // Strict: a capped anticipation can equal a leg-start distance,
         // and a leg must never sequence at the instant it begins.
-        if distance >= threshold {
-            return SequenceEvent::None;
-        }
-        // The reason names the RULE that authorizes early sequencing,
-        // not the sample that happened to arrive (NAV-TT-005): a fly-by
-        // fix whose anticipation exceeds the capture radius is an
-        // anticipated transition even when a sparse sample lands inside
-        // the radius.
-        let reason = if anticipation > self.config.capture_radius_m {
-            SequenceReason::Anticipated
+        let reason = if distance < threshold {
+            // The reason names the RULE that authorizes early
+            // sequencing, not the sample that happened to arrive
+            // (NAV-TT-005): a fly-by fix whose anticipation exceeds the
+            // capture radius is an anticipated transition even when a
+            // sparse sample lands inside the radius.
+            if anticipation > self.config.capture_radius_m {
+                SequenceReason::Anticipated
+            } else {
+                SequenceReason::Overflown
+            }
+        } else if let Some(cross_track_m) = passed_cross_track_m(&leg, position, self.ellipsoid) {
+            SequenceReason::Passed { cross_track_m }
         } else {
-            SequenceReason::Overflown
+            return SequenceEvent::None;
         };
         let next = index.wrapping_add(1);
         if next >= self.plan.waypoints.len() {

@@ -146,7 +146,8 @@ pub fn layer_spec(kind: LayerKind, source: SourceKey, revision: Revision) -> Lay
     }
 }
 
-/// A registry source from its name, for example `esri_world_imagery`.
+/// A source from its text form: a registry name, for example
+/// `esri_world_imagery`, or `declared:<sha256>` of a source declaration.
 ///
 /// # Errors
 ///

@@ -96,8 +96,9 @@ can hover.
 
 - **NAV-LG-007** A `TrackToFix` leg runs on the great circle from the fix
   before it to its own fix. It sequences on a horizontal fix capture, and
-  the capture criteria of NAV-TT-003 and NAV-TT-004 apply unchanged. This
-  is the behavior the implicit model already has, now named.
+  the capture criteria of NAV-TT-003 and NAV-TT-004 apply unchanged. A
+  passed fix also ends the leg (NAV-TT-006). This is the behavior of the
+  implicit model.
 - **NAV-LG-008** A `DirectToFix` leg runs from the present position to
   its fix. An `InitialFix` leg declares the start fix of a procedure and
   states no path, so the executor flies it from the present position in
@@ -108,7 +109,9 @@ can hover.
 - **NAV-LG-009** A `CourseToFix` leg runs on the great circle that its
   fix and its published course define. The course is a true course in
   `[0, 2π)`, measured at the fix, in the direction of flight. The leg
-  sequences on a horizontal fix capture inside the capture radius only.
+  sequences on a horizontal fix capture inside the capture radius, or
+  when the vehicle passes the fix (NAV-TT-006). It does not anticipate a
+  turn.
   Guidance reports the published course as the reference course, and it
   measures the cross-track deviation against the course line. A vehicle
   right of the course line reads a positive deviation, which matches

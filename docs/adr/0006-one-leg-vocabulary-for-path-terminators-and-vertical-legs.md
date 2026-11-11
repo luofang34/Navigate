@@ -153,8 +153,8 @@ under a guard that was written for a different geometry.
 
 ### Sequencing is on an achieved condition, never on a timer
 
-Every leg ends on a condition the vehicle achieves. A fix capture, an
-altitude reached, a vehicle state reported, or an external command are
+Every leg ends on a condition the vehicle achieves. A fix capture, a
+fix passed (NAV-TT-006), an altitude reached, a vehicle state reported, or an external command are
 achieved conditions. Elapsed time is not. A hover that ends after 30
 seconds ends because a timer expired, not because the vehicle did
 anything. Such a leg would sequence while the vehicle is in the wrong
