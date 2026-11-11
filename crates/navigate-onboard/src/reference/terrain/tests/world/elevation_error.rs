@@ -60,4 +60,33 @@ impl DemError {
             } => sigma_m * (noise(gx, gy, length_m / px, seed) - 0.5) / NOISE_SIGMA,
         }
     }
+
+    /// The error `north_m` and `east_m` metres from [`CENTRE`].
+    pub(crate) fn at_metres(self, north_m: f64, east_m: f64) -> f64 {
+        let px = elevation_pixel_m();
+        let (x0, y0) = centre_pixel();
+        self.at(x0 + east_m / px, y0 - north_m / px)
+    }
+
+    /// The least-squares plane of the error over a footprint centred
+    /// `centre` (north, east) metres from [`CENTRE`] with the half sides
+    /// `half` (north, east): its slope north and east, and its mean.
+    pub(crate) fn plane_fit(self, centre: [f64; 2], half: [f64; 2]) -> [f64; 3] {
+        const N: i32 = 24;
+        let (mut sxx, mut syy, mut sxz, mut syz, mut sz, mut n) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        for i in -N..=N {
+            for j in -N..=N {
+                let x = half[0] * f64::from(i) / f64::from(N);
+                let y = half[1] * f64::from(j) / f64::from(N);
+                let z = self.at_metres(centre[0] + x, centre[1] + y);
+                sxx += x * x;
+                syy += y * y;
+                sxz += x * z;
+                syz += y * z;
+                sz += z;
+                n += 1.0;
+            }
+        }
+        [sxz / sxx, syz / syy, sz / n]
+    }
 }

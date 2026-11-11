@@ -34,11 +34,11 @@ const FIELD: f64 = 120.0 / 150.0;
 
 /// One fix: the horizontal error, north and east in metres, and the
 /// horizontal covariance that the fix states.
-type Fix = (Vector2<f64>, Matrix2<f64>);
+pub(super) type Fix = (Vector2<f64>, Matrix2<f64>);
 
 /// The world of `error` with the elevation one-sigma [`DEM_SIGMA_M`]
 /// stated, and correlation cells of `zoom`.
-fn world(error: DemError, zoom: u32) -> World {
+pub(super) fn world(error: DemError, zoom: u32) -> World {
     World::build(&WorldSpec {
         accuracy_mm: Some((1_500, (DEM_SIGMA_M * 1_000.0) as u32)),
         dem_error: error,
@@ -48,7 +48,7 @@ fn world(error: DemError, zoom: u32) -> World {
 }
 
 /// Six random elevation fields of [`DEM_SIGMA_M`] and [`LENGTH_M`].
-fn fields() -> Vec<DemError> {
+pub(super) fn fields() -> Vec<DemError> {
     (0..6)
         .map(|seed| DemError::Field {
             sigma_m: DEM_SIGMA_M,
@@ -74,7 +74,7 @@ fn load(navigator: &mut ReferenceNavigator, world: &World, length_m: f64) {
 
 /// A hover `agl_m` above the mean ground at the position `k` of a 3 by 3
 /// grid about the centre.
-fn hover(k: u32, agl_m: f64) -> Flight {
+pub(super) fn hover(k: u32, agl_m: f64) -> Flight {
     let north = f64::from(k % 3) * SPACING_M - SPACING_M;
     let east = f64::from(k / 3) * SPACING_M - SPACING_M;
     Flight {
@@ -88,7 +88,7 @@ fn hover(k: u32, agl_m: f64) -> Flight {
 }
 
 /// The mount of a camera `off_deg` from the nadir, looking north or east.
-fn mount(off_deg: f64, east: bool) -> CameraMount {
+pub(super) fn mount(off_deg: f64, east: bool) -> CameraMount {
     let yaw = if east {
         core::f64::consts::FRAC_PI_2
     } else {
@@ -99,7 +99,7 @@ fn mount(off_deg: f64, east: bool) -> CameraMount {
 
 /// The fix of one frame over `map`, rendered over `truth`; `None` when
 /// the frame gave no fix.
-fn fix(maps: (&World, &World), flight: &Flight, mount: CameraMount) -> Option<Fix> {
+pub(super) fn fix(maps: (&World, &World), flight: &Flight, mount: CameraMount) -> Option<Fix> {
     fix_rendered(maps, flight, (mount, mount))
 }
 
@@ -139,7 +139,7 @@ fn fix_rendered(
 
 /// The fixes of the grid over each of `maps`, seen at `off_deg` from
 /// `agl_m`.
-fn grid(maps: &[World], truth: &World, (off_deg, agl_m): (f64, f64)) -> Vec<Fix> {
+pub(super) fn grid(maps: &[World], truth: &World, (off_deg, agl_m): (f64, f64)) -> Vec<Fix> {
     let mut fixes = Vec::new();
     for (i, map) in maps.iter().enumerate() {
         for k in 0..9 {
