@@ -7,7 +7,7 @@ use navigate_contract::GeodeticPosition;
 use super::error_between;
 use crate::inertial::ClockNoiseModel;
 use crate::inertial::config::InertialConfig;
-use crate::inertial::discretization::{expm, van_loan};
+use crate::inertial::discretization::{expm, van_loan, van_loan_dense};
 use crate::inertial::local_level::body_fixed;
 use crate::inertial::mechanization::{
     ImuRates, continuous_jacobian, continuous_noise, mechanize, transition,
@@ -201,4 +201,30 @@ fn discrete_bias_noise_equals_the_gauss_markov_step() {
         let eigen = q_d.symmetric_eigenvalues();
         assert!(eigen.iter().all(|e| *e > -1e-24), "{eigen}");
     }
+}
+
+#[test]
+fn the_block_van_loan_equals_the_dense_one_to_rounding() {
+    // The block form runs the same approximant on the N×N blocks of the
+    // block-triangular matrix. Only the order of the sums differs, so
+    // the results agree to the rounding of f64, relative to the largest
+    // entry. The cases cover the default and the full configuration,
+    // IMU rates from 500 Hz to a one-minute coast step.
+    let field = earth_frame();
+    let mut worst = (0.0_f64, 0.0_f64);
+    for config in [InertialConfig::default(), short_bias_config()] {
+        let (_, midpoint) = mechanize(&nominal(), &rates(), 0.5, &field, &config);
+        let f = continuous_jacobian(&midpoint, &field, &config);
+        let q_c = continuous_noise(&config);
+        for dt_s in [0.002, 0.01, 0.1, 1.0, 10.0, 60.0] {
+            let (phi, q_d) = van_loan(&f, &q_c, dt_s).expect("finite");
+            let (phi_ref, q_ref) = van_loan_dense(&f, &q_c, dt_s).expect("finite");
+            let relative = |a: &SMatrix<f64, 22, 22>, b: &SMatrix<f64, 22, 22>| {
+                (a - b).abs().max() / b.abs().max()
+            };
+            worst.0 = worst.0.max(relative(&phi, &phi_ref));
+            worst.1 = worst.1.max(relative(&q_d, &q_ref));
+        }
+    }
+    assert!(worst.0 < 1e-13 && worst.1 < 1e-13, "{worst:?}");
 }

@@ -37,6 +37,7 @@
 //! covariance model of the filter to a covariance analysis that has no
 //! filter state, such as a Cramér–Rao bound.
 
+mod bias_prior;
 mod clock;
 mod coast;
 mod config;
@@ -73,6 +74,7 @@ use crate::observation::{MeasurementKind, Observation};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
 use crate::solution_sequence::SolutionSequencer;
+pub use bias_prior::ImuBiasPrior;
 pub use clock::ClockNoiseModel;
 pub use config::InertialConfig;
 pub use frame_change::FrameChange;
@@ -111,6 +113,8 @@ pub struct InertialNavigationFilter {
     core: Option<InertialCore>,
     history: History,
     stats: StatsTable,
+    /// The IMU bias prior of the next initialization.
+    bias_prior: Option<ImuBiasPrior>,
 }
 
 impl InertialNavigationFilter {
@@ -152,6 +156,7 @@ impl InertialNavigationFilter {
             core: None,
             history: History::default(),
             stats: StatsTable::default(),
+            bias_prior: None,
         }
     }
 

@@ -3,6 +3,7 @@
 //! at true poses, and the reference navigator run on inertial increments
 //! and those frames.
 
+mod content;
 mod cost;
 mod fixes;
 pub(crate) mod flight;

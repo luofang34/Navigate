@@ -38,6 +38,7 @@ mod belief;
 mod budget;
 mod camera;
 mod config;
+mod content;
 mod keyframes;
 mod map;
 mod names;
@@ -258,6 +259,18 @@ impl ReferenceNavigator {
                 sensor: input.sensor,
             });
         };
+        // A frame with no structure gives no match, and it is found before
+        // the filter, the map, or the matcher do any work for it.
+        if content::Content::of(&image).is_featureless(map.config.min_structure) {
+            sink.record(AcceptanceRecord {
+                sensor: input.sensor,
+                acquired_at: input.acquired_at,
+                measurement: MEASUREMENT,
+                outcome: Outcome::Unused(names::FEATURELESS_FRAME),
+                context: None,
+            });
+            return Ok(());
+        }
         let times = (input.acquired_at, input.delivered_at);
         let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
             Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,

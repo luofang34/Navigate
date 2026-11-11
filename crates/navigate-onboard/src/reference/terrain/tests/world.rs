@@ -107,7 +107,7 @@ pub(crate) const ENVELOPE: ValidityEnvelope = ValidityEnvelope {
 };
 
 /// A value in `[0, 1)` for each lattice point.
-fn lattice(x: i64, y: i64, seed: u64) -> f64 {
+pub(crate) fn lattice(x: i64, y: i64, seed: u64) -> f64 {
     let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
         ^ seed;
