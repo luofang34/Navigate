@@ -116,6 +116,7 @@ fn aligned_off(extra: &[SensorKind], north_m: f64, variance_m2: f64) -> Referenc
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator

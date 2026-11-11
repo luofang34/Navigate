@@ -9,6 +9,7 @@ use core::any::Any;
 
 use navigate_data::product::{KindName, ProductKind, ProductUse};
 use navigate_data::{LayerKind, Sha256Digest};
+use navigate_fusion::ImuBiasPrior;
 
 use crate::{AcceptanceSink, AlignmentStatus, OnboardError, SensorInput, SensorSuite};
 
@@ -64,6 +65,13 @@ pub struct Alignment {
     pub attitude_cov: SymmetricCov3,
     /// When the state is valid, on the navigator clock.
     pub at: MonotonicNanos,
+    /// The IMU biases at the state, with their covariances, in the body
+    /// axes: for example the gyroscope turn-on bias that a ground
+    /// calibration measured in a rest window before an in-air start. The
+    /// filter starts its biases from it; `None` starts them at zero with
+    /// their stationary variances and clears a prior that an earlier
+    /// alignment gave.
+    pub imu_bias_prior: Option<ImuBiasPrior>,
 }
 
 /// A navigator: sensor inputs in, a navigation solution out.

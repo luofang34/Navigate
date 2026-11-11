@@ -336,6 +336,7 @@ fn a_transfer_alignment_and_a_realignment_replace_the_state() {
         velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
         attitude_cov: SymmetricCov3::from_diagonal(1e-4, 1e-4, 4e-4),
         at: at(200),
+        imu_bias_prior: None,
     };
     navigator.align(&transfer).unwrap();
     let Some(AlignmentStatus::Aligned { record, .. }) = navigator.alignment_status() else {
@@ -412,18 +413,30 @@ fn a_fork_in_a_rest_window_aligns_as_the_original_does() {
 
 /// The gyroscope bias of the rest window starts the filter's bias: a
 /// vehicle at rest with 2 mrad/s of bias about the vertical keeps its
-/// heading after the state. A transfer alignment gives no bias, and the
-/// same vehicle turns its heading by the bias times the time.
+/// heading after the state. A transfer alignment that carries the bias in
+/// its prior, as a ground calibration before an in-air start gives it,
+/// keeps the heading too, to the prior's one-sigma times the time; one
+/// without a prior turns the heading by the bias times the time.
 #[test]
-fn the_window_gyro_bias_starts_the_filter() {
-    let heading_drift = |transfer: bool| {
+fn the_gyro_bias_of_a_window_or_a_prior_starts_the_filter() {
+    // The prior of a ground calibration: the true bias, to 0.1 mrad/s.
+    const PRIOR_SIGMA: f64 = 1e-4;
+    let heading_drift = |transfer: Option<bool>| {
         let mut rig = Rig::new(ATTITUDE_DEG, 71, 1.0);
         rig.gyro_bias = Vector3::new(2e-4, -3e-4, 2e-3);
         let mut navigator = rig.navigator();
         let mut sink = Vec::new();
         feed(&mut navigator, &mut rig, 1..=200, &mut sink);
         let aligned = navigator.solution(at(200)).unwrap();
-        if transfer {
+        if let Some(with_prior) = transfer {
+            let accel = rig.budgets.accel_bias.powi(2);
+            let gyro = PRIOR_SIGMA * PRIOR_SIGMA;
+            let prior = crate::ImuBiasPrior::new(
+                [0.0; 3],
+                SymmetricCov3::from_diagonal(accel, accel, accel),
+                (rig.gyro_bias + Vector3::new(0.0, 0.0, 0.5 * PRIOR_SIGMA)).into(),
+                SymmetricCov3::from_diagonal(gyro, gyro, gyro),
+            );
             navigator
                 .align(&crate::Alignment {
                     position: aligned.position,
@@ -433,18 +446,26 @@ fn the_window_gyro_bias_starts_the_filter() {
                     velocity_cov: aligned.velocity_cov,
                     attitude_cov: aligned.attitude_cov.unwrap(),
                     at: at(200),
+                    imu_bias_prior: with_prior.then_some(prior),
                 })
                 .unwrap();
+            let Some(AlignmentStatus::Aligned { record, .. }) = navigator.alignment_status() else {
+                panic!("aligned by transfer");
+            };
+            assert_eq!(record.gyro_bias_rad_s.is_some(), with_prior);
         }
         let start = normalized_errors(&rig, &aligned).3;
         feed(&mut navigator, &mut rig, 201..=500, &mut sink);
         let end = normalized_errors(&rig, &navigator.solution(at(500)).unwrap()).3;
         (end - start).abs()
     };
-    let own = heading_drift(false);
-    let transferred = heading_drift(true);
-    // 2 mrad/s over 3 s is 6 mrad; the bias of the window is known to
-    // the gyroscope noise over 2 s, 0.07 mrad/s.
+    let own = heading_drift(None);
+    let with_prior = heading_drift(Some(true));
+    let without = heading_drift(Some(false));
+    // 2 mrad/s over 3 s is 6 mrad. The bias of the window is known to
+    // the gyroscope noise over 2 s, 0.07 mrad/s; that of the prior to
+    // 0.1 mrad/s, 0.3 mrad over 3 s.
     assert!(own < 1e-3, "{own}");
-    assert!(transferred > 4e-3, "{transferred}");
+    assert!(with_prior < 3.0 * PRIOR_SIGMA * 3.0, "{with_prior}");
+    assert!(without > 4e-3, "{without}");
 }

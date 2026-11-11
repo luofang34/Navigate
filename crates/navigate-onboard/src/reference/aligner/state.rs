@@ -2,7 +2,6 @@
 //! with an input while it aligns, and how a state is set and forgotten.
 
 use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
-use navigate_fusion::ImuBiasPrior;
 
 use super::{measurement, names};
 use crate::{
@@ -32,9 +31,7 @@ impl ReferenceNavigator {
                 let solved =
                     self.aligner
                         .increment(at, *dt_s, *delta_theta_rad, *delta_velocity_m_s);
-                return solved.map_or(Ok(()), |s| {
-                    self.set_state(&s.alignment, s.record, Some(s.biases))
-                });
+                return solved.map_or(Ok(()), |s| self.set_state(&s.alignment, s.record));
             }
             SensorData::StarExposureMid => {
                 if let Some(channel) = self.stars.get_mut(&input.sensor.get()) {
@@ -93,21 +90,22 @@ impl ReferenceNavigator {
         Ok(())
     }
 
-    /// Sets the state of the filter, with the IMU biases of a
-    /// self-alignment or none for a state that the host gave, and what the
-    /// navigator states about it. What the navigator kept about an earlier
-    /// state goes.
+    /// Sets the state of the filter, with the IMU bias prior of the
+    /// alignment, and what the navigator states about it. What the
+    /// navigator kept about an earlier state goes, and an alignment without
+    /// a prior clears the prior of an earlier one.
     pub(in crate::reference) fn set_state(
         &mut self,
         a: &Alignment,
         record: AlignmentRecord,
-        biases: Option<ImuBiasPrior>,
     ) -> Result<(), OnboardError> {
         let refused = |reason| OnboardError::Refused {
             stage: "alignment",
             reason,
         };
-        self.filter.set_imu_bias_prior(biases).map_err(refused)?;
+        self.filter
+            .set_imu_bias_prior(a.imu_bias_prior)
+            .map_err(refused)?;
         self.filter
             .initialize_surface(
                 a.position,
@@ -140,7 +138,7 @@ impl ReferenceNavigator {
             source: crate::AlignmentSource::Truth,
             ..super::transfer_record(truth)
         };
-        self.set_state(truth, record, None)
+        self.set_state(truth, record)
     }
 
     /// Forgets the state: the navigator aligns again from its sensors.

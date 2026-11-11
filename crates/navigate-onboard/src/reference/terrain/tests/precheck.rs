@@ -115,6 +115,7 @@ fn aligned_hover(imager: ImagerModel) -> ReferenceNavigator {
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator

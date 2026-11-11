@@ -95,6 +95,7 @@ fn aligned_on(
             velocity_cov: navigate_contract::SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: navigate_contract::SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     let request = TerrainMapRequest {
@@ -313,6 +314,7 @@ fn fixes_with(world: &World, config: TerrainConfig, poses: u32) -> (u32, f64, f6
                 velocity_cov: navigate_contract::SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
                 attitude_cov: navigate_contract::SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
                 at: at(0),
+                imu_bias_prior: None,
             })
             .unwrap();
         navigator

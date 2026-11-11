@@ -437,7 +437,10 @@ window (the mean rate less the Earth rate) with its one-sigma. The filter
 starts its gyroscope bias from that value and one-sigma, and its
 accelerometer bias at zero with the declared one-sigma, because a
 levelled tilt holds the accelerometer bias. A transfer alignment starts
-both biases at zero. After the state, a magnetometer or surveyed-point input
+the biases from `Alignment::imu_bias_prior`, for example a ground
+calibration of the gyroscope turn-on bias before an in-air start; without
+a prior it starts them at zero and clears the prior of an earlier
+alignment. After the state, a magnetometer or surveyed-point input
 gives a record `Unused("alignment_only")`.
 
 `Navigator::align` is a transfer alignment: the state of another
