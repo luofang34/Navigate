@@ -4977,6 +4977,7 @@ dependencies = [
  "navigate-camera",
  "navigate-celestial",
  "navigate-contract",
+ "navigate-data",
  "navigate-fusion",
  "navigate-geodesy",
  "navigate-guidance",

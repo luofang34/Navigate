@@ -5,7 +5,46 @@ use navigate_contract::{
     SymmetricCov3,
 };
 
+use core::any::Any;
+
+use navigate_data::product::{KindName, ProductKind, ProductUse};
+use navigate_data::{LayerKind, Sha256Digest};
+
 use crate::{AcceptanceSink, OnboardError, SensorInput, SensorSuite};
+
+/// How much a navigator needs one kind of data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Need {
+    /// The navigator refuses to load without it.
+    Required,
+    /// The navigator uses it when it is present.
+    Optional,
+}
+
+/// One kind of data that a navigator needs or can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataRequirement {
+    /// A core layer kind, or `None` for a product requirement.
+    pub layer: Option<LayerKind>,
+    /// A product kind, or `None` for a layer requirement.
+    pub product: Option<ProductKind>,
+    /// Altitude bands that the navigator can use, inclusive, or `None` for
+    /// any band.
+    pub altitude_bands: Option<(u32, u32)>,
+    /// How much the navigator needs it.
+    pub need: Need,
+}
+
+/// What a navigator did with one product chunk at load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductReport {
+    /// The kind of the chunk.
+    pub kind: KindName,
+    /// The chunk digest.
+    pub chunk: Sha256Digest,
+    /// Use, fallback, or refusal, with the reason.
+    pub decision: ProductUse,
+}
 
 /// The initial state of a navigator, with its covariances.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,4 +92,29 @@ pub trait Navigator {
 
     /// The solution at `now`, or `None` before the alignment.
     fn solution(&mut self, now: MonotonicNanos) -> Option<NavigationSolution>;
+
+    /// The data that the navigator needs or can use, before load. A
+    /// navigator that uses no map data gives none.
+    fn requirements(&self) -> Vec<DataRequirement> {
+        Vec::new()
+    }
+
+    /// What the navigator did with each product chunk at load.
+    fn load_report(&self) -> &[ProductReport] {
+        &[]
+    }
+
+    /// A complete copy of the state, for a fork or a later restore.
+    fn snapshot(&self) -> Box<dyn Navigator>;
+
+    /// Restores the state of `snapshot`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a snapshot of another navigator type.
+    fn restore(&mut self, snapshot: &dyn Navigator) -> Result<(), OnboardError>;
+
+    /// The navigator as [`Any`], so that [`Navigator::restore`] can check
+    /// the type of a snapshot.
+    fn as_any(&self) -> &dyn Any;
 }

@@ -408,3 +408,27 @@ fn the_bundle_links_a_navigator_and_a_director_as_trait_objects() {
     assert!(output.setpoint.is_some() || output.refusal.is_some());
     assert_eq!(onboard.director.active_index(), Some(0));
 }
+
+#[test]
+fn a_snapshot_forks_the_run_and_restores_it() {
+    let mut navigator = aligned(&[SensorKind::Gnss]);
+    let mut sink = Vec::new();
+    run(&mut navigator, 5, Some(0.0), &mut sink);
+    let snapshot = navigator.snapshot();
+    let mut fork = snapshot.snapshot();
+    for step in 5 * RATE + 1..=8 * RATE {
+        navigator.ingest(&rest_increment(step), &mut sink).unwrap();
+        fork.ingest(&rest_increment(step), &mut sink).unwrap();
+    }
+    let now = at(8 * RATE);
+    assert_eq!(navigator.solution(now), fork.solution(now));
+    navigator
+        .ingest(&gnss_fix(8 * RATE, 3.0), &mut sink)
+        .unwrap();
+    assert_ne!(navigator.solution(now), fork.solution(now));
+    navigator.restore(&*snapshot).unwrap();
+    let mut from_snapshot = snapshot.snapshot();
+    let then = at(5 * RATE);
+    assert_eq!(navigator.solution(then), from_snapshot.solution(then));
+    assert!(navigator.requirements().is_empty() && navigator.load_report().is_empty());
+}

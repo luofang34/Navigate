@@ -11,6 +11,7 @@ nalgebra = { workspace = true, features = ["std"] }
 navigate-camera = { workspace = true, features = ["std"] }
 navigate-celestial.workspace = true
 navigate-contract = { workspace = true, features = ["std"] }
+navigate-data = { workspace = true, features = ["std"] }
 navigate-fusion = { workspace = true, features = ["std"] }
 navigate-geodesy = { workspace = true, features = ["std"] }
 navigate-guidance = { workspace = true, features = ["std"] }

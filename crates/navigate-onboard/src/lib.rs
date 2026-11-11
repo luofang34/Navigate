@@ -7,7 +7,9 @@
 //! - a [`FlightDirector`] that sequences the route and computes the
 //!   guidance setpoint from a solution.
 //!
-//! [`Onboard`] owns one of each. The host declares the [`SensorSuite`]
+//! [`Onboard`] owns one of each. A navigator declares its data
+//! requirements before load, reports what it did with each product chunk,
+//! and gives a snapshot of its complete state that it can restore. The host declares the [`SensorSuite`]
 //! once, when it builds the navigator. Each [`SensorInput`] then carries the
 //! sensor identifier, the times, and the data. A sensor is unavailable only
 //! when its inputs do not come: no navigator has a mode that disables one.
@@ -29,6 +31,6 @@ pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
 pub use bundle::Onboard;
 pub use director::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector};
 pub use error::OnboardError;
-pub use navigator::{Alignment, Navigator};
+pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};

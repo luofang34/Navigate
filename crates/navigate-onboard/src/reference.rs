@@ -345,6 +345,27 @@ impl Navigator for ReferenceNavigator {
     fn solution(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
         self.filter.tick(now)
     }
+
+    fn snapshot(&self) -> Box<dyn Navigator> {
+        Box::new(self.clone())
+    }
+
+    fn restore(&mut self, snapshot: &dyn Navigator) -> Result<(), OnboardError> {
+        let other =
+            snapshot
+                .as_any()
+                .downcast_ref::<Self>()
+                .ok_or_else(|| OnboardError::Config {
+                    field: "snapshot",
+                    detail: "a snapshot of another navigator type".into(),
+                })?;
+        self.clone_from(other);
+        Ok(())
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]
