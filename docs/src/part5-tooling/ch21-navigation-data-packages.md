@@ -389,6 +389,13 @@ makes itself.
 
 ### Terrain camera
 
+The terrain-camera means is in the Cargo feature `terrain-camera` of
+`navigate-onboard`, which links `navigate-visual` and
+`navigate-visual-render`. The feature only adds code: a navigator without
+a declared terrain camera gives the same values with and without it.
+Without the feature, a suite with a terrain camera is refused
+(`OnboardError::FeatureDisabled`).
+
 Declare the camera in the suite:
 
 | `SensorSpec` field | Content |
@@ -448,10 +455,16 @@ the context `keyframe` or `render`:
 | `Accepted` | The filter took the fix. It is the first fix of its correlation cell. |
 | `Rejected(reason)` | The filter refused the fix. The cell stays open. |
 | `Unused("shared_map_error")` | An earlier fix carries the map error of the cell. The fix is not offered to the filter. |
-| `Unused("untracked_map_cell")` | The ledger is full. |
+| `Unused("untracked_map_cell")` | The ledger of cells is full. |
 | `Unused("outside_coverage")` | Less than `min_view_coverage` of the reference shows the map. |
-| `Unused("capture_lag")`, `Unused("no_solution")` | The frame is too old, or the navigator has no solution with an attitude. |
-| `Unused("insufficient_matches")` and the other localizer reasons | `navigate_visual::Localizer` did not accept a pose. |
+| `Unused("capture_lag")` | The frame came later after its exposure than `max_capture_lag_s`. |
+| `Unused("acquired_after_delivery")` | The acquisition time is after the delivery time. |
+| `Unused("no_solution")` | The navigator has no solution with an attitude. |
+| `Unused("insufficient_matches")`, `("insufficient_spatial_support")`, `("degenerate_geometry")`, `("outside_prior")`, `("frame_order")`, `("matcher_failed")`, `("invalid_view")` | `navigate_visual::Localizer` did not accept a pose. |
+| `Unused("render_refused")`, `("belief_out_of_range")`, `("outside_grid")`, `("fix_refused")` | The renderer, a frame conversion, the grid scheme, or the fix builder refused. |
+
+A host can count frames by these names: a name does not change. The
+context is absent when no reference view was made.
 
 An input is an error, with no record, when no map is loaded
 (`MapNotLoaded`), when the frame size is not the declared size

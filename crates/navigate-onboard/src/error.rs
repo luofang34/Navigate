@@ -42,6 +42,17 @@ pub enum OnboardError {
     /// The star tracker failed outside identification.
     #[error("star tracker: {0}")]
     StarTrack(String),
+    /// The suite declares a sensor whose means is not compiled into this
+    /// build of the crate.
+    #[error("sensor {sensor:?} is a {kind}; build navigate-onboard with the feature `{feature}`")]
+    FeatureDisabled {
+        /// The sensor.
+        sensor: SourceId,
+        /// Its declared kind.
+        kind: &'static str,
+        /// The Cargo feature that holds the means.
+        feature: &'static str,
+    },
     /// A terrain camera in a spectral band that the terrain means cannot
     /// match against the visible imagery of a package.
     #[error("sensor {sensor:?} is a {band:?} camera; the terrain means takes a visible camera")]

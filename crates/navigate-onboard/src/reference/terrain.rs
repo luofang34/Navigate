@@ -21,8 +21,8 @@ use image::GrayImage;
 use nalgebra::Vector3;
 use navigate_camera::{CameraMount, Distortion, SpectralBand};
 use navigate_contract::{ClockDomainId, NavigationSolution, SourceEpoch, SourceId};
-use navigate_data::ReadPort;
-use navigate_data::product::Calibration;
+use navigate_data::product::{Calibration, ProductKind};
+use navigate_data::{LayerKind, ReadPort};
 use navigate_fusion::{IngestOutcome, Observation};
 use navigate_visual::fusion_bridge::{
     EvidenceIndependence, VisualSourceIdentity, position_fix_observation_composed,
@@ -32,12 +32,13 @@ use navigate_visual::session::{
 };
 use navigate_visual::{
     CameraModel, Estimate, Frame, FrameStamp, Localizer, LocalizerConfig, PosePrior,
-    PyramidalMatcher, ReferenceView, VisualError,
+    PyramidalMatcher, ReferenceView,
 };
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, ErrorBudget, MapRefusal, OnboardError, Outcome,
-    ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, DataRequirement, ErrorBudget, MapRefusal, Need, OnboardError,
+    Outcome, ProductReport, ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSpec,
+    SensorSuite,
 };
 
 mod belief;
@@ -45,6 +46,7 @@ mod budget;
 mod config;
 mod keyframes;
 mod map;
+mod names;
 mod view;
 
 pub use config::TerrainConfig;
@@ -55,10 +57,9 @@ pub use map::{
 use belief::{Belief, body_position};
 use budget::{ViewGeometry, external_covariance_ned};
 use map::TerrainMap;
+pub(crate) use names::MEASUREMENT;
+use names::rejection;
 use view::{NoView, Views, lat_lon};
-
-/// The measurement name of a terrain fix in an acceptance record.
-pub(crate) const MEASUREMENT: &str = "terrain_position";
 
 /// Largest count of map cells whose first fix the navigator records. A
 /// zoom 16 cell is some hundreds of metres on a side, so this covers some
@@ -117,22 +118,9 @@ pub(crate) fn admission(label: &FusionEligibility) -> Option<&'static str> {
     match EvidenceIndependence::ValidatedIndependent.restricted_by(label) {
         EvidenceIndependence::ValidatedIndependent => None,
         EvidenceIndependence::Unknown => Some(match label {
-            FusionEligibility::SharedMapError { .. } => "shared_map_error",
-            _ => "untracked_map_cell",
+            FusionEligibility::SharedMapError { .. } => names::SHARED_MAP_ERROR,
+            _ => names::UNTRACKED_MAP_CELL,
         }),
-    }
-}
-
-/// The reason name of a localizer rejection.
-const fn rejection(error: &VisualError) -> &'static str {
-    match error {
-        VisualError::InsufficientMatches { .. } => "insufficient_matches",
-        VisualError::InsufficientSpatialSupport { .. } => "insufficient_spatial_support",
-        VisualError::DegenerateGeometry => "degenerate_geometry",
-        VisualError::OutsidePrior { .. } => "outside_prior",
-        VisualError::FrameOrder { .. } => "frame_order",
-        VisualError::Backend { .. } => "matcher_failed",
-        VisualError::Invalid { .. } | VisualError::Dimensions { .. } => "invalid_view",
     }
 }
 
@@ -227,14 +215,14 @@ impl TerrainCamera {
         self.frames = self.frames.wrapping_add(1);
         let (acquired, delivered) = (input.acquired_at.as_nanos(), input.delivered_at.as_nanos());
         let Some(lag_ns) = delivered.checked_sub(acquired) else {
-            return Ok(Sighting::Unused("acquired_after_delivery", None));
+            return Ok(Sighting::Unused(names::ACQUIRED_AFTER_DELIVERY, None));
         };
         let lag_s = lag_ns as f64 * 1e-9;
         if lag_s > map.config.max_capture_lag_s {
-            return Ok(Sighting::Unused("capture_lag", None));
+            return Ok(Sighting::Unused(names::CAPTURE_LAG, None));
         }
         let Some(belief) = solution.and_then(|s| Belief::before(s, lag_s)) else {
-            return Ok(Sighting::Unused("no_solution", None));
+            return Ok(Sighting::Unused(names::NO_SOLUTION, None));
         };
         let (position_radius_m, attitude_radius_rad) = map.config.search(belief.sigma_h_m, lag_s);
         let reference = match self.views.reference(
@@ -256,7 +244,7 @@ impl TerrainCamera {
         };
         let (view, path) = (&*reference.view, reference.path);
         let Ok(pose) = belief.camera_in(view.frame, &self.mount) else {
-            return Ok(Sighting::Unused("belief_out_of_range", Some(path)));
+            return Ok(Sighting::Unused(names::BELIEF_OUT_OF_RANGE, Some(path)));
         };
         let prior = PosePrior {
             pose,
@@ -299,7 +287,7 @@ impl TerrainCamera {
             estimate.pose.position + axis * geometry.range_m,
         );
         let Ok(cell) = MapCell::of_layer(&map.imagery.layer, ground) else {
-            return Sighting::Unused("outside_grid", Some(path));
+            return Sighting::Unused(names::OUTSIDE_GRID, Some(path));
         };
         let frame = FrameKey {
             stream: StreamId(self.sensor.get()),
@@ -320,7 +308,7 @@ impl TerrainCamera {
             },
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain fix was not built");
-                Sighting::Unused("fix_refused", Some(path))
+                Sighting::Unused(names::FIX_REFUSED, Some(path))
             }
         }
     }
@@ -348,6 +336,36 @@ impl TerrainMeans {
     /// The report of the loaded map.
     pub(crate) fn report(&self) -> Option<&MapReport> {
         self.map.as_ref().map(|map| &map.report)
+    }
+
+    /// The data that the means needs or can use: imagery and elevation,
+    /// and keyframes if the host built them. None without a camera.
+    pub(crate) fn requirements(&self) -> Vec<DataRequirement> {
+        if !self.has_cameras() {
+            return Vec::new();
+        }
+        let layer = |kind| DataRequirement {
+            layer: Some(kind),
+            product: None,
+            altitude_bands: None,
+            need: Need::Required,
+        };
+        vec![
+            layer(LayerKind::Imagery),
+            layer(LayerKind::Elevation),
+            DataRequirement {
+                layer: None,
+                product: Some(ProductKind::Keyframes),
+                altitude_bands: None,
+                need: Need::Optional,
+            },
+        ]
+    }
+
+    /// What the means did with each product chunk at load.
+    pub(crate) fn products(&self) -> &[ProductReport] {
+        self.report()
+            .map_or(&[], |report| report.products.as_slice())
     }
 }
 

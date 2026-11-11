@@ -16,8 +16,10 @@
 //!
 //! [`ReferenceNavigator`] is the reference composition: the 22-state
 //! inertial filter with GNSS, barometric, star-camera, and terrain-camera
-//! aiding. The terrain camera needs a terrain map: the host opens a store
-//! and gives it with a [`TerrainMapRequest`], and the navigator reads the
+//! aiding. The terrain-camera means is in the Cargo feature
+//! `terrain-camera`; without the feature, a suite with a terrain camera is
+//! refused. The terrain camera needs a terrain map: the host opens a store
+//! and gives it with a `TerrainMapRequest`, and the navigator reads the
 //! package and never fetches.
 //! [`RouteDirector`] executes a flight plan with Navigate's sequencer and
 //! guidance laws.
@@ -37,8 +39,10 @@ pub use director::{
 };
 pub use error::{MapRefusal, OnboardError};
 pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
+#[cfg(feature = "terrain-camera")]
 pub use reference::{
-    AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, ReferenceNavigator,
-    StarCatalogueConfig, TerrainConfig, TerrainMapRequest, own_prior,
+    AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainConfig,
+    TerrainMapRequest,
 };
+pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};
