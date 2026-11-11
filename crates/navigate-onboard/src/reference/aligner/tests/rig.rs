@@ -299,6 +299,7 @@ impl Rig {
                 horizontal_sigma_m: b.gnss_horizontal_m,
                 vertical_sigma_m: b.gnss_vertical_m,
                 velocity_sigma_m_s: b.gnss_velocity_m_s,
+                correlated: None,
             },
         )
     }

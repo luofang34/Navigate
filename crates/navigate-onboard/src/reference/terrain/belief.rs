@@ -4,7 +4,6 @@
 use nalgebra::{Matrix3, Quaternion, Rotation3, UnitQuaternion, Vector3};
 use navigate_camera::{CameraMount, OpticalPose};
 use navigate_contract::{MonotonicNanos, NavigationSolution};
-use navigate_fusion::InertialNavigationFilter;
 use navigate_visual::{CameraPose, LocalFrame, VisualError};
 
 use super::names;
@@ -50,7 +49,7 @@ pub(crate) struct Exposure {
 /// delivered at `delivered`, or the name of the reason why the frame is
 /// not matched.
 pub(crate) fn at_exposure(
-    filter: &mut InertialNavigationFilter,
+    filter: &mut crate::NavigatorFilter,
     (acquired, delivered): (MonotonicNanos, MonotonicNanos),
     max_capture_lag_s: f64,
 ) -> Result<Exposure, &'static str> {

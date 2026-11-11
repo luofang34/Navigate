@@ -52,5 +52,7 @@ pub use reference::{
     AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
     TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
 };
-pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
-pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};
+pub use reference::{NavigatorFilter, ReferenceNavigator, StarCatalogueConfig, own_prior};
+pub use sensor::{
+    ErrorBudget, GnssCorrelatedError, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite,
+};

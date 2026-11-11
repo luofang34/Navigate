@@ -1,9 +1,11 @@
+mod correlated_gnss;
+
 use super::*;
 use crate::sensor::SensorSpec;
 use crate::{GuidanceLaw, Onboard, RouteDirector};
 use nalgebra::{Matrix2, UnitQuaternion, Vector2, Vector3};
 use navigate_camera::{CameraMount, ImagerModel, Intrinsics};
-use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity};
+use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 
 pub(crate) const CLOCK: ClockDomainId = ClockDomainId::new(7);
 const IMU: SourceId = SourceId::new(1);
@@ -60,6 +62,7 @@ pub(crate) fn suite(extra: &[SensorKind]) -> SensorSuite {
                     horizontal_sigma_m: 1.0,
                     vertical_sigma_m: 2.0,
                     velocity_sigma_m_s: 0.1,
+                    correlated: None,
                 },
             ),
             SensorKind::Barometer => spec(
