@@ -325,6 +325,7 @@ impl TerrainCamera {
             let working = reference.working;
             let view = Arc::clone(&reference.view);
             self.pending.compared(view, frame.image, working, &evidence);
+            self.pending.gate(&prior, &estimate);
             estimate
         } else {
             self.localizer.estimate_blocking(&frame, view, &prior)

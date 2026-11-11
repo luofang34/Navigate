@@ -117,6 +117,14 @@ fn check_records(matches: &[Option<TerrainMatch>]) {
     assert_eq!(flagged, solved.inliers);
     assert!(fused.pairs().len() > solved.inliers / 2 && solved.inliers >= 20);
     assert!(solved.reprojection_rms_px < 2.5);
+    let gate = fused.prior_gate().unwrap();
+    assert!(
+        gate.position_m <= gate.position_radius_m && gate.attitude_rad <= gate.attitude_radius_rad
+    );
+    assert!(
+        gate.position_m > 1.0,
+        "the belief starts 37 m off: {gate:?}"
+    );
     let fix = fused.fix().unwrap();
     let (nn, ee, _) = fix.covariance_ned.diagonal();
     assert!(nn > 0.0 && ee > 0.0);
@@ -139,6 +147,7 @@ fn check_records(matches: &[Option<TerrainMatch>]) {
 
     let skipped = first(&records, |m| m.outcome() == &shared && m.path().is_none());
     assert!(skipped.reference().is_none() && skipped.solved().is_none());
+    assert!(skipped.prior_gate().is_none() && noise.prior_gate().is_none());
 }
 
 #[test]

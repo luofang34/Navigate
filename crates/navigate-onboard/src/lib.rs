@@ -50,8 +50,8 @@ pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 #[cfg(feature = "terrain-camera")]
 pub use reference::terrain::{
     AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, Luma, MapReport,
-    MatchPair, OfferedFix, SolvedPose, TerrainConfig, TerrainMapRequest, TerrainMatch, ViewPose,
-    WorkingCamera, WorkingLimit,
+    MatchPair, OfferedFix, PriorGate, SolvedPose, TerrainConfig, TerrainMapRequest, TerrainMatch,
+    ViewPose, WorkingCamera, WorkingLimit,
 };
 pub use reference::{NavigatorFilter, ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{
