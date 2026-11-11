@@ -4,7 +4,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use navigate_data::product::{Calibration, ProductUse};
+use navigate_camera::Intrinsics;
+use navigate_data::product::ProductUse;
 use navigate_data::tile::ground_sample_distance_m;
 use navigate_data::{
     DataError, DayNumber, GeoidModel, Layer, LayerKey, Package, ReadPort, Revision, Sha256Digest,
@@ -16,7 +17,7 @@ use navigate_visual_render::{RenderError, SceneRequest, SceneWindow, scene_aroun
 
 use super::budget::MapSigmas;
 use super::config::TerrainConfig;
-use super::keyframes::KeyframeSet;
+use super::keyframes::{KeyframeSet, resampled_to};
 use crate::ProductReport;
 
 mod load;
@@ -183,6 +184,11 @@ impl LayerUse {
         };
         self.zooms.iter().find(fits).or(self.zooms.last()).copied()
     }
+
+    /// Ground size of one pixel of the layer at `zoom`, metres.
+    pub(crate) fn ground_sample_m(&self, zoom: u32) -> f64 {
+        ground_sample_distance_m(self.lat_deg, zoom, self.layer.tile_pixels)
+    }
 }
 
 /// The loaded terrain map. It does not change after the load, so each
@@ -207,14 +213,15 @@ impl TerrainMap {
         }
     }
 
-    /// The keyframe sets that were rendered for a camera of `calibration`.
+    /// The keyframe sets that were rendered for the camera `declared` at
+    /// any size, each with the camera of its views.
     pub(crate) fn keyframes_for(
         &self,
-        calibration: Calibration,
-    ) -> impl Iterator<Item = &KeyframeSet> {
+        declared: &Intrinsics,
+    ) -> impl Iterator<Item = (&KeyframeSet, Intrinsics)> {
         self.keyframes
             .iter()
-            .filter(move |set| set.calibration == calibration)
+            .filter_map(move |set| Some((set, resampled_to(declared, &set.calibration)?)))
     }
 }
 

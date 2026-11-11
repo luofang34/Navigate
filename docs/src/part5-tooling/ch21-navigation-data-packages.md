@@ -448,7 +448,11 @@ eight-bit luminance, row-major, top row first, undistorted, of the
 declared size. `acquired_at` is the middle of the exposure, and
 `delivered_at` is the time when the frame reaches the navigator. A frame
 that comes more than `TerrainConfig::max_capture_lag_s` after its
-exposure is not matched.
+exposure is not matched. The search starts at the state of the filter at
+the exposure. When the exposure is older than the history of the filter,
+it starts at the solution on delivery moved back along its velocity, with
+wider bounds; `ReferenceNavigator::terrain_belief_source` states which of
+the two the last frame took (`BeliefSource`).
 
 Each frame gives one record with the measurement `terrain_position` and
 the context `keyframe` or `render`:
@@ -483,11 +487,50 @@ times the range on each axis. `navigate_visual::fusion_bridge::
 position_fix_observation_composed` adds the sum to the image-geometry
 covariance with no further factor.
 
-Measured (release build, Apple M3 Max, directory store): one frame of
-320 by 240 pixels costs approximately 40 ms with a keyframe, which is the
-match, and approximately 0.5 s without, of which the reference render is
-more than 90 %. The scene window of a rendered reference costs
-approximately 9 ms and serves the next frames until the view leaves it. A
-frame in a cell that has a fix costs the same, because the cell is that of
-the matched ground. `cargo test --release -p navigate-onboard --lib cost
--- --nocapture` gives the values of a machine.
+The reference and the match run at a working resolution, not at the
+resolution of the camera. `TerrainConfig::working_camera` gives it for a
+range and a map pixel size: the declared camera resampled until one pixel
+on the ground is one map pixel (`WorkingLimit::MapTexel`), not more than
+`max_match_pixels` (`PixelBound`: the match is then coarser than the map
+allows) and not less than `min_match_pixels` (`PixelFloor`). A camera
+that is coarser than the map keeps its pixels (`Native`). The frame is
+resampled to its reference, so keyframes can be built for any size of the
+declared camera (`Keyframe`). `ReferenceNavigator::terrain_working_camera`
+gives the camera of the last match, the ground size of its pixels, and
+the limit. Example: a camera of 800 by 600 pixels and 67° at 1 700 m sees
+2.8 m for each pixel; over zoom 15 imagery (3.6 m) the map texel asks for
+635 by 477 pixels, and the default bound of 76 800 pixels gives 320 by
+240 with pixels of 7.1 m.
+
+Before a reference is made, the navigator finds the ground point of the
+believed optical axis and each correlation cell within the search disk
+about it (the position search radius plus three times the attitude
+one-sigma times the range). When each of those cells has a fix, the frame
+is recorded as `Unused("shared_map_error")` with no context and is not
+matched. A frame within that radius of a cell without a fix is matched,
+so a track along a cell edge has no such saving.
+
+Measured (release build, Apple M3 Max, directory store), for a camera of
+800 by 600 pixels 800 m above zoom 15 imagery, matched at about 240 by
+180 pixels:
+
+| Part | Time |
+|---|---|
+| Frame that is not matched | less than 0.1 ms |
+| Resample of the frame | 1 ms |
+| Scene window, once, then resident | 6 ms to 10 ms |
+| Reference render | 34 ms |
+| Match and pose | 36 ms |
+| Frame with a rendered reference | 40 ms to 90 ms |
+| Frame with a keyframe | 18 ms |
+
+A cruise at 60 m/s with one frame each second over cells of 457 m, along
+the middle of a column of cells: of 20 frames, 3 are fused, 1 is matched
+and withheld, and 16 are not matched; the mean is 12 ms for each frame.
+The reference renderer casts one terrain ray for each block of 4 by 4
+pixels and interpolates. A ray for each pixel costs 540 ms to 990 ms for
+a frame of 320 by 240 pixels and does not make the fix better: over
+eight poses the horizontal error is 1.4 m against 1.2 m on hills of 80 m
+and 1.2 m against 1.0 m on hills of 400 m. `cargo test --release -p
+navigate-onboard --features terrain-camera --lib cost -- --nocapture`
+gives the values of a machine.

@@ -7,5 +7,6 @@ mod cost;
 mod fixes;
 pub(crate) mod flight;
 mod load;
+mod precheck;
 mod snapshot;
 mod world;
