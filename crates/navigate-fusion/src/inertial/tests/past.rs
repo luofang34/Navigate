@@ -89,20 +89,30 @@ fn outside_the_history_is_refused_by_name() {
         unready.state_at(t(0)),
         Err(PastStateRefusal::NotInitialized)
     );
-    let (filter, _) = turning_filter(1_000);
+    let (filter, _) = turning_filter(8_000);
     assert_eq!(
-        filter.state_at(t(1_010)),
+        filter.state_at(t(8_010)),
         Err(PastStateRefusal::AfterStateTime {
-            at: t(1_010),
-            state_at: t(1_000),
+            at: t(8_010),
+            state_at: t(8_000),
         })
     );
-    // 32 entries of 10 ms: the oldest kept state is 320 ms back.
-    let oldest = t(1_000 - 32 * STEP_MS);
+    // 800 events at 100 Hz overflow the history; it keeps between one
+    // stride less than its capacity and its capacity.
+    let depth = filter.history_depth().expect("initialized");
+    let capacity = crate::inertial::MAX_INERTIAL_HISTORY as u64;
+    let stride = crate::inertial::history::CHECKPOINT_STRIDE as u64;
+    let depth_ms = depth.as_nanos() / 1_000_000;
+    assert!(
+        ((capacity - stride) * STEP_MS..=capacity * STEP_MS).contains(&depth_ms),
+        "{depth_ms} ms"
+    );
+    let oldest = t(8_000 - depth_ms);
     assert!(filter.state_at(oldest).is_ok());
+    let early = t(8_000 - depth_ms - STEP_MS);
     assert_eq!(
-        filter.state_at(t(600)),
-        Err(PastStateRefusal::BeforeHistory { at: t(600), oldest })
+        filter.state_at(early),
+        Err(PastStateRefusal::BeforeHistory { at: early, oldest })
     );
 }
 
