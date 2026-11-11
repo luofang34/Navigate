@@ -4,6 +4,7 @@ mod bias_prior;
 mod checkpoints;
 mod coast;
 mod deep_space;
+mod flight_truth;
 mod frame_change;
 mod increment;
 mod lunar_beacon;

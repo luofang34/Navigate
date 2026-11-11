@@ -10,29 +10,13 @@
 
 use std::vec::Vec;
 
-use nalgebra::{Rotation3, UnitQuaternion, Vector3};
-use navigate_contract::SymmetricCov3;
-use navigate_geodesy::{BodyEllipsoid, BodyFixedPosition, body_fixed_to_geodetic};
+use navigate_geodesy::BodyEllipsoid;
 
+use super::flight_truth::{Alignment, FREE_INDEX, Flight, Route, gauss, tactical};
 use super::*;
-use crate::inertial::local_level::{LocalLevel, quaternion_of};
-use crate::inertial::mechanization::{ImuRates, mechanize};
-use crate::inertial::nominal::{POS, VEL, rotation_vector};
-use crate::inertial::regime::Regime;
-use crate::kalman::FogmBias;
+use crate::inertial::local_level::LocalLevel;
+use crate::inertial::nominal::{POS, VEL};
 use crate::observation::{Observation, ObservationValue};
-
-const G: f64 = 9.80665;
-
-/// A route: speed, bank of the turns, duration, step, and the start
-/// time and direction of each 90° turn.
-struct Route {
-    speed_mps: f64,
-    bank_deg: f64,
-    duration_s: f64,
-    step_s: f64,
-    turns: &'static [(f64, f64)],
-}
 
 /// The route of the trial: 40 m/s, three turns at 25° bank, 1400 s.
 const TRIAL_ROUTE: Route = Route {
@@ -71,182 +55,41 @@ const NEES_BAND: (f64, f64) = if cfg!(debug_assertions) {
     (0.5, 6.0)
 };
 
-/// SplitMix64 finalizer: independent bits for each input.
-fn mix(mut z: u64) -> u64 {
-    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// A standard normal draw for one seed and one index.
-fn gauss(seed: u32, index: u32) -> f64 {
-    let uniform = |j: u64| {
-        let bits = mix((u64::from(seed) << 40) ^ j) >> 11;
-        (bits as f64 + 0.5) / (1_u64 << 53) as f64
-    };
-    let j = u64::from(index) * 2;
-    let (a, b) = (uniform(j), uniform(j + 1));
-    (-2.0 * a.ln()).sqrt() * (core::f64::consts::TAU * b).cos()
-}
-
-fn draw3(seed: u32, first: u32, sigma: f64) -> Vector3<f64> {
-    Vector3::new(
-        gauss(seed, first),
-        gauss(seed, first + 1),
-        gauss(seed, first + 2),
-    ) * sigma
-}
-
-/// The tactical grade of the trial: 1 mg and 1°/h FOGM biases with a
-/// one-hour correlation time, 0.05 m/s/√h and 0.1°/√h white noise.
-fn tactical() -> InertialConfig {
-    let per_sqrt_hour = 1.0 / 60.0;
-    InertialConfig {
-        accel_noise_sigma_mps2_sqrt_hz: 0.05 * per_sqrt_hour,
-        gyro_noise_sigma_rad_s_sqrt_hz: 0.1_f64.to_radians() * per_sqrt_hour,
-        accel_bias: FogmBias::new(3_600.0, 1e-3 * G),
-        gyro_bias: FogmBias::new(3_600.0, 1.0_f64.to_radians() / 3_600.0),
-        ..InertialConfig::default()
-    }
-}
-
-/// The truth state and its commanded heading and bank.
-struct Truth {
-    x: InertialNominal,
-    heading: f64,
-    bank: f64,
-    altitude_m: f64,
-}
-
-impl Truth {
-    /// The commanded turn rate at `t_s`.
-    fn turn_rate(t_s: f64) -> f64 {
-        let rate = G * ROUTE.bank_deg.to_radians().tan() / ROUTE.speed_mps;
-        let duration = core::f64::consts::FRAC_PI_2 / rate;
-        ROUTE
-            .turns
-            .iter()
-            .find(|(start, _)| (*start..start + duration).contains(&t_s))
-            .map_or(0.0, |(_, sign)| sign * rate)
-    }
-
-    /// The IMU rates of one step of a coordinated turn that holds the
-    /// altitude: the bank rolls toward the command at up to 0.5 rad/s,
-    /// the heading turns at `g·tan φ / V`, and the specific force gives
-    /// the centripetal acceleration.
-    fn rates(&mut self, t_s: f64, regime: &Regime) -> ImuRates {
-        let dt = ROUTE.step_s;
-        let level = LocalLevel::at_body_fixed(&self.x.p, BodyEllipsoid::WGS84);
-        let target = (Self::turn_rate(t_s) * ROUTE.speed_mps / G).atan();
-        self.bank += ((target - self.bank) / 1.0).clamp(-0.5, 0.5) * dt;
-        let rate = G * self.bank.tan() / ROUTE.speed_mps;
-        self.heading += rate * dt;
-        let body_to_ned = Rotation3::from_euler_angles(self.bank, 0.0, self.heading);
-        let c_target = level.ned_to_bf * body_to_ned.matrix();
-        let c = self.x.c_b_to_f();
-        let omega = regime.frame_rotation();
-        let turn = UnitQuaternion::from_matrix(&(c.transpose() * c_target));
-        let v = level.bf_to_ned() * self.x.v;
-        let height = level.position.altitude_m - self.altitude_m;
-        let a_ned = Vector3::new(-rate * v.y, rate * v.x, 0.02 * height - 0.3 * v.z);
-        let (g, _) = regime.gravity(&self.x.p);
-        ImuRates {
-            specific_force: c.transpose()
-                * (level.ned_to_bf * a_ned - g + 2.0 * omega.cross(&self.x.v)),
-            angular_rate: rotation_vector(&turn) / dt + c.transpose() * omega,
-        }
-    }
-}
+/// The in-flight alignment of the trial.
+const ALIGNMENT: Alignment = Alignment {
+    position_m: 20.0,
+    velocity_mps: 0.2,
+    attitude_rad: 2e-3,
+};
 
 /// The horizontal NEES, the horizontal 1-sigma, and the horizontal
-/// error every 100 s of one run.
+/// error every 100 s of one run, with a 1 m altimeter that has the
+/// filter's bias model at each IMU step when `baro` holds.
 fn run(seed: u32, baro: bool) -> Vec<(f64, f64, f64)> {
     let config = tactical();
-    let regime = core(&surface_filter(
-        config,
-        PlanetaryBody::EARTH_WGS84,
-        earth_origin(),
-    ))
-    .regime;
-    let level = LocalLevel::at(earth_origin());
-    let speed = ROUTE.speed_mps;
-    let mut truth = Truth {
-        x: InertialNominal::at(
-            earth_body_fixed(&earth_origin()),
-            level.ned_to_bf * Vector3::new(speed, 0.0, 0.0),
-            quaternion_of(&level.ned_to_bf),
-        ),
-        heading: 0.0,
-        bank: 0.0,
-        altitude_m: earth_origin().altitude_m,
-    };
-    let (pos_sigma, vel_sigma, att_sigma) = (20.0, 0.2, 2e-3);
-    let start_p = truth.x.p + level.ned_to_bf * draw3(seed, 1, pos_sigma);
-    let start = body_fixed_to_geodetic(
-        &BodyFixedPosition::new(start_p.x, start_p.y, start_p.z),
-        BodyEllipsoid::WGS84,
-    );
-    let dv = draw3(seed, 4, vel_sigma);
-    let tilt = UnitQuaternion::from_rotation_matrix(&Rotation3::new(draw3(seed, 7, att_sigma)));
-    let (p2, v2, a2) = (pos_sigma.powi(2), vel_sigma.powi(2), att_sigma.powi(2));
-    let mut filter =
-        InertialNavigationFilter::new_surface(config, CLOCK, PlanetaryBody::EARTH_WGS84);
-    filter
-        .initialize_surface(
-            start,
-            NedVelocity::new(speed + dv.x, dv.y, dv.z),
-            AttitudeQuaternion::new(tilt.w, tilt.i, tilt.j, tilt.k),
-            SymmetricCov3::from_diagonal(p2, p2, p2),
-            SymmetricCov3::from_diagonal(v2, v2, v2),
-            SymmetricCov3::from_diagonal(a2, a2, a2),
-            t(0),
-            gnss(),
-        )
-        .expect("plausible initial state");
-    let dt = ROUTE.step_s;
-    let accel_bias = draw3(seed, 10, config.accel_bias.sigma());
-    let gyro_bias = draw3(seed, 13, config.gyro_bias.sigma());
-    let baro_bias = config.baro_bias.sigma() * gauss(seed, 16);
-    let accel_white = config.accel_noise_sigma_mps2_sqrt_hz / dt.sqrt();
-    let gyro_white = config.gyro_noise_sigma_rad_s_sqrt_hz / dt.sqrt();
-    let steps = (ROUTE.duration_s / dt).round() as u32;
-    let step_ms = (dt * 1_000.0).round() as u64;
-    let per_report = (100.0 / dt).round() as u32;
+    let mut flight = Flight::new(ROUTE, seed, config, ALIGNMENT);
+    let baro_bias = config.baro_bias.sigma() * gauss(seed, FREE_INDEX);
+    let steps = ROUTE.steps();
+    let per_report = (100.0 / ROUTE.step_s).round() as u32;
     let mut samples = Vec::new();
     let mut refused = 0_u32;
     for k in 1..=steps {
-        let at_ms = u64::from(k) * step_ms;
-        let rates = truth.rates(f64::from(k - 1) * dt, &regime);
-        truth.x = mechanize(&truth.x, &rates, dt, &regime, &config).0;
-        let force = rates.specific_force + accel_bias + draw3(seed, 100_000 + 6 * k, accel_white);
-        let rate = rates.angular_rate + gyro_bias + draw3(seed, 100_003 + 6 * k, gyro_white);
-        let sample = imu(k, at_ms, (force.into(), rate.into()), dt);
-        assert_accepted(filter.ingest_imu(&sample, t(at_ms)));
+        let at_ms = flight.step();
         if baro {
-            let height = LocalLevel::at_body_fixed(&truth.x.p, BodyEllipsoid::WGS84)
-                .position
-                .altitude_m;
             let obs = Observation::new(
                 stamp(3, k, at_ms),
                 ObservationValue::Altitude {
-                    altitude_m: height + baro_bias + gauss(seed, 5_000_000 + k),
+                    altitude_m: flight.truth_height_m() + baro_bias + gauss(seed, FREE_INDEX + k),
                     variance_m2: 1.0,
                 },
                 SourceComposition::of(SensorClass::Barometric),
             );
-            if !filter.ingest(&obs, t(at_ms)).is_accepted() {
+            if !flight.filter.ingest(&obs, t(at_ms)).is_accepted() {
                 refused = refused.wrapping_add(1);
             }
         }
         if k % per_report == 0 {
-            let solution = filter.tick(t(at_ms)).expect("published");
-            let local = LocalLevel::at_body_fixed(&truth.x.p, BodyEllipsoid::WGS84);
-            let e = local.bf_to_ned() * (core(&filter).nominal.p - truth.x.p);
-            let [nn, ne, _, ee, _, _] = solution.position_cov.upper_triangle();
-            let nees =
-                (ee * e.x * e.x - 2.0 * ne * e.x * e.y + nn * e.y * e.y) / (nn * ee - ne * ne);
-            samples.push((nees, (nn + ee).sqrt(), e.x.hypot(e.y)));
+            samples.push(flight.horizontal(at_ms));
         }
     }
     // The 0.1 % innovation gate refuses a few true draws.
