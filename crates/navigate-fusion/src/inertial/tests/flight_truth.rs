@@ -15,7 +15,7 @@ use navigate_geodesy::{BodyEllipsoid, BodyFixedPosition, body_fixed_to_geodetic}
 use super::*;
 use crate::inertial::local_level::{LocalLevel, quaternion_of};
 use crate::inertial::mechanization::{ImuRates, mechanize};
-use crate::inertial::nominal::rotation_vector;
+use crate::inertial::nominal::{ATT, rotation_vector};
 use crate::inertial::regime::Regime;
 use crate::kalman::FogmBias;
 
@@ -282,4 +282,46 @@ impl Flight {
         let nees = (ee * e.x * e.x - 2.0 * ne * e.x * e.y + nn * e.y * e.y) / (nn * ee - ne * ne);
         (nees, (nn + ee).sqrt(), e.x.hypot(e.y))
     }
+
+    /// The attitude NEES: the rotation from the filter attitude to the
+    /// truth, in the body axes, against the attitude block of the error
+    /// covariance. It has three degrees of freedom.
+    pub(super) fn attitude_nees(&self) -> f64 {
+        let core = core(&self.filter);
+        let error = rotation_vector(&(core.nominal.q.inverse() * self.truth.q));
+        let p = core.p.fixed_view::<3, 3>(ATT, ATT).into_owned();
+        p.try_inverse()
+            .map_or(f64::INFINITY, |inverse| error.dot(&(inverse * error)))
+    }
+}
+
+#[test]
+fn the_noise_is_standard_normal_white_and_independent_across_seeds() {
+    // 100 000 draws of one seed: mean, variance, and lag-1 and lag-6
+    // autocorrelation (the IMU draws six values per step), and the
+    // correlation of two seeds over the same indices.
+    let n = 100_000_u32;
+    let draws = |seed: u32| (0..n).map(move |i| gauss(seed, i));
+    let count = f64::from(n);
+    let mean = draws(1).sum::<f64>() / count;
+    let variance = draws(1).map(|z| (z - mean).powi(2)).sum::<f64>() / count;
+    // 5-sigma bounds of the estimators for n independent N(0, 1) draws.
+    let bound = 5.0 / count.sqrt();
+    assert!(mean.abs() < bound, "mean {mean}");
+    assert!(
+        (variance - 1.0).abs() < 5.0 * (2.0 / count).sqrt(),
+        "variance {variance}"
+    );
+    let values: std::vec::Vec<f64> = draws(1).collect();
+    for lag in [1_usize, 6, 12] {
+        let product = values
+            .iter()
+            .zip(values.iter().skip(lag))
+            .map(|(a, b)| a * b)
+            .sum::<f64>();
+        let rho = product / (count - lag as f64);
+        assert!(rho.abs() < bound, "lag {lag}: {rho}");
+    }
+    let cross = draws(0).zip(draws(19)).map(|(a, b)| a * b).sum::<f64>() / count;
+    assert!(cross.abs() < bound, "seeds 0 and 19: {cross}");
 }
