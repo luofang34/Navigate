@@ -5,6 +5,7 @@
 
 mod content;
 mod cost;
+mod dem;
 mod fixes;
 pub(crate) mod flight;
 mod inspection;

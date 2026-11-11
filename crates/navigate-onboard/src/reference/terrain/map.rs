@@ -119,6 +119,12 @@ pub struct MapReport {
     /// Bound on the height error from an unknown geoid undulation, metres;
     /// zero when the heights are ellipsoidal or the host geoid applies.
     pub undulation_bound_m: f64,
+    /// The length over which the navigator takes the error of the
+    /// elevation to be correlated, metres, from
+    /// [`TerrainConfig::dem_correlation_length_m`]: with the one-sigma of
+    /// the elevation layer, it sets the horizontal error of a fix from the
+    /// tilt of that error under the footprint.
+    pub dem_correlation_length_m: f64,
     /// What the navigator did with each chunk of the product list.
     pub products: Vec<ProductReport>,
     /// Count of route keyframes in use.

@@ -24,6 +24,9 @@ use navigate_visual_render::{
 /// Centre of the world, `[lat, lon]` in degrees.
 pub(crate) const CENTRE: [f64; 2] = [41.70, -1.00];
 /// Imagery zoom of the world: 3.6 m pixels at its latitude.
+mod elevation_error;
+pub(crate) use elevation_error::DemError;
+
 pub(crate) const IMAGERY_ZOOM: u32 = 15;
 /// Elevation zoom of the world.
 pub(crate) const ELEVATION_ZOOM: u32 = 12;
@@ -61,6 +64,9 @@ pub(crate) struct WorldSpec {
     pub imagery_zoom: u32,
     /// Height of the hills from valley to top, metres.
     pub relief_m: f64,
+    /// The error of the elevation of the package against the ground of
+    /// the frames.
+    pub dem_error: DemError,
 }
 
 impl Default for WorldSpec {
@@ -75,6 +81,7 @@ impl Default for WorldSpec {
             correlation_zoom: CORRELATION_ZOOM,
             imagery_zoom: IMAGERY_ZOOM,
             relief_m: 80.0,
+            dem_error: DemError::None,
         }
     }
 }
@@ -156,10 +163,10 @@ fn imagery_tile(a: TileAddress, pixels: u32) -> Vec<u8> {
     }))
 }
 
-fn elevation_tile(a: TileAddress, relief_m: f64) -> Vec<u8> {
+fn elevation_tile(a: TileAddress, relief_m: f64, error: DemError) -> Vec<u8> {
     png(&RgbImage::from_fn(256, 256, |x, y| {
         let (gx, gy) = (f64::from(a.x * 256 + x), f64::from(a.y * 256 + y));
-        let h = ground_height_m(gx, gy, relief_m) + 32_768.0;
+        let h = ground_height_m(gx, gy, relief_m) + error.at(gx, gy) + 32_768.0;
         Rgb([
             (h / 256.0) as u8,
             (h % 256.0) as u8,
@@ -223,7 +230,7 @@ impl World {
             )
             .unwrap();
             for a in tiles {
-                let tile = elevation_tile(a, spec.relief_m);
+                let tile = elevation_tile(a, spec.relief_m, spec.dem_error);
                 pollster::block_on(writer.add_tile(&mut store, ELEVATION, a, &tile)).unwrap();
             }
         }
