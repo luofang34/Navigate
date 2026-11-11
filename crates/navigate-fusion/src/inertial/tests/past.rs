@@ -127,3 +127,26 @@ fn a_delayed_fix_conditions_a_later_past_state() {
     let (n_after, _, _) = after.solution.position_cov.diagonal();
     assert!(n_after < n_before, "{n_after} vs {n_before}");
 }
+
+#[test]
+fn aiding_after_the_past_time_does_not_degrade_its_quality() {
+    // The usual late-frame case: a fix is admitted after the exposure
+    // time. The silence rule reads no silence then, and the past
+    // quality is that of the published solution.
+    let (mut filter, _) = turning_filter(200);
+    let fix = Observation::new(
+        stamp(1, 1, 190),
+        ObservationValue::PositionFix {
+            position: earth_origin(),
+            covariance: SymmetricCov3::from_diagonal(1.0, 1.0, 1.0),
+        },
+        gnss(),
+    );
+    assert_accepted(filter.ingest(&fix, t(200)));
+    let published = filter.tick(t(200)).expect("published");
+    let state = past(&filter, 150);
+    assert_eq!(
+        state.solution.integrity.quality,
+        published.integrity.quality
+    );
+}
