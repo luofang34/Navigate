@@ -8,6 +8,7 @@
 //! coast without IMU data. A change of mode, a burn, and a coast are
 //! history events, so a delayed observation replays through them.
 
+use nalgebra::{Const, DimMin};
 use navigate_contract::{MonotonicNanos, SymmetricCov3};
 
 use super::InertialNavigationFilter;
@@ -105,14 +106,17 @@ pub(crate) struct ImpulsiveBurn {
 impl ImpulsiveBurn {
     /// Adds the velocity change to `core`, and its covariance to the
     /// velocity block.
-    pub(crate) fn apply(&self, core: &mut InertialCore) {
+    pub(crate) fn apply<const N: usize>(&self, core: &mut InertialCore<N>) {
         core.nominal.v += nalgebra::Vector3::from(self.delta_v_frame_mps);
         let mut block = core.p.fixed_view_mut::<3, 3>(VEL, VEL);
         block += cov3_to_matrix(&self.covariance);
     }
 }
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// The active propagation mode, or the mode of the next
     /// initialization.
     #[must_use]

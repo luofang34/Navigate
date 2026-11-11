@@ -31,11 +31,13 @@
 
 mod store;
 
+use nalgebra::{Const, DimMin};
 use navigate_contract::{DurationNanos, MonotonicNanos};
 
 use super::config::InertialConfig;
 use super::estimate::{InertialCore, Mode};
 use super::mechanization::ImuRates;
+use super::nominal::FULL_STATES;
 use super::update::{Event, apply_event};
 use crate::float_math::round;
 use crate::history_ring::HistoryRing;
@@ -67,14 +69,14 @@ struct HistoryEntry {
 /// The retained events of one filter epoch, oldest first, their
 /// checkpoint cores, and the initialization time.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct History {
+pub(crate) struct History<const N: usize = FULL_STATES> {
     entries: HistoryRing<HistoryEntry, { MAX_INERTIAL_HISTORY + 1 }>,
-    cores: CorePool<MAX_CHECKPOINTS>,
+    cores: CorePool<N, MAX_CHECKPOINTS>,
     pools: EventPools,
     anchor: Option<MonotonicNanos>,
 }
 
-impl Default for History {
+impl<const N: usize> Default for History<N> {
     fn default() -> Self {
         Self {
             entries: HistoryRing::new(),
@@ -85,7 +87,10 @@ impl Default for History {
     }
 }
 
-impl History {
+impl<const N: usize> History<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Forgets every entry and the initialization time.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
@@ -105,7 +110,7 @@ impl History {
     /// holds `capacity` entries, or when a pool has no free slot.
     pub(crate) fn record(
         &mut self,
-        before: InertialCore,
+        before: InertialCore<N>,
         event: Event,
         at: MonotonicNanos,
         capacity: usize,
@@ -178,7 +183,7 @@ impl History {
         &self,
         position: usize,
         config: &InertialConfig,
-    ) -> Option<Result<InertialCore, RejectionReason>> {
+    ) -> Option<Result<InertialCore<N>, RejectionReason>> {
         let (start, slot) = (0..=position).rev().find_map(|index| {
             let slot = self.entries.get(index)?.checkpoint?;
             Some((index, slot))
@@ -203,10 +208,10 @@ impl History {
     /// can give a core for.
     pub(crate) fn base_at(
         &self,
-        current: &InertialCore,
+        current: &InertialCore<N>,
         at: MonotonicNanos,
         config: &InertialConfig,
-    ) -> Result<(InertialCore, Option<ImuRates>), MonotonicNanos> {
+    ) -> Result<(InertialCore<N>, Option<ImuRates>), MonotonicNanos> {
         let capacity = config.fusion.history_capacity;
         let oldest = self.oldest(current, capacity);
         if capacity == 0 || at < oldest {
@@ -230,7 +235,7 @@ impl History {
     /// The oldest time the history can give a core for: the state time
     /// of the oldest checkpoint, the initialization time without
     /// entries, and the state time of `current` when replay is disabled.
-    pub(crate) fn oldest(&self, current: &InertialCore, capacity: usize) -> MonotonicNanos {
+    pub(crate) fn oldest(&self, current: &InertialCore<N>, capacity: usize) -> MonotonicNanos {
         if capacity == 0 {
             return current.state_at;
         }
@@ -253,11 +258,11 @@ impl History {
     /// two passes give the same cores.
     pub(crate) fn apply_delayed(
         &mut self,
-        current: &InertialCore,
+        current: &InertialCore<N>,
         event: &Event,
         at: MonotonicNanos,
         config: &InertialConfig,
-    ) -> Result<(InertialCore, Option<f64>), RejectionReason> {
+    ) -> Result<(InertialCore<N>, Option<f64>), RejectionReason> {
         let capacity = config.fusion.history_capacity;
         let oldest = self.oldest(current, capacity);
         let outside = || RejectionReason::OutsideHistory {
@@ -319,7 +324,7 @@ impl History {
     /// each entry.
     fn rewrite(
         &mut self,
-        mut core: InertialCore,
+        mut core: InertialCore<N>,
         index: usize,
         config: &InertialConfig,
     ) -> Result<(), RejectionReason> {

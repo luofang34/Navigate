@@ -7,12 +7,12 @@
 //! `m = [s_N, s_E, 1]` and `κ = m·u`. A beam close to the terrain plane
 //! has a small `κ`, and the range is then very sensitive to the attitude.
 
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::{Const, DimMin, SMatrix, Vector3};
 use navigate_geodesy::BodyEllipsoid;
 
 use super::{scalar, vehicle_level};
 use crate::inertial::estimate::{InertialCore, Linearized};
-use crate::inertial::nominal::{ATT, N, POS};
+use crate::inertial::nominal::{ATT, POS};
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
 
@@ -28,11 +28,14 @@ const MIN_INCIDENCE: f64 = 0.05;
 /// and `C_bl = R_fl·C_bf`. The barometric bias does not enter: a surface altimeter measures a
 /// geometric range. A beam with `κ ≤ 0.05` or a vehicle at or below the
 /// terrain is refused with [`RejectionReason::ImplausibleCovariance`].
-pub(crate) fn terrain_clearance(
-    core: &InertialCore,
+pub(crate) fn terrain_clearance<const N: usize>(
+    core: &InertialCore<N>,
     ellipsoid: BodyEllipsoid,
     value: &ObservationValue,
-) -> Result<Linearized<1>, RejectionReason> {
+) -> Result<Linearized<1, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::TerrainClearance {
         clearance_m,
         terrain_height_m,

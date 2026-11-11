@@ -210,4 +210,4 @@ const MAX_OBSERVATIONS: usize = 160;
 const MAX_RARE: usize = 4;
 
 /// The checkpoint cores of the history.
-pub(super) type CorePool<const N: usize> = Pool<InertialCore, N>;
+pub(super) type CorePool<const N: usize, const SLOTS: usize> = Pool<InertialCore<N>, SLOTS>;

@@ -20,14 +20,24 @@ use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
 use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 use navigate_fusion::RejectionReason;
 use navigate_fusion::inertial::{
-    ERROR_ATTITUDE, ERROR_MAG_BIAS, ERROR_POSITION, ERROR_STATES, ERROR_VELOCITY, ErrorMatrix,
-    InertialConfig, NominalPoint, error_transition, initial_error_covariance,
-    ned_to_body_fixed_dcm,
+    ErrorMatrix, InertialConfig, NominalPoint, StateLayout, error_transition,
+    initial_error_covariance, ned_to_body_fixed_dcm,
 };
 use navigate_fusion::kalman::joseph_covariance_update;
 use navigate_geodesy::{BodyEllipsoid, geodetic_to_body_fixed};
 
 use crate::float_math::sqrt;
+
+/// The layout of the filter error states that the bound uses.
+const LAYOUT: StateLayout = StateLayout::FULL;
+/// Number of error states.
+const ERROR_STATES: usize = LAYOUT.dimension();
+/// First index of the position error.
+const ERROR_POSITION: usize = LAYOUT.position();
+/// First index of the velocity error.
+const ERROR_VELOCITY: usize = LAYOUT.velocity();
+/// First index of the attitude error.
+const ERROR_ATTITUDE: usize = LAYOUT.attitude();
 
 #[cfg(test)]
 mod tests;
@@ -179,7 +189,9 @@ impl CrlbTracker {
         let mut h = SMatrix::<f64, 1, ERROR_STATES>::zeros();
         h.fixed_view_mut::<1, 3>(0, ERROR_POSITION)
             .copy_from(&gradient.transpose());
-        h[(0, ERROR_MAG_BIAS)] = 1.0;
+        if let Some(mag_bias) = LAYOUT.mag_bias() {
+            h[(0, mag_bias)] = 1.0;
+        }
         self.p = joseph_covariance_update(&self.p, &h, &SMatrix::<f64, 1, 1>::new(variance_t2))
             .ok_or(RejectionReason::ImplausibleCovariance)?;
         Ok(())

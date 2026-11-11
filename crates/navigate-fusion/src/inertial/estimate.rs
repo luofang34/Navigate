@@ -1,14 +1,17 @@
 //! The initialized state of the inertial filter and its propagation
 //! (ADR-0014, ADR-0017, ADR-0018).
 
-use nalgebra::{SMatrix, SVector, Vector3};
+use nalgebra::{Const, DimMin, SMatrix, SVector, Vector3};
 use navigate_contract::{MonotonicNanos, SourceId};
 
 use super::coast::coast_transition;
 use super::config::InertialConfig;
 use super::imu::ImuIncrement;
+use super::layout::StateLayout;
 use super::mechanization::{ImuRates, increment_transition, transition};
-use super::nominal::{ErrorMat, ErrorVec, InertialNominal, N, POS, VEL, reset_covariance};
+use super::nominal::{
+    ErrorMat, ErrorVec, FULL_STATES, InertialNominal, POS, VEL, reset_covariance,
+};
 use super::propagation::{ForceModelCoast, PropagationMode};
 use super::regime::Regime;
 use crate::admission::seconds;
@@ -31,10 +34,12 @@ pub(crate) type MagneticKey = (SourceId, Option<u64>);
 /// The state of an initialized filter at one time. The history keeps a
 /// copy of it before each event, so a replay starts from it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct InertialCore {
+pub(crate) struct InertialCore<const N: usize = FULL_STATES> {
     pub(crate) regime: Regime,
     pub(crate) nominal: InertialNominal,
-    pub(crate) p: ErrorMat,
+    pub(crate) p: ErrorMat<N>,
+    /// The blocks of the error state.
+    pub(crate) layout: StateLayout,
     pub(crate) state_at: MonotonicNanos,
     /// The rates of the most recent IMU sample. A propagation without a
     /// covering sample holds them.
@@ -54,7 +59,10 @@ pub(crate) enum Mode {
     Replay,
 }
 
-impl InertialCore {
+impl<const N: usize> InertialCore<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Propagates the state to `at` with constant `rates`. A time at or
     /// before the state time changes nothing.
     pub(crate) fn propagate_to(
@@ -180,12 +188,12 @@ impl InertialCore {
     /// core does not change.
     pub(crate) fn update<const M: usize>(
         &mut self,
-        model: &Linearized<M>,
+        model: &Linearized<M, N>,
         gate_chi2: f64,
         mode: Mode,
     ) -> Result<f64, RejectionReason> {
         let state = KalmanState::<N> {
-            x: ErrorVec::zeros(),
+            x: ErrorVec::<N>::zeros(),
             p: self.p,
         };
         let prepared = state
@@ -198,7 +206,7 @@ impl InertialCore {
             });
         }
         let updated = state.apply_update(&prepared);
-        self.nominal = self.nominal.inject(&updated.x);
+        self.nominal = self.nominal.inject(&updated.x, &self.layout);
         self.p = reset_covariance(&updated.p, &updated.x);
         Ok(prepared.chi2)
     }
@@ -213,7 +221,7 @@ impl InertialCore {
     /// four states). The gate is that of [`Self::update`].
     pub(crate) fn update_vertical(
         &mut self,
-        model: &Linearized<1>,
+        model: &Linearized<1, N>,
         up: &Vector3<f64>,
         gate_chi2: f64,
         mode: Mode,
@@ -238,7 +246,7 @@ impl InertialCore {
         }
         let x = gain * residual;
         let p = joseph(&self.p, &model.h, &model.r, &gain);
-        self.nominal = self.nominal.inject(&x);
+        self.nominal = self.nominal.inject(&x, &self.layout);
         self.p = reset_covariance(&((p + p.transpose()) * 0.5), &x);
         Ok(chi2)
     }
@@ -248,18 +256,18 @@ impl InertialCore {
 /// `y = z − h(x_nom)`, the Jacobian `H` of the error state, and the noise
 /// `R`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Linearized<const M: usize> {
+pub(crate) struct Linearized<const M: usize, const N: usize = FULL_STATES> {
     pub(crate) residual: SVector<f64, M>,
     pub(crate) h: SMatrix<f64, M, N>,
     pub(crate) r: SMatrix<f64, M, M>,
 }
 
-impl<const M: usize> MeasurementModel<M, N> for Linearized<M> {
-    fn innovation(&self, x: &ErrorVec) -> SVector<f64, M> {
+impl<const M: usize, const N: usize> MeasurementModel<M, N> for Linearized<M, N> {
+    fn innovation(&self, x: &ErrorVec<N>) -> SVector<f64, M> {
         self.residual - self.h * x
     }
 
-    fn jacobian(&self, _x: &ErrorVec) -> Option<SMatrix<f64, M, N>> {
+    fn jacobian(&self, _x: &ErrorVec<N>) -> Option<SMatrix<f64, M, N>> {
         Some(self.h)
     }
 

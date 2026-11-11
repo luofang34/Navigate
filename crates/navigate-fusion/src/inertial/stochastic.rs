@@ -9,68 +9,79 @@
 use nalgebra::{Matrix3, Vector3};
 
 use super::config::InertialConfig;
-use super::nominal::{
-    ACCEL_BIAS, ALT_BIAS, CLOCK_BIAS, CLOCK_DRIFT, DMC, ErrorMat, GYRO_BIAS, InertialNominal,
-    MAG_BIAS,
-};
+use super::nominal::{ACCEL_BIAS, ErrorMat, GYRO_BIAS, InertialNominal};
 use crate::kalman::FogmBias;
 
 /// Adds the first-order Gauss–Markov decay of each bias and of the
 /// empirical acceleration, and the clock drift into the clock bias, to
 /// `f`.
-pub(crate) fn add_dynamics(f: &mut ErrorMat, config: &InertialConfig) {
+pub(crate) fn add_dynamics<const N: usize>(f: &mut ErrorMat<N>, config: &InertialConfig) {
+    let layout = config.layout;
     let identity = Matrix3::<f64>::identity();
     f.fixed_view_mut::<3, 3>(ACCEL_BIAS, ACCEL_BIAS)
         .copy_from(&(identity * config.accel_bias.decay_rate()));
     f.fixed_view_mut::<3, 3>(GYRO_BIAS, GYRO_BIAS)
         .copy_from(&(identity * config.gyro_bias.decay_rate()));
-    f[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.decay_rate();
-    f[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.decay_rate();
-    if let Some(dmc) = &config.dmc {
-        f.fixed_view_mut::<3, 3>(DMC, DMC)
+    if let Some(i) = layout.alt_bias() {
+        f[(i, i)] = config.baro_bias.decay_rate();
+    }
+    if let Some(i) = layout.mag_bias() {
+        f[(i, i)] = config.mag_bias.decay_rate();
+    }
+    if let (Some(dmc), Some(i)) = (&config.dmc, layout.dmc()) {
+        f.fixed_view_mut::<3, 3>(i, i)
             .copy_from(&(identity * dmc.decay_rate()));
     }
-    if config.clock_model.is_some() {
-        f[(CLOCK_BIAS, CLOCK_DRIFT)] = 1.0;
+    if let (Some(_), Some(i)) = (&config.clock_model, layout.clock()) {
+        f[(i, i + 1)] = 1.0;
     }
 }
 
 /// Adds the noise density of each bias, of the empirical acceleration,
 /// and of the clock to `q`. A first-order Gauss–Markov state has the
 /// density `2·σ²/τ`. The clock has `diag(S_f, S_g)`.
-pub(crate) fn add_noise(q: &mut ErrorMat, config: &InertialConfig) {
+pub(crate) fn add_noise<const N: usize>(q: &mut ErrorMat<N>, config: &InertialConfig) {
+    let layout = config.layout;
     for axis in 0..3 {
         q[(ACCEL_BIAS + axis, ACCEL_BIAS + axis)] = config.accel_bias.continuous_psd();
         q[(GYRO_BIAS + axis, GYRO_BIAS + axis)] = config.gyro_bias.continuous_psd();
-        if let Some(dmc) = &config.dmc {
-            q[(DMC + axis, DMC + axis)] = dmc.continuous_psd();
+        if let (Some(dmc), Some(i)) = (&config.dmc, layout.dmc()) {
+            q[(i + axis, i + axis)] = dmc.continuous_psd();
         }
     }
-    q[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.continuous_psd();
-    q[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.continuous_psd();
-    if let Some(clock) = &config.clock_model {
-        q[(CLOCK_BIAS, CLOCK_BIAS)] = clock.white_frequency_psd_m2_per_s;
-        q[(CLOCK_DRIFT, CLOCK_DRIFT)] = clock.random_walk_frequency_psd_m2_per_s3;
+    if let Some(i) = layout.alt_bias() {
+        q[(i, i)] = config.baro_bias.continuous_psd();
+    }
+    if let Some(i) = layout.mag_bias() {
+        q[(i, i)] = config.mag_bias.continuous_psd();
+    }
+    if let (Some(clock), Some(i)) = (&config.clock_model, layout.clock()) {
+        q[(i, i)] = clock.white_frequency_psd_m2_per_s;
+        q[(i + 1, i + 1)] = clock.random_walk_frequency_psd_m2_per_s3;
     }
 }
 
 /// Sets the initial variance of each bias and of the empirical
 /// acceleration to its stationary variance, and the clock variances to
 /// the configured initial values.
-pub(crate) fn set_initial_variances(p: &mut ErrorMat, config: &InertialConfig) {
+pub(crate) fn set_initial_variances<const N: usize>(p: &mut ErrorMat<N>, config: &InertialConfig) {
+    let layout = config.layout;
     for axis in 0..3 {
         p[(ACCEL_BIAS + axis, ACCEL_BIAS + axis)] = config.accel_bias.stationary_variance();
         p[(GYRO_BIAS + axis, GYRO_BIAS + axis)] = config.gyro_bias.stationary_variance();
-        if let Some(dmc) = &config.dmc {
-            p[(DMC + axis, DMC + axis)] = dmc.stationary_variance();
+        if let (Some(dmc), Some(i)) = (&config.dmc, layout.dmc()) {
+            p[(i + axis, i + axis)] = dmc.stationary_variance();
         }
     }
-    p[(ALT_BIAS, ALT_BIAS)] = config.baro_bias.stationary_variance();
-    p[(MAG_BIAS, MAG_BIAS)] = config.mag_bias.stationary_variance();
-    if let Some(clock) = &config.clock_model {
-        p[(CLOCK_BIAS, CLOCK_BIAS)] = clock.initial_bias_sigma_m * clock.initial_bias_sigma_m;
-        p[(CLOCK_DRIFT, CLOCK_DRIFT)] =
-            clock.initial_drift_sigma_mps * clock.initial_drift_sigma_mps;
+    if let Some(i) = layout.alt_bias() {
+        p[(i, i)] = config.baro_bias.stationary_variance();
+    }
+    if let Some(i) = layout.mag_bias() {
+        p[(i, i)] = config.mag_bias.stationary_variance();
+    }
+    if let (Some(clock), Some(i)) = (&config.clock_model, layout.clock()) {
+        p[(i, i)] = clock.initial_bias_sigma_m * clock.initial_bias_sigma_m;
+        p[(i + 1, i + 1)] = clock.initial_drift_sigma_mps * clock.initial_drift_sigma_mps;
     }
 }
 

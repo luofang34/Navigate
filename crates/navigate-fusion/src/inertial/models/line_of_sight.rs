@@ -13,12 +13,12 @@
 //! - `H_p = −Bᵀ·Cᵀ/|d|` for a target at the distance `|d|`, because the
 //!   direction to the target turns when the vehicle moves across it.
 
-use nalgebra::{Matrix2, SMatrix, Vector3};
+use nalgebra::{Const, DimMin, Matrix2, SMatrix, Vector3};
 
 use super::MIN_RANGE_M;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Linearized, Mode};
-use crate::inertial::nominal::{ATT, N, POS};
+use crate::inertial::nominal::{ATT, POS};
 use crate::observation::{LineOfSightReference, ObservationValue};
 use crate::rejection::RejectionReason;
 
@@ -39,12 +39,15 @@ pub(crate) fn tangent_basis(u: &Vector3<f64>) -> SMatrix<f64, 3, 2> {
 }
 
 /// Applies a line of sight to `core`.
-pub(super) fn apply(
-    core: &mut InertialCore,
+pub(super) fn apply<const N: usize>(
+    core: &mut InertialCore<N>,
     value: &ObservationValue,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let (model, cosine) = line_of_sight(core, value)?;
     let gate = config.fusion.line_of_sight_gate_chi2;
     if mode == Mode::Gated && cosine <= 0.0 {
@@ -61,10 +64,13 @@ pub(super) fn apply(
 /// The linearized line of sight at the nominal state of `core`, and the
 /// cosine of the angle between the measured and the predicted
 /// directions.
-pub(crate) fn line_of_sight(
-    core: &InertialCore,
+pub(crate) fn line_of_sight<const N: usize>(
+    core: &InertialCore<N>,
     value: &ObservationValue,
-) -> Result<(Linearized<2>, f64), RejectionReason> {
+) -> Result<(Linearized<2, N>, f64), RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::LineOfSight {
         measured_body_unit,
         reference,

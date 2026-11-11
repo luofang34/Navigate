@@ -13,7 +13,7 @@
 //! increment `Δv_rot` rotates into the frame axes with the frame rotation
 //! at the midpoint of the step.
 
-use nalgebra::{Matrix3, UnitQuaternion, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, UnitQuaternion, Vector3};
 
 use super::config::InertialConfig;
 use super::discretization::van_loan;
@@ -160,12 +160,12 @@ fn advanced(
 /// attitude block: `δθ̇ = −[ω_ib×]·δθ − δb_g`. The accelerometers sense
 /// each non-gravitational force, so the empirical acceleration does not
 /// enter the velocity.
-pub(crate) fn continuous_jacobian(
+pub(crate) fn continuous_jacobian<const N: usize>(
     midpoint: &Midpoint,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> ErrorMat {
-    let mut f = ErrorMat::zeros();
+) -> ErrorMat<N> {
+    let mut f = ErrorMat::<N>::zeros();
     let identity = Matrix3::identity();
     let omega = field.frame_rotation();
     let gradient = field.gravity(&midpoint.p_mid).1;
@@ -189,10 +189,10 @@ pub(crate) fn continuous_jacobian(
 /// gyroscope noise are isotropic, so the rotation into the frame axes
 /// does not change the velocity block. [`stochastic::add_noise`] gives
 /// the bias, empirical acceleration, and clock densities.
-pub(crate) fn continuous_noise(config: &InertialConfig) -> ErrorMat {
+pub(crate) fn continuous_noise<const N: usize>(config: &InertialConfig) -> ErrorMat<N> {
     let accel = powi(config.accel_noise_sigma_mps2_sqrt_hz, 2);
     let gyro = powi(config.gyro_noise_sigma_rad_s_sqrt_hz, 2);
-    let mut q = ErrorMat::zeros();
+    let mut q = ErrorMat::<N>::zeros();
     for axis in 0..3 {
         q[(VEL + axis, VEL + axis)] = accel;
         q[(ATT + axis, ATT + axis)] = gyro;
@@ -204,13 +204,16 @@ pub(crate) fn continuous_noise(config: &InertialConfig) -> ErrorMat {
 /// One propagation step: the next nominal state, the transition matrix
 /// `Φ`, and the discrete process noise `Q_d`. `None` when the
 /// discretization fails.
-pub(crate) fn transition(
+pub(crate) fn transition<const N: usize>(
     x: &InertialNominal,
     rates: &ImuRates,
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(InertialNominal, ErrorMat, ErrorMat)> {
+) -> Option<(InertialNominal, ErrorMat<N>, ErrorMat<N>)>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let (next, midpoint) = mechanize(x, rates, dt_s, field, config);
     let (phi, q_d) = discretize(&midpoint, dt_s, field, config)?;
     Some((next, phi, q_d))
@@ -218,25 +221,31 @@ pub(crate) fn transition(
 
 /// One propagation step over a full increment: the next nominal state,
 /// `Φ`, and `Q_d`. `None` when the discretization fails.
-pub(crate) fn increment_transition(
+pub(crate) fn increment_transition<const N: usize>(
     x: &InertialNominal,
     increment: &ImuIncrement,
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(InertialNominal, ErrorMat, ErrorMat)> {
+) -> Option<(InertialNominal, ErrorMat<N>, ErrorMat<N>)>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let (next, midpoint) = mechanize_increment(x, increment, dt_s, field, config);
     let (phi, q_d) = discretize(&midpoint, dt_s, field, config)?;
     Some((next, phi, q_d))
 }
 
 /// `Φ` and `Q_d` of the error dynamics linearized at `midpoint`.
-fn discretize(
+fn discretize<const N: usize>(
     midpoint: &Midpoint,
     dt_s: f64,
     field: &impl GravityField,
     config: &InertialConfig,
-) -> Option<(ErrorMat, ErrorMat)> {
+) -> Option<(ErrorMat<N>, ErrorMat<N>)>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let f = continuous_jacobian(midpoint, field, config);
     van_loan(&f, &continuous_noise(config), dt_s)
 }

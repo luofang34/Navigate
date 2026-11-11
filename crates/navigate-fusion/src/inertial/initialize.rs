@@ -5,7 +5,7 @@
 //! local NED velocity, a body-to-NED attitude, and local NED covariances
 //! into that frame with the local axes at the position.
 
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, Vector3};
 use navigate_contract::{
     AttitudeQuaternion, CartesianPosition, CartesianVelocity, GeodeticPosition, MonotonicNanos,
     NedVelocity, SourceComposition, SymmetricCov3,
@@ -34,7 +34,10 @@ struct InitialState {
     att_cov: Matrix3<f64>,
 }
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Sets the state on the reference ellipsoid of the active regime at
     /// `at`. After a change of frame, the active regime is the new one.
     /// `attitude` rotates the body axes into the local NED axes at
@@ -155,6 +158,7 @@ impl InertialNavigationFilter {
             prior.apply(&mut nominal, &mut p);
         }
         self.core = Some(InertialCore {
+            layout: self.config.layout,
             regime,
             nominal,
             p,
@@ -194,12 +198,12 @@ fn check_initial(
 /// variance rises to the configured floor. For a surface
 /// initialization, `P_frame = R·P_ned·Rᵀ`, so `P_θ = C_bnᵀ·P_ned·C_bn`
 /// with `C_bn` the rotation from the body axes to the local NED axes.
-fn initial_covariance(
+fn initial_covariance<const N: usize>(
     config: &InertialConfig,
     initial: &InitialState,
     c: &Matrix3<f64>,
-) -> ErrorMat {
-    let mut p = ErrorMat::zeros();
+) -> ErrorMat<N> {
+    let mut p = ErrorMat::<N>::zeros();
     p.fixed_view_mut::<3, 3>(POS, POS)
         .copy_from(&initial.pos_cov);
     p.fixed_view_mut::<3, 3>(VEL, VEL)

@@ -1,13 +1,13 @@
 //! Attitude fixes and visual poses (ADR-0014, ADR-0017).
 
-use nalgebra::{Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, SMatrix, SVector, UnitQuaternion, Vector3};
 use navigate_contract::{AttitudeQuaternion, SymmetricCov3};
 use navigate_geodesy::BodyEllipsoid;
 
 use super::block;
 use crate::inertial::estimate::{InertialCore, Linearized};
 use crate::inertial::local_level::{LocalLevel, body_fixed};
-use crate::inertial::nominal::{ATT, N, POS, rotation_vector, to_unit_quaternion};
+use crate::inertial::nominal::{ATT, POS, rotation_vector, to_unit_quaternion};
 use crate::kalman::cov3_to_matrix;
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
@@ -15,11 +15,14 @@ use crate::rejection::RejectionReason;
 /// The residual of a measured attitude: the body-axis rotation vector
 /// `2·log(q_nom⁻¹ ⊗ q_meas)` in the hemisphere `w ≥ 0`. `to_reference`
 /// rotates the frame axes into the reference axes of the measurement.
-fn attitude_residual(
-    core: &InertialCore,
+fn attitude_residual<const N: usize>(
+    core: &InertialCore<N>,
     to_reference: &UnitQuaternion<f64>,
     attitude: &AttitudeQuaternion,
-) -> (Vector3<f64>, UnitQuaternion<f64>) {
+) -> (Vector3<f64>, UnitQuaternion<f64>)
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let nominal = to_reference * core.nominal.q;
     let residual = rotation_vector(&(nominal.inverse() * to_unit_quaternion(attitude)));
     (residual, nominal)
@@ -29,12 +32,15 @@ fn attitude_residual(
 /// `to_reference` rotates the frame axes into the reference axes of the
 /// fix: the local NED axes at the vehicle when the regime has a
 /// reference ellipsoid, and the frame axes when it has none.
-pub(super) fn attitude_fix(
-    core: &InertialCore,
+pub(super) fn attitude_fix<const N: usize>(
+    core: &InertialCore<N>,
     to_reference: &UnitQuaternion<f64>,
     attitude: &AttitudeQuaternion,
     covariance: &SymmetricCov3,
-) -> Linearized<3> {
+) -> Linearized<3, N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let (residual, _) = attitude_residual(core, to_reference, attitude);
     block(residual, ATT, cov3_to_matrix(covariance))
 }
@@ -44,11 +50,14 @@ pub(super) fn attitude_fix(
 /// the local NED axes at the pose into the body-fixed axes. The pose
 /// attitude is relative to the same local axes, and its covariance
 /// rotates into the body axes: `R_body = C_blᵀ·R_ned·C_bl`.
-pub(super) fn visual_pose(
-    core: &InertialCore,
+pub(super) fn visual_pose<const N: usize>(
+    core: &InertialCore<N>,
     ellipsoid: BodyEllipsoid,
     value: &ObservationValue,
-) -> Result<Linearized<6>, RejectionReason> {
+) -> Result<Linearized<6, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::VisualPose {
         position,
         position_covariance,

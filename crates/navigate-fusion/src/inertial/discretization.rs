@@ -2,11 +2,10 @@
 //! dynamics (ADR-0014).
 
 #[cfg(test)]
-use nalgebra::{Const, DimMin, SMatrix};
+use nalgebra::SMatrix;
+use nalgebra::{Const, DimMin};
 
 use super::nominal::ErrorMat;
-#[cfg(test)]
-use super::nominal::N;
 use crate::float_math::powi;
 
 /// Degree of the diagonal Padé approximant.
@@ -22,7 +21,7 @@ const MAX_SQUARINGS: u32 = 60;
 
 /// Dimension of the dense Van Loan block matrix of the tests.
 #[cfg(test)]
-const VAN_LOAN_DIM: usize = 2 * N;
+const VAN_LOAN_DIM: usize = 2 * super::nominal::FULL_STATES;
 
 /// The matrix exponential `exp(a)` of a dense matrix, the reference of
 /// the block form in the tests, with the `[6/6]` Padé approximant
@@ -87,7 +86,14 @@ fn infinity_norm<const D: usize>(a: &SMatrix<f64, D, D>) -> f64 {
 /// solve of `D·X = Nᵤ` is `X₁₁ = D₁₁⁻¹·N₁₁`, `X₂₂ = D₂₂⁻¹·N₂₂`, and
 /// `X₁₂ = D₁₁⁻¹·(N₁₂ − D₁₂·X₂₂)`, and a squaring is
 /// `[[X₁₁², X₁₁·X₁₂ + X₁₂·X₂₂], [0, X₂₂²]]`.
-pub(crate) fn van_loan(f: &ErrorMat, q_c: &ErrorMat, dt_s: f64) -> Option<(ErrorMat, ErrorMat)> {
+pub(crate) fn van_loan<const N: usize>(
+    f: &ErrorMat<N>,
+    q_c: &ErrorMat<N>,
+    dt_s: f64,
+) -> Option<(ErrorMat<N>, ErrorMat<N>)>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let m = Upper {
         a: -f * dt_s,
         b: q_c * dt_s,
@@ -101,18 +107,21 @@ pub(crate) fn van_loan(f: &ErrorMat, q_c: &ErrorMat, dt_s: f64) -> Option<(Error
 
 /// A block upper-triangular matrix `[[a, b], [0, c]]` of `N×N` blocks.
 #[derive(Clone, Copy)]
-struct Upper {
-    a: ErrorMat,
-    b: ErrorMat,
-    c: ErrorMat,
+struct Upper<const N: usize> {
+    a: ErrorMat<N>,
+    b: ErrorMat<N>,
+    c: ErrorMat<N>,
 }
 
-impl Upper {
+impl<const N: usize> Upper<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     fn identity() -> Self {
         Self {
-            a: ErrorMat::identity(),
-            b: ErrorMat::zeros(),
-            c: ErrorMat::identity(),
+            a: ErrorMat::<N>::identity(),
+            b: ErrorMat::<N>::zeros(),
+            c: ErrorMat::<N>::identity(),
         }
     }
 
@@ -171,7 +180,10 @@ impl Upper {
 
 /// [`expm`] of a block upper-triangular matrix, with the same `[6/6]`
 /// Padé approximant, scaling, and squaring on the blocks.
-fn block_expm(m: &Upper) -> Option<Upper> {
+fn block_expm<const N: usize>(m: &Upper<N>) -> Option<Upper<N>>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     if !m.is_finite() {
         return None;
     }
@@ -213,6 +225,7 @@ pub(crate) fn van_loan_dense(
     q_c: &ErrorMat,
     dt_s: f64,
 ) -> Option<(ErrorMat, ErrorMat)> {
+    const N: usize = super::nominal::FULL_STATES;
     let mut m = SMatrix::<f64, VAN_LOAN_DIM, VAN_LOAN_DIM>::zeros();
     m.fixed_view_mut::<N, N>(0, 0).copy_from(&(-f * dt_s));
     m.fixed_view_mut::<N, N>(0, N).copy_from(&(q_c * dt_s));

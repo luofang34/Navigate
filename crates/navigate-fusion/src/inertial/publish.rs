@@ -5,7 +5,7 @@ use navigate_contract::{
     NedVelocity, SolutionStamp, WrappingSequence,
 };
 
-use nalgebra::{Matrix3, UnitQuaternion, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, UnitQuaternion, Vector3};
 use navigate_contract::SourceComposition;
 use navigate_geodesy::BodyEllipsoid;
 
@@ -19,7 +19,10 @@ use crate::kalman::{horizontal_1sigma_m, matrix_to_cov3, vertical_1sigma_m};
 use navigate_astrodynamics::GravityField;
 use navigate_contract::{IntegrityAssessment, SpaceIntegrityAssessment};
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Publishes the geodetic solution for `now` on the reference
     /// ellipsoid of the regime. The filter converts the body-fixed state
     /// at the vehicle: the position is geodetic, and the velocity, the
@@ -90,7 +93,7 @@ impl InertialNavigationFilter {
     }
 
     /// A copy of the state propagated to `now`.
-    fn propagated(&self, now: MonotonicNanos) -> Option<InertialCore> {
+    fn propagated(&self, now: MonotonicNanos) -> Option<InertialCore<N>> {
         let mut core = self.core?;
         now.elapsed_since(core.state_at)?;
         core.propagate_with(now, None, &self.config).ok()?;
@@ -153,7 +156,7 @@ pub(super) struct SurfaceState {
 impl SurfaceState {
     /// `v = R_fl·v_frame`, `q = q_frame→local ⊗ q`, `P = R_fl·P_frame·R_flᵀ`,
     /// `P_att = C_bl·P_θ·C_blᵀ`, and `P_pos,att = R_fl·P_p,θ·C_blᵀ`.
-    pub(super) fn of(core: &InertialCore, ellipsoid: BodyEllipsoid) -> Self {
+    pub(super) fn of<const N: usize>(core: &InertialCore<N>, ellipsoid: BodyEllipsoid) -> Self {
         let local = vehicle_level(core, ellipsoid);
         let r = local.bf_to_ned();
         let attitude = local.bf_to_ned_quaternion() * core.nominal.q;

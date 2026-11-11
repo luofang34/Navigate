@@ -3,6 +3,7 @@
 //! is always in that frame.
 
 use nalgebra::Vector3;
+use nalgebra::{Const, DimMin};
 
 use super::{block, range};
 use crate::inertial::config::InertialConfig;
@@ -14,12 +15,15 @@ use crate::rejection::RejectionReason;
 
 /// Applies a Cartesian position fix, velocity fix, or range. The values
 /// and covariances are in the frame axes.
-pub(super) fn apply(
-    core: &mut InertialCore,
+pub(super) fn apply<const N: usize>(
+    core: &mut InertialCore<N>,
     value: &ObservationValue,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let vector_gate = config.fusion.innovation_gate_chi2;
     match value {
         ObservationValue::CartesianPositionFix {

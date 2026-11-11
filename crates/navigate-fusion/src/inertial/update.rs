@@ -6,6 +6,7 @@
 //! frame of the core that the event updates. Thus a delayed observation
 //! is judged against the frame that was active at its acquisition time.
 
+use nalgebra::{Const, DimMin};
 use navigate_contract::MonotonicNanos;
 
 use super::config::InertialConfig;
@@ -50,14 +51,17 @@ pub(crate) enum Event {
 /// Without it the propagation holds the most recent rates. The result is
 /// the chi-square statistic of an observation. On an error the caller
 /// drops `core`.
-pub(crate) fn apply_event(
-    core: &mut InertialCore,
+pub(crate) fn apply_event<const N: usize>(
+    core: &mut InertialCore<N>,
     event: &Event,
     at: MonotonicNanos,
     config: &InertialConfig,
     mode: Mode,
     covering: Option<ImuRates>,
-) -> Result<Option<f64>, RejectionReason> {
+) -> Result<Option<f64>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let explicit = config.fusion.require_explicit_frame || core.regime.requires_explicit_frame();
     let force_model = matches!(core.mode, PropagationMode::ForceModel(_));
     match event {

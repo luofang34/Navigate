@@ -9,14 +9,14 @@
 //! A two-way model sums the uplink and the downlink and has no clock
 //! term.
 
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::{Const, DimMin, SMatrix, Vector3};
 
 use super::{MIN_RANGE_M, scalar};
 use crate::float_math::ln;
 use crate::inertial::clock::SPEED_OF_LIGHT_MPS;
 use crate::inertial::config::InertialConfig;
 use crate::inertial::estimate::{InertialCore, Linearized, Mode};
-use crate::inertial::nominal::{CLOCK_BIAS, CLOCK_DRIFT, N, POS, VEL};
+use crate::inertial::nominal::{POS, VEL};
 use crate::observation::ObservationValue;
 use crate::rejection::RejectionReason;
 
@@ -74,25 +74,32 @@ pub(crate) fn shapiro_delay(
 }
 
 /// Applies a radiometric value to `core`.
-pub(super) fn apply(
-    core: &mut InertialCore,
+pub(super) fn apply<const N: usize>(
+    core: &mut InertialCore<N>,
     value: &ObservationValue,
     config: &InertialConfig,
     mode: Mode,
-) -> Result<f64, RejectionReason> {
+) -> Result<f64, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let model = linearize(core, value, config)?;
     core.update(&model, config.fusion.scalar_gate_chi2, mode)
 }
 
 /// The radiometric value linearized at the nominal state of `core`.
-pub(crate) fn linearize(
-    core: &InertialCore,
+pub(crate) fn linearize<const N: usize>(
+    core: &InertialCore<N>,
     value: &ObservationValue,
     config: &InertialConfig,
-) -> Result<Linearized<1>, RejectionReason> {
+) -> Result<Linearized<1, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
+    let clock = core.layout.clock().filter(|_| config.clock_model.is_some());
     let model = match value {
         ObservationValue::Pseudorange { .. } | ObservationValue::PseudorangeRate { .. }
-            if config.clock_model.is_none() =>
+            if clock.is_none() =>
         {
             return Err(RejectionReason::ClockStateDisabled { kind: value.kind() });
         }
@@ -108,7 +115,9 @@ pub(crate) fn linearize(
             let mut h = SMatrix::<f64, 1, N>::zeros();
             h.fixed_view_mut::<1, 3>(0, POS)
                 .copy_from(&leg.unit.transpose());
-            h[CLOCK_BIAS] = 1.0;
+            if let Some(index) = clock {
+                h[index] = 1.0;
+            }
             scalar(pseudorange_m - predicted, h, *variance_m2)
         }
         ObservationValue::PseudorangeRate {
@@ -121,7 +130,9 @@ pub(crate) fn linearize(
             let w = core.nominal.v - Vector3::from(*emitter_velocity_mps);
             let (rate, position_row, velocity_row) = leg.rate(&w);
             let mut h = rate_row(&position_row, &velocity_row);
-            h[CLOCK_DRIFT] = 1.0;
+            if let Some(index) = clock {
+                h[index + 1] = 1.0;
+            }
             let predicted = rate + core.nominal.clock_drift_mps;
             scalar(pseudorange_rate_mps - predicted, h, *variance_m2_per_s2)
         }
@@ -134,7 +145,10 @@ pub(crate) fn linearize(
 
 /// A row with `position_row` on the position error and `velocity_row`
 /// on the velocity error.
-fn rate_row(position_row: &Vector3<f64>, velocity_row: &Vector3<f64>) -> SMatrix<f64, 1, N> {
+fn rate_row<const N: usize>(
+    position_row: &Vector3<f64>,
+    velocity_row: &Vector3<f64>,
+) -> SMatrix<f64, 1, N> {
     let mut h = SMatrix::<f64, 1, N>::zeros();
     h.fixed_view_mut::<1, 3>(0, POS)
         .copy_from(&position_row.transpose());
@@ -146,10 +160,13 @@ fn rate_row(position_row: &Vector3<f64>, velocity_row: &Vector3<f64>) -> SMatrix
 /// The two-way range: the uplink and the downlink distances, the delay
 /// of each leg past the body of `gravitation_gm_m3_s2`, and the
 /// turnaround delay.
-fn two_way_range(
-    core: &InertialCore,
+fn two_way_range<const N: usize>(
+    core: &InertialCore<N>,
     value: &ObservationValue,
-) -> Result<Linearized<1>, RejectionReason> {
+) -> Result<Linearized<1, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::TwoWayRange {
         tx_station_pos_m,
         rx_station_pos_m,
@@ -181,10 +198,13 @@ fn two_way_range(
 
 /// The two-way range rate: the sum of the uplink and the downlink range
 /// rates.
-fn two_way_range_rate(
-    core: &InertialCore,
+fn two_way_range_rate<const N: usize>(
+    core: &InertialCore<N>,
     value: &ObservationValue,
-) -> Result<Linearized<1>, RejectionReason> {
+) -> Result<Linearized<1, N>, RejectionReason>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let ObservationValue::TwoWayRangeRate {
         tx_station_pos_m,
         tx_station_vel_mps,

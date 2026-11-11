@@ -24,13 +24,14 @@
 //! body or sensor axes, and the clock does not depend on the frame, so
 //! those blocks are the identity. The covariance is `P_N = J·P_O·Jᵀ`.
 
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Const, DimMin, Matrix3, Vector3};
 use navigate_contract::{AttitudeQuaternion, MonotonicNanos};
 use navigate_geodesy::BodyEllipsoid;
 
 use super::InertialNavigationFilter;
 use super::estimate::InertialCore;
-use super::nominal::{DMC, ErrorMat, InertialNominal, POS, VEL, renormalized, to_unit_quaternion};
+use super::layout::StateLayout;
+use super::nominal::{ErrorMat, InertialNominal, POS, VEL, renormalized, to_unit_quaternion};
 use super::regime::Regime;
 use super::update::Event;
 use crate::admission::is_unit_quaternion;
@@ -124,22 +125,27 @@ pub(crate) fn transformed_nominal(x: &InertialNominal, change: &FrameChange) -> 
 }
 
 /// The Jacobian of the error state for `change`.
-pub(crate) fn frame_change_jacobian(change: &FrameChange) -> ErrorMat {
+pub(crate) fn frame_change_jacobian<const N: usize>(
+    change: &FrameChange,
+    layout: &StateLayout,
+) -> ErrorMat<N> {
     let c = change.rotation();
     let omega = Vector3::from(change.relative_angular_rate_in_old_rad_s);
-    let mut j = ErrorMat::identity();
+    let mut j = ErrorMat::<N>::identity();
     j.fixed_view_mut::<3, 3>(POS, POS).copy_from(&c);
     j.fixed_view_mut::<3, 3>(VEL, VEL).copy_from(&c);
     j.fixed_view_mut::<3, 3>(VEL, POS)
         .copy_from(&(-c * omega.cross_matrix()));
-    j.fixed_view_mut::<3, 3>(DMC, DMC).copy_from(&c);
+    if let Some(dmc) = layout.dmc() {
+        j.fixed_view_mut::<3, 3>(dmc, dmc).copy_from(&c);
+    }
     j
 }
 
 /// Moves `core` into the new frame of `change`, with its regime.
-pub(crate) fn apply_frame_change(core: &mut InertialCore, change: &FrameChange) {
+pub(crate) fn apply_frame_change<const N: usize>(core: &mut InertialCore<N>, change: &FrameChange) {
     core.nominal = transformed_nominal(&core.nominal, change);
-    let j = frame_change_jacobian(change);
+    let j = frame_change_jacobian::<N>(change, &core.layout);
     let moved = j * core.p * j.transpose();
     core.p = (moved + moved.transpose()) * 0.5;
     core.regime = Regime {
@@ -148,7 +154,10 @@ pub(crate) fn apply_frame_change(core: &mut InertialCore, change: &FrameChange) 
     };
 }
 
-impl InertialNavigationFilter {
+impl<const N: usize> InertialNavigationFilter<N>
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     /// Moves the state into the new frame of `change` at `at`. The change
     /// is a history event, so a delayed observation before `at` replays
     /// through it in the frame of its acquisition time.
