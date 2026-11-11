@@ -56,4 +56,18 @@ pub trait FlightDirector {
 
     /// The waypoint being flown to, or `None` once the plan is complete.
     fn active_index(&self) -> Option<usize>;
+
+    /// A complete copy of the state.
+    fn snapshot(&self) -> Box<dyn FlightDirector>;
+
+    /// Restores the state of `snapshot`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a snapshot of another director type.
+    fn restore(&mut self, snapshot: &dyn FlightDirector) -> Result<(), crate::OnboardError>;
+
+    /// The director as [`core::any::Any`], so that
+    /// [`FlightDirector::restore`] can check the type of a snapshot.
+    fn as_any(&self) -> &dyn core::any::Any;
 }

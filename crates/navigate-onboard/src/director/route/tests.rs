@@ -29,9 +29,9 @@ fn waypoints() -> Vec<Waypoint> {
 }
 
 #[cfg(test)]
-fn director(waypoints: &[Waypoint], law: GuidanceLaw) -> RouteDirector<'_> {
+fn director(waypoints: &[Waypoint], law: GuidanceLaw) -> RouteDirector {
     let config = ExecutionConfig::new(100.0).with_surface_gravity_mps2(9.806_65);
-    RouteDirector::new("TRIP", waypoints, config, law, 40.0, CLOCK).unwrap()
+    RouteDirector::new("TRIP", waypoints.to_vec(), config, law, 40.0, CLOCK).unwrap()
 }
 
 #[cfg(test)]
@@ -94,7 +94,22 @@ fn the_velocity_law_gives_a_velocity_setpoint() {
 fn unusable_routes_are_refused() {
     let waypoints = waypoints();
     let config = ExecutionConfig::new(100.0);
-    assert!(RouteDirector::new("TRIP", &waypoints, config, tracking(), 0.0, CLOCK).is_err());
-    assert!(RouteDirector::new("", &waypoints, config, tracking(), 40.0, CLOCK).is_err());
-    assert!(RouteDirector::new("TRIP", &[], config, tracking(), 40.0, CLOCK).is_err());
+    assert!(RouteDirector::new("TRIP", waypoints.clone(), config, tracking(), 0.0, CLOCK).is_err());
+    assert!(RouteDirector::new("", waypoints.clone(), config, tracking(), 40.0, CLOCK).is_err());
+    assert!(RouteDirector::new("TRIP", Vec::new(), config, tracking(), 40.0, CLOCK).is_err());
+}
+
+#[test]
+fn a_director_snapshot_restores_the_sequencing_state() {
+    let waypoints = waypoints();
+    let mut director = director(&waypoints, tracking());
+    let mut navigator = aligned(&[]);
+    let now = MonotonicNanos::from_nanos(1_000_000_000);
+    let mut solution = navigator.solution(now).unwrap();
+    let saved = director.snapshot();
+    solution.position = waypoints[0].position;
+    director.step(Some(&solution), now);
+    assert_eq!(director.active_index(), Some(1));
+    director.restore(&*saved).unwrap();
+    assert_eq!(director.active_index(), Some(0));
 }

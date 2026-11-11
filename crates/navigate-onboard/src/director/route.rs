@@ -11,17 +11,23 @@ use super::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw};
 use crate::OnboardError;
 
 /// Executes one flight plan on WGS84: leg sequencing with capture and
-/// turn anticipation, and the guidance law on the active leg.
+/// turn anticipation, and the guidance law on the active leg. It owns its
+/// waypoints and keeps the sequencing state as the active index and the
+/// completion flag; each step resumes the execution from them
+/// (`PlanExecution::resume`).
 #[derive(Debug, Clone)]
-pub struct RouteDirector<'w> {
-    execution: PlanExecution<'w>,
-    waypoints: &'w [Waypoint],
+pub struct RouteDirector {
+    route_id: Ident,
+    waypoints: Vec<Waypoint>,
+    config: ExecutionConfig,
     law: GuidanceLaw,
     cruise_speed_mps: f64,
     clock: ClockDomainId,
+    active_index: usize,
+    complete: bool,
 }
 
-impl<'w> RouteDirector<'w> {
+impl RouteDirector {
     /// A director for `waypoints` named `route_id`.
     ///
     /// # Errors
@@ -30,7 +36,7 @@ impl<'w> RouteDirector<'w> {
     /// and a cruise speed that is not finite and positive.
     pub fn new(
         route_id: &str,
-        waypoints: &'w [Waypoint],
+        waypoints: Vec<Waypoint>,
         config: ExecutionConfig,
         law: GuidanceLaw,
         cruise_speed_mps: f64,
@@ -43,16 +49,30 @@ impl<'w> RouteDirector<'w> {
         if !(cruise_speed_mps.is_finite() && cruise_speed_mps > 0.0) {
             return Err(invalid(format!("cruise speed {cruise_speed_mps}")));
         }
-        let ident = Ident::try_new(route_id).map_err(|e| invalid(format!("{route_id}: {e:?}")))?;
-        let plan = FlightPlan::new(ident, PlanRole::Mission, Ellipsoid::WGS84, waypoints);
-        let execution = PlanExecution::new(plan, config).map_err(|e| invalid(format!("{e}")))?;
-        Ok(Self {
-            execution,
+        let route_id =
+            Ident::try_new(route_id).map_err(|e| invalid(format!("{route_id}: {e:?}")))?;
+        let director = Self {
+            route_id,
             waypoints,
+            config,
             law,
             cruise_speed_mps,
             clock,
-        })
+            active_index: 0,
+            complete: false,
+        };
+        director.execution().map_err(|e| invalid(format!("{e}")))?;
+        Ok(director)
+    }
+
+    fn execution(&self) -> Result<PlanExecution<'_>, navigate_route::PlanActivationError> {
+        let plan = FlightPlan::new(
+            self.route_id,
+            PlanRole::Mission,
+            Ellipsoid::WGS84,
+            &self.waypoints,
+        );
+        PlanExecution::resume(plan, self.config, self.active_index, self.complete)
     }
 
     /// Speed on the leg toward waypoint `index`: the cruise speed under the
@@ -68,13 +88,13 @@ impl<'w> RouteDirector<'w> {
     }
 }
 
-impl FlightDirector for RouteDirector<'_> {
+impl FlightDirector for RouteDirector {
     fn step(
         &mut self,
         solution: Option<&NavigationSolution>,
         now: MonotonicNanos,
     ) -> DirectorOutput {
-        let index = self.execution.active_index();
+        let index = self.active_index;
         let mut output = DirectorOutput {
             setpoint: None,
             commanded_speed_mps: self.leg_speed(index),
@@ -82,13 +102,10 @@ impl FlightDirector for RouteDirector<'_> {
             active_index: self.active_index(),
             refusal: None,
         };
-        let Some(solution) = solution else {
+        let (Some(solution), Ok(mut execution)) = (solution, self.execution()) else {
             return output;
         };
-        output.event = match self
-            .execution
-            .advance(&solution.position, self.leg_speed(index))
-        {
+        output.event = match execution.advance(&solution.position, self.leg_speed(index)) {
             SequenceEvent::LegAdvanced { reason, .. } => Some((false, reason)),
             SequenceEvent::PlanComplete { reason, .. } => Some((true, reason)),
             _ => None,
@@ -98,7 +115,7 @@ impl FlightDirector for RouteDirector<'_> {
             plan_complete,
             anticipated: reason == SequenceReason::Anticipated,
         });
-        let leg = self.execution.active_leg();
+        let leg = execution.active_leg();
         output.active_index = leg.map(|leg| leg.index);
         if let Some(leg) = leg {
             output.commanded_speed_mps = self.leg_speed(leg.index);
@@ -125,11 +142,35 @@ impl FlightDirector for RouteDirector<'_> {
                 Err(refusal) => output.refusal = Some(refusal),
             }
         }
+        let (active, complete) = (execution.active_index(), execution.is_complete());
+        self.active_index = active;
+        self.complete = complete;
         output
     }
 
     fn active_index(&self) -> Option<usize> {
-        self.execution.active_leg().map(|leg| leg.index)
+        (!self.complete && self.active_index < self.waypoints.len()).then_some(self.active_index)
+    }
+
+    fn snapshot(&self) -> Box<dyn FlightDirector> {
+        Box::new(self.clone())
+    }
+
+    fn restore(&mut self, snapshot: &dyn FlightDirector) -> Result<(), OnboardError> {
+        let other =
+            snapshot
+                .as_any()
+                .downcast_ref::<Self>()
+                .ok_or_else(|| OnboardError::Config {
+                    field: "snapshot",
+                    detail: "a snapshot of another director type".into(),
+                })?;
+        self.clone_from(other);
+        Ok(())
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
     }
 }
 

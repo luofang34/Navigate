@@ -188,9 +188,13 @@ and a rename.
   caller supplies: `Accepted`, `Rejected` with Navigate's reason, or
   `Unused` with a reason.
 - `FlightDirector` sequences the route and gives the guidance setpoint
-  from a solution. It holds no control authority. `RouteDirector` uses
-  `navigate_route::PlanExecution` with `navigate_guidance::guide` or
-  `guide_velocity`.
+  from a solution. It holds no control authority. `RouteDirector` owns its
+  waypoints, keeps the active index and the completion flag, and resumes a
+  `navigate_route::PlanExecution` from them at each step, with
+  `navigate_guidance::guide` or `guide_velocity`.
+- Both traits give `snapshot` and `restore`, so that a host can fork a run
+  and restore it. A navigator gives its data requirements before load and
+  a report for each product chunk after load.
 - `Onboard` owns one of each as trait objects.
 
 The host declares the `SensorSuite` once: for each sensor, the

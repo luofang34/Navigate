@@ -399,7 +399,8 @@ fn the_bundle_links_a_navigator_and_a_director_as_trait_objects() {
         navigate_guidance::GuidanceConfig::default()
             .with_expected_ellipsoid(navigate_contract::Ellipsoid::WGS84),
     );
-    let director = RouteDirector::new("TEST", &waypoints, config, law, 40.0, CLOCK).unwrap();
+    let director =
+        RouteDirector::new("TEST", waypoints.to_vec(), config, law, 40.0, CLOCK).unwrap();
     let mut onboard = Onboard::new(Box::new(aligned(&[])), Box::new(director));
     let (solution, output) = onboard.direct(at(0));
     assert!(solution.is_some());
