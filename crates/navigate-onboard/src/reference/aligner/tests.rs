@@ -10,7 +10,10 @@ use crate::{
     Outcome, PositionSource, ReferenceNavigator,
 };
 
+mod inputs;
+mod motion;
 mod rig;
+mod window;
 use rig::{GNSS, HEIGHT_M, LAT_DEG, LON_DEG, MAGNETOMETER, Rig, at};
 
 /// Roll, pitch, and heading of the vehicle of the tests, degrees: not
@@ -171,22 +174,23 @@ fn the_aligned_state_is_as_good_as_it_states() {
     assert!((2.18..=3.82).contains(&position), "{position}");
 }
 
-/// The aligned state after a time at rest with a GNSS fix each second. A
+/// The aligned state after 60 s at rest with a GNSS fix each second. A
 /// levelled tilt and the accelerometer bias are one error, and the filter
-/// takes them as two, so this test states the normalized attitude error
-/// after the filter worked on them. An optimized build takes 24 vehicles
-/// for 60 s. A build without optimization takes one vehicle for 3 s,
-/// because a step of the filter is slow there.
+/// takes them as two: this test guards that the filter, working on them,
+/// does not turn that into an attitude more certain than it is. A step of
+/// the filter is slow without optimization, so the test runs in an
+/// optimized build only (`ci.sh` runs it).
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "needs an optimized build: cargo test --release -p navigate-onboard --lib aligner"
+)]
 fn the_aligned_state_stays_as_good_as_it_states_at_rest() {
     rig::show_events();
-    let (seeds, steps): (u64, u64) = if cfg!(debug_assertions) {
-        (1, 300)
-    } else {
-        (24, 6_000)
-    };
+    const SEEDS: u64 = 24;
+    const STEPS: u64 = 6_000;
     let mut attitude = 0.0;
-    for seed in 0..seeds {
+    for seed in 0..SEEDS {
         let mut rig = Rig::new(
             [(seed % 9) as f64 - 4.0, -5.0, 15.0 * seed as f64],
             seed,
@@ -194,24 +198,26 @@ fn the_aligned_state_stays_as_good_as_it_states_at_rest() {
         );
         let mut navigator = rig.navigator();
         let mut sink = Vec::new();
-        feed(&mut navigator, &mut rig, 1..=200 + steps, &mut sink);
-        let solution = navigator.solution(at(200 + steps)).unwrap();
+        feed(&mut navigator, &mut rig, 1..=200 + STEPS, &mut sink);
+        let solution = navigator.solution(at(200 + STEPS)).unwrap();
         attitude += normalized_errors(&rig, &solution).0;
         let fused = sink
             .iter()
             .filter(|r| r.measurement == "gnss_position" && r.outcome == Outcome::Accepted)
             .count();
-        assert!(fused as u64 >= steps / 100 - 1, "{fused} fixes fused");
+        assert!(fused as u64 >= STEPS / 100 - 1, "{fused} fixes fused");
     }
-    let attitude = attitude / seeds as f64;
+    let attitude = attitude / SEEDS as f64;
     tracing::info!(
-        seeds,
-        seconds = steps / 100,
+        seeds = SEEDS,
+        seconds = STEPS / 100,
         attitude_nees = attitude,
         "at rest after the alignment"
     );
-    // Not overconfident by more than a factor of two in one-sigma.
-    assert!(attitude < 12.0, "{attitude}");
+    // The sum of 24 values of three degrees of freedom is chi-square with
+    // 72, of mean 72 and one-sigma 12. A band of 3.3 sigma is 32 to 112:
+    // a mean between 1.35 and 4.65.
+    assert!((1.35..=4.65).contains(&attitude), "{attitude}");
 }
 
 /// A declination that is wrong by ten times its declared one-sigma makes
@@ -280,28 +286,6 @@ fn an_alignment_names_what_it_lacks_and_gives_no_state_without_it() {
         waiting(&navigator),
         (AlignmentPhase::Heading, names::HEADING_UNCERTAIN)
     );
-    // No position: the magnetometer and a statement of rest are not enough.
-    let mut navigator = rig.navigator();
-    for step in 1..=200 {
-        navigator.ingest(&rig.increment(step), &mut sink).unwrap();
-        navigator.ingest(&rig.magnetic(step), &mut sink).unwrap();
-        if step == 100 {
-            let mut fix = rig.gnss(step, true).0;
-            if let crate::SensorData::GnssFix { position_cov, .. } = &mut fix.data {
-                *position_cov = None;
-            }
-            // The receiver of this suite has a budget, so its fix has a
-            // covariance; a moving receiver gives no rest.
-            if let crate::SensorData::GnssFix { velocity, .. } = &mut fix.data {
-                *velocity = Some(navigate_contract::NedVelocity::new(4.0, 0.0, 0.0));
-            }
-            navigator.ingest(&fix, &mut sink).unwrap();
-        }
-    }
-    assert_eq!(
-        waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST)
-    );
     assert!(navigator.solution(at(200)).is_none());
 }
 
@@ -325,6 +309,14 @@ fn a_surveyed_point_aligns_a_vehicle_without_gnss() {
     assert!((solution.position.altitude_m - HEIGHT_M).abs() < 1e-9);
     let (_, _, sigma_d) = solution.position_cov.diagonal();
     assert!((sigma_d.sqrt() - 0.5).abs() < 1e-9);
+    // No sensor measures the velocity on the point: its one-sigma is what
+    // a mean specific force at the gate of the noise makes over the
+    // window, 2 mm/s/√Hz over 2 s, spread to the gate of four sigma.
+    let (north, _, _) = solution.velocity_cov.diagonal();
+    let expected = 2e-3 * 2.0_f64.sqrt() * (1.0 + 16.0 / 3.0_f64).sqrt();
+    assert!((north.sqrt() - expected).abs() < 1e-6, "{}", north.sqrt());
+    let v = solution.velocity;
+    assert!(v.north_mps.hypot(v.east_mps).hypot(v.down_mps) < 3.0 * expected);
 }
 
 #[test]

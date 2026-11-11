@@ -338,11 +338,15 @@ Rules of both traits:
 
 The self-alignment of the reference navigator follows these rules:
 
-- **Rest.** The alignment works in rest windows. Inertial data alone
-  cannot show rest, because steady straight flight has the specific force
-  and the body rate of rest. A window counts only with the evidence of
-  another sensor: a GNSS velocity below a bound, or the statement that
-  the vehicle is on a surveyed point.
+- **Rest.** The alignment works in rest windows: the inertial
+  increments of one unbroken stretch of time by their stamps, and the
+  inputs of other sensors stamped in it. Each test of rest is a multiple
+  of what the declared budgets say an honest window scatters by, never a
+  fixed constant. Inertial data alone cannot show rest, because steady
+  straight flight has the specific force and the body rate of rest. A
+  window counts only with the evidence of another sensor: a mean GNSS
+  velocity near zero within the receiver's stated error, or the
+  statement that the vehicle is on a surveyed point.
 - **One window, one state.** A window gives a state when rest, a heading
   source, and a position are all in that window. Each window levels
   again, so no part of a state is older than its window.
@@ -358,7 +362,8 @@ The self-alignment of the reference navigator follows these rules:
   ground is not a heading: a multirotor moves in each direction at each
   heading.
 - **Position.** A GNSS fix with a covariance, or the surveyed point. The
-  velocity is zero with the one-sigma of rest.
+  velocity is zero, with a one-sigma that covers each velocity the tests
+  of rest let through.
 - **After the state.** Several GNSS positions in a row that the filter
   refuses at its gate make the alignment suspect. The navigator states
   it and keeps its state.

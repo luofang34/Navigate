@@ -1,7 +1,8 @@
-//! A vehicle at rest and its sensors, for the alignment tests. The true
+//! A vehicle and its sensors, for the alignment tests: at rest, in steady
+//! straight motion, or from rest into a forward acceleration. The true
 //! specific force, body rate, and magnetic field come from the true
-//! attitude with formulas of this file; no value of the truth reaches the
-//! navigator except through a sensor.
+//! attitude and motion with formulas of this file; no value of the truth
+//! reaches the navigator except through a sensor.
 
 use nalgebra::{UnitQuaternion, Vector3};
 use navigate_contract::{ClockDomainId, GeodeticPosition, MonotonicNanos, NedVelocity, SourceId};
@@ -22,6 +23,9 @@ pub(crate) const STEP_S: f64 = 0.01;
 pub(crate) const LAT_DEG: f64 = 41.7;
 pub(crate) const LON_DEG: f64 = -1.0;
 pub(crate) const HEIGHT_M: f64 = 300.0;
+/// Horizontal intensity of the Earth's field at the place: 45 µT with a
+/// dip of 57°.
+const HORIZONTAL_FIELD_T: f64 = 45e-6 * 0.544_639_035;
 
 /// The declared errors of the sensors of the rig.
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +40,7 @@ pub(crate) struct Budgets {
     pub declination_sigma_rad: f64,
     pub gnss_horizontal_m: f64,
     pub gnss_vertical_m: f64,
+    pub gnss_velocity_m_s: f64,
 }
 
 impl Default for Budgets {
@@ -54,6 +59,7 @@ impl Default for Budgets {
             declination_sigma_rad: 0.009,
             gnss_horizontal_m: 1.5,
             gnss_vertical_m: 3.0,
+            gnss_velocity_m_s: 0.1,
         }
     }
 }
@@ -98,9 +104,16 @@ pub(crate) struct Rig {
     pub body_to_ned: UnitQuaternion<f64>,
     pub accel_bias: Vector3<f64>,
     pub gyro_bias: Vector3<f64>,
-    /// Error of the magnetic heading from the body disturbance and from
-    /// the declination, radians.
-    pub heading_bias_rad: f64,
+    /// Error of the declared declination, radians.
+    pub declination_error_rad: f64,
+    /// The field of the body after calibration, tesla, body axes: hard
+    /// iron, which turns with the vehicle.
+    pub hard_iron_t: Vector3<f64>,
+    /// The steady velocity of the vehicle, north, east, down, m/s.
+    pub velocity_ned: Vector3<f64>,
+    /// The step from which the vehicle accelerates, and the acceleration,
+    /// north, east, down, m/s².
+    pub roll: Option<(u64, Vector3<f64>)>,
     noise: Noise,
 }
 
@@ -133,16 +146,41 @@ impl Rig {
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), roll);
         let accel_bias = noise.vector(budgets.accel_bias);
         let gyro_bias = noise.vector(budgets.gyro_bias);
-        let heading_bias_rad = noise.normal() * budgets.mag_disturbance_rad
-            + noise.normal() * budgets.declination_sigma_rad * declination_error;
+        // A hard-iron component across the horizontal field of one sigma
+        // of the declared disturbance turns the heading by that sigma.
+        let hard_iron_t = noise.vector(budgets.mag_disturbance_rad * HORIZONTAL_FIELD_T);
+        let declination_error_rad =
+            noise.normal() * budgets.declination_sigma_rad * declination_error;
         Self {
             budgets,
             body_to_ned,
             accel_bias,
             gyro_bias,
-            heading_bias_rad,
+            declination_error_rad,
+            hard_iron_t,
+            velocity_ned: Vector3::zeros(),
+            roll: None,
             noise,
         }
+    }
+
+    /// The acceleration of the vehicle at `step`, north, east, down.
+    fn acceleration(&self, step: u64) -> Vector3<f64> {
+        match self.roll {
+            Some((from, acceleration)) if step > from => acceleration,
+            _ => Vector3::zeros(),
+        }
+    }
+
+    /// The velocity of the vehicle at `step`, north, east, down.
+    pub(crate) fn velocity(&self, step: u64) -> Vector3<f64> {
+        let rolled = match self.roll {
+            Some((from, acceleration)) if step > from => {
+                acceleration * ((step - from) as f64 * STEP_S)
+            }
+            _ => Vector3::zeros(),
+        };
+        self.velocity_ned + rolled
     }
 
     fn input(sensor: SourceId, step: u64, data: SensorData) -> SensorInput {
@@ -164,7 +202,7 @@ impl Rig {
             - 3.086e-6 * HEIGHT_M;
         let ned_to_body = self.body_to_ned.inverse();
         let per_sample = 1.0 / STEP_S.sqrt();
-        let force = ned_to_body * Vector3::new(0.0, 0.0, -gravity)
+        let force = ned_to_body * (self.acceleration(step) - Vector3::new(0.0, 0.0, gravity))
             + self.accel_bias
             + self.noise.vector(self.budgets.accel_noise * per_sample);
         let rate = ned_to_body * (Vector3::new(c, 0.0, -s) * 7.292_115e-5)
@@ -182,11 +220,12 @@ impl Rig {
     }
 
     /// The field of the Earth at the place, 45 µT with a dip of 57°, as
-    /// the magnetometer gives it: the body disturbance and the noise turn
-    /// the field about the vertical.
+    /// the magnetometer gives it: the declination error and the noise turn
+    /// the field about the vertical, and the hard iron adds in the body
+    /// axes.
     pub(crate) fn magnetic(&mut self, step: u64) -> SensorInput {
         let declination = self.budgets.declination_rad
-            + self.heading_bias_rad
+            + self.declination_error_rad
             + self.noise.normal() * self.budgets.mag_noise_rad;
         let dip = 57.0_f64.to_radians();
         let field_ned = Vector3::new(
@@ -194,7 +233,8 @@ impl Rig {
             dip.cos() * declination.sin(),
             dip.sin(),
         ) * 45e-6;
-        let field_body_t: [f64; 3] = (self.body_to_ned.inverse() * field_ned).into();
+        let field_body_t: [f64; 3] =
+            (self.body_to_ned.inverse() * field_ned + self.hard_iron_t).into();
         Self::input(
             MAGNETOMETER,
             step,
@@ -202,22 +242,26 @@ impl Rig {
         )
     }
 
-    /// A GNSS fix of the vehicle at rest with the noise of the receiver,
-    /// and the position error that it has, north, east, down, metres.
+    /// A GNSS fix of the vehicle with the noise of the receiver, and the
+    /// position error that it has, north, east, down, metres. The vehicle
+    /// is at the reference point at step zero and moves with its
+    /// velocity; the error is from the reference point.
     pub(crate) fn gnss(&mut self, step: u64, with_velocity: bool) -> (SensorInput, Vector3<f64>) {
         let b = self.budgets;
-        let error = Vector3::new(
-            self.noise.normal() * b.gnss_horizontal_m,
-            self.noise.normal() * b.gnss_horizontal_m,
-            self.noise.normal() * b.gnss_vertical_m,
-        );
+        let travelled = self.velocity_ned * (step as f64 * STEP_S);
+        let error = travelled
+            + Vector3::new(
+                self.noise.normal() * b.gnss_horizontal_m,
+                self.noise.normal() * b.gnss_horizontal_m,
+                self.noise.normal() * b.gnss_vertical_m,
+            );
         let lat = LAT_DEG.to_radians();
         let position = GeodeticPosition::new(
             lat + error.x / 6_364_000.0,
             LON_DEG.to_radians() + error.y / (6_378_137.0 * lat.cos()),
             HEIGHT_M - error.z,
         );
-        let v = self.noise.vector(0.03);
+        let v = self.velocity(step) + self.noise.vector(b.gnss_velocity_m_s);
         let fix = SensorData::GnssFix {
             position,
             velocity: with_velocity.then(|| NedVelocity::new(v.x, v.y, v.z)),
@@ -245,6 +289,19 @@ impl Rig {
     /// its body disturbance.
     pub(crate) fn suite(&self, magnetometer: Option<f64>) -> SensorSuite {
         let b = self.budgets;
+        self.suite_with(
+            magnetometer,
+            ErrorBudget::Gnss {
+                horizontal_sigma_m: b.gnss_horizontal_m,
+                vertical_sigma_m: b.gnss_vertical_m,
+                velocity_sigma_m_s: b.gnss_velocity_m_s,
+            },
+        )
+    }
+
+    /// The suite of the rig with the GNSS budget `gnss`.
+    pub(crate) fn suite_with(&self, magnetometer: Option<f64>, gnss: ErrorBudget) -> SensorSuite {
+        let b = self.budgets;
         let spec = |id, kind, budget| SensorSpec {
             id,
             kind,
@@ -264,15 +321,7 @@ impl Rig {
                     gyro_bias: FogmBias::new(3_600.0, b.gyro_bias),
                 },
             ),
-            spec(
-                GNSS,
-                SensorKind::Gnss,
-                ErrorBudget::Gnss {
-                    horizontal_sigma_m: b.gnss_horizontal_m,
-                    vertical_sigma_m: b.gnss_vertical_m,
-                    velocity_sigma_m_s: 0.1,
-                },
-            ),
+            spec(GNSS, SensorKind::Gnss, gnss),
             spec(SURVEY, SensorKind::SurveyedPoint, ErrorBudget::Declared),
         ];
         if let Some(disturbance_sigma_rad) = magnetometer {
@@ -293,6 +342,12 @@ impl Rig {
     /// A navigator of the suite of the rig that no one aligned.
     pub(crate) fn navigator(&self) -> ReferenceNavigator {
         let suite = self.suite(Some(self.budgets.mag_disturbance_rad));
+        ReferenceNavigator::new(suite, CLOCK, None).unwrap()
+    }
+
+    /// A navigator of the suite of the rig with the GNSS budget `gnss`.
+    pub(crate) fn navigator_with_gnss(&self, gnss: ErrorBudget) -> ReferenceNavigator {
+        let suite = self.suite_with(Some(self.budgets.mag_disturbance_rad), gnss);
         ReferenceNavigator::new(suite, CLOCK, None).unwrap()
     }
 }

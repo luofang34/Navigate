@@ -100,17 +100,10 @@ pub enum AlignmentStatus {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct AlignmentConfig {
-    /// Length of one rest window, seconds.
+    /// Length of one rest window, seconds. The tests of rest and the
+    /// velocity one-sigma of a state of rest come from the declared
+    /// budgets of the sensors, not from this configuration.
     pub window_s: f64,
-    /// Largest scatter of the specific force on each axis in a rest
-    /// window, m/s² one-sigma.
-    pub rest_specific_force_sigma_mps2: f64,
-    /// Largest mean body rate in a rest window, rad/s.
-    pub rest_rate_rad_s: f64,
-    /// Largest GNSS speed that is evidence of rest, m/s.
-    pub rest_speed_m_s: f64,
-    /// One-sigma of the velocity of a vehicle at rest, m/s, each axis.
-    pub rest_velocity_sigma_m_s: f64,
     /// Largest heading one-sigma that an alignment accepts, radians. A
     /// larger error is outside the linear range of the filter. The
     /// default is an engineering value, not a measured limit of the
@@ -125,10 +118,6 @@ impl Default for AlignmentConfig {
     fn default() -> Self {
         Self {
             window_s: 2.0,
-            rest_specific_force_sigma_mps2: 0.3,
-            rest_rate_rad_s: 0.02,
-            rest_speed_m_s: 0.3,
-            rest_velocity_sigma_m_s: 0.05,
             max_heading_sigma_rad: 0.2,
             suspect_after: 5,
         }
@@ -139,16 +128,9 @@ impl AlignmentConfig {
     /// Whether each value is finite and positive.
     #[must_use]
     pub fn is_usable(&self) -> bool {
-        [
-            self.window_s,
-            self.rest_specific_force_sigma_mps2,
-            self.rest_rate_rad_s,
-            self.rest_speed_m_s,
-            self.rest_velocity_sigma_m_s,
-            self.max_heading_sigma_rad,
-        ]
-        .iter()
-        .all(|v| v.is_finite() && *v > 0.0)
+        [self.window_s, self.max_heading_sigma_rad]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
             && self.suspect_after > 0
     }
 }

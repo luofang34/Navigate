@@ -323,6 +323,32 @@ impl ReferenceNavigator {
     }
 }
 
+/// Whether the reference navigator takes `data` from a sensor of `kind`,
+/// before its first state and after it.
+const fn fits(data: &SensorData, kind: SensorKind) -> bool {
+    let terrain = matches!(
+        (data, kind),
+        (SensorData::TerrainFrame { .. }, SensorKind::TerrainCamera)
+    );
+    (terrain && cfg!(feature = "terrain-camera"))
+        || matches!(
+            (data, kind),
+            (SensorData::ImuIncrement { .. }, SensorKind::Imu)
+                | (SensorData::GnssFix { .. }, SensorKind::Gnss)
+                | (SensorData::BaroAltitude { .. }, SensorKind::Barometer)
+                | (
+                    SensorData::StarExposureMid | SensorData::StarCentroids { .. },
+                    SensorKind::StarCamera,
+                )
+                | (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
+                | (
+                    SensorData::SurveyedPosition { .. },
+                    SensorKind::SurveyedPoint
+                )
+                | (SensorData::Observation(_), _)
+        )
+}
+
 impl Navigator for ReferenceNavigator {
     fn suite(&self) -> &SensorSuite {
         &self.suite
@@ -356,7 +382,10 @@ impl Navigator for ReferenceNavigator {
             kind: kind.name(),
             data: input.data.name(),
         };
-        if !self.filter.is_initialized() && aligner::takes(&input.data) {
+        if !fits(&input.data, kind) {
+            return Err(wrong());
+        }
+        if !self.filter.is_initialized() {
             return self.aligning(input, budget, sink);
         }
         match (&input.data, kind) {

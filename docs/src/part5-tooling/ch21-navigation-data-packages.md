@@ -395,18 +395,36 @@ makes itself.
 A navigator that the host does not align finds its first state from its
 sensors. `Navigator::alignment_status` gives `Aligning { phase,
 waiting_for }` or `Aligned { record, suspect }`; `solution` gives `None`
-before the state. Before the state, an inertial increment goes to the
-alignment, and each aiding input gives a record `Unused("alignment")`.
+before the state. Before the state as after it, an input whose data is
+not of the kind of its sensor is refused with `WrongData`. An inertial
+increment goes to the alignment. A GNSS fix, a magnetic field, and a
+surveyed position go to the alignment and give a record
+`Unused("alignment")`; a barometer altitude, a star frame, a terrain
+frame, and an observation give the same record and are not used. A star
+exposure mark holds no prior.
 
 The reference navigator aligns at rest, in windows of
-`AlignmentConfig::window_s` (2 s). A window gives a state when it has:
+`AlignmentConfig::window_s` (2 s). A window is the inertial increments of
+one unbroken stretch of time by their stamps: an increment that does not
+start where the last one ended, to half a step, starts a new window, and
+an input of another sensor counts only in the window that holds its
+acquisition stamp. A window gives a state when it has:
 
 | Part | Source | `waiting_for` when it is absent |
 |---|---|---|
-| Rest | specific force scatter, mean body rate, and mean specific force near gravity; and a GNSS velocity below `rest_speed_m_s` or a `SurveyedPosition` input | `rest`, `rest_evidence` |
+| Rest | enough increments to judge their scatter; specific force scatter, mean specific force near gravity, and mean body rate within four sigma of the declared IMU budget; and the mean GNSS velocity of the window within four sigma of zero, or a `SurveyedPosition` input | `rest_samples`, `rest`, `rest_evidence` |
 | Roll, pitch | mean specific force | (`rest_window` while the window fills) |
 | Heading | `SensorKind::Magnetometer` with `SensorData::MagneticField`, and the declination of `ErrorBudget::Magnetometer` | `heading_source`, `heading_uncertain` |
 | Position | a GNSS fix with a covariance or a declared budget, or `SensorKind::SurveyedPoint` with `SensorData::SurveyedPosition` | `position_source` |
+
+The velocity of a state of rest is zero. Its one-sigma on each axis is
+the noise of the rest evidence spread to the four-sigma gate, `σ·√(1 +
+4²/3)`: with GNSS, `σ` is the one-sigma of the mean velocity of the
+window (from the velocity covariance of each fix or the declared
+receiver budget); on a surveyed point, which no sensor measures the
+velocity of, `σ` is the accelerometer noise density times the root of
+the window length. A GNSS velocity with neither covariance nor budget is
+no evidence of rest.
 
 `ErrorBudget::Magnetometer` states four terms as heading errors: the
 noise of one sample, the disturbance of the body (a bias: hard and soft
@@ -423,7 +441,7 @@ gives a record `Unused("alignment_only")`.
 estimator or of a survey. It replaces an alignment in progress and an
 earlier state. `Navigator::realign` forgets the state, and the sensors
 give the next one. Each new state forgets the map cells that gave a
-terrain fix. `ReferenceNavigator::align_from_truth` exists only with the
+terrain fix, and the prior and the lock of each star camera. `ReferenceNavigator::align_from_truth` exists only with the
 Cargo feature `evaluation`: an evaluation uses it for a navigator with a
 known start, and a flight build does not have it.
 

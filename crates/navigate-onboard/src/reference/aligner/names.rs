@@ -6,6 +6,9 @@
 pub(crate) const INERTIAL_INCREMENTS: &str = "inertial_increments";
 /// The rest window is not complete.
 pub(crate) const REST_WINDOW: &str = "rest_window";
+/// The window holds too few inertial increments to judge rest by their
+/// scatter.
+pub(crate) const REST_SAMPLES: &str = "rest_samples";
 /// The specific force, the body rate, or the GNSS speed of the window is
 /// not that of a vehicle at rest.
 pub(crate) const REST: &str = "rest";
@@ -40,6 +43,7 @@ mod tests {
             [
                 INERTIAL_INCREMENTS,
                 REST_WINDOW,
+                REST_SAMPLES,
                 REST,
                 REST_EVIDENCE,
                 HEADING_SOURCE,
@@ -49,6 +53,7 @@ mod tests {
             [
                 "inertial_increments",
                 "rest_window",
+                "rest_samples",
                 "rest",
                 "rest_evidence",
                 "heading_source",

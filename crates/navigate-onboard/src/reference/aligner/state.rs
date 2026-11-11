@@ -10,53 +10,74 @@ use crate::{
 };
 
 impl ReferenceNavigator {
-    /// Takes an input before the first state: the alignment uses what it
-    /// can, and each aiding input gets a record that says so.
+    /// Takes an input before the first state, whose data is of the kind
+    /// of its sensor. The alignment uses what it can; each input of
+    /// another sensor than the inertial unit gets a record that the
+    /// alignment took it, whether it used it or not. A star exposure mark
+    /// holds no prior, because there is no state to give one.
     pub(in crate::reference) fn aligning(
         &mut self,
         input: &SensorInput,
         budget: ErrorBudget,
         sink: &mut dyn AcceptanceSink,
     ) -> Result<(), OnboardError> {
+        let at = input.acquired_at;
         match &input.data {
             SensorData::ImuIncrement {
                 dt_s,
                 delta_theta_rad,
                 delta_velocity_m_s,
             } => {
-                let solved = self.aligner.increment(
-                    input.acquired_at,
-                    *dt_s,
-                    *delta_theta_rad,
-                    *delta_velocity_m_s,
-                );
+                let solved =
+                    self.aligner
+                        .increment(at, *dt_s, *delta_theta_rad, *delta_velocity_m_s);
                 return solved.map_or(Ok(()), |s| self.set_state(&s.alignment, s.record));
+            }
+            SensorData::StarExposureMid => {
+                if let Some(channel) = self.stars.get_mut(&input.sensor.get()) {
+                    channel.hold_prior(None);
+                }
+                return Ok(());
             }
             SensorData::GnssFix {
                 position,
                 velocity,
                 position_cov,
-                ..
+                velocity_cov,
             } => {
-                let declared = match budget {
+                let (declared, declared_speed) = match budget {
                     ErrorBudget::Gnss {
                         horizontal_sigma_m: h,
                         vertical_sigma_m: v,
-                        ..
-                    } => Some(SymmetricCov3::from_diagonal(h * h, h * h, v * v)),
-                    _ => None,
+                        velocity_sigma_m_s,
+                    } => (
+                        Some(SymmetricCov3::from_diagonal(h * h, h * h, v * v)),
+                        Some(velocity_sigma_m_s),
+                    ),
+                    _ => (None, None),
                 };
+                // The largest axis of a stated velocity covariance, or the
+                // declared one-sigma of the receiver.
+                let speed_sigma = velocity_cov
+                    .map(|c| {
+                        let (n, e, d) = c.diagonal();
+                        n.max(e).max(d).sqrt()
+                    })
+                    .or(declared_speed);
+                let velocity = velocity.zip(speed_sigma);
                 self.aligner
-                    .gnss(*position, *velocity, position_cov.or(declared));
+                    .gnss(at, *position, velocity, position_cov.or(declared));
             }
-            SensorData::MagneticField { field_body_t } => self.aligner.magnetic(*field_body_t),
+            SensorData::MagneticField { field_body_t } => {
+                self.aligner.magnetic(at, *field_body_t);
+            }
             SensorData::SurveyedPosition {
                 position,
                 horizontal_sigma_m,
                 vertical_sigma_m,
             } => self
                 .aligner
-                .surveyed(*position, (*horizontal_sigma_m, *vertical_sigma_m)),
+                .surveyed(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
             _ => {}
         }
         sink.record(AcceptanceRecord {
@@ -124,6 +145,9 @@ impl ReferenceNavigator {
         self.alignment = None;
         self.gate_refusals = 0;
         self.aligner.restart();
+        for channel in self.stars.values_mut() {
+            channel.forget_state();
+        }
         // The cells of the terrain means say that a map error is in the
         // state of the filter. A new state holds none.
         #[cfg(feature = "terrain-camera")]
