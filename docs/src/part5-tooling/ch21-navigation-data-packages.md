@@ -433,8 +433,11 @@ takes the declination from a field model. When the heading one-sigma is
 above `max_heading_sigma_rad`, the alignment waits with
 `heading_uncertain`. The `AlignmentRecord` states the sources, the
 one-sigma of the tilt and of the heading, and the gyroscope bias of the
-window (the mean rate less the Earth rate), which the filter cannot take
-at this time. After the state, a magnetometer or surveyed-point input
+window (the mean rate less the Earth rate) with its one-sigma. The filter
+starts its gyroscope bias from that value and one-sigma, and its
+accelerometer bias at zero with the declared one-sigma, because a
+levelled tilt holds the accelerometer bias. A transfer alignment starts
+both biases at zero. After the state, a magnetometer or surveyed-point input
 gives a record `Unused("alignment_only")`.
 
 `Navigator::align` is a transfer alignment: the state of another

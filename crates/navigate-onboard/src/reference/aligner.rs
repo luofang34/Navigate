@@ -17,6 +17,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 use navigate_contract::{
     AttitudeQuaternion, GeodeticPosition, MonotonicNanos, NedVelocity, SymmetricCov3,
 };
+use navigate_fusion::ImuBiasPrior;
 
 use crate::{
     Alignment, AlignmentConfig, AlignmentPhase, AlignmentRecord, AlignmentSource, ErrorBudget,
@@ -45,6 +46,8 @@ struct Magnetometer {
 pub(crate) struct Solved {
     pub alignment: Alignment,
     pub record: AlignmentRecord,
+    /// The IMU biases of the window for the filter.
+    pub biases: ImuBiasPrior,
 }
 
 /// What the alignment waits for.
@@ -248,6 +251,19 @@ impl Aligner {
         let (sin_lat, cos_lat) = position.latitude_rad.sin_cos();
         let earth_rate_ned = Vector3::new(cos_lat, 0.0, -sin_lat) * EARTH_RATE_RAD_S;
         let gyro_bias = w.rate.mean() - attitude.inverse() * earth_rate_ned;
+        // The mean rate holds the gyroscope noise over the window; the
+        // Earth rate taken out of it is turned by the attitude error.
+        let gyro_bias_var = inertial.gyro_noise.powi(2) / w.seconds()
+            + (EARTH_RATE_RAD_S * tilt_sigma_rad.hypot(heading_sigma_rad)).powi(2);
+        // A levelled tilt holds the accelerometer bias, so the window does
+        // not measure it: zero with its declared variance.
+        let accel_bias_var = inertial.accel_bias.powi(2);
+        let biases = ImuBiasPrior::new(
+            [0.0; 3],
+            SymmetricCov3::from_diagonal(accel_bias_var, accel_bias_var, accel_bias_var),
+            gyro_bias.into(),
+            SymmetricCov3::from_diagonal(gyro_bias_var, gyro_bias_var, gyro_bias_var),
+        );
         let q = attitude.quaternion();
         let velocity_var = rest.velocity_sigma_m_s.powi(2);
         let tilt_var = tilt_sigma_rad * tilt_sigma_rad;
@@ -277,7 +293,9 @@ impl Aligner {
                 tilt_sigma_rad,
                 heading_sigma_rad,
                 gyro_bias_rad_s: Some(gyro_bias.into()),
+                gyro_bias_sigma_rad_s: Some(gyro_bias_var.sqrt()),
             },
+            biases,
         })
     }
 
@@ -333,6 +351,7 @@ pub(crate) fn transfer_record(a: &Alignment) -> AlignmentRecord {
         tilt_sigma_rad: ((north + east) / 2.0).max(0.0).sqrt(),
         heading_sigma_rad: down.max(0.0).sqrt(),
         gyro_bias_rad_s: None,
+        gyro_bias_sigma_rad_s: None,
     }
 }
 

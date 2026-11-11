@@ -409,3 +409,42 @@ fn a_fork_in_a_rest_window_aligns_as_the_original_does() {
     assert!(matches!(status, Some(AlignmentStatus::Aligned { .. })));
     assert_eq!(run(&mut *fork), (records, status, solution));
 }
+
+/// The gyroscope bias of the rest window starts the filter's bias: a
+/// vehicle at rest with 2 mrad/s of bias about the vertical keeps its
+/// heading after the state. A transfer alignment gives no bias, and the
+/// same vehicle turns its heading by the bias times the time.
+#[test]
+fn the_window_gyro_bias_starts_the_filter() {
+    let heading_drift = |transfer: bool| {
+        let mut rig = Rig::new(ATTITUDE_DEG, 71, 1.0);
+        rig.gyro_bias = Vector3::new(2e-4, -3e-4, 2e-3);
+        let mut navigator = rig.navigator();
+        let mut sink = Vec::new();
+        feed(&mut navigator, &mut rig, 1..=200, &mut sink);
+        let aligned = navigator.solution(at(200)).unwrap();
+        if transfer {
+            navigator
+                .align(&crate::Alignment {
+                    position: aligned.position,
+                    velocity: aligned.velocity,
+                    attitude: aligned.attitude.unwrap(),
+                    position_cov: aligned.position_cov,
+                    velocity_cov: aligned.velocity_cov,
+                    attitude_cov: aligned.attitude_cov.unwrap(),
+                    at: at(200),
+                })
+                .unwrap();
+        }
+        let start = normalized_errors(&rig, &aligned).3;
+        feed(&mut navigator, &mut rig, 201..=500, &mut sink);
+        let end = normalized_errors(&rig, &navigator.solution(at(500)).unwrap()).3;
+        (end - start).abs()
+    };
+    let own = heading_drift(false);
+    let transferred = heading_drift(true);
+    // 2 mrad/s over 3 s is 6 mrad; the bias of the window is known to
+    // the gyroscope noise over 2 s, 0.07 mrad/s.
+    assert!(own < 1e-3, "{own}");
+    assert!(transferred > 4e-3, "{transferred}");
+}

@@ -66,10 +66,13 @@ pub struct AlignmentRecord {
     /// One-sigma of the heading, radians.
     pub heading_sigma_rad: f64,
     /// The gyroscope bias that the rest window gave, rad/s, in the body
-    /// axes: the mean rate less the Earth rate. The filter has no entry
-    /// for an initial bias, so the navigator states it and does not use
-    /// it.
+    /// axes: the mean rate less the Earth rate. The filter starts its
+    /// gyroscope bias from it; `None` for a state that the host gave,
+    /// after which the filter starts the biases at zero.
     pub gyro_bias_rad_s: Option<[f64; 3]>,
+    /// One-sigma of that bias on each axis, rad/s: the gyroscope noise
+    /// over the window and the Earth rate turned by the attitude error.
+    pub gyro_bias_sigma_rad_s: Option<f64>,
 }
 
 /// Where a navigator is on the way to its first state.
