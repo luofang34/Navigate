@@ -1,0 +1,34 @@
+//! The onboard boundary (ADR-0022).
+//!
+//! A host links two parts:
+//!
+//! - a [`Navigator`] that takes sensor inputs and gives a
+//!   `NavigationSolution` and [`AcceptanceRecord`]s;
+//! - a [`FlightDirector`] that sequences the route and computes the
+//!   guidance setpoint from a solution.
+//!
+//! [`Onboard`] owns one of each. The host declares the [`SensorSuite`]
+//! once, when it builds the navigator. Each [`SensorInput`] then carries the
+//! sensor identifier, the times, and the data. A sensor is unavailable only
+//! when its inputs do not come: no navigator has a mode that disables one.
+//!
+//! [`ReferenceNavigator`] is the reference composition: the 22-state
+//! inertial filter with GNSS, barometric, and star-camera aiding.
+//! [`RouteDirector`] executes a flight plan with Navigate's sequencer and
+//! guidance laws.
+
+mod acceptance;
+mod bundle;
+mod director;
+mod error;
+mod navigator;
+mod reference;
+mod sensor;
+
+pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
+pub use bundle::Onboard;
+pub use director::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector};
+pub use error::OnboardError;
+pub use navigator::{Alignment, Navigator};
+pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
+pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};

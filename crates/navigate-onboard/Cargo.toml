@@ -1,0 +1,22 @@
+[package]
+name = "navigate-onboard"
+description = "The onboard boundary: navigator and flight-director traits, a declared sensor suite, and the reference composition"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+nalgebra = { workspace = true, features = ["std"] }
+navigate-camera = { workspace = true, features = ["std"] }
+navigate-celestial.workspace = true
+navigate-contract = { workspace = true, features = ["std"] }
+navigate-fusion = { workspace = true, features = ["std"] }
+navigate-geodesy = { workspace = true, features = ["std"] }
+navigate-guidance = { workspace = true, features = ["std"] }
+navigate-route = { workspace = true, features = ["std"] }
+navigate-startrack.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

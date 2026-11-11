@@ -23,6 +23,7 @@ members = [
     "crates/navigate-match-kernels",
     "crates/navigate-locate",
     "crates/navigate-data",
+    "crates/navigate-onboard",
     "crates/navigate-locate-web",
     "crates/navigate-visual-render",
     "crates/navigate-visual-flight",

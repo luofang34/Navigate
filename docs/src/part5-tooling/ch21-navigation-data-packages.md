@@ -178,3 +178,31 @@ give the same keys.
 `MemoryStore` holds files in memory. `DirectoryStore` (feature `std`)
 holds them in a directory and writes each file through a temporary file
 and a rename.
+
+## 9. The onboard boundary
+
+`navigate-onboard` holds the composition that a host links:
+
+- `Navigator` takes `SensorInput`s and gives a `NavigationSolution`. It
+  writes one `AcceptanceRecord` for each measurement into a sink that the
+  caller supplies: `Accepted`, `Rejected` with Navigate's reason, or
+  `Unused` with a reason.
+- `FlightDirector` sequences the route and gives the guidance setpoint
+  from a solution. It holds no control authority. `RouteDirector` uses
+  `navigate_route::PlanExecution` with `navigate_guidance::guide` or
+  `guide_velocity`.
+- `Onboard` owns one of each as trait objects.
+
+The host declares the `SensorSuite` once: for each sensor, the
+identifier, the kind, the imager model and the mount of a camera, the
+rate, and the error budget. An input carries the sensor identifier, the
+acquisition and delivery times, and the data. A sensor is unavailable only
+when its inputs do not come.
+
+`ReferenceNavigator` feeds every declared sensor into one 22-state
+inertial filter on WGS84: IMU increments, GNSS position and velocity
+fixes (with the declared budget when a fix has no covariance), barometric
+altitude (with the barometer bias state), star-camera frames (identified
+lost in space or with the navigator's own attitude as the prior, then one
+line of sight for each star), and observations that a sensor makes
+itself.
