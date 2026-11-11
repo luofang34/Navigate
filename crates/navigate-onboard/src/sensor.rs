@@ -57,6 +57,8 @@ pub enum ErrorBudget {
         gyro_bias: FogmBias,
     },
     /// GNSS one-sigma errors, used when a fix carries no covariance.
+    /// With a correlated part, the position sigmas and the position
+    /// covariance of each fix are the white part of the error only.
     Gnss {
         /// Horizontal position, each axis, metres.
         horizontal_sigma_m: f64,
@@ -64,6 +66,9 @@ pub enum ErrorBudget {
         vertical_sigma_m: f64,
         /// Velocity, each axis, m/s.
         velocity_sigma_m_s: f64,
+        /// The time-correlated part of the position error, or `None` for
+        /// a white error.
+        correlated: Option<GnssCorrelatedError>,
     },
     /// Barometric altitude errors.
     Barometer {
@@ -86,6 +91,44 @@ pub enum ErrorBudget {
     },
     /// The inputs carry their own covariances.
     Declared,
+}
+
+/// The time-correlated part of a GNSS position error: ionosphere, orbit,
+/// and clock residuals that successive fixes share. A first-order
+/// Gauss–Markov process with the correlation time `tau_s` and the
+/// stationary one-sigma errors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GnssCorrelatedError {
+    /// Correlation time, seconds.
+    pub tau_s: f64,
+    /// Horizontal position, each axis, metres.
+    pub horizontal_sigma_m: f64,
+    /// Vertical position, metres.
+    pub vertical_sigma_m: f64,
+}
+
+impl GnssCorrelatedError {
+    /// Whether the correlation time is finite and positive and each sigma
+    /// is finite and not negative.
+    #[must_use]
+    pub fn is_plausible(&self) -> bool {
+        self.tau_s.is_finite()
+            && self.tau_s > 0.0
+            && [self.horizontal_sigma_m, self.vertical_sigma_m]
+                .iter()
+                .all(|sigma| sigma.is_finite() && *sigma >= 0.0)
+    }
+}
+
+impl ErrorBudget {
+    /// The correlated part of a GNSS budget, or `None`.
+    #[must_use]
+    pub const fn gnss_correlated(&self) -> Option<GnssCorrelatedError> {
+        match self {
+            Self::Gnss { correlated, .. } => *correlated,
+            _ => None,
+        }
+    }
 }
 
 /// One declared sensor.
@@ -125,8 +168,9 @@ impl SensorSuite {
     /// # Errors
     ///
     /// Refuses a repeated identifier, a suite without exactly one IMU, a
-    /// budget that does not match its kind, a camera without an imager and
-    /// a mount, and a rate that is not finite and positive.
+    /// budget that does not match its kind, an implausible correlated GNSS
+    /// error, a camera without an imager and a mount, and a rate that is
+    /// not finite and positive.
     pub fn new(sensors: Vec<SensorSpec>) -> Result<Self, OnboardError> {
         let invalid = |detail: String| OnboardError::Config {
             field: "sensor suite",
@@ -152,7 +196,12 @@ impl SensorSuite {
                     | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
-            if !budget_ok || (camera && (a.imager.is_none() || a.mount.is_none())) {
+            let correlated_ok = a
+                .budget
+                .gnss_correlated()
+                .is_none_or(|correlated| correlated.is_plausible());
+            if !budget_ok || !correlated_ok || (camera && (a.imager.is_none() || a.mount.is_none()))
+            {
                 return Err(invalid(format!(
                     "sensor {:?} ({}) budget or camera model",
                     a.id,
@@ -176,6 +225,14 @@ impl SensorSuite {
     #[must_use]
     pub fn get(&self, id: SourceId) -> Option<&SensorSpec> {
         self.sensors.iter().find(|s| s.id == id)
+    }
+
+    /// Whether a sensor declares a time-correlated error.
+    #[must_use]
+    pub fn has_correlated_error(&self) -> bool {
+        self.sensors
+            .iter()
+            .any(|s| s.budget.gnss_correlated().is_some())
     }
 
     /// The sensors of one kind.

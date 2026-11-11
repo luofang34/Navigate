@@ -1,6 +1,7 @@
-//! The reference navigator: Navigate's 22-state inertial filter on WGS84
-//! with GNSS, barometric, star-camera, terrain-camera, and pass-through
-//! aiding.
+//! The reference navigator: Navigate's inertial filter on WGS84 with GNSS,
+//! barometric, star-camera, terrain-camera, and pass-through aiding. The
+//! filter has 22 states, and a correlated-error block when a sensor
+//! declares a time-correlated error.
 
 use std::collections::BTreeMap;
 
@@ -9,8 +10,8 @@ use navigate_contract::{
     SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
 };
 use navigate_fusion::{
-    FogmBias, ImuIncrement, InertialConfig, InertialNavigationFilter, IngestOutcome, Observation,
-    ObservationValue, PlanetaryBody,
+    CorrelatedError, FogmBias, ImuIncrement, InertialConfig, IngestOutcome, Observation,
+    ObservationValue,
 };
 use navigate_startrack::line_of_sight_observations;
 
@@ -19,9 +20,11 @@ use crate::{
     SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
+mod filter;
 mod stars;
 #[cfg(feature = "terrain-camera")]
 mod terrain;
+pub use filter::NavigatorFilter;
 pub use stars::{StarCatalogueConfig, own_prior};
 #[cfg(feature = "terrain-camera")]
 pub use terrain::{
@@ -39,8 +42,7 @@ use terrain::TerrainMeans;
 pub struct ReferenceNavigator {
     suite: SensorSuite,
     clock: ClockDomainId,
-    /// Boxed: the filter's inline history is hundreds of kilobytes.
-    filter: Box<InertialNavigationFilter>,
+    filter: NavigatorFilter,
     /// Keyed by `SourceId::get`.
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
@@ -89,7 +91,8 @@ impl ReferenceNavigator {
     ///
     /// # Errors
     ///
-    /// Refuses a suite without an IMU budget, a star camera without a
+    /// Refuses a suite without an IMU budget, a configuration whose model
+    /// has no block in the layout, a star camera without a
     /// catalogue configuration, and a terrain camera that is not a visible
     /// camera with usable intrinsics. Without the feature `terrain-camera`
     /// it refuses each terrain camera
@@ -122,11 +125,12 @@ impl ReferenceNavigator {
         Ok(Self {
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
-            filter: Box::new(InertialNavigationFilter::new_surface(
-                config,
-                clock,
-                PlanetaryBody::EARTH_WGS84,
-            )),
+            filter: NavigatorFilter::new(config, clock, suite.has_correlated_error()).map_err(
+                |error| OnboardError::Config {
+                    field: "filter layout",
+                    detail: error.to_string(),
+                },
+            )?,
             suite,
             clock,
             sequences: BTreeMap::new(),
@@ -136,7 +140,7 @@ impl ReferenceNavigator {
 
     /// The filter, for its configuration and rejection counters.
     #[must_use]
-    pub fn filter(&self) -> &InertialNavigationFilter {
+    pub fn filter(&self) -> &NavigatorFilter {
         &self.filter
     }
 
@@ -235,13 +239,19 @@ impl ReferenceNavigator {
         else {
             return;
         };
-        let (h, v, s) = match budget {
+        let (h, v, s, correlated) = match budget {
             ErrorBudget::Gnss {
                 horizontal_sigma_m,
                 vertical_sigma_m,
                 velocity_sigma_m_s,
-            } => (horizontal_sigma_m, vertical_sigma_m, velocity_sigma_m_s),
-            _ => (f64::NAN, f64::NAN, f64::NAN),
+                correlated,
+            } => (
+                horizontal_sigma_m,
+                vertical_sigma_m,
+                velocity_sigma_m_s,
+                correlated,
+            ),
+            _ => (f64::NAN, f64::NAN, f64::NAN, None),
         };
         let position_cov =
             position_cov.unwrap_or(SymmetricCov3::from_diagonal(h * h, h * h, v * v));
@@ -249,7 +259,21 @@ impl ReferenceNavigator {
             position: *position,
             covariance: position_cov,
         };
-        self.offer_value(input, "gnss_position", value, SensorClass::Gnss, sink);
+        let stamp = self.stamp(input.sensor, input.acquired_at);
+        let observation = Observation::new(stamp, value, SourceComposition::of(SensorClass::Gnss));
+        // The velocity is from Doppler and stays white.
+        let observation = match correlated {
+            Some(c) => observation.with_correlated_error(CorrelatedError::new(
+                c.tau_s,
+                [
+                    c.horizontal_sigma_m,
+                    c.horizontal_sigma_m,
+                    c.vertical_sigma_m,
+                ],
+            )),
+            None => observation,
+        };
+        self.offer(input, "gnss_position", &observation, None, sink);
         if let Some(velocity) = velocity {
             let covariance =
                 velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
