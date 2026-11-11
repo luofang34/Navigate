@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use image::GrayImage;
 use nalgebra::Vector3;
-use navigate_camera::{CameraMount, SpectralBand};
+use navigate_camera::{CameraMount, Distortion, SpectralBand};
 use navigate_contract::{ClockDomainId, NavigationSolution, SourceEpoch, SourceId};
 use navigate_data::ReadPort;
 use navigate_data::product::Calibration;
@@ -160,6 +160,14 @@ impl TerrainCamera {
                 sensor: spec.id,
                 band: imager.band,
             });
+        }
+        // The means does not remove lens distortion. A declared distortion
+        // says that the frames have it, so their geometry would be wrong.
+        if imager.distortion != Distortion::None {
+            return Err(invalid(format!(
+                "{:?} declares a lens distortion; the terrain means takes undistorted frames",
+                spec.id
+            )));
         }
         let k = imager.intrinsics;
         let camera = CameraModel {

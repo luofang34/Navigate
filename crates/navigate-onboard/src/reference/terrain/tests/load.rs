@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use navigate_camera::{CameraMount, SpectralBand};
+use navigate_camera::{CameraMount, Distortion, SpectralBand};
 use navigate_contract::Ellipsoid;
 use navigate_data::index::IndexEntry;
 use navigate_data::product::{KindName, ProductKind, ProductUse, write_list};
@@ -311,6 +311,19 @@ fn a_camera_and_a_frame_that_the_means_cannot_take_are_refused() {
             band: SpectralBand::LongWaveInfrared
         })
     );
+    // A declared lens distortion says that the frames are not undistorted.
+    let mut distorted = imager();
+    distorted.distortion = Distortion::BrownConrady {
+        k1: -0.1,
+        k2: 0.0,
+        k3: 0.0,
+        p1: 0.0,
+        p2: 0.0,
+    };
+    assert!(matches!(
+        ReferenceNavigator::new(suite(distorted, CameraMount::nadir()), CLOCK, None),
+        Err(OnboardError::Config { field: "terrain camera", detail }) if detail.contains("distortion")
+    ));
     let world = World::build(&WorldSpec::default());
     let flight = hover();
     let mut navigator = navigator(&flight, belly(), [0.0; 3], 20.0);

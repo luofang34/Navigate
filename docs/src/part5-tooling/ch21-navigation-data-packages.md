@@ -394,7 +394,7 @@ Declare the camera in the suite:
 | `SensorSpec` field | Content |
 |---|---|
 | `kind` | `SensorKind::TerrainCamera` |
-| `imager` | `ImagerModel::pinhole(Intrinsics { width, height, fx, fy, cx, cy })`, in pixels. Pixel centres have integer coordinates. The band is visible; another band is refused (`OnboardError::UnsupportedBand`). |
+| `imager` | `ImagerModel::pinhole(Intrinsics { width, height, fx, fy, cx, cy })`, in pixels. Pixel centres have integer coordinates. The band is visible; another band is refused (`OnboardError::UnsupportedBand`). The distortion is `Distortion::None`: the host gives undistorted frames, and a declared distortion is refused. |
 | `mount` | `CameraMount`: `lever_arm_body_m` is the optical centre from the body reference point in the body axes (forward, right, down); `cam_from_body` turns the body axes into the camera axes (`+X` right in the image, `+Y` down in the image, `+Z` along the optical axis). |
 | `budget` | `ErrorBudget::TerrainCamera { calibration_sigma_rad }`: the residual of the geometric calibration as an angle. |
 

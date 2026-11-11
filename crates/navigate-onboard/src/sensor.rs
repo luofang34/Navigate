@@ -241,6 +241,8 @@ pub enum SensorData {
     /// declared [`SensorSpec`]: the image is undistorted, its size is the
     /// size of the declared intrinsics, and its axes are those of
     /// `navigate_camera::Intrinsics` (columns to the right, rows down).
+    /// The navigator takes each row at the acquisition time, so it does
+    /// not model a rolling shutter.
     TerrainFrame {
         /// Image width, pixels.
         width: u32,
