@@ -4822,6 +4822,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigate-data"
+version = "0.1.0"
+dependencies = [
+ "navigate-contract",
+ "navigate-geodesy",
+ "pollster",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "navigate-fusion"
 version = "0.1.0"
 dependencies = [

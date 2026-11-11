@@ -22,6 +22,7 @@ members = [
     "crates/navigate-match",
     "crates/navigate-match-kernels",
     "crates/navigate-locate",
+    "crates/navigate-data",
     "crates/navigate-locate-web",
     "crates/navigate-visual-render",
     "crates/navigate-visual-flight",
@@ -40,6 +41,7 @@ eclipse-canon = { path = "crates/eclipse-canon" }
 flamsteed = { path = "crates/flamsteed", version = "0.1.0" }
 navigate-contract = { path = "crates/navigate-contract", default-features = false }
 navigate-geodesy = { path = "crates/navigate-geodesy", default-features = false }
+navigate-data = { path = "crates/navigate-data", default-features = false }
 navigate-astrodynamics = { path = "crates/navigate-astrodynamics", default-features = false }
 navigate-fusion = { path = "crates/navigate-fusion", default-features = false }
 navigate-magnav = { path = "crates/navigate-magnav", default-features = false }

@@ -27,6 +27,7 @@ This appendix maps every crate in the `Navigate` Cargo workspace to its runtime 
 | `navigate-locate` | `wasm32` + host | Single-photo localization, Hilbert-sharded `DINOv2` place search, and flight corridor tracking | Ch 13, 20 |
 | `navigate-visual-flight` | Host | Real-time 30 Hz zero-disk-IO flight visual engine, multi-hypothesis spatial basin checks, amortized masking, delayed covariance propagation | Ch 7, 12, 13 |
 | `navigate-locate-web` | `wasm32` | Browser Web Worker visual locator with WebNN, WebGPU, and CPU fallback | Ch 20 |
+| `navigate-data` | `no_std` + `alloc` | Navigation data contract: canonical package manifests, content-addressed blobs, verification, read and fetch ports, fixed correlation grid, vertical datum | Ch 21 |
 | `navigate-recording` | Host | Visual recording wire contracts, session processor, and revisit loop closures | Ch 20 |
 | `tools/navrun` | Host CLI | Deterministic end-to-end closed-loop scenario runner | Ch 19 |
 | `tools/visual-model` | Host CLI | Deterministic checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` | Ch 20 |
@@ -57,3 +58,4 @@ This appendix maps every crate in the `Navigate` Cargo workspace to its runtime 
 | [ADR-0019](../adr/0019-space-trajectory-and-multiphase-guidance.md) | Space trajectory laws, space guidance setpoints, and mission-phase orchestration from orbit to a runway or to touchdown | Ch 18 |
 | [ADR-0020](../adr/0020-visual-stack-consolidation-polar-trn-and-visual-pose.md) | Visual stack consolidation, polar terrain-relative navigation, and 6-DOF visual pose fusion | Ch 2, 8, 12, 13 |
 | [ADR-0021](../adr/0021-one-imaging-sensor-model-and-star-sightings.md) | One imaging sensor model, and star sightings enter fusion as lines of sight | Ch 8, 11, 12 |
+| [ADR-0022](../adr/0022-navigation-data-contract-mission-packages-and-the-onboard-boundary.md) | One navigation data contract, content-addressed mission packages, and one onboard boundary | Ch 21 |

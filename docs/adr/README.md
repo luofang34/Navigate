@@ -28,3 +28,5 @@ lifecycle rules.
 | [0018](0018-reduced-dynamic-orbit-determination-clock-and-radiometric-opnav.md) | Reduced-dynamic orbit determination with a force-model coast, receiver clock states, and radiometric and optical navigation models in the inertial filter | Proposed |
 | [0019](0019-space-trajectory-and-multiphase-guidance.md) | Space trajectory laws, space guidance setpoints, and mission-phase orchestration from orbit to a runway or to touchdown | Proposed |
 | [0020](0020-visual-stack-consolidation-polar-trn-and-visual-pose.md) | Six crates hold the visual stack; an exact body tangent frame serves polar terrain-relative navigation; a camera pose enters the inertial filter as one visual pose | Proposed |
+| [0021](0021-one-imaging-sensor-model-and-star-sightings.md) | One imaging sensor model, and star sightings enter fusion as lines of sight | Proposed |
+| [0022](0022-navigation-data-contract-mission-packages-and-the-onboard-boundary.md) | One navigation data contract, content-addressed mission packages, and one onboard boundary | Proposed |

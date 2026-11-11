@@ -21,6 +21,7 @@ for target in thumbv8m.main-none-eabihf riscv32imac-unknown-none-elf; do
     for crate in \
         navigate-contract \
         navigate-camera \
+        navigate-data \
         navigate-geodesy \
         navigate-astrodynamics \
         navigate-fusion \
@@ -80,6 +81,7 @@ echo "== wasm32 (visual locator, matchers, and segmentation) =="
 cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-match --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-match --no-default-features --features webgpu --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-data --target wasm32-unknown-unknown -- -D warnings
 
 echo "== cargo build --release =="
 cargo build --release --workspace

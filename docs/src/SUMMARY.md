@@ -36,6 +36,7 @@
 
 - [Deterministic Closed-Loop Verification (`navrun`)](part5-tooling/ch19-deterministic-verification-navrun.md)
 - [Visual Pipeline, Model Conversion, and Web Deployment](part5-tooling/ch20-visual-pipeline-web-deployment.md)
+- [Navigation Data Packages](part5-tooling/ch21-navigation-data-packages.md)
 
 ---
 

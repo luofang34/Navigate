@@ -55,8 +55,8 @@ renders settle frames, and its documentation states the tile-detail limit.
 ### One package, one identity
 
 The display and the reference renderer read the same installed package. The
-package `pack_id` is the map identity for both (the visual bench records it
-with every result). With the renderer identity, a fix names every input that
+package identity of ADR-0022, the digest of the canonical manifest, is the
+map identity for both (the visual bench records it with every result). With the renderer identity, a fix names every input that
 made its reference.
 
 ### Scheduling
