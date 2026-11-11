@@ -203,6 +203,5 @@ fn the_plan_covers_the_strip_and_the_view_past_the_last_waypoint() {
 fn plan_resources_for_two() -> ResourcePlan {
     ResourcePlan {
         legs: alloc::vec![],
-        bytes: 0.0,
     }
 }

@@ -237,10 +237,13 @@ its level for the same texel is one less. A higher leg and an oblique view
 need coarser levels and cost less for each kilometre. Altitude octave
 bands key the derived products.
 
-Measured sizes: imagery approximately 18 KB/km² at zoom 15 and 70 KB/km²
-at zoom 16; Terrarium elevation approximately 2 KB/km² at zoom 12 and
-7.5 KB/km² at zoom 13; the NVKTILE1 bank at its default settings
-approximately 4.2 MB/km².
+The size of a plan is the count of its planned tiles times the size of
+one tile of each layer, because a whole tile is fetched however little of
+it a strip covers. The estimate uses a typical tile size, and a budget is
+judged on an upper tile size. Measured on the Zaragoza package: Esri
+imagery JPEG 15.5 to 17.3 kB a tile (typical 16 kB, upper 20 kB),
+Terrarium PNG 76 to 100 kB a tile (typical 90 kB, upper 110 kB). The
+NVKTILE1 bank at its default settings is approximately 4.2 MB/km².
 
 ### 11. Three onboard representations
 
