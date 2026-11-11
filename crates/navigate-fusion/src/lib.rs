@@ -53,8 +53,8 @@ mod solution_sequence;
 
 pub use config::FusionConfig;
 pub use inertial::{
-    ClockNoiseModel, ForceModelCoast, FrameChange, ImuIncrement, ImuSample, InertialConfig,
-    InertialNavigationFilter, PastState, PastStateRefusal, PropagationMode,
+    ClockNoiseModel, ForceModelCoast, FrameChange, ImuBiasPrior, ImuIncrement, ImuSample,
+    InertialConfig, InertialNavigationFilter, PastState, PastStateRefusal, PropagationMode,
 };
 pub use kalman::FogmBias;
 pub use kinematic::{InnovationStats, NavigationFilter};

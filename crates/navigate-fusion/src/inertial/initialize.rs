@@ -43,7 +43,8 @@ impl InertialNavigationFilter {
     /// body-fixed frame: `p = r(position)`, `v = R·v_ned`,
     /// `q = q_ned→frame ⊗ attitude`, and `P = R·P_ned·Rᵀ`, with `R` the
     /// rotation from the local NED axes to the frame axes. The biases
-    /// start at zero with their stationary variances. An initialization
+    /// start from the prior of [`Self::set_imu_bias_prior`], or at zero
+    /// with their stationary variances without one. An initialization
     /// forgets the history.
     ///
     /// # Errors
@@ -98,7 +99,8 @@ impl InertialNavigationFilter {
     /// the body axes into the frame axes. Each covariance is in the frame
     /// axes. Each regime accepts this initialization, so a surface
     /// filter can start from a body-fixed Cartesian position. After a
-    /// change of frame, the active frame is the new one.
+    /// change of frame, the active frame is the new one. The biases
+    /// start as in [`Self::initialize_surface`].
     ///
     /// # Errors
     ///
@@ -147,8 +149,11 @@ impl InertialNavigationFilter {
         at: MonotonicNanos,
         composition: SourceComposition,
     ) -> Result<(), RejectionReason> {
-        let nominal = InertialNominal::at(initial.p, initial.v, initial.q);
-        let p = initial_covariance(&self.config, initial, &nominal.c_b_to_f());
+        let mut nominal = InertialNominal::at(initial.p, initial.v, initial.q);
+        let mut p = initial_covariance(&self.config, initial, &nominal.c_b_to_f());
+        if let Some(prior) = &self.bias_prior {
+            prior.apply(&mut nominal, &mut p);
+        }
         self.core = Some(InertialCore {
             regime,
             nominal,
