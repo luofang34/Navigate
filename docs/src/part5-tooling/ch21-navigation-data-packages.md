@@ -485,7 +485,11 @@ eight-bit luminance, row-major, top row first, undistorted, of the
 declared size. `acquired_at` is the middle of the exposure, and
 `delivered_at` is the time when the frame reaches the navigator. A frame
 that comes more than `TerrainConfig::max_capture_lag_s` after its
-exposure is not matched.
+exposure is not matched. The search starts at the state of the filter at
+the exposure. When the exposure is older than the history of the filter,
+it starts at the solution on delivery moved back along its velocity, with
+wider bounds; `ReferenceNavigator::terrain_belief_source` states which of
+the two the last frame took (`BeliefSource`).
 
 Each frame gives one record with the measurement `terrain_position` and
 the context `keyframe` or `render`:

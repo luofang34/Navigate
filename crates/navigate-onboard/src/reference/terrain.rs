@@ -43,11 +43,13 @@ mod map;
 mod names;
 mod view;
 
+pub use belief::BeliefSource;
 pub use config::{TerrainConfig, WorkingCamera, WorkingLimit};
 pub use map::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainMapRequest,
 };
 
+use belief::at_exposure;
 use camera::TerrainCamera;
 use map::TerrainMap;
 pub(crate) use names::MEASUREMENT;
@@ -217,6 +219,15 @@ impl ReferenceNavigator {
         self.terrain.cameras.get(&sensor.get())?.working()
     }
 
+    /// Where the belief of the last frame of the terrain camera `sensor`
+    /// came from: the state of the filter at the exposure, or the solution
+    /// on delivery moved back. `None` before the first frame with a
+    /// belief.
+    #[must_use]
+    pub fn terrain_belief_source(&self, sensor: SourceId) -> Option<BeliefSource> {
+        self.terrain.cameras.get(&sensor.get())?.belief_source()
+    }
+
     /// What the navigator loaded as its terrain map, or `None` before a
     /// load.
     #[must_use]
@@ -247,8 +258,11 @@ impl ReferenceNavigator {
                 sensor: input.sensor,
             });
         };
-        let solution = self.filter.tick(input.delivered_at);
-        let sighting = camera.sight(&map, &self.terrain.ledger, input, image, solution.as_ref())?;
+        let times = (input.acquired_at, input.delivered_at);
+        let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
+            Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,
+            Err(reason) => Sighting::Unused(reason, None),
+        };
         let (outcome, context) = match sighting {
             Sighting::Unused(reason, path) => (Outcome::Unused(reason), path),
             Sighting::Fix {

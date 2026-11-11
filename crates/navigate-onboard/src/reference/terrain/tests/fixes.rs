@@ -8,7 +8,7 @@ use navigate_fusion::RejectionReason;
 use super::flight::{CAMERA, Flight, RATE, at, fly, load, navigator, request, show_events};
 use super::world::{CENTRE, GROUND_M, World, WorldSpec, camera_model, correlation_cell};
 use crate::reference::terrain::MEASUREMENT;
-use crate::{AcceptanceRecord, Navigator, Outcome, TerrainConfig, TerrainMapRequest};
+use crate::{AcceptanceRecord, BeliefSource, Navigator, Outcome, TerrainConfig, TerrainMapRequest};
 
 /// 800 m above the mean ground.
 pub(crate) const HEIGHT_M: f64 = GROUND_M + 800.0;
@@ -237,6 +237,11 @@ fn a_late_frame_is_matched_at_its_exposure_and_an_old_frame_is_not_matched() {
             .ingest(&flight.increment(step), &mut sink)
             .unwrap();
     }
+    // The filter gave its own state at the exposure.
+    assert_eq!(
+        navigator.terrain_belief_source(CAMERA),
+        Some(BeliefSource::FilterAtExposure)
+    );
     // The vehicle moved 2.3 m in the 60 ms. The fix is for the exposure.
     let error = flight.error_m(&navigator.solution(at(100)).unwrap(), 100);
     assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
@@ -251,6 +256,45 @@ fn a_late_frame_is_matched_at_its_exposure_and_an_old_frame_is_not_matched() {
             (Outcome::Unused("capture_lag"), None)
         ]
     );
+}
+
+#[test]
+fn a_frame_older_than_the_history_of_the_filter_takes_the_moved_back_belief() {
+    let world = World::build(&WorldSpec::default());
+    let flight = across_cells();
+    let mut navigator = navigator(&flight, belly(), [15.0, -20.0, 5.0], 30.0);
+    // The host accepts frames up to a second old.
+    let patient = TerrainMapRequest {
+        config: TerrainConfig {
+            max_capture_lag_s: 1.0,
+            ..request(&world).config
+        },
+        ..request(&world)
+    };
+    navigator
+        .load_terrain_map(std::sync::Arc::clone(&world.store), &patient, None)
+        .unwrap();
+    let mut sink = Vec::new();
+    // The frame of step 25 comes 0.8 s later, after 40 more increments:
+    // more than the history of the filter holds.
+    for step in 1..=65 {
+        navigator
+            .ingest(&flight.increment(step), &mut sink)
+            .unwrap();
+    }
+    assert!(navigator.filter().state_at(at(25)).is_err());
+    navigator
+        .ingest(&flight.frame(&world, &belly(), 25, 40), &mut sink)
+        .unwrap();
+    assert_eq!(
+        navigator.terrain_belief_source(CAMERA),
+        Some(BeliefSource::MovedBackFromDelivery)
+    );
+    // The frame is matched from the moved-back belief: the vehicle went
+    // 30 m in the 0.8 s. The filter then judges the age of the fix.
+    let records = terrain(&sink);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].1, Some("render"), "{records:?}");
 }
 
 #[test]

@@ -26,8 +26,8 @@ mod terrain;
 pub use stars::{StarCatalogueConfig, own_prior};
 #[cfg(feature = "terrain-camera")]
 pub use terrain::{
-    AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainConfig,
-    TerrainMapRequest, WorkingCamera, WorkingLimit,
+    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
+    TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
 };
 
 use aligner::Aligner;

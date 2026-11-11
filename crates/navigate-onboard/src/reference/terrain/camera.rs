@@ -5,7 +5,7 @@ use image::GrayImage;
 use image::imageops::{FilterType, resize};
 use nalgebra::Vector3;
 use navigate_camera::{CameraMount, Distortion, Intrinsics, SpectralBand};
-use navigate_contract::{ClockDomainId, NavigationSolution, SourceEpoch, SourceId};
+use navigate_contract::{ClockDomainId, SourceEpoch, SourceId};
 use navigate_data::{CorrelationKey, GridCell, TileAddress};
 use navigate_visual::fusion_bridge::{VisualSourceIdentity, position_fix_observation_composed};
 use navigate_visual::session::{ContinuityEpoch, FrameKey, MapCell, MapCellLedger, StreamId};
@@ -14,7 +14,7 @@ use navigate_visual::{
     ReferenceView,
 };
 
-use super::belief::{Belief, body_position};
+use super::belief::{Belief, BeliefSource, Exposure, body_position};
 use super::budget::{ViewGeometry, external_covariance_ned};
 use super::config::WorkingCamera;
 use super::map::TerrainMap;
@@ -46,6 +46,8 @@ pub(crate) struct TerrainCamera {
     ground_height_m: Option<f64>,
     /// The camera of the last reference view and match.
     working: Option<WorkingCamera>,
+    /// Where the belief of the last frame came from.
+    belief_source: Option<BeliefSource>,
 }
 
 /// The frame of the match: the image at the size of the working camera.
@@ -118,6 +120,7 @@ impl TerrainCamera {
             views: Views::default(),
             ground_height_m: None,
             working: None,
+            belief_source: None,
         })
     }
 
@@ -127,6 +130,12 @@ impl TerrainCamera {
         self.views = Views::default();
         self.ground_height_m = None;
         self.working = None;
+        self.belief_source = None;
+    }
+
+    /// Where the belief of the last frame came from.
+    pub(super) const fn belief_source(&self) -> Option<BeliefSource> {
+        self.belief_source
     }
 
     /// The camera of the last reference view and match.
@@ -207,22 +216,16 @@ impl TerrainCamera {
         ledger: &MapCellLedger,
         input: &SensorInput,
         image: GrayImage,
-        solution: Option<&NavigationSolution>,
+        exposure: &Exposure,
     ) -> Result<Sighting, OnboardError> {
         let sequence = self.frames;
         self.frames = self.frames.wrapping_add(1);
-        let (acquired, delivered) = (input.acquired_at.as_nanos(), input.delivered_at.as_nanos());
-        let Some(lag_ns) = delivered.checked_sub(acquired) else {
-            return Ok(Sighting::Unused(names::ACQUIRED_AFTER_DELIVERY, None));
-        };
-        let lag_s = lag_ns as f64 * 1e-9;
-        if lag_s > map.config.max_capture_lag_s {
-            return Ok(Sighting::Unused(names::CAPTURE_LAG, None));
-        }
-        let Some(belief) = solution.and_then(|s| Belief::before(s, lag_s)) else {
-            return Ok(Sighting::Unused(names::NO_SOLUTION, None));
-        };
-        let (position_radius_m, attitude_radius_rad) = map.config.search(belief.sigma_h_m, lag_s);
+        let acquired = input.acquired_at.as_nanos();
+        let belief = exposure.belief;
+        self.belief_source = Some(exposure.source);
+        let (position_radius_m, attitude_radius_rad) = map
+            .config
+            .search(belief.sigma_h_m, exposure.unmodelled_lag_s);
         let key = FrameKey {
             stream: StreamId(self.sensor.get()),
             continuity: ContinuityEpoch(0),
