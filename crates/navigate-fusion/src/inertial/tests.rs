@@ -1,7 +1,10 @@
+mod baro_consistency;
+mod baro_maneuver;
 mod bias_prior;
 mod checkpoints;
 mod coast;
 mod deep_space;
+mod flight_truth;
 mod frame_change;
 mod increment;
 mod lunar_beacon;
@@ -14,6 +17,7 @@ mod regimes;
 mod schuler;
 mod sequence;
 mod space;
+mod star_distribution;
 mod stochastic;
 mod surface;
 mod terrain;
