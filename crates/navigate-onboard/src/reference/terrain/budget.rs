@@ -2,12 +2,30 @@
 //! as a root sum square of independent terms.
 //!
 //! The terms are independent of each other: the registration of the
-//! imagery, the height of the elevation model, and the calibration of the
-//! camera come from three different processes. Their covariances add. The
-//! fusion bridge adds the image-geometry covariance of the match to the
-//! sum.
+//! imagery, the height and the tilt of the elevation model, and the
+//! calibration of the camera come from different processes. Their
+//! covariances add. The fusion bridge adds the image-geometry covariance
+//! of the match to the sum.
+//!
+//! The tilt term holds what a free 6-DoF solve does with an elevation
+//! error that is not uniform under the footprint: it takes a tilt of the
+//! elevation error as a turned camera, and the fix moves horizontally by
+//! the height above the ground times the tilt. A uniform elevation error
+//! moves the fix vertically only, and a mount angle error turns the solved
+//! attitude and hardly moves the position. An elevation error of one-sigma
+//! `σ` that is correlated over a length `L` has a slope of about `√2·σ/L`
+//! on each axis. The solve fits the tilt over the whole footprint: over a
+//! footprint of width `W`, the `(W/L)²` patches of the error average, and
+//! the fitted slope is about `√12·σ·L/W²`. The term takes the smaller of
+//! the two. A fix is taken as independent of the fixes of other map
+//! cells. That holds while the footprints of the fixes of adjacent cells
+//! do not overlap: cells of zoom 16 are about 470 m wide, and a footprint
+//! of a camera with a field of 0.8 of the range is that wide from about
+//! 600 m above the ground. From higher, adjacent fixes share part of
+//! their tilt error, and the term does not hold that correlation.
 
 use nalgebra::{Matrix3, Vector3};
+use navigate_camera::Intrinsics;
 use navigate_visual::{Estimate, ReferenceView};
 
 /// Largest off-nadir angle of the height term. Past it the tangent grows
@@ -22,6 +40,13 @@ pub(crate) struct MapSigmas {
     /// Height of the terrain surface above the ellipsoid, metres: the
     /// elevation model and the bound of an unknown geoid undulation.
     pub height_m: f64,
+    /// The elevation model alone, metres: the error whose tilt under a
+    /// footprint moves a fix. An unknown geoid undulation is the same
+    /// over a footprint and has no tilt.
+    pub elevation_m: f64,
+    /// Length over which the error of the elevation model is correlated,
+    /// metres ([`super::TerrainConfig::dem_correlation_length_m`]).
+    pub elevation_length_m: f64,
 }
 
 /// How the camera saw the ground in one fix.
@@ -34,13 +59,17 @@ pub(crate) struct ViewGeometry {
     pub ground_direction: [f64; 2],
     /// Mean distance to the matched ground along the optical axis, metres.
     pub range_m: f64,
+    /// The narrower extent of the view for each metre of range, the
+    /// smaller of the width over `fx` and the height over `fy`: times the
+    /// range, the narrower side of the footprint.
+    pub field_ratio: f64,
 }
 
 impl ViewGeometry {
     /// The geometry of a solved estimate over its reference. The frame of
     /// an estimate is a tangent frame near the fix, so its axes are east,
     /// north, and up at the fix.
-    pub(crate) fn of(estimate: &Estimate, reference: &ReferenceView) -> Self {
+    pub(crate) fn of(estimate: &Estimate, reference: &ReferenceView, camera: &Intrinsics) -> Self {
         // The eye axes are right, up, and back: the camera looks along -Z.
         let axis = estimate.pose.orientation * -Vector3::z();
         let horizontal = axis.x.hypot(axis.y);
@@ -64,6 +93,8 @@ impl ViewGeometry {
             } else {
                 sum / f64::from(count)
             },
+            field_ratio: (f64::from(camera.width) / camera.fx)
+                .min(f64::from(camera.height) / camera.fy),
         }
     }
 }
@@ -94,6 +125,7 @@ impl MapSigmas {
 ///   direction. A view straight down has no such term.
 /// - Calibration: an angular error `calibration_sigma_rad` moves the fix by
 ///   that angle times the range, on each axis.
+/// - Terrain tilt ([`tilt_sigma_m`]): on each horizontal axis.
 #[cfg(test)]
 pub(crate) fn external_covariance_ned(
     map: &MapSigmas,
@@ -104,7 +136,7 @@ pub(crate) fn external_covariance_ned(
 }
 
 /// The external covariance of a fix without the map error, in north,
-/// east, down axes, m²: the relief and the calibration terms of
+/// east, down axes, m²: the relief, the calibration, and the tilt terms of
 /// [`external_covariance_ned`].
 pub(crate) fn unshared_covariance_ned(
     map: &MapSigmas,
@@ -115,7 +147,36 @@ pub(crate) fn unshared_covariance_ned(
     let relief_m = map.height_m * view.off_nadir_rad.clamp(0.0, MAX_OFF_NADIR_RAD).tan();
     let [north, east] = view.ground_direction;
     let along = Vector3::new(north, east, 0.0) * relief_m;
-    Matrix3::identity() * calibration_m2 + along * along.transpose()
+    let tilt_m2 = tilt_sigma_m(map, view).powi(2);
+    Matrix3::from_diagonal(&Vector3::new(
+        calibration_m2 + tilt_m2,
+        calibration_m2 + tilt_m2,
+        calibration_m2,
+    )) + along * along.transpose()
+}
+
+/// The horizontal one-sigma of a fix from the tilt of the elevation error
+/// under its footprint, each axis, metres: the height above the ground
+/// times the fitted slope of the error, the smaller of `√2·σ/L` and
+/// `√12·σ·L/W²`, `W` being the narrower side of the footprint. The term
+/// grows with the height above the ground while the footprint is narrower
+/// than about `1.6·L`, and falls beyond, where the footprint averages more
+/// of the error than the height multiplies.
+pub(crate) fn tilt_sigma_m(map: &MapSigmas, view: &ViewGeometry) -> f64 {
+    let off_nadir = view.off_nadir_rad.clamp(0.0, MAX_OFF_NADIR_RAD);
+    let height_m = view.range_m * off_nadir.cos();
+    let footprint_m = view.range_m * view.field_ratio;
+    let (sigma, length) = (map.elevation_m, map.elevation_length_m);
+    if !(length > 0.0 && length.is_finite()) {
+        return 0.0;
+    }
+    let local = core::f64::consts::SQRT_2 * sigma / length;
+    let fitted = if footprint_m > 0.0 {
+        12.0_f64.sqrt() * sigma * length / (footprint_m * footprint_m)
+    } else {
+        local
+    };
+    height_m * local.min(fitted)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 mod anchors;
 mod content;
 mod cost;
+mod dem;
 pub(crate) mod fixes;
 pub(crate) mod flight;
 mod inspection;

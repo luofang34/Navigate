@@ -110,6 +110,9 @@ cargo test -p navigate-onboard --features terrain-camera
 # The at-rest consistency of a self-alignment needs a minute of filter
 # steps for each of 24 vehicles; the debug build ignores that test.
 cargo test --release -p navigate-onboard --lib aligner
+# Fixes over elevation models with a tilted or a random error, through the
+# real matcher: slow without optimization, ignored in the debug build.
+cargo test --release -p navigate-onboard --features terrain-camera --lib terrain::tests::dem
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \

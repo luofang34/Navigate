@@ -61,12 +61,15 @@ where
     let sigmas = MapSigmas {
         horizontal_m: imagery_report.sigma_m,
         height_m: elevation_report.sigma_m.hypot(undulation_bound_m),
+        elevation_m: elevation_report.sigma_m,
+        elevation_length_m: request.config.dem_correlation_length_m,
     };
     let report = MapReport {
         package: request.package,
         imagery: imagery_report,
         elevation: elevation_report,
         undulation_bound_m,
+        dem_correlation_length_m: request.config.dem_correlation_length_m,
         products,
         keyframes: keyframes.iter().map(|set| set.entries.len()).sum(),
     };
