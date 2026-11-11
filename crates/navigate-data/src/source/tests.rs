@@ -98,3 +98,17 @@ fn packages_of_one_declared_source_share_correlation_keys() {
     assert_eq!(key(&a), key(&b));
     assert_ne!(key(&a), key(&c));
 }
+
+#[test]
+fn keys_and_digests_decode_from_owned_values() {
+    let declared = declaration("sheet-17").key().unwrap();
+    for key in [SourceKey::EsriWorldImagery, declared] {
+        let value = serde_json::to_value(key).unwrap();
+        assert_eq!(serde_json::from_value::<SourceKey>(value).unwrap(), key);
+    }
+    let digest = Sha256Digest::of(b"x");
+    assert_eq!(
+        serde_json::from_value::<Sha256Digest>(serde_json::to_value(digest).unwrap()).unwrap(),
+        digest
+    );
+}
