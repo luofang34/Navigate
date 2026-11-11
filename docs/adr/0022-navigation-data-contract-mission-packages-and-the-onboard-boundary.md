@@ -362,12 +362,14 @@ The terrain-camera means of the reference navigator follows these rules:
   A fix that the match can give has its ground in that disk, so the
   check loses no fix of a cell without one while the error of the belief
   is inside the search bounds.
-- **Belief at the exposure.** The filter gives a solution only at or
-  after its state time. The search starts at the solution on delivery,
-  moved back along its velocity, and its bounds grow with the delay. A
-  frame older than a set delay is not matched. The fix comes from the
-  image only: its lever arm comes off with the solved attitude, and its
-  stamp is the exposure.
+- **Belief at the exposure.** The search starts at the state of the
+  filter at the exposure (`InertialNavigationFilter::state_at`). For an
+  exposure older than the history of the filter, it starts at the
+  solution on delivery, moved back along its velocity, and its bounds
+  grow with the delay; the navigator states which of the two a frame
+  took. A frame older than a set delay is not matched. The fix comes
+  from the image only: its lever arm comes off with the solved attitude,
+  and its stamp is the exposure.
 - **Covariance.** The covariance of a fix is the image-geometry
   covariance of the match plus the covariances of independent terms (a
   root sum square, not a sum of one-sigma values): the horizontal
@@ -405,7 +407,6 @@ The terrain-camera means of the reference navigator follows these rules:
 | Polar and other-body grids | The grid scheme value (§8). |
 | Representation L in a navigator | The data requirements of a navigator (§13). |
 | Fusion of fixes that share map error | A filter state for time-correlated position error. A source then declares its correlated error, and a fix in a cell that has a fix is fused with that declaration and is not withheld. In the terrain means, one function turns the label of a fix into what the filter is told. |
-| The belief of the navigator at a past exposure | The one function of the terrain means that makes the belief. A query of the filter history replaces the move back along the velocity. |
 
 ### Relation to Pilotage
 
