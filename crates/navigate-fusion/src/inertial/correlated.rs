@@ -83,7 +83,10 @@ impl ErrorKind {
 }
 
 /// The process of one source: the source, its epoch, the kind, and the
-/// declaration.
+/// declaration of its latest fix. The source, the epoch, and the kind
+/// identify the process; a source may change its declaration from fix
+/// to fix, for example with its satellite geometry, and the process
+/// stays the same.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Process {
     source: SourceId,
@@ -95,6 +98,10 @@ pub(crate) struct Process {
 impl Process {
     fn same_source(&self, other: &Self) -> bool {
         self.source == other.source && self.kind == other.kind
+    }
+
+    fn same_process(&self, other: &Self) -> bool {
+        self.same_source(other) && self.epoch == other.epoch
     }
 }
 
@@ -200,15 +207,9 @@ impl CorrelatedSources {
                         .then_some((block, offset?, current))
                 });
         if let Some((block, offset, current)) = bound {
-            let reset = current.process != process;
-            let tracked = if reset {
-                tracked
-            } else {
-                Tracked {
-                    last_at: at,
-                    ..current
-                }
-            };
+            // The block of the same process keeps its estimate and takes
+            // the latest declaration for its propagation.
+            let reset = !current.process.same_process(&process);
             let plan = Plan::Bound {
                 block,
                 offset,
@@ -259,7 +260,7 @@ impl CorrelatedSources {
                 .then_some((entry, current))
         });
         let (entry, factor) = match found {
-            Some((entry, current)) if current.process == process => {
+            Some((entry, current)) if current.process.same_process(&process) => {
                 let dt_s = at.elapsed_since(current.last_at).map_or(0.0, seconds);
                 let rho = process.declared.correlation(dt_s);
                 (entry, (1.0 + rho) / (1.0 - rho))

@@ -49,7 +49,18 @@ where
         return apply_white(core, obs, config, mode);
     };
     let mut candidate = *core;
-    let pending = candidate.prepare_correlated(&obs.stamp, &obs.value, declared)?;
+    let pending = match candidate.prepare_correlated(&obs.stamp, &obs.value, declared) {
+        Ok(pending) => pending,
+        // A delayed fix of another source can take a block before this
+        // fix in the replay, as it would have in order. The fix then has
+        // no place, as it would have had none in order, and the replay
+        // goes on without it.
+        Err(
+            RejectionReason::CorrelatedErrorRepeated { .. }
+            | RejectionReason::CorrelatedSourceUntracked,
+        ) if mode == Mode::Replay => return Ok(0.0),
+        Err(reason) => return Err(reason),
+    };
     candidate.pending = Some(pending.plan);
     let chi2 = apply_white(&mut candidate, obs, config, mode)?;
     candidate.pending = None;

@@ -272,3 +272,126 @@ fn a_fork_continues_as_the_original_with_its_bound_and_inflated_sources() {
         .expect("a test thread");
     assert_eq!(forks.join().expect("no panic"), (true, true));
 }
+
+#[test]
+fn a_source_that_changes_its_declaration_keeps_its_process() {
+    // A receiver that scales its declaration with the satellite geometry:
+    // its block keeps its estimate, and its inflation keeps the time of
+    // its last fix.
+    let declared = |sequence: u32| {
+        let scale = if sequence.is_multiple_of(2) {
+            1.0
+        } else {
+            1.05
+        };
+        CorrelatedError::new(TAU_S, [1.2 * scale, 1.2 * scale, 2.0 * scale])
+    };
+    let mut bound = flight::<25>(BOUND);
+    let mut full = flight::<22>(StateLayout::FULL);
+    for sequence in 1..=10_u32 {
+        let at_ms = bound.step();
+        let obs = fix(
+            &bound,
+            &Vector3::zeros(),
+            Declared::AllWhite,
+            sequence,
+            at_ms,
+        )
+        .with_correlated_error(declared(sequence));
+        assert_accepted(bound.filter.ingest(&obs, t(at_ms)));
+        let at_ms = full.step();
+        let obs = fix(
+            &full,
+            &Vector3::zeros(),
+            Declared::AllWhite,
+            sequence,
+            at_ms,
+        )
+        .with_correlated_error(declared(sequence));
+        assert_accepted(full.filter.ingest(&obs, t(at_ms)));
+    }
+    let at_ms = bound.step();
+    let obs = fix(&bound, &Vector3::zeros(), Declared::AllWhite, 11, at_ms)
+        .with_correlated_error(declared(11));
+    let mut candidate = *core(&bound.filter);
+    let pending = candidate
+        .prepare_correlated(&obs.stamp, &obs.value, &declared(11))
+        .expect("planned");
+    assert!(
+        matches!(pending.plan, Plan::Bound { reset: false, .. }),
+        "{pending:?}"
+    );
+    let at_ms_full = full.step();
+    assert_eq!(at_ms, at_ms_full);
+    let obs = fix(&full, &Vector3::zeros(), Declared::AllWhite, 11, at_ms)
+        .with_correlated_error(declared(11));
+    let mut candidate = *core(&full.filter);
+    let pending = candidate
+        .prepare_correlated(&obs.stamp, &obs.value, &declared(11))
+        .expect("planned");
+    let Plan::Inflated { factor, .. } = pending.plan else {
+        panic!("a layout without a block inflates: {pending:?}");
+    };
+    assert!(factor > 100.0, "factor {factor}");
+}
+
+/// The core after fixes of two sources on a layout with one block: a
+/// constant error from the steps 5 to 12, and one fix of a second source
+/// acquired at step 3 that arrives at step 3 or, delayed, at step 8.
+fn two_sources(delayed: bool) -> InertialCore<25> {
+    let constant = CorrelatedError::new(f64::INFINITY, [1.0; 3]);
+    let other = CorrelatedError::new(TAU_S, [1.0; 3]);
+    // The delayed fix is older than the default staleness bound.
+    let config = InertialConfig {
+        layout: BOUND,
+        fusion: crate::FusionConfig {
+            staleness_bound: navigate_contract::DurationNanos::from_millis(5_000),
+            ..tactical().fusion
+        },
+        ..tactical()
+    };
+    let mut flight = std::boxed::Box::new(Flight::<25>::new(ROUTE, 5, config, ALIGNMENT));
+    let mut held = None;
+    for k in 1..=12_u32 {
+        let at_ms = flight.step();
+        if k == 3 {
+            let obs = fix(&flight, &Vector3::zeros(), Declared::AllWhite, 1, at_ms);
+            let obs = Observation {
+                stamp: stamp(4, 1, at_ms),
+                ..obs
+            }
+            .with_correlated_error(other);
+            if delayed {
+                held = Some(obs);
+            } else {
+                assert_accepted(flight.filter.ingest(&obs, t(at_ms)));
+            }
+        }
+        if k == 8
+            && let Some(obs) = held.take()
+        {
+            assert_accepted(flight.filter.ingest(&obs, t(at_ms)));
+        }
+        if k >= 5 {
+            let obs = fix(&flight, &Vector3::zeros(), Declared::AllWhite, k, at_ms)
+                .with_correlated_error(constant);
+            // In order, the second source holds the block, and the
+            // constant error is used once.
+            let outcome = flight.filter.ingest(&obs, t(at_ms));
+            assert_eq!(
+                outcome.is_accepted(),
+                k == 5 || (delayed && k < 8),
+                "step {k}"
+            );
+        }
+    }
+    *core(&flight.filter)
+}
+
+#[test]
+fn a_delayed_fix_that_takes_a_block_first_replays_as_in_order() {
+    let in_order = two_sources(false);
+    let delayed = two_sources(true);
+    assert!((in_order.nominal.p - delayed.nominal.p).norm() < 1e-6);
+    assert_eq!(in_order.correlated, delayed.correlated);
+}
