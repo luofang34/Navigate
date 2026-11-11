@@ -92,7 +92,10 @@ pub enum GuidanceRefusal {
         got: Ellipsoid,
     },
     /// Vertical 1-sigma uncertainty exceeds the configured bound on an
-    /// altitude-constrained leg.
+    /// altitude-constrained leg, or the uncertainty is not finite, or
+    /// the bound is NaN. The bound is
+    /// `GuidanceConfig::max_vertical_1sigma_m`, which is independent of
+    /// the quality floor of [`Self::IntegrityBelowFloor`].
     #[error(
         "vertical 1-sigma uncertainty {vertical_1sigma_m} m exceeds the configured bound {bound_m} m"
     )]
