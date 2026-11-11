@@ -105,6 +105,9 @@ echo "$onboard_out" | grep -q "test result: ok. $onboard_count passed" \
 echo "== cargo test =="
 cargo test --all-targets
 cargo test -p navigate-onboard --features terrain-camera
+# The at-rest consistency of a self-alignment needs a minute of filter
+# steps for each of 24 vehicles; the debug build ignores that test.
+cargo test --release -p navigate-onboard --lib aligner
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
@@ -116,7 +119,10 @@ echo "== wasm32 (visual locator, matchers, and segmentation) =="
 cargo clippy -p navigate-locate-web --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-match --target wasm32-unknown-unknown -- -D warnings
 cargo clippy -p navigate-match --no-default-features --features webgpu --target wasm32-unknown-unknown -- -D warnings
+echo "== wasm32 (browser host: package plan, resident copy, onboard navigator) =="
 cargo clippy -p navigate-data --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-data --no-default-features --features libm --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p navigate-onboard --features terrain-camera --target wasm32-unknown-unknown -- -D warnings
 
 echo "== cargo build --release =="
 cargo build --release --workspace

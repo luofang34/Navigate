@@ -25,6 +25,7 @@
 //! guidance laws.
 
 mod acceptance;
+mod alignment;
 mod bundle;
 mod director;
 mod error;
@@ -33,6 +34,10 @@ mod reference;
 mod sensor;
 
 pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
+pub use alignment::{
+    AlignmentConfig, AlignmentPhase, AlignmentRecord, AlignmentSource, AlignmentStatus,
+    HeadingSource, PositionSource,
+};
 pub use bundle::Onboard;
 pub use director::{
     DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector, SequenceCause,

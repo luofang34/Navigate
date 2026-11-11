@@ -10,7 +10,7 @@ use core::any::Any;
 use navigate_data::product::{KindName, ProductKind, ProductUse};
 use navigate_data::{LayerKind, Sha256Digest};
 
-use crate::{AcceptanceSink, OnboardError, SensorInput, SensorSuite};
+use crate::{AcceptanceSink, AlignmentStatus, OnboardError, SensorInput, SensorSuite};
 
 /// How much a navigator needs one kind of data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +46,8 @@ pub struct ProductReport {
     pub decision: ProductUse,
 }
 
-/// The initial state of a navigator, with its covariances.
+/// The state that a transfer alignment gives a navigator, with its
+/// covariances: the state of another estimator or of a survey.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Alignment {
     /// Position.
@@ -70,12 +71,35 @@ pub trait Navigator {
     /// The declared sensors.
     fn suite(&self) -> &SensorSuite;
 
-    /// Starts the state.
+    /// Sets the state from a transfer alignment: the state of another
+    /// estimator or of a survey, with its covariances. The source is never
+    /// the true state of a simulation. A navigator that aligns itself
+    /// needs no call; a call replaces an alignment in progress and an
+    /// earlier state.
     ///
     /// # Errors
     ///
     /// Refuses an alignment that the filter does not accept.
     fn align(&mut self, alignment: &Alignment) -> Result<(), OnboardError>;
+
+    /// Where the navigator is on the way to its first state, or `None`
+    /// for a navigator that does not report it.
+    fn alignment_status(&self) -> Option<AlignmentStatus> {
+        None
+    }
+
+    /// Forgets the state and aligns again from the sensors. A navigator
+    /// does not do this by itself in flight.
+    ///
+    /// # Errors
+    ///
+    /// Refuses when the navigator cannot align itself.
+    fn realign(&mut self) -> Result<(), OnboardError> {
+        Err(OnboardError::Config {
+            field: "realign",
+            detail: "this navigator does not align itself".into(),
+        })
+    }
 
     /// Takes one input and writes what it did with each measurement into
     /// `sink`. A refused aiding measurement is a record, not an error.

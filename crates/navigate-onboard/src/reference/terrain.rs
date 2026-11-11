@@ -117,6 +117,15 @@ impl TerrainMeans {
         })
     }
 
+    /// Forgets which map cells gave a fix and what each camera kept: the
+    /// filter has a new state, and no map error is in it.
+    pub(crate) fn forget_fixes(&mut self) {
+        self.ledger = MapCellLedger::new(MAX_LEDGER_CELLS);
+        for camera in self.cameras.values_mut() {
+            camera.reset();
+        }
+    }
+
     /// Whether the suite declares a terrain camera.
     pub(crate) fn has_cameras(&self) -> bool {
         !self.cameras.is_empty()
@@ -164,6 +173,16 @@ impl ReferenceNavigator {
     /// fetches. A second load replaces the map and keeps the record of the
     /// map cells that already gave a fix, because that record names the
     /// source of the imagery and not the package.
+    ///
+    /// The load and every later frame read the store by blocking on each
+    /// read, because a navigator step is not asynchronous. The store must
+    /// therefore complete each read without help from the calling thread,
+    /// as a [`DirectoryStore`](navigate_data::DirectoryStore) and a
+    /// [`MemoryStore`](navigate_data::MemoryStore) do. A store whose reads
+    /// complete on an event loop that the caller runs, such as a browser
+    /// store on the page's thread, would never return: a host with such a
+    /// store awaits [`navigate_data::resident_copy`] of the package and its
+    /// product list, and gives this load the memory store of the copy.
     ///
     /// # Errors
     ///

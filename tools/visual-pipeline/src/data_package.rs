@@ -6,14 +6,14 @@ mod fetch;
 mod ground;
 
 pub use fetch::{CatalogFetch, TemplateFetch, TemplateLayer};
-pub use ground::{GROUND_ZOOM, TerrariumGround};
+pub use ground::{fetch_ground_blocking, insert_png};
+pub use navigate_data::package_plan::{GROUND_ZOOM, PlanCamera, TerrariumGround, layer_spec};
 
 use crate::{PipelineError, json_file::read_json};
+use navigate_data::package_plan::{PackagePlan, PlanBounds, route_request};
 use navigate_data::{
-    Accuracy, DEFAULT_CORRELATION_ZOOM, Descriptor, DirectoryStore, Encoding, GeoidModel,
-    HorizontalDatum, LayerKey, LayerKind, LayerLabel, LayerLimits, LayerSpec, PlannedCamera,
-    PlannedLeg, ResourceRequest, Revision, SourceKey, TileKey, VerticalDatum, estimate_size,
-    plan_resources, plan_tiles, prepare,
+    Descriptor, DirectoryStore, LayerKind, LayerLabel, LayerLimits, ResourceRequest, Revision,
+    SourceKey, prepare,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,19 +31,6 @@ pub struct PlanWaypoint {
     pub lon_deg: f64,
     /// Altitude above mean sea level in metres.
     pub altitude_m: f64,
-}
-
-/// One camera of a plan file.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct PlanCamera {
-    /// Image width in pixels.
-    pub width_px: u32,
-    /// Image height in pixels.
-    pub height_px: u32,
-    /// Horizontal field of view in degrees.
-    pub horizontal_fov_deg: f64,
-    /// Angle of the optical axis below the horizontal in degrees.
-    pub depression_deg: f64,
 }
 
 /// The plan file of the `package` subcommand.
@@ -64,43 +51,32 @@ pub struct PlanFile {
 }
 
 impl PlanFile {
-    /// The legs between the waypoints.
-    pub fn legs(&self) -> Vec<PlannedLeg> {
+    /// The waypoints as `[lat, lon, altitude]`.
+    pub fn points(&self) -> Vec<[f64; 3]> {
         self.waypoints
-            .windows(2)
-            .filter_map(|w| match w {
-                [a, b] => Some(PlannedLeg {
-                    from: [a.lat_deg, a.lon_deg, a.altitude_m],
-                    to: [b.lat_deg, b.lon_deg, b.altitude_m],
-                }),
-                _ => None,
-            })
+            .iter()
+            .map(|w| [w.lat_deg, w.lon_deg, w.altitude_m])
             .collect()
+    }
+
+    /// The bounds of the plan.
+    pub const fn bounds(&self) -> PlanBounds {
+        PlanBounds {
+            search_radius_m: self.search_radius_m,
+            deviation_m: self.deviation_m,
+            max_range_m: self.max_range_m,
+        }
     }
 
     /// The resource request with the measured layer sizes.
     pub fn request(&self) -> ResourceRequest {
-        ResourceRequest {
-            legs: self.legs(),
-            cameras: self
-                .cameras
-                .iter()
-                .map(|c| PlannedCamera {
-                    focal_px: f64::from(c.width_px)
-                        / 2.0
-                        / (c.horizontal_fov_deg.to_radians() / 2.0).tan(),
-                    width_px: c.width_px,
-                    height_px: c.height_px,
-                    depression_rad: c.depression_deg.to_radians(),
-                })
-                .collect(),
-            search_radius_m: self.search_radius_m,
-            deviation_m: self.deviation_m,
-            max_range_m: self.max_range_m,
-            imagery: LayerLimits::imagery(),
-            elevation: LayerLimits::terrarium(),
-            elevation_offset: 3,
-        }
+        route_request(
+            &self.points(),
+            &self.cameras,
+            self.bounds(),
+            LayerLimits::imagery(),
+            LayerLimits::terrarium(),
+        )
     }
 }
 
@@ -121,29 +97,6 @@ pub struct PackageOptions {
     pub max_tiles: usize,
     /// Compute and print the resource plan only.
     pub plan_only: bool,
-}
-
-/// The spec of a layer of `kind` from `source` at `revision`: WGS84,
-/// 256-pixel tiles, JPEG imagery or Terrarium elevation above EGM96, and
-/// unknown accuracy.
-pub fn layer_spec(kind: LayerKind, source: SourceKey, revision: Revision) -> LayerSpec {
-    let elevation = kind == LayerKind::Elevation;
-    LayerSpec {
-        key: LayerKey { kind, source },
-        revision,
-        horizontal_datum: HorizontalDatum::Wgs84,
-        vertical_datum: elevation.then_some(VerticalDatum::Orthometric {
-            geoid: GeoidModel::Egm96,
-        }),
-        encoding: if elevation {
-            Encoding::TerrariumPng
-        } else {
-            Encoding::Jpeg
-        },
-        tile_pixels: 256,
-        accuracy: Accuracy::unknown(),
-        correlation_zoom: DEFAULT_CORRELATION_ZOOM,
-    }
 }
 
 /// A source from its text form: a registry name, for example
@@ -227,17 +180,15 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
         .iter()
         .map(|w| [w.lat_deg, w.lon_deg])
         .collect();
-    let ground = TerrariumGround::fetch_blocking(&fetch, &options.elevation.spec, &points)?;
-    let request = plan_file.request();
-    let plan = plan_resources(&request, &ground)?;
-    let tiles = plan_tiles(&request.legs, &plan)?;
-    let count: usize = tiles.values().map(std::collections::BTreeSet::len).sum();
-    let size = estimate_size(&request, &tiles);
-    let mut out = json!({ "resource_plan": plan, "planned_tiles": count, "size": size });
+    let ground = fetch_ground_blocking(&fetch, &options.elevation.spec, &points)?;
+    let plan = PackagePlan::new(plan_file.request(), &ground)?;
+    let count = plan.tile_count();
+    let mut out =
+        json!({ "resource_plan": plan.resources, "planned_tiles": count, "size": plan.size });
     if options.plan_only {
         return Ok(out);
     }
-    let keys = keys(&fetch, &tiles)?;
+    let keys = plan.keys(&fetch.specs())?;
     if keys.len() > options.max_tiles {
         return Err(PipelineError::Invalid(format!(
             "{} tiles planned, limit {}",
@@ -253,7 +204,7 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
         &[&options.imagery, &options.elevation],
     );
     let summary = pollster::block_on(prepare(
-        &tiles,
+        &plan.tiles,
         &fetch.specs(),
         &descriptor,
         options.max_tiles,
@@ -265,27 +216,6 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
         source,
     })?;
     Ok(out)
-}
-
-fn keys(
-    fetch: &TemplateFetch,
-    tiles: &navigate_data::PlannedTiles,
-) -> Result<Vec<TileKey>, PipelineError> {
-    let specs = fetch.specs();
-    let mut keys = Vec::new();
-    for (&kind, addresses) in tiles {
-        let spec = specs
-            .iter()
-            .find(|s| s.key.kind == kind)
-            .ok_or_else(|| PipelineError::Invalid(format!("no {kind:?} layer")))?;
-        keys.extend(addresses.iter().map(|&address| TileKey {
-            source: spec.key.source,
-            revision: spec.revision,
-            layer: kind,
-            address,
-        }));
-    }
-    Ok(keys)
 }
 
 #[cfg(test)]
