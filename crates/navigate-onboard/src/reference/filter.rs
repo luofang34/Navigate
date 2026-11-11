@@ -58,10 +58,12 @@ impl NavigatorFilter {
                 layout: StateLayout::FULL.with_correlated_blocks(1),
                 ..config
             };
-            let filter = InertialNavigationFilter::<CORRELATED_STATES>::surface_with_layout(
+            // Boxed at once: each move of the filter by value is a copy of
+            // its inline history on the stack.
+            return InertialNavigationFilter::<CORRELATED_STATES>::surface_with_layout(
                 config, clock, body,
-            )?;
-            return Ok(Self::Correlated(Box::new(filter)));
+            )
+            .map(|filter| Self::Correlated(Box::new(filter)));
         }
         Ok(Self::Full(Box::new(InertialNavigationFilter::new_surface(
             config, clock, body,

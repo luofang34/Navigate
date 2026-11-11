@@ -364,10 +364,10 @@ fn mean_nees(correlated: bool) -> Vec<f64> {
 
 #[test]
 fn a_correlated_gnss_budget_gives_the_navigator_a_correlated_block() {
-    let correlated = ReferenceNavigator::new(suite(true), CLOCK, None).unwrap();
-    let white = ReferenceNavigator::new(suite(false), CLOCK, None).unwrap();
-    assert_eq!(correlated.filter().layout().dimension(), 25);
-    assert_eq!(white.filter().layout().dimension(), 22);
+    for (correlated, dimension) in [(true, 25), (false, 22)] {
+        let navigator = Box::new(ReferenceNavigator::new(suite(correlated), CLOCK, None).unwrap());
+        assert_eq!(navigator.filter().layout().dimension(), dimension);
+    }
 }
 
 #[test]
