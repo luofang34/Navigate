@@ -35,7 +35,7 @@ fn rotating_to_inertial(angle_rad: f64) -> AttitudeQuaternion {
     ))
 }
 
-fn general_change() -> FrameChange {
+pub(super) fn general_change() -> FrameChange {
     FrameChange {
         new_env: earth_inertial(),
         new_surface_ellipsoid: None,

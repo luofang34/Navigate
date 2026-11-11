@@ -15,7 +15,7 @@ and it matters most in the browser and on a microcontroller.
 
 Some sources have an error that is correlated in time:
 
-- A single-frequency GNSS receiver has metre-level ionosphere, orbit, and
+- A single-frequency GNSS receiver has meter-level ionosphere, orbit, and
   clock residuals with a correlation time of minutes. A filter that takes
   each fix as white averages this error over the fixes as if it were
   noise. On a turning route with 1 Hz fixes (white 0.6 m horizontal and
@@ -63,6 +63,9 @@ The source declares the process because only the source knows its error
 model. The filter keys the process by the source and the epoch of the
 stamp, and by its kind: a position offset for position fixes, or a
 rotation of the sensor reference for attitude fixes and lines of sight.
+A source can change its declaration from fix to fix, for example with
+its satellite geometry; the process stays the same, and the latest
+declaration sets its propagation.
 Other values with a declaration are refused with
 `CorrelationNotModelled`, because the white model would be
 over-confident. The kinematic filter has no correlated states and refuses
@@ -94,7 +97,10 @@ independent error, which is the defect this decision removes.
 
 The bindings, the last-fix times, and the block means are part of the
 filter core. A replay of a delayed fix and a fork of the filter thus
-reproduce them.
+reproduce them. A delayed fix can take a block before the fixes of
+another source that arrived first. The replay then gives those fixes
+the plan they would have had in order, and skips a fix that would have
+been refused in order.
 
 ### 4. Relation to `SharedMapError`
 
@@ -111,7 +117,7 @@ for each cell. That key, and the declaration in `navigate-visual` and
 
 The body-fixed error state reads the vertical along the local up of the
 nominal position. Two points at the same height `d` apart differ along
-that up by the chord `−d²/(2R)`. At kilometres of horizontal error, an
+that up by the chord `−d²/(2R)`. At kilometers of horizontal error, an
 altitude update with full gain spreads this chord through the
 vertical–horizontal cross-covariance. The altitude update therefore uses
 a gain without its horizontal position and velocity rows, with the
@@ -129,7 +135,9 @@ Joseph covariance update (a Schmidt "consider" update of those states).
   NEES of 2.2 to 4.3 on the route of the context. Declared with a
   correlation time three times too short or too long, it stays in the
   band (2.1 to 5.4). Without a block, the inflation gives 0.22 to 0.36:
-  conservative, and never over-confident.
+  conservative, and never over-confident. The RMS 3-D position error
+  after the first correlation time is 2.55 m with a block, 3.96 m with
+  the inflation, and 2.53 m with the over-confident white declaration.
 - A star mount error declared as a constant correlated error gives a
   mean attitude NEES of 2.86.
 - An observation that declares a correlated error is 40 bytes larger.

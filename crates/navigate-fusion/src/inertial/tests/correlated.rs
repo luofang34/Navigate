@@ -395,3 +395,30 @@ fn a_delayed_fix_that_takes_a_block_first_replays_as_in_order() {
     assert!((in_order.nominal.p - delayed.nominal.p).norm() < 1e-6);
     assert_eq!(in_order.correlated, delayed.correlated);
 }
+
+#[test]
+fn a_frame_change_rotates_a_bound_position_block() {
+    let mut bound = flight::<25>(BOUND);
+    let mut error = FixError::new(5);
+    fly(
+        &mut bound,
+        &mut error,
+        Declared::Correlated { tau_s: TAU_S },
+        10,
+    );
+    let before = *core(&bound.filter);
+    let mut after = before;
+    let change = super::frame_change::general_change();
+    crate::inertial::frame_change::apply_frame_change(&mut after, &change);
+    let c = crate::inertial::nominal::to_unit_quaternion(&change.orientation_old_to_new)
+        .to_rotation_matrix()
+        .into_inner();
+    let block = 22;
+    let rotated = c * before.p.fixed_view::<3, 3>(block, block) * c.transpose();
+    assert!((after.p.fixed_view::<3, 3>(block, block) - rotated).amax() < 1e-9);
+    let cross = c * before.p.fixed_view::<3, 3>(0, block) * c.transpose();
+    assert!((after.p.fixed_view::<3, 3>(0, block) - cross).amax() < 1e-9);
+    let [mean, _] = before.nominal.correlated;
+    let [moved, _] = after.nominal.correlated;
+    assert!((moved - c * mean).norm() < 1e-12);
+}
