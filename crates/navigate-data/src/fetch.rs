@@ -5,16 +5,16 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::future::Future;
 
-use crate::{LayerKind, SourceRef, TileAddress};
+use crate::{LayerKind, Revision, SourceKey, TileAddress};
 
 /// The identity of one source tile: source, revision, layer, and address.
 /// It names the content, not a URL.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileKey {
-    /// Source identifier.
-    pub source: String,
+    /// Source.
+    pub source: SourceKey,
     /// Source revision.
-    pub revision: String,
+    pub revision: Revision,
     /// Layer kind.
     pub layer: LayerKind,
     /// Tile address.
@@ -26,7 +26,7 @@ impl fmt::Display for TileKey {
         let a = self.address;
         write!(
             f,
-            "{}@{}/{:?}/{}/{}/{}",
+            "{:?}@{:?}/{:?}/{}/{}/{}",
             self.source, self.revision, self.layer, a.zoom, a.x, a.y
         )
     }
@@ -42,12 +42,9 @@ pub enum Fetched {
 }
 
 /// A source of tiles that the host implements, for example over HTTP with
-/// a cache. Builders call it when a host prepares a package.
+/// a cache keyed by [`TileKey`]. Builders call it when a host prepares a
+/// package.
 pub trait FetchPort {
-    /// The source of a layer kind, or `None` when this port has no such
-    /// layer.
-    fn source(&self, layer: LayerKind) -> Option<SourceRef>;
-
     /// Gets one tile. An error is a failure of the port; a tile that the
     /// source does not have is [`Fetched::Absent`].
     fn fetch(&self, key: &TileKey) -> impl Future<Output = Result<Fetched, String>>;

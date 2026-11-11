@@ -2,7 +2,8 @@
 //! tiles through `file://` templates, and seals a package whose identity
 //! does not depend on the cache.
 
-use navigate_data::{DirectoryStore, Package, Sha256Digest, TileAddress, TileRead};
+use navigate_data::index::IndexEntry;
+use navigate_data::{DirectoryStore, LayerKind, Package, Sha256Digest, TileAddress, TileRead};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
@@ -67,16 +68,16 @@ fn run(
         ))
         .args([
             "--imagery-source",
-            "test-imagery",
+            "esri_world_imagery",
             "--imagery-revision",
-            "r1",
+            "release:1",
         ])
         .arg("--dem-url")
         .arg(format!(
             "file://{}/dem/{{z}}/{{x}}/{{y}}",
             provider.display()
         ))
-        .args(["--dem-source", "test-terrarium"])
+        .args(["--dem-source", "mapzen_terrarium"])
         .args(extra)
         .output()
         .unwrap();
@@ -139,26 +140,23 @@ fn package_subcommand_plans_fetches_and_seals_a_package() {
     let identity: Sha256Digest = a["package"]["identity"].as_str().unwrap().parse().unwrap();
     let store = DirectoryStore::new(work.path().join("s1"));
     let package = pollster::block_on(Package::open(&store, identity)).unwrap();
+    let manifest = package.manifest().clone();
+    let tiles: u64 = manifest.layers.iter().map(|l| l.index.tiles).sum();
+    assert_eq!(tiles, a["package"]["tiles"].as_u64().unwrap());
     // Identical tiles (the flat elevation) share one blob.
-    let distinct: BTreeSet<_> = package.manifest().blobs().collect();
-    let declared = package.manifest().blobs().count() as u64;
-    assert_eq!(declared, a["package"]["tiles"].as_u64().unwrap());
-    assert_eq!(
-        pollster::block_on(package.verify_all(&store)).unwrap(),
-        distinct.len()
-    );
-    let layer = package.manifest().layer("imagery").unwrap();
-    for zoom in &layer.zooms {
-        for t in &zoom.tiles {
-            let address = TileAddress::new(zoom.zoom, t.x, t.y).unwrap();
-            let read = pollster::block_on(package.tile(&store, "imagery", address)).unwrap();
-            let want = std::fs::read(
-                provider
-                    .path()
-                    .join(format!("img/{}/{}/{}", zoom.zoom, t.x, t.y)),
-            )
-            .unwrap();
-            assert_eq!(read, TileRead::Present(want));
+    let verified = pollster::block_on(package.verify_all(&store)).unwrap() as u64;
+    assert!(verified < tiles, "{verified} {tiles}");
+    let imagery = manifest.layer_of_kind(LayerKind::Imagery).unwrap().key;
+    for (address, entry) in pollster::block_on(package.layer_entries(imagery)).unwrap() {
+        let read = pollster::block_on(package.tile(&store, imagery, address)).unwrap();
+        let file = provider
+            .path()
+            .join(format!("img/{}/{}/{}", address.zoom, address.x, address.y));
+        match entry {
+            IndexEntry::Tile { .. } => {
+                assert_eq!(read, TileRead::Present(std::fs::read(file).unwrap()))
+            }
+            IndexEntry::Gap => assert!(!file.exists() && read == TileRead::Gap),
         }
     }
 }

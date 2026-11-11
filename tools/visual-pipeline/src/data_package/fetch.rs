@@ -2,7 +2,7 @@
 //! never fetches; this tool is a host.
 
 use crate::{PipelineError, external_tool::run_tool};
-use navigate_data::{FetchPort, Fetched, LayerKind, SourceRef, TileKey};
+use navigate_data::{FetchPort, Fetched, LayerKind, LayerSpec, Revision, TileKey};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -12,8 +12,11 @@ pub struct TemplateLayer {
     /// URL template with `{z}`, `{x}`, and `{y}`. `file://` reads local
     /// files; other schemes run `curl`.
     pub url: String,
-    /// The source that the package records.
-    pub source: SourceRef,
+    /// The layer that the package records: source, revision, datums,
+    /// encoding, and accuracy.
+    pub spec: LayerSpec,
+    /// Attribution text for the descriptor.
+    pub attribution: String,
 }
 
 /// A fetch port over URL templates, with a cache keyed by the tile key
@@ -40,11 +43,17 @@ impl TemplateFetch {
         self
     }
 
+    /// The declared layers.
+    pub fn specs(&self) -> Vec<LayerSpec> {
+        self.layers.values().map(|l| l.spec).collect()
+    }
+
     fn cache_path(&self, key: &TileKey) -> PathBuf {
         let a = key.address;
+        let source = serde_json::to_string(&key.source).unwrap_or_default();
         self.cache
-            .join(&key.source)
-            .join(&key.revision)
+            .join(source.trim_matches('"'))
+            .join(revision_text(key.revision))
             .join(format!("{}/{}/{}", a.zoom, a.x, a.y))
     }
 
@@ -109,11 +118,17 @@ impl TemplateFetch {
     }
 }
 
-impl FetchPort for TemplateFetch {
-    fn source(&self, layer: LayerKind) -> Option<SourceRef> {
-        self.layers.get(&layer).map(|l| l.source.clone())
+/// A revision as one path part: `unversioned`, `release-N`, or
+/// `collected-D` (day number).
+pub fn revision_text(revision: Revision) -> String {
+    match revision {
+        Revision::Unversioned => "unversioned".into(),
+        Revision::Release(n) => format!("release-{n}"),
+        Revision::Collected(day) => format!("collected-{}", day.0),
     }
+}
 
+impl FetchPort for TemplateFetch {
     async fn fetch(&self, key: &TileKey) -> Result<Fetched, String> {
         self.fetch_blocking(key).map_err(|error| error.to_string())
     }
@@ -180,22 +195,22 @@ fn download(url: &str, cached: &Path) -> Result<Option<Vec<u8>>, PipelineError> 
 }
 
 /// A fetch port over a `photo-reference-catalog` directory, so that an
-/// existing catalog becomes a package.
+/// existing catalog becomes a package. It answers by layer kind and
+/// address; the host declares the source of each layer.
 #[derive(Clone, Debug)]
 pub struct CatalogFetch {
     root: PathBuf,
     tiles: BTreeMap<(LayerKind, [u32; 3]), String>,
-    sources: BTreeMap<LayerKind, SourceRef>,
+    attribution: BTreeMap<LayerKind, String>,
 }
 
 impl CatalogFetch {
-    /// Reads `catalog.json` in `root`. `revision` names the catalog content
-    /// for the package, for example its release.
+    /// Reads `catalog.json` in `root`.
     ///
     /// # Errors
     ///
     /// Returns [`PipelineError`] when the catalog does not read or decode.
-    pub fn open_blocking(root: &Path, revision: &str) -> Result<Self, PipelineError> {
+    pub fn open_blocking(root: &Path) -> Result<Self, PipelineError> {
         let path = root.join("catalog.json");
         let doc: serde_json::Value = crate::json_file::read_json(&path)?;
         if doc.get("format").and_then(serde_json::Value::as_str) != Some("photo-reference-catalog")
@@ -226,31 +241,20 @@ impl CatalogFetch {
                 tiles.insert((kind, xyz), file.to_owned());
             }
         }
-        let attribution = |name: &str| {
+        let text = |name: &str| {
             doc.pointer(&format!("/attribution/{name}"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned()
         };
-        let source = |id: &str, attribution: String| SourceRef {
-            id: id.to_owned(),
-            revision: revision.to_owned(),
-            attribution,
-        };
-        let sources = BTreeMap::from([
-            (
-                LayerKind::Imagery,
-                source("catalog-imagery", attribution("imagery")),
-            ),
-            (
-                LayerKind::Elevation,
-                source("catalog-terrarium", attribution("dem")),
-            ),
+        let attribution = BTreeMap::from([
+            (LayerKind::Imagery, text("imagery")),
+            (LayerKind::Elevation, text("dem")),
         ]);
         Ok(Self {
             root: root.to_path_buf(),
             tiles,
-            sources,
+            attribution,
         })
     }
 
@@ -261,13 +265,14 @@ impl CatalogFetch {
             .filter(move |(k, _)| *k == kind)
             .map(|(_, xyz)| *xyz)
     }
+
+    /// The attribution text of a layer in the catalog.
+    pub fn attribution(&self, kind: LayerKind) -> &str {
+        self.attribution.get(&kind).map_or("", String::as_str)
+    }
 }
 
 impl FetchPort for CatalogFetch {
-    fn source(&self, layer: LayerKind) -> Option<SourceRef> {
-        self.sources.get(&layer).cloned()
-    }
-
     async fn fetch(&self, key: &TileKey) -> Result<Fetched, String> {
         let a = key.address;
         let Some(file) = self.tiles.get(&(key.layer, [a.zoom, a.x, a.y])) else {

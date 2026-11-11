@@ -1,20 +1,26 @@
 //! Opening a package and reading its tiles.
 
-use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::manifest::Declared;
-use crate::{DataError, Manifest, ReadPort, Sha256Digest, TileAddress, blob_path, manifest_path};
+use alloc::collections::BTreeSet;
+
+use crate::index::{IndexEntry, entries, find, verify_index};
+use crate::store::read_all;
+use crate::{
+    DataError, Descriptor, LayerKey, Manifest, RandomAccess, ReadPort, Sha256Digest, TileAddress,
+    blob_path, descriptor_path, manifest_path,
+};
 
 mod writer;
-pub use writer::PackageWriter;
+pub use writer::{LayerSpec, PackageWriter};
 
-/// A package whose manifest has been checked.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Package {
+/// A package whose manifest and tile indexes have been checked.
+pub struct Package<F> {
     manifest: Manifest,
     identity: Sha256Digest,
+    /// The open index of each layer, in manifest order.
+    indexes: Vec<F>,
 }
 
 /// The answer of a package for one tile of a layer.
@@ -29,21 +35,21 @@ pub enum TileRead {
     Outside,
 }
 
-impl Package {
-    /// Opens the package `identity` in `store`. The manifest bytes must have
-    /// that digest and be in canonical form.
+impl<F: RandomAccess> Package<F> {
+    /// Opens the package `identity` in `store`: the manifest must have that
+    /// digest and be canonical, and each tile index must agree with the
+    /// manifest.
     ///
     /// # Errors
     ///
-    /// Refuses a missing manifest, a digest that differs, and a manifest
-    /// that [`Manifest::from_canonical`] refuses.
-    pub async fn open<S: ReadPort + ?Sized>(
+    /// Refuses a missing or changed manifest, a manifest that
+    /// [`Manifest::from_canonical`] refuses, and a missing or changed index.
+    pub async fn open<S: ReadPort<File = F> + ?Sized>(
         store: &S,
         identity: Sha256Digest,
     ) -> Result<Self, DataError> {
         let path = manifest_path(identity);
-        let bytes = store
-            .read(&path)
+        let bytes = read_all(store, &path)
             .await?
             .ok_or_else(|| DataError::Missing { path: path.clone() })?;
         let actual = Sha256Digest::of(&bytes);
@@ -54,7 +60,29 @@ impl Package {
             });
         }
         let manifest = Manifest::from_canonical(&bytes, &path)?;
-        Ok(Self { manifest, identity })
+        let mut indexes = Vec::with_capacity(manifest.layers.len());
+        for layer in &manifest.layers {
+            let index_path = blob_path(layer.index.blob);
+            let file = store
+                .open(&index_path)
+                .await?
+                .ok_or_else(|| DataError::Missing {
+                    path: index_path.clone(),
+                })?;
+            let counts = verify_index(&file, layer.index.blob, &index_path).await?;
+            if counts.tiles != layer.index.tiles || counts.gaps != layer.index.gaps {
+                return Err(DataError::Integrity {
+                    path: index_path,
+                    detail: String::from("counts do not agree with the manifest"),
+                });
+            }
+            indexes.push(file);
+        }
+        Ok(Self {
+            manifest,
+            identity,
+            indexes,
+        })
     }
 
     /// The manifest.
@@ -63,75 +91,163 @@ impl Package {
         &self.manifest
     }
 
-    /// The package identity: the digest of the canonical manifest. A
-    /// visual fix names it as the `manifest_sha256` of its map revision.
+    /// The package identity: the digest of the canonical manifest. A visual
+    /// fix names it as the `manifest_sha256` of its map revision.
     #[must_use]
     pub const fn identity(&self) -> Sha256Digest {
         self.identity
     }
 
-    /// The release identifier.
-    #[must_use]
-    pub fn release_id(&self) -> &str {
-        &self.manifest.release_id
-    }
-
-    /// Reads one tile of layer `layer_id` and checks its blob.
+    /// The index entry of one address of a layer.
     ///
     /// # Errors
     ///
-    /// Refuses an unknown layer, a blob that the store does not hold, and a
-    /// blob whose size or digest differs from the manifest.
+    /// Refuses a layer that the package does not hold and an index read that
+    /// fails.
+    pub async fn entry(
+        &self,
+        layer: LayerKey,
+        address: TileAddress,
+    ) -> Result<Option<IndexEntry>, DataError> {
+        let position = self
+            .manifest
+            .layers
+            .iter()
+            .position(|l| l.key == layer)
+            .ok_or_else(|| DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            })?;
+        let (Some(file), Some(spec)) = (
+            self.indexes.get(position),
+            self.manifest.layers.get(position),
+        ) else {
+            return Err(DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            });
+        };
+        find(
+            file,
+            spec.index.records(),
+            address,
+            &blob_path(spec.index.blob),
+        )
+        .await
+    }
+
+    /// Reads one tile of a layer and checks its blob.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a layer that the package does not hold, a blob that the
+    /// store does not hold, and a blob whose size or digest differs.
     pub async fn tile<S: ReadPort + ?Sized>(
         &self,
         store: &S,
-        layer_id: &str,
+        layer: LayerKey,
         address: TileAddress,
     ) -> Result<TileRead, DataError> {
-        let layer = self
-            .manifest
-            .layer(layer_id)
-            .ok_or_else(|| DataError::Invalid {
-                field: "layer",
-                detail: String::from(layer_id),
-            })?;
-        match layer.declared(address) {
-            Declared::Outside => Ok(TileRead::Outside),
-            Declared::Gap => Ok(TileRead::Gap),
-            Declared::Tile(tile) => read_blob(store, tile.blob, tile.bytes)
-                .await
-                .map(TileRead::Present),
+        match self.entry(layer, address).await? {
+            None => Ok(TileRead::Outside),
+            Some(IndexEntry::Gap) => Ok(TileRead::Gap),
+            Some(IndexEntry::Tile { blob, bytes }) => {
+                read_blob(store, blob, bytes).await.map(TileRead::Present)
+            }
         }
     }
 
-    /// Reads and checks each blob once. Returns the count of blobs.
+    /// Every record of the index of a layer, in index order.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a layer that the package does not hold and an index read that
+    /// fails.
+    pub async fn layer_entries(
+        &self,
+        layer: LayerKey,
+    ) -> Result<Vec<(TileAddress, IndexEntry)>, DataError> {
+        let position = self
+            .manifest
+            .layers
+            .iter()
+            .position(|l| l.key == layer)
+            .ok_or_else(|| DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            })?;
+        let (Some(file), Some(spec)) = (
+            self.indexes.get(position),
+            self.manifest.layers.get(position),
+        ) else {
+            return Err(DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            });
+        };
+        entries(file, spec.index.records(), &blob_path(spec.index.blob)).await
+    }
+
+    /// Reads and checks each tile blob once. Returns the count of distinct
+    /// blobs.
     ///
     /// # Errors
     ///
     /// Returns the first blob that is missing or does not agree.
     pub async fn verify_all<S: ReadPort + ?Sized>(&self, store: &S) -> Result<usize, DataError> {
-        let blobs: BTreeSet<(Sha256Digest, u64)> = self.manifest.blobs().collect();
-        for &(digest, bytes) in &blobs {
-            read_blob(store, digest, bytes).await?;
+        let mut seen = BTreeSet::new();
+        for layer in &self.manifest.layers {
+            for (_, entry) in self.layer_entries(layer.key).await? {
+                if let IndexEntry::Tile { blob, bytes } = entry
+                    && seen.insert(blob)
+                {
+                    read_blob(store, blob, bytes).await?;
+                }
+            }
         }
-        Ok(blobs.len())
+        Ok(seen.len())
+    }
+
+    /// The descriptor, if the store holds one.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a descriptor that does not decode.
+    pub async fn descriptor<S: ReadPort + ?Sized>(
+        &self,
+        store: &S,
+    ) -> Result<Option<Descriptor>, DataError> {
+        let path = descriptor_path(self.identity);
+        let Some(bytes) = read_all(store, &path).await? else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| DataError::Document {
+                path,
+                detail: alloc::format!("{error}"),
+            })
     }
 }
 
-async fn read_blob<S: ReadPort + ?Sized>(
+/// Reads one blob and checks its size and digest.
+///
+/// # Errors
+///
+/// Refuses a missing blob and a blob that does not agree.
+pub async fn read_blob<S: ReadPort + ?Sized>(
     store: &S,
     digest: Sha256Digest,
     size: u64,
 ) -> Result<Vec<u8>, DataError> {
     let path = blob_path(digest);
-    let bytes = store
-        .read(&path)
+    let bytes = read_all(store, &path)
         .await?
         .ok_or_else(|| DataError::Missing { path: path.clone() })?;
     if bytes.len() as u64 != size || Sha256Digest::of(&bytes) != digest {
         return Err(DataError::Integrity {
             path,
-            detail: alloc::format!("{} bytes do not agree with the manifest", bytes.len()),
+            detail: alloc::format!("{} bytes do not agree with the index", bytes.len()),
         });
     }
     Ok(bytes)

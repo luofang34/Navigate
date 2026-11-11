@@ -10,8 +10,9 @@ pub use ground::{GROUND_ZOOM, TerrariumGround};
 
 use crate::{PipelineError, json_file::read_json};
 use navigate_data::{
-    Accuracy, DirectoryStore, Encoding, FetchPort, LayerKind, LayerLimits, LayerTemplate,
-    PlannedCamera, PlannedLeg, ResourceRequest, SourceRef, TileKey, VerticalDatum, plan_resources,
+    Accuracy, DEFAULT_CORRELATION_ZOOM, Descriptor, DirectoryStore, Encoding, GeoidModel,
+    HorizontalDatum, LayerKey, LayerKind, LayerLabel, LayerLimits, LayerSpec, PlannedCamera,
+    PlannedLeg, ResourceRequest, Revision, SourceKey, TileKey, VerticalDatum, plan_resources,
     plan_tiles, prepare,
 };
 use serde::{Deserialize, Serialize};
@@ -122,29 +123,90 @@ pub struct PackageOptions {
     pub plan_only: bool,
 }
 
-/// The layer templates of a Terrarium elevation layer and a JPEG imagery
-/// layer, with unknown accuracy.
-pub fn default_templates() -> Vec<LayerTemplate> {
-    vec![
-        LayerTemplate {
-            id: "imagery".into(),
-            kind: LayerKind::Imagery,
-            encoding: Encoding::Jpeg,
-            tile_pixels: 256,
-            vertical_datum: None,
-            accuracy: Accuracy::unknown(),
+/// The spec of a layer of `kind` from `source` at `revision`: WGS84,
+/// 256-pixel tiles, JPEG imagery or Terrarium elevation above EGM96, and
+/// unknown accuracy.
+pub fn layer_spec(kind: LayerKind, source: SourceKey, revision: Revision) -> LayerSpec {
+    let elevation = kind == LayerKind::Elevation;
+    LayerSpec {
+        key: LayerKey { kind, source },
+        revision,
+        horizontal_datum: HorizontalDatum::Wgs84,
+        vertical_datum: elevation.then_some(VerticalDatum::Orthometric {
+            geoid: GeoidModel::Egm96,
+        }),
+        encoding: if elevation {
+            Encoding::TerrariumPng
+        } else {
+            Encoding::Jpeg
         },
-        LayerTemplate {
-            id: "elevation".into(),
-            kind: LayerKind::Elevation,
-            encoding: Encoding::TerrariumPng,
-            tile_pixels: 256,
-            vertical_datum: Some(VerticalDatum::Orthometric {
-                geoid_model: "egm96".into(),
-            }),
-            accuracy: Accuracy::unknown(),
-        },
-    ]
+        tile_pixels: 256,
+        accuracy: Accuracy::unknown(),
+        correlation_zoom: DEFAULT_CORRELATION_ZOOM,
+    }
+}
+
+/// A registry source from its name, for example `esri_world_imagery`.
+///
+/// # Errors
+///
+/// Refuses a name that the registry does not hold.
+pub fn parse_source(text: &str) -> Result<SourceKey, PipelineError> {
+    match serde_json::from_value(Value::String(text.to_owned())) {
+        Ok(SourceKey::Unsupported) | Err(_) => {
+            Err(PipelineError::Invalid(format!("unknown source {text}")))
+        }
+        Ok(source) => Ok(source),
+    }
+}
+
+/// A revision from `unversioned`, `release:N`, or `collected:YYYY-MM-DD`.
+///
+/// # Errors
+///
+/// Refuses any other text.
+pub fn parse_revision(text: &str) -> Result<Revision, PipelineError> {
+    let bad = || {
+        PipelineError::Invalid(format!(
+            "revision {text}: use unversioned, release:N, or collected:YYYY-MM-DD"
+        ))
+    };
+    if text == "unversioned" {
+        return Ok(Revision::Unversioned);
+    }
+    if let Some(n) = text.strip_prefix("release:") {
+        return n.parse().map(Revision::Release).map_err(|_| bad());
+    }
+    let date = text.strip_prefix("collected:").ok_or_else(bad)?;
+    let parts: Vec<&str> = date.split('-').collect();
+    let [y, m, d] = parts.as_slice() else {
+        return Err(bad());
+    };
+    let (y, m, d) = (
+        y.parse().map_err(|_| bad())?,
+        m.parse().map_err(|_| bad())?,
+        d.parse().map_err(|_| bad())?,
+    );
+    navigate_data::DayNumber::from_ymd(y, m, d)
+        .map(Revision::Collected)
+        .map_err(PipelineError::from)
+}
+
+/// The descriptor of a package from the plan release and the layers.
+pub fn descriptor(release_id: &str, layers: &[&TemplateLayer]) -> Descriptor {
+    Descriptor {
+        release_id: release_id.to_owned(),
+        layers: layers
+            .iter()
+            .map(|l| LayerLabel {
+                key: l.spec.key,
+                label: format!("{:?}", l.spec.key.source),
+                attribution: l.attribution.clone(),
+                licence: String::new(),
+            })
+            .collect(),
+        note: String::new(),
+    }
 }
 
 /// Plans the flight, fetches the planned tiles, and seals a package.
@@ -164,7 +226,7 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
         .iter()
         .map(|w| [w.lat_deg, w.lon_deg])
         .collect();
-    let ground = TerrariumGround::fetch_blocking(&fetch, &points)?;
+    let ground = TerrariumGround::fetch_blocking(&fetch, &options.elevation.spec, &points)?;
     let request = plan_file.request();
     let plan = plan_resources(&request, &ground)?;
     let tiles = plan_tiles(&request.legs, &plan)?;
@@ -184,10 +246,14 @@ pub fn build_package_blocking(options: &PackageOptions) -> Result<Value, Pipelin
     tracing::info!(tiles = keys.len(), "fetching planned tiles");
     fetch.prefetch_blocking(&keys, FETCH_THREADS)?;
     let mut store = DirectoryStore::new(&options.store);
-    let summary = pollster::block_on(prepare(
+    let descriptor = descriptor(
         &plan_file.release_id,
+        &[&options.imagery, &options.elevation],
+    );
+    let summary = pollster::block_on(prepare(
         &tiles,
-        &default_templates(),
+        &fetch.specs(),
+        &descriptor,
         options.max_tiles,
         &fetch,
         &mut store,
@@ -203,14 +269,16 @@ fn keys(
     fetch: &TemplateFetch,
     tiles: &navigate_data::PlannedTiles,
 ) -> Result<Vec<TileKey>, PipelineError> {
+    let specs = fetch.specs();
     let mut keys = Vec::new();
     for (&kind, addresses) in tiles {
-        let source: SourceRef = fetch
-            .source(kind)
-            .ok_or_else(|| PipelineError::Invalid(format!("no {kind:?} source")))?;
+        let spec = specs
+            .iter()
+            .find(|s| s.key.kind == kind)
+            .ok_or_else(|| PipelineError::Invalid(format!("no {kind:?} layer")))?;
         keys.extend(addresses.iter().map(|&address| TileKey {
-            source: source.id.clone(),
-            revision: source.revision.clone(),
+            source: spec.key.source,
+            revision: spec.revision,
             layer: kind,
             address,
         }));

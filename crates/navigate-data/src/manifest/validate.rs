@@ -1,10 +1,11 @@
-//! The ordering and value rules of a manifest.
+//! The rules of a manifest.
 
 use alloc::string::String;
 
 use crate::{
-    Accuracy, DataError, LayerKind, MAX_ZOOM, Sigma,
-    manifest::{Layer, LayerZoom, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION},
+    Body, DataError, EllipsoidId, Encoding, GeoidModel, GridScheme, HorizontalDatum, LayerKind,
+    MAX_ZOOM, SourceKey, VerticalDatum,
+    manifest::{Layer, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION},
 };
 
 fn invalid(field: &'static str, detail: impl Into<String>) -> DataError {
@@ -14,34 +15,52 @@ fn invalid(field: &'static str, detail: impl Into<String>) -> DataError {
     }
 }
 
+const fn unsupported(field: &'static str) -> DataError {
+    DataError::Unsupported { field }
+}
+
 impl Manifest {
-    /// Checks the format, the ordering, and the values.
+    /// Checks the format, the version, the vocabulary, and the order.
     ///
     /// # Errors
     ///
-    /// Refuses another format or version, an empty release identifier, a
-    /// grid that is not the fixed grid, layers out of order or repeated, and
-    /// any layer that [`Layer::validate`] refuses.
+    /// Refuses another format, another version ([`DataError::Version`]), an
+    /// unsupported body, ellipsoid, or grid scheme
+    /// ([`DataError::Unsupported`]), a manifest without layers, layers out
+    /// of order or repeated, and any layer that [`Layer::validate`]
+    /// refuses.
     pub fn validate(&self) -> Result<(), DataError> {
-        if self.format != PACKAGE_FORMAT || self.version != PACKAGE_FORMAT_VERSION {
-            return Err(invalid(
-                "format",
-                alloc::format!("{} version {}", self.format, self.version),
-            ));
+        if self.format != PACKAGE_FORMAT {
+            return Err(invalid("format", self.format.clone()));
         }
-        if self.release_id.is_empty() {
-            return Err(invalid("release_id", "empty"));
+        if self.version != PACKAGE_FORMAT_VERSION {
+            return Err(DataError::Version {
+                document: "package manifest",
+                found: self.version,
+                supported: PACKAGE_FORMAT_VERSION,
+            });
         }
-        if self.grid != crate::GridSpec::default() {
-            return Err(invalid("grid", alloc::format!("{:?}", self.grid)));
+        if self.body != Body::Earth {
+            return Err(unsupported("body"));
         }
-        if self.layers.windows(2).any(|w| match w {
-            [a, b] => a.id >= b.id,
-            _ => false,
-        }) {
-            return Err(invalid("layers", "not in strict identifier order"));
+        if self.ellipsoid != EllipsoidId::Wgs84 {
+            return Err(unsupported("ellipsoid"));
         }
-        self.layers.iter().try_for_each(Layer::validate)
+        if self.grid != GridScheme::WebMercatorXyz {
+            return Err(unsupported("grid"));
+        }
+        if self.layers.is_empty() {
+            return Err(invalid("layers", "a package has at least one layer"));
+        }
+        self.layers.iter().try_for_each(Layer::validate)?;
+        if self
+            .layers
+            .windows(2)
+            .any(|w| matches!(w, [a, b] if a.key >= b.key))
+        {
+            return Err(invalid("layers", "not in strict key order"));
+        }
+        Ok(())
     }
 }
 
@@ -50,87 +69,67 @@ impl Layer {
     ///
     /// # Errors
     ///
-    /// Refuses an empty identifier or source identity, zero tile pixels, an
-    /// elevation layer without a vertical datum, an imagery layer with one,
-    /// a sigma that is not finite and non-negative, and any zoom level that
-    /// breaks the ordering rules.
+    /// Refuses an unsupported kind, source, encoding, horizontal datum,
+    /// vertical datum, or geoid model; an elevation layer without a
+    /// vertical datum and an imagery layer with one; zero tile pixels; a
+    /// correlation zoom past the scheme; and an index whose counts do not
+    /// match its size.
     pub fn validate(&self) -> Result<(), DataError> {
-        if self.id.is_empty() || self.source.id.is_empty() || self.source.revision.is_empty() {
-            return Err(invalid("layer", alloc::format!("{:?}", self.id)));
+        if self.key.kind == LayerKind::Unsupported {
+            return Err(unsupported("layer kind"));
         }
-        if self.tile_pixels == 0 {
-            return Err(invalid("tile_pixels", "zero"));
+        if self.key.source == SourceKey::Unsupported {
+            return Err(unsupported("source"));
         }
-        let datum_ok = match self.kind {
-            LayerKind::Elevation => self.vertical_datum.is_some(),
-            _ => self.vertical_datum.is_none(),
-        };
-        if !datum_ok {
+        if self.encoding == Encoding::Unsupported {
+            return Err(unsupported("encoding"));
+        }
+        if self.horizontal_datum == HorizontalDatum::Unsupported {
+            return Err(unsupported("horizontal datum"));
+        }
+        match (self.key.kind, self.vertical_datum) {
+            (LayerKind::Elevation, None) => {
+                return Err(invalid("vertical_datum", "elevation needs one"));
+            }
+            (LayerKind::Imagery, Some(_)) => {
+                return Err(invalid("vertical_datum", "imagery has none"));
+            }
+            (_, Some(VerticalDatum::Unsupported)) => return Err(unsupported("vertical datum")),
+            (
+                _,
+                Some(VerticalDatum::Orthometric {
+                    geoid: GeoidModel::Unsupported,
+                }),
+            ) => {
+                return Err(unsupported("geoid model"));
+            }
+            _ => {}
+        }
+        if self.tile_pixels == 0 || self.correlation_zoom > MAX_ZOOM {
             return Err(invalid(
-                "vertical_datum",
-                alloc::format!("layer {}", self.id),
+                "layer",
+                alloc::format!(
+                    "{} px, correlation zoom {}",
+                    self.tile_pixels,
+                    self.correlation_zoom
+                ),
             ));
         }
-        check_accuracy(&self.accuracy)?;
-        if self.zooms.windows(2).any(|w| match w {
-            [a, b] => a.zoom >= b.zoom,
-            _ => false,
-        }) {
-            return Err(invalid("zooms", "not in strict increasing order"));
+        let expected = (crate::index::INDEX_MAGIC.len() as u64).saturating_add(
+            self.index
+                .records()
+                .saturating_mul(crate::index::RECORD_BYTES as u64),
+        );
+        if self.index.bytes != expected {
+            return Err(invalid(
+                "index",
+                alloc::format!(
+                    "{} bytes for {} records",
+                    self.index.bytes,
+                    self.index.records()
+                ),
+            ));
         }
-        self.zooms.iter().try_for_each(check_zoom)
+        Ok(())
     }
-}
-
-fn check_accuracy(accuracy: &Accuracy) -> Result<(), DataError> {
-    for sigma in [
-        accuracy.horizontal,
-        accuracy.vertical,
-        accuracy.age_growth_per_year,
-    ] {
-        if let Sigma::Known(value) = sigma
-            && !(value.is_finite() && value >= 0.0)
-        {
-            return Err(invalid("accuracy", alloc::format!("{value}")));
-        }
-    }
-    Ok(())
-}
-
-fn check_zoom(zoom: &LayerZoom) -> Result<(), DataError> {
-    if zoom.zoom > MAX_ZOOM {
-        return Err(invalid("zoom", alloc::format!("{}", zoom.zoom)));
-    }
-    let side = 1_u64 << zoom.zoom;
-    let inside = |x: u32, y: u32| u64::from(x) < side && u64::from(y) < side;
-    let tiles_ordered = zoom.tiles.windows(2).all(|w| match w {
-        [a, b] => (a.y, a.x) < (b.y, b.x),
-        _ => true,
-    });
-    let gaps_ordered = zoom.gaps.windows(2).all(|w| match w {
-        [[ax, ay], [bx, by]] => (ay, ax) < (by, bx),
-        _ => true,
-    });
-    if !tiles_ordered || !gaps_ordered {
-        return Err(invalid(
-            "tiles",
-            alloc::format!("zoom {} is not in strict row, column order", zoom.zoom),
-        ));
-    }
-    if zoom.tiles.iter().any(|t| !inside(t.x, t.y)) || zoom.gaps.iter().any(|&[x, y]| !inside(x, y))
-    {
-        return Err(invalid(
-            "tiles",
-            alloc::format!("address outside zoom {}", zoom.zoom),
-        ));
-    }
-    let both = zoom.gaps.iter().any(|&[x, y]| {
-        zoom.tiles
-            .binary_search_by_key(&(y, x), |t| (t.y, t.x))
-            .is_ok()
-    });
-    if both {
-        return Err(invalid("gaps", "an address is both a tile and a gap"));
-    }
-    Ok(())
 }

@@ -3,7 +3,7 @@
 
 use crate::PipelineError;
 use navigate_data::tile::{decode_terrarium_m, tile_xy};
-use navigate_data::{FetchPort, Fetched, GroundHeight, LayerKind, TileAddress, TileKey};
+use navigate_data::{FetchPort, Fetched, GroundHeight, LayerKind, LayerSpec, TileAddress, TileKey};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The zoom of the planning elevation: approximately 120 m pixels.
@@ -24,18 +24,21 @@ impl TerrariumGround {
     /// fails, or a tile does not decode.
     pub fn fetch_blocking<F: FetchPort>(
         fetch: &F,
+        elevation: &LayerSpec,
         points: &[[f64; 2]],
     ) -> Result<Self, PipelineError> {
-        let source = fetch
-            .source(LayerKind::Elevation)
-            .ok_or_else(|| PipelineError::Invalid("the port has no elevation source".into()))?;
+        if elevation.key.kind != LayerKind::Elevation {
+            return Err(PipelineError::Invalid(
+                "the planning layer is not elevation".into(),
+            ));
+        }
         let mut wanted = BTreeSet::new();
         navigate_data::corridor::corridor_tiles(points, 2_000.0, GROUND_ZOOM, &mut wanted)?;
         let mut ground = Self::default();
         for address in wanted {
             let key = TileKey {
-                source: source.id.clone(),
-                revision: source.revision.clone(),
+                source: elevation.key.source,
+                revision: elevation.revision,
                 layer: LayerKind::Elevation,
                 address,
             };

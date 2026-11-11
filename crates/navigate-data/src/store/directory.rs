@@ -1,18 +1,26 @@
 //! A store in a directory of the native file system.
 
-use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::store::checked_path;
-use crate::{DataError, ReadPort, WritePort};
+use crate::{DataError, RandomAccess, ReadPort, WritePort};
 
-/// A store in a directory. The futures complete at once: the calls block
+/// A store in a directory. The futures complete at once: each call blocks
 /// the caller for the file operation, so an asynchronous host runs them on
 /// a thread that can block.
 #[derive(Clone, Debug)]
 pub struct DirectoryStore {
     root: PathBuf,
+}
+
+/// An open file of a [`DirectoryStore`].
+#[derive(Clone, Debug)]
+pub struct DirectoryFile {
+    path: PathBuf,
+    len: u64,
 }
 
 impl DirectoryStore {
@@ -32,19 +40,42 @@ impl DirectoryStore {
     }
 }
 
-fn store_error(path: &str, error: &std::io::Error) -> DataError {
+fn store_error(path: &Path, error: &std::io::Error) -> DataError {
     DataError::Store {
-        path: String::from(path),
+        path: path.display().to_string(),
         message: alloc::format!("{error}"),
     }
 }
 
+impl RandomAccess for DirectoryFile {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    async fn read_at(&self, offset: u64, length: usize) -> Result<Vec<u8>, DataError> {
+        let mut file = std::fs::File::open(&self.path).map_err(|e| store_error(&self.path, &e))?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| store_error(&self.path, &e))?;
+        let mut out = alloc::vec![0_u8; length];
+        file.read_exact(&mut out)
+            .map_err(|e| store_error(&self.path, &e))?;
+        Ok(out)
+    }
+}
+
 impl ReadPort for DirectoryStore {
-    async fn read(&self, path: &str) -> Result<Option<Vec<u8>>, DataError> {
-        match std::fs::read(self.file(path)?) {
-            Ok(bytes) => Ok(Some(bytes)),
+    type File = DirectoryFile;
+
+    async fn open(&self, path: &str) -> Result<Option<DirectoryFile>, DataError> {
+        let file = self.file(path)?;
+        match std::fs::metadata(&file) {
+            Ok(meta) if meta.is_file() => Ok(Some(DirectoryFile {
+                path: file,
+                len: meta.len(),
+            })),
+            Ok(_) => Ok(None),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(store_error(path, &error)),
+            Err(error) => Err(store_error(&file, &error)),
         }
     }
 }
@@ -58,11 +89,11 @@ impl WritePort for DirectoryStore {
             return Ok(());
         }
         if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| store_error(path, &e))?;
+            std::fs::create_dir_all(parent).map_err(|e| store_error(parent, &e))?;
         }
         let part = file.with_extension("part");
-        std::fs::write(&part, bytes).map_err(|e| store_error(path, &e))?;
-        std::fs::rename(&part, &file).map_err(|e| store_error(path, &e))
+        std::fs::write(&part, bytes).map_err(|e| store_error(&part, &e))?;
+        std::fs::rename(&part, &file).map_err(|e| store_error(&file, &e))
     }
 
     async fn contains(&self, path: &str) -> Result<bool, DataError> {
