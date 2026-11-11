@@ -7,7 +7,7 @@
 //! extra measurement must not get worse on average, and its horizontal
 //! NEES must stay in its band.
 
-use nalgebra::Vector3;
+use nalgebra::{Rotation3, Vector3};
 
 use super::flight_truth::{Alignment, FREE_INDEX, Flight, Route, draw3, tactical};
 use super::*;
@@ -69,24 +69,30 @@ const ALIGNMENT: Alignment = Alignment {
 const STARS_PER_FRAME: u32 = 8;
 /// Centroid direction 1-sigma, radians.
 const STAR_SIGMA_RAD: f64 = 5e-6;
-// The camera mount has no alignment error here. A constant mount error
-// that each line of sight declares as white variance is not modelled:
-// with 2e-5 rad of it the attitude NEES with stars was 17.8, because the
-// filter averages a constant error as if it were noise. That needs a
-// time-correlated error model (ADR-0023), not a white variance.
+/// The constant camera mount error of the limit case, radians about each
+/// axis, declared as white variance on each line of sight.
+const MOUNT_SIGMA_RAD: f64 = 2e-5;
 
 /// One case of the distribution.
 #[derive(Clone, Copy)]
 struct Case {
     stars: bool,
     route: Route,
+    /// 1-sigma of the constant mount error of each run, radians.
+    mount_rad: f64,
 }
 
 /// One frame of the roof camera: `STARS_PER_FRAME` lines of sight in a
 /// cone around the body zenith, with centroid noise.
-fn offer_stars(flight: &mut Flight, star: &mut u32, at_ms: u64) -> u32 {
+fn offer_stars(
+    flight: &mut Flight,
+    star: &mut u32,
+    mount: &Rotation3<f64>,
+    mount_rad: f64,
+    at_ms: u64,
+) -> u32 {
     let seed = flight.seed;
-    let variance = STAR_SIGMA_RAD.powi(2);
+    let variance = STAR_SIGMA_RAD.powi(2) + mount_rad.powi(2);
     let c = flight.truth_body_to_frame();
     let mut refused = 0_u32;
     for _ in 0..STARS_PER_FRAME {
@@ -94,7 +100,7 @@ fn offer_stars(flight: &mut Flight, star: &mut u32, at_ms: u64) -> u32 {
         let tilt = draw3(seed, FREE_INDEX + 3 + 6 * *star, 0.25);
         let body_unit = Vector3::new(tilt.x, tilt.y, -1.0).normalize();
         let noise = draw3(seed, FREE_INDEX + 6 + 6 * *star, STAR_SIGMA_RAD);
-        let measured_unit = (body_unit + noise).normalize();
+        let measured_unit = (mount * body_unit + noise).normalize();
         let observation = Observation::in_frame(
             stamp(7, *star, at_ms),
             ObservationValue::LineOfSight {
@@ -119,13 +125,20 @@ fn offer_stars(flight: &mut Flight, star: &mut u32, at_ms: u64) -> u32 {
 /// meters at the end of one run of a tactical IMU.
 fn run(seed: u32, case: Case) -> (f64, f64, f64) {
     let mut flight = Flight::new(case.route, seed, tactical(), ALIGNMENT);
+    let mount = Rotation3::new(draw3(seed, FREE_INDEX, case.mount_rad));
     let per_frame = (1.0 / case.route.step_s).round() as u32;
     let (mut star, mut refused) = (0_u32, 0_u32);
     let mut at_ms = 0;
     for k in 1..=case.route.steps() {
         at_ms = flight.step();
         if case.stars && k % per_frame == 0 {
-            refused = refused.wrapping_add(offer_stars(&mut flight, &mut star, at_ms));
+            refused = refused.wrapping_add(offer_stars(
+                &mut flight,
+                &mut star,
+                &mount,
+                case.mount_rad,
+                at_ms,
+            ));
         }
     }
     assert!(refused * 100 <= star.max(1), "{refused} of {star} refused");
@@ -150,8 +163,13 @@ fn monte_carlo_stars_do_not_make_the_horizontal_estimate_worse() {
         let (free_nees, free_att, free_rms, free) = distribution(Case {
             stars: false,
             route,
+            mount_rad: 0.0,
         });
-        let (star_nees, star_att, star_rms, starred) = distribution(Case { stars: true, route });
+        let (star_nees, star_att, star_rms, starred) = distribution(Case {
+            stars: true,
+            route,
+            mount_rad: 0.0,
+        });
         let (low, high) = HORIZONTAL_BAND;
         for nees in [free_nees, star_nees] {
             assert!(
@@ -188,4 +206,21 @@ fn monte_carlo_stars_do_not_make_the_horizontal_estimate_worse() {
             free.len()
         );
     }
+}
+
+#[test]
+fn monte_carlo_a_constant_mount_error_declared_as_white_makes_the_attitude_over_confident() {
+    // A constant camera mount error that each line of sight declares as
+    // white variance: the filter averages it over the lines of sight and
+    // the frames as if it were noise, so the attitude covariance falls
+    // below the error. The mean attitude NEES is above its band (17.8 in
+    // the release sample). A time-correlated error model for the mount
+    // (ADR-0023) or a mount state brings it into the band, and this test
+    // then inverts.
+    let (_, attitude, _, _) = distribution(Case {
+        stars: true,
+        route: AT_REST,
+        mount_rad: MOUNT_SIGMA_RAD,
+    });
+    assert!(attitude > ATTITUDE_BAND.1, "attitude NEES {attitude}");
 }

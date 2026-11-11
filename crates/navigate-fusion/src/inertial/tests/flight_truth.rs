@@ -287,7 +287,9 @@ impl Flight {
     /// nominal less the height of the truth, against the vertical
     /// variance of the published solution.
     pub(super) fn height_nees(&mut self) -> f64 {
-        let at = self.filter.tick(t(u64::from(self.step) * (self.route.step_s * 1_000.0).round() as u64));
+        let at = self.filter.tick(t(
+            u64::from(self.step) * (self.route.step_s * 1_000.0).round() as u64
+        ));
         let vertical = at.map_or(f64::NAN, |s| s.position_cov.upper_triangle()[5]);
         let height = |p: &Vector3<f64>| {
             LocalLevel::at_body_fixed(p, BodyEllipsoid::WGS84)

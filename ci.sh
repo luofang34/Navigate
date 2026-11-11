@@ -77,7 +77,8 @@ echo "== navigate-fusion Monte Carlo consistency (release) =="
 # The names are exact, and the step fails unless all of them ran.
 monte_carlo_tests="inertial::tests::baro_consistency::monte_carlo_a_barometric_altitude_improves_the_horizontal_estimate_consistently
 inertial::tests::baro_maneuver::monte_carlo_an_altimeter_in_turns_keeps_the_horizontal_estimate_consistent
-inertial::tests::star_distribution::monte_carlo_stars_do_not_make_the_horizontal_estimate_worse"
+inertial::tests::star_distribution::monte_carlo_stars_do_not_make_the_horizontal_estimate_worse
+inertial::tests::star_distribution::monte_carlo_a_constant_mount_error_declared_as_white_makes_the_attitude_over_confident"
 monte_carlo_count=$(echo "$monte_carlo_tests" | wc -l | tr -d ' ')
 # shellcheck disable=SC2086
 monte_carlo_out=$(cargo test --release -p navigate-fusion --lib -- --exact $monte_carlo_tests 2>&1) \
