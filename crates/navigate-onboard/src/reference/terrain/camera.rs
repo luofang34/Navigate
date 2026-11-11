@@ -350,7 +350,7 @@ impl TerrainCamera {
         if self.inspect {
             self.pending.solved(&estimate);
         }
-        let geometry = ViewGeometry::of(&estimate, view);
+        let geometry = ViewGeometry::of(&estimate, view, &self.declared);
         // The map error of a fix is the error of the imagery that the
         // camera saw: the cell is that of the matched ground, not of the
         // vehicle.

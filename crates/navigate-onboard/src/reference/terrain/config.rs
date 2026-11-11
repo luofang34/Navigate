@@ -87,6 +87,13 @@ pub struct TerrainConfig {
     /// needs corners in each part of the image, so a frame is not made
     /// smaller than this for a coarse map.
     pub min_match_pixels: u32,
+    /// Length over which the error of the elevation model is correlated,
+    /// metres. A package states the one-sigma of its elevation and not
+    /// this length; the tilt of that error under a footprint moves a fix
+    /// horizontally, and the length sets how large the tilt can be. The
+    /// default suits a 1-arc-second radar model such as SRTM over farmland
+    /// and hills.
+    pub dem_correlation_length_m: f64,
 }
 
 impl Default for TerrainConfig {
@@ -109,6 +116,7 @@ impl Default for TerrainConfig {
             min_structure: 2.0,
             max_match_pixels: 320 * 240,
             min_match_pixels: 160 * 120,
+            dem_correlation_length_m: 300.0,
         }
     }
 }
@@ -179,6 +187,7 @@ impl TerrainConfig {
             self.far_m,
             self.min_structure,
             f64::from(self.depth_edge),
+            self.dem_correlation_length_m,
         ]
         .iter()
         .all(|v| v.is_finite() && *v > 0.0);
