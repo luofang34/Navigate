@@ -13,6 +13,7 @@ use crate::{
 mod calibration;
 mod declared;
 mod envelope;
+mod forward;
 mod inputs;
 mod lacks;
 mod motion;
