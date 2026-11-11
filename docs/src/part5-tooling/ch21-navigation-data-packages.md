@@ -390,6 +390,148 @@ record of a star frame names its identification mode, `tracking` or
 `lost_in_space`), terrain-camera frames, and observations that a sensor
 makes itself.
 
+### Alignment
+
+A navigator that the host does not align finds its first state from its
+sensors. `Navigator::alignment_status` gives `Aligning { phase,
+waiting_for }` or `Aligned { record, suspect }`; `solution` gives `None`
+before the state. `waiting_for` is an `AlignmentNeed`, whose `name()` is
+the stable text in the table below. `Navigator::set_alignment_config`
+and `Navigator::set_magnetic_reference` reach a navigator held as a trait
+object. Before the state as after it, an input whose data is
+not of the kind of its sensor is refused with `WrongData`. An inertial
+increment goes to the alignment. A GNSS fix, a magnetic field, a
+surveyed position, and a known position go to the alignment and give a record
+`Unused("alignment")`; a barometer altitude, a star frame, a terrain
+frame, and an observation give the same record and are not used. A star
+exposure mark holds no prior.
+
+The reference navigator aligns at rest, in windows of
+`AlignmentConfig::window_s` (2 s). A window is the inertial increments of
+one unbroken stretch of time by their stamps: an increment that does not
+start where the last one ended, to half a step, starts a new window, and
+an input of another sensor counts only in the window that holds its
+acquisition stamp. A window gives a state when it has:
+
+| Part | Source | `waiting_for` when it is absent |
+|---|---|---|
+| Rest | enough increments to judge their scatter; specific force scatter, mean specific force near gravity, and mean body rate within four sigma of the declared IMU budget; and the mean GNSS velocity of the window within four sigma of zero, or a `SurveyedPosition` input | `rest_samples`, `rest`, `rest_evidence` |
+| Roll, pitch | mean specific force | (`rest_window` while the window fills) |
+| Heading | `SensorKind::Magnetometer` with `SensorData::MagneticField`, and the `MagneticReference` that the host states | `heading_source`, `field_strength`, `heading_uncertain` |
+| Position | a GNSS fix with a covariance or a declared budget, or `SensorKind::SurveyedPoint` with `SensorData::SurveyedPosition` or `SensorData::KnownPosition` | `position_source` |
+
+`SensorData::SurveyedPosition` says that the vehicle is at rest on the
+point; `SensorData::KnownPosition` gives a position and says nothing of
+rest.
+
+The velocity of a state of rest is zero. Its one-sigma on each axis is
+the noise of the rest evidence spread to the four-sigma gate, `σ·√(1 +
+4²/3)`: with GNSS, `σ` is the one-sigma of the mean velocity of the
+window (from the velocity covariance of each fix or the declared
+receiver budget); on a surveyed point, which no sensor measures the
+velocity of, `σ` is the accelerometer noise density times the root of
+the window length. A GNSS velocity with neither covariance nor budget is
+no evidence of rest.
+
+`ErrorBudget::Magnetometer` states two fields on each axis, in tesla:
+the noise of one sample and the residual body field after calibration (a
+bias: hard and soft iron and motor currents). The field of the place is
+not a property of the sensor: the host states it with
+`Navigator::set_magnetic_reference` from a field model, as declination,
+total intensity, and their one-sigmas, and states it again when the place
+or the epoch changes it. A field across the horizontal component turns
+the heading by its ratio to that component, so the heading one-sigma
+holds the noise of the mean and the body field over the measured
+horizontal intensity, the declination one-sigma, and the tilt error
+through the dip. A mean field whose strength is more than four sigma from
+the stated intensity is disturbed, and the alignment waits with
+`field_strength`. When the heading one-sigma is above
+`max_heading_sigma_rad`, it waits with `heading_uncertain`. The `AlignmentRecord` states the sources, the
+one-sigma of the tilt and of the heading, and the gyroscope bias of the
+window (the mean rate less the Earth rate) with its one-sigma. The filter
+starts its gyroscope bias from that value and one-sigma, and its
+accelerometer bias at zero with the declared one-sigma, because a
+levelled tilt holds the accelerometer bias. A transfer alignment starts
+the biases from `Alignment::imu_bias_prior`, for example a ground
+calibration of the gyroscope turn-on bias before an in-air start; without
+a prior it starts them at zero and clears the prior of an earlier
+alignment. After the state, a magnetometer, surveyed-point, or
+known-position input gives a record `Unused("alignment_only")`.
+
+A vehicle that moves along its nose also aligns in motion. The host
+sets `AlignmentConfig::course_heading_sigma_rad` to the one-sigma of the
+angle between its course over the ground and its heading: a small value
+for wheels on the ground, the crab angle of the expected cross wind for a
+fixed wing in the air. The default is `None`: the course is not a
+heading, and a moving vehicle waits with `rest`. With a value, a vehicle
+near rest (a GNSS speed within four sigma of the receiver noise) still
+aligns by its rest window, and a GNSS fix of a moving vehicle gives the
+state of the instant of that fix when the alignment has:
+
+| Part | Source | `waiting_for` when it is absent |
+|---|---|---|
+| Position | the fix has a covariance, or the receiver has a declared budget | `position_source` |
+| Velocity | the fix has a velocity covariance, or the receiver has a declared velocity one-sigma | `velocity_accuracy` |
+| Course | a ground speed at which the noise of the course is not above `max_heading_sigma_rad` | `course_speed` |
+| Heading | the course; its one-sigma, the crab allowance with the noise of the course, is not above `max_heading_sigma_rad` | `heading_uncertain` |
+| Acceleration | an earlier fix with a velocity, of the last 10 s | `velocity_fixes` |
+| Roll, pitch | the inertial increments between the two fixes cover the span to one step, and their specific force agrees in size with that of the velocity change within four sigma | `inertial_gap`, `force_disagreement` |
+
+The spans to the earlier fixes are tried from the smallest tilt one-sigma
+up, so a span over a lost increment or a wrong velocity gives way to one
+that skips it. The record of such a state has `HeadingSource::GnssCourse`
+and no gyroscope bias, and the filter starts its biases at zero. The
+heading error of the state is the crab angle; the filter makes it smaller
+only when the vehicle has a horizontal acceleration.
+
+A vehicle with no GNSS can start from what an operator or a host core
+declares: `SensorData::DeclaredStart` from a `SensorKind::Operator`
+sensor, valid at the acquisition stamp of its input. It states the
+position with a horizontal one-sigma, the height with its
+`VerticalDatum` and one-sigma, the true heading with its one-sigma, and
+the speed, marked `SpeedKind::Airspeed` or `SpeedKind::GroundSpeed`,
+with its one-sigma; `imu_bias_prior` carries the IMU biases of a ground
+calibration, as `Alignment::imu_bias_prior` does. The navigator levels
+from its own inertial data over
+the `window_s` before the stamp and takes the rest from the statement;
+the record has `AlignmentSource::Declared`. A statement that comes late
+gives the state at its stamp, and the increments after it go into the
+filter; one that comes before the increments reach its stamp waits for
+them.
+
+Levelling takes the vehicle as not accelerated, and the state says what
+that costs. The size of the mean specific force must be that of gravity
+within four sigma of the accelerometer errors and of the false turn that
+the gyroscope bias makes at the declared speed; if not, the alignment
+waits with `steady_motion`. The size hardly shows an acceleration across
+gravity, so the tilt one-sigma holds every horizontal acceleration that
+the size test admits, spread evenly up to the largest. A vehicle that
+moves along its nose (`course_heading_sigma_rad` set) takes the
+centripetal acceleration of a turn, from the body rate and the declared
+speed, out of the specific force; another vehicle in a turn waits.
+
+The statement does not say four things, and the state holds an
+allowance for each:
+
+| Unstated | Allowance |
+|---|---|
+| Wind, for an airspeed | `AlignmentConfig::declared_wind_sigma_m_s` (10 m/s) on each horizontal axis |
+| Vertical speed | `AlignmentConfig::declared_vertical_speed_sigma_m_s` (3 m/s) |
+| Crab angle, the direction of the velocity | `course_heading_sigma_rad`; without it the direction is unknown, and each horizontal axis holds half the square of the speed |
+| Geoid undulation, for a height above a geoid | the bound of an unknown undulation, 107 m, as part of the vertical one-sigma |
+
+The two configured values are engineering choices for the vehicle. A
+height of unknown datum waits with `height_datum`.
+
+`Navigator::align` is a transfer alignment: the state of another
+estimator or of a survey. It replaces an alignment in progress and an
+earlier state. `Navigator::realign` forgets the state, and the sensors
+give the next one. Each new state forgets the map cells that gave a
+terrain fix, and the prior and the lock of each star camera.
+`ReferenceNavigator::align_from_truth` exists only with the
+Cargo feature `evaluation`: an evaluation uses it for a navigator with a
+known start, and a flight build does not have it.
+
 ### Terrain camera
 
 The terrain-camera means is in the Cargo feature `terrain-camera` of

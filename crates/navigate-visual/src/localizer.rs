@@ -1,8 +1,8 @@
 //! Frame admission and geometric pose acceptance.
 
 use crate::{
-    CameraPose, Frame, FrameStamp, ImageMatcher, LocalFrame, MapRevision, PosePrior, ReferenceView,
-    VisualError,
+    CameraPose, Frame, FrameStamp, ImageMatcher, LocalFrame, MapRevision, PixelMatch, PosePrior,
+    ReferenceView, TrackingMotion, VisualError,
 };
 use nalgebra::SMatrix;
 
@@ -80,6 +80,52 @@ pub struct Estimate {
     pub backend: String,
 }
 
+/// The matches of one frame and which of them the geometric fit kept, for
+/// a host that shows the match. Pixels are centres in the images that
+/// were matched: the reference view and the query frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MatchEvidence {
+    /// The matches that the matcher gave, in its order.
+    pub matches: Vec<PixelMatch>,
+    /// For each match, whether the final fit kept it as an inlier. Empty
+    /// when the frame was refused before a fit: invalid input, a backend
+    /// failure, or too few matches with reference depth.
+    pub inliers: Vec<bool>,
+}
+
+impl MatchEvidence {
+    /// The evidence of `matches`, with the query pixels `kept` of the final
+    /// inliers. Each kept pixel is that of one correspondence with depth,
+    /// in the order of the matches, and no two correspondences share a
+    /// query pixel, so the walk below finds each one exactly.
+    fn of(
+        frame: &Frame,
+        reference: &ReferenceView,
+        matches: Vec<PixelMatch>,
+        kept: &[nalgebra::Vector2<f64>],
+    ) -> Self {
+        if kept.is_empty() {
+            return Self {
+                matches,
+                inliers: Vec::new(),
+            };
+        }
+        let mut inliers = vec![false; matches.len()];
+        let mut next = kept.iter().peekable();
+        for (index, point) in
+            crate::geometry::depth_correspondences_indexed(frame, reference, &matches)
+        {
+            if next.peek().is_some_and(|pixel| **pixel == point.pixel) {
+                next.next();
+                if let Some(flag) = inliers.get_mut(index) {
+                    *flag = true;
+                }
+            }
+        }
+        Self { matches, inliers }
+    }
+}
+
 /// Ordered visual map observations with no assumed statistical independence.
 ///
 /// The caller supplies each frame's prior and reference. This component does not
@@ -134,14 +180,59 @@ impl<M: ImageMatcher> Localizer<M> {
         reference: &ReferenceView,
         prior: &PosePrior,
     ) -> Result<Estimate, VisualError> {
-        reference.validate(frame)?;
-        prior.validate()?;
-        self.admit_stamp(frame.stamp)?;
-        let matches = self
+        self.estimate_and_match(frame, reference, prior).0
+    }
+
+    /// [`Self::estimate_blocking`], and the matches that it made with the
+    /// inliers of its fit. The estimate and the stream state are those of
+    /// `estimate_blocking`; the evidence costs one more pass over the
+    /// matches.
+    pub fn estimate_with_evidence_blocking(
+        &mut self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+    ) -> (Result<Estimate, VisualError>, MatchEvidence) {
+        let (estimate, matches, kept) = self.estimate_and_match(frame, reference, prior);
+        let evidence = MatchEvidence::of(frame, reference, matches, &kept);
+        (estimate, evidence)
+    }
+
+    /// The estimate, the matches, and the query pixels of the final
+    /// inliers of the fit.
+    fn estimate_and_match(
+        &mut self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+    ) -> (
+        Result<Estimate, VisualError>,
+        Vec<PixelMatch>,
+        Vec<nalgebra::Vector2<f64>>,
+    ) {
+        let admitted = reference
+            .validate(frame)
+            .and_then(|()| prior.validate())
+            .and_then(|()| self.admit_stamp(frame.stamp));
+        if let Err(error) = admitted {
+            return (Err(error), Vec::new(), Vec::new());
+        }
+        let matches = match self
             .matcher
-            .match_images_blocking(&reference.image, &frame.image)?;
-        self.verifier
-            .verify(frame, reference, prior, &matches, self.matcher.identity())
+            .match_images_blocking(&reference.image, &frame.image)
+        {
+            Ok(matches) => matches,
+            Err(error) => return (Err(error), Vec::new(), Vec::new()),
+        };
+        let (evaluation, kept) = self.verifier.evaluate_keeping_inliers(
+            frame,
+            reference,
+            prior,
+            &matches,
+            self.matcher.identity(),
+            TrackingMotion::Free,
+        );
+        (evaluation.acceptance, matches, kept)
     }
 
     fn admit_stamp(&mut self, stamp: FrameStamp) -> Result<(), VisualError> {

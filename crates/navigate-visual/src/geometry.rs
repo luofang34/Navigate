@@ -115,24 +115,43 @@ impl PoseVerifier {
         matcher_identity: &str,
         motion: TrackingMotion,
     ) -> CandidateEvaluation {
+        self.evaluate_keeping_inliers(frame, reference, prior, matches, matcher_identity, motion)
+            .0
+    }
+
+    /// [`Self::evaluate_with_motion`], and the query pixels of the final
+    /// inliers of the fit in the order of `matches`: empty when no fit was
+    /// made.
+    pub(crate) fn evaluate_keeping_inliers(
+        &self,
+        frame: &Frame,
+        reference: &ReferenceView,
+        prior: &PosePrior,
+        matches: &[PixelMatch],
+        matcher_identity: &str,
+        motion: TrackingMotion,
+    ) -> (CandidateEvaluation, Vec<Vector2<f64>>) {
         if matcher_identity.is_empty() {
-            return CandidateEvaluation {
+            let evaluation = CandidateEvaluation {
                 acceptance: Err(VisualError::Invalid {
                     field: "matcher identity",
                 }),
                 refinement: None,
             };
+            return (evaluation, Vec::new());
         }
         let (pose, inliers, depth_matches) =
             match self.fit_candidate(frame, reference, prior, matches, motion.solver()) {
                 Ok(fitted) => fitted,
                 Err(error) => {
-                    return CandidateEvaluation {
+                    let evaluation = CandidateEvaluation {
                         acceptance: Err(error),
                         refinement: None,
                     };
+                    return (evaluation, Vec::new());
                 }
             };
+        let kept = inliers.iter().map(|point| point.pixel).collect();
         let support = FitSupport::new(
             &frame.camera,
             &reference.pose,
@@ -151,10 +170,11 @@ impl PoseVerifier {
                 geometry_covariance: covariance,
                 backend: matcher_identity.to_owned(),
             });
-        CandidateEvaluation {
+        let evaluation = CandidateEvaluation {
             acceptance,
             refinement: Some(support.seed(pose)),
-        }
+        };
+        (evaluation, kept)
     }
 
     fn fit_candidate(
@@ -312,11 +332,25 @@ fn depth_correspondences(
     reference: &ReferenceView,
     matches: &[crate::PixelMatch],
 ) -> Vec<Correspondence> {
+    depth_correspondences_indexed(frame, reference, matches)
+        .into_iter()
+        .map(|(_, point)| point)
+        .collect()
+}
+
+/// The correspondences of the matches that have a reference depth and do
+/// not repeat a pixel, each with the index of its match.
+pub(crate) fn depth_correspondences_indexed(
+    frame: &Frame,
+    reference: &ReferenceView,
+    matches: &[crate::PixelMatch],
+) -> Vec<(usize, Correspondence)> {
     let mut reference_pixels = std::collections::BTreeSet::new();
     let mut query_pixels = std::collections::BTreeSet::new();
     matches
         .iter()
-        .filter_map(|pair| {
+        .enumerate()
+        .filter_map(|(index, pair)| {
             let p = pair.reference;
             let q = pair.query;
             if ![p.x, p.y, q.x, q.y].iter().all(|v| v.is_finite()) {
@@ -343,10 +377,13 @@ fn depth_correspondences(
             }
             reference_pixels.insert((x, y));
             query_pixels.insert(query_key);
-            Some(Correspondence {
-                world: frame.camera.unproject(&reference.pose, p, depth),
-                pixel: q,
-            })
+            Some((
+                index,
+                Correspondence {
+                    world: frame.camera.unproject(&reference.pose, p, depth),
+                    pixel: q,
+                },
+            ))
         })
         .collect()
 }

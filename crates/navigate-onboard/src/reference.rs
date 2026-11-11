@@ -7,31 +7,29 @@ use std::collections::BTreeMap;
 
 use navigate_contract::{
     ClockDomainId, MonotonicNanos, NavigationSolution, ObservationStamp, SensorClass,
-    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
+    SourceComposition, SourceEpoch, SourceId, WrappingSequence,
 };
 use navigate_fusion::{
-    CorrelatedError, FogmBias, ImuIncrement, InertialConfig, IngestOutcome, Observation,
-    ObservationValue,
+    FogmBias, ImuIncrement, InertialConfig, IngestOutcome, Observation, ObservationValue,
 };
 use navigate_startrack::line_of_sight_observations;
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, ErrorBudget, Navigator, OnboardError, Outcome,
-    SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
+    ErrorBudget, MagneticReference, Navigator, OnboardError, Outcome, SensorData, SensorInput,
+    SensorKind, SensorSuite,
 };
 
+mod aligner;
 mod filter;
+mod gnss;
 mod stars;
 #[cfg(feature = "terrain-camera")]
-mod terrain;
+pub(crate) mod terrain;
 pub use filter::NavigatorFilter;
 pub use stars::{StarCatalogueConfig, own_prior};
-#[cfg(feature = "terrain-camera")]
-pub use terrain::{
-    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
-    TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
-};
 
+use aligner::Aligner;
 use stars::{Sighting, StarChannel};
 #[cfg(feature = "terrain-camera")]
 use terrain::TerrainMeans;
@@ -47,6 +45,11 @@ pub struct ReferenceNavigator {
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
     stars: BTreeMap<u32, StarChannel>,
+    aligner: Aligner,
+    /// What the alignment of the present state used.
+    alignment: Option<AlignmentRecord>,
+    /// GNSS positions in a row that the filter refused at its gate.
+    gate_refusals: u32,
     #[cfg(feature = "terrain-camera")]
     terrain: TerrainMeans,
 }
@@ -131,6 +134,9 @@ impl ReferenceNavigator {
             });
         }
         Ok(Self {
+            aligner: Aligner::new(&suite),
+            alignment: None,
+            gate_refusals: 0,
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
             filter: NavigatorFilter::new(config, clock, correlated_blocks(&suite)).map_err(
@@ -183,11 +189,15 @@ impl ReferenceNavigator {
         observation: &Observation,
         context: Option<&'static str>,
         sink: &mut dyn AcceptanceSink,
-    ) {
+    ) -> bool {
         let outcome = match self.filter.ingest(observation, input.delivered_at) {
             IngestOutcome::Accepted => Outcome::Accepted,
             IngestOutcome::Rejected(reason) => Outcome::Rejected(reason),
         };
+        let gated = matches!(
+            outcome,
+            Outcome::Rejected(navigate_fusion::RejectionReason::InnovationGate { .. })
+        );
         sink.record(AcceptanceRecord {
             sensor: input.sensor,
             acquired_at: input.acquired_at,
@@ -195,6 +205,7 @@ impl ReferenceNavigator {
             outcome,
             context,
         });
+        gated
     }
 
     fn offer_value(
@@ -204,10 +215,10 @@ impl ReferenceNavigator {
         value: ObservationValue,
         class: SensorClass,
         sink: &mut dyn AcceptanceSink,
-    ) {
+    ) -> bool {
         let stamp = self.stamp(input.sensor, input.acquired_at);
         let observation = Observation::new(stamp, value, SourceComposition::of(class));
-        self.offer(input, measurement, &observation, None, sink);
+        self.offer(input, measurement, &observation, None, sink)
     }
 
     fn imu(
@@ -234,62 +245,6 @@ impl ReferenceNavigator {
                 stage: "IMU increment",
                 reason,
             }),
-        }
-    }
-
-    fn gnss(&mut self, input: &SensorInput, budget: ErrorBudget, sink: &mut dyn AcceptanceSink) {
-        let SensorData::GnssFix {
-            position,
-            velocity,
-            position_cov,
-            velocity_cov,
-        } = &input.data
-        else {
-            return;
-        };
-        let (h, v, s, correlated) = match budget {
-            ErrorBudget::Gnss {
-                horizontal_sigma_m,
-                vertical_sigma_m,
-                velocity_sigma_m_s,
-                correlated,
-            } => (
-                horizontal_sigma_m,
-                vertical_sigma_m,
-                velocity_sigma_m_s,
-                correlated,
-            ),
-            _ => (f64::NAN, f64::NAN, f64::NAN, None),
-        };
-        let position_cov =
-            position_cov.unwrap_or(SymmetricCov3::from_diagonal(h * h, h * h, v * v));
-        let value = ObservationValue::PositionFix {
-            position: *position,
-            covariance: position_cov,
-        };
-        let stamp = self.stamp(input.sensor, input.acquired_at);
-        let observation = Observation::new(stamp, value, SourceComposition::of(SensorClass::Gnss));
-        // The velocity is from Doppler and stays white.
-        let observation = match correlated {
-            Some(c) => observation.with_correlated_error(CorrelatedError::new(
-                c.tau_s,
-                [
-                    c.horizontal_sigma_m,
-                    c.horizontal_sigma_m,
-                    c.vertical_sigma_m,
-                ],
-            )),
-            None => observation,
-        };
-        self.offer(input, "gnss_position", &observation, None, sink);
-        if let Some(velocity) = velocity {
-            let covariance =
-                velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
-            let value = ObservationValue::VelocityFix {
-                velocity: *velocity,
-                covariance,
-            };
-            self.offer_value(input, "gnss_velocity", value, SensorClass::Gnss, sink);
         }
     }
 
@@ -333,27 +288,64 @@ impl ReferenceNavigator {
     }
 }
 
+/// Whether the reference navigator takes `data` from a sensor of `kind`,
+/// before its first state and after it.
+const fn fits(data: &SensorData, kind: SensorKind) -> bool {
+    let terrain = matches!(
+        (data, kind),
+        (SensorData::TerrainFrame { .. }, SensorKind::TerrainCamera)
+    );
+    (terrain && cfg!(feature = "terrain-camera"))
+        || matches!(
+            (data, kind),
+            (SensorData::ImuIncrement { .. }, SensorKind::Imu)
+                | (SensorData::GnssFix { .. }, SensorKind::Gnss)
+                | (SensorData::BaroAltitude { .. }, SensorKind::Barometer)
+                | (
+                    SensorData::StarExposureMid | SensorData::StarCentroids { .. },
+                    SensorKind::StarCamera,
+                )
+                | (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
+                | (
+                    SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                    SensorKind::SurveyedPoint,
+                )
+                | (SensorData::DeclaredStart(_), SensorKind::Operator)
+                | (SensorData::Observation(_), _)
+        )
+}
+
 impl Navigator for ReferenceNavigator {
     fn suite(&self) -> &SensorSuite {
         &self.suite
     }
 
     fn align(&mut self, a: &Alignment) -> Result<(), OnboardError> {
-        self.filter
-            .initialize_surface(
-                a.position,
-                a.velocity,
-                a.attitude,
-                a.position_cov,
-                a.velocity_cov,
-                a.attitude_cov,
-                a.at,
-                SourceComposition::of(SensorClass::Inertial),
-            )
-            .map_err(|reason| OnboardError::Refused {
-                stage: "alignment",
-                reason,
-            })
+        self.set_state(a, aligner::transfer_record(a))
+    }
+
+    fn alignment_status(&self) -> Option<AlignmentStatus> {
+        Some(self.alignment_now())
+    }
+
+    fn set_magnetic_reference(&mut self, reference: MagneticReference) -> Result<(), OnboardError> {
+        if !reference.is_usable() {
+            return Err(OnboardError::Config {
+                field: "magnetic reference",
+                detail: format!("{reference:?}"),
+            });
+        }
+        self.aligner.reference = Some(reference);
+        Ok(())
+    }
+
+    fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+        self.configure_alignment(config)
+    }
+
+    fn realign(&mut self) -> Result<(), OnboardError> {
+        self.forget_state();
+        Ok(())
     }
 
     fn ingest(
@@ -371,7 +363,22 @@ impl Navigator for ReferenceNavigator {
             kind: kind.name(),
             data: input.data.name(),
         };
+        if !fits(&input.data, kind) {
+            return Err(wrong());
+        }
+        if !self.filter.is_initialized() {
+            return self.aligning(input, budget, sink);
+        }
         match (&input.data, kind) {
+            (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
+            | (
+                SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                SensorKind::SurveyedPoint,
+            )
+            | (SensorData::DeclaredStart(_), SensorKind::Operator) => {
+                Self::alignment_only(input, sink);
+                Ok(())
+            }
             (
                 SensorData::ImuIncrement {
                     dt_s,

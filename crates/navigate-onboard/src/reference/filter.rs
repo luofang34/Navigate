@@ -6,9 +6,9 @@ use navigate_contract::{
     SourceComposition, SymmetricCov3,
 };
 use navigate_fusion::{
-    ImuIncrement, InertialConfig, InertialNavigationFilter, IngestOutcome, LayoutError,
-    Observation, PastState, PastStateRefusal, PlanetaryBody, RejectionCounters, RejectionReason,
-    StateLayout,
+    ImuBiasPrior, ImuIncrement, InertialConfig, InertialNavigationFilter, IngestOutcome,
+    LayoutError, Observation, PastState, PastStateRefusal, PlanetaryBody, RejectionCounters,
+    RejectionReason, StateLayout,
 };
 
 /// The dimension of [`StateLayout::FULL`] with one correlated-error
@@ -116,6 +116,12 @@ impl NavigatorFilter {
         each!(self, f => f.tick(now))
     }
 
+    /// Whether the filter holds a state.
+    #[must_use]
+    pub fn is_initialized(&self) -> bool {
+        each!(self, f => f.is_initialized())
+    }
+
     /// The state at a past time, as [`InertialNavigationFilter::state_at`]
     /// gives it.
     ///
@@ -160,5 +166,19 @@ impl NavigatorFilter {
         each!(self, f => f.initialize_surface(
             position, velocity, attitude, pos_cov, vel_cov, att_cov, at, composition,
         ))
+    }
+
+    /// Drops the state, as [`InertialNavigationFilter::reset`] does.
+    pub(crate) fn reset(&mut self) {
+        each!(self, f => f.reset());
+    }
+
+    /// The IMU biases that the next initialization starts from, as
+    /// [`InertialNavigationFilter::set_imu_bias_prior`] takes them.
+    pub(crate) fn set_imu_bias_prior(
+        &mut self,
+        prior: Option<ImuBiasPrior>,
+    ) -> Result<(), RejectionReason> {
+        each!(self, f => f.set_imu_bias_prior(prior))
     }
 }

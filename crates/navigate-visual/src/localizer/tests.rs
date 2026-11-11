@@ -3,6 +3,8 @@ use crate::{CameraModel, PixelMatch, PyramidalMatcher};
 use image::GrayImage;
 use nalgebra::{UnitQuaternion, Vector2, Vector3};
 
+mod evidence;
+
 struct KnownMatches(Vec<PixelMatch>);
 impl ImageMatcher for KnownMatches {
     fn identity(&self) -> &str {

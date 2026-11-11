@@ -2,7 +2,7 @@
 
 use navigate_camera::{CameraMount, ImagerModel};
 use navigate_contract::{GeodeticPosition, MonotonicNanos, NedVelocity, SourceId, SymmetricCov3};
-use navigate_fusion::{FogmBias, Observation};
+use navigate_fusion::{CorrelatedError, FogmBias, Observation};
 use navigate_startrack::StarCentroid;
 
 use crate::OnboardError;
@@ -22,6 +22,16 @@ pub enum SensorKind {
     /// A camera that sees the terrain. The navigator matches its frames
     /// against the terrain map that the host loads.
     TerrainCamera,
+    /// A three-axis magnetometer. It gives the heading of an alignment at
+    /// rest.
+    Magnetometer,
+    /// A point that the host measured before the flight, for example the
+    /// surveyed launch point. It is a measurement with a declared error,
+    /// and its input says that the vehicle is at rest on the point.
+    SurveyedPoint,
+    /// An operator or a host core that declares the start of a vehicle
+    /// that has no other source of it.
+    Operator,
     /// A sensor that gives fusion observations itself.
     ObservationSource,
 }
@@ -36,6 +46,9 @@ impl SensorKind {
             Self::Barometer => "barometer",
             Self::StarCamera => "star camera",
             Self::TerrainCamera => "terrain camera",
+            Self::Magnetometer => "magnetometer",
+            Self::SurveyedPoint => "surveyed point",
+            Self::Operator => "operator",
             Self::ObservationSource => "observation source",
         }
     }
@@ -89,6 +102,17 @@ pub enum ErrorBudget {
         /// error is this angle times the range to the ground.
         calibration_sigma_rad: f64,
     },
+    /// Magnetometer errors, each axis, as fields. The field of the place
+    /// is not a property of the sensor: the host states it with
+    /// [`crate::Navigator::set_magnetic_reference`].
+    Magnetometer {
+        /// White noise of one sample, tesla.
+        noise_sigma_t: f64,
+        /// Residual of the body field after calibration: hard and soft
+        /// iron and the field of motor currents, tesla. It is a bias, so
+        /// more samples do not make it smaller.
+        disturbance_sigma_t: f64,
+    },
     /// The inputs carry their own covariances.
     Declared,
 }
@@ -117,6 +141,13 @@ impl GnssCorrelatedError {
             && [self.horizontal_sigma_m, self.vertical_sigma_m]
                 .iter()
                 .all(|sigma| sigma.is_finite() && *sigma >= 0.0)
+    }
+
+    /// The error as the filter takes it, on the north, east and down axes
+    /// of a position fix.
+    pub(crate) fn filter_error(&self) -> CorrelatedError {
+        let (h, v) = (self.horizontal_sigma_m, self.vertical_sigma_m);
+        CorrelatedError::new(self.tau_s, [h, h, v])
     }
 }
 
@@ -193,6 +224,9 @@ impl SensorSuite {
                     | (SensorKind::Barometer, ErrorBudget::Barometer { .. })
                     | (SensorKind::StarCamera, ErrorBudget::StarCamera { .. })
                     | (SensorKind::TerrainCamera, ErrorBudget::TerrainCamera { .. })
+                    | (SensorKind::Magnetometer, ErrorBudget::Magnetometer { .. })
+                    | (SensorKind::SurveyedPoint, ErrorBudget::Declared)
+                    | (SensorKind::Operator, ErrorBudget::Declared)
                     | (SensorKind::ObservationSource, _)
             );
             let camera = matches!(a.kind, SensorKind::StarCamera | SensorKind::TerrainCamera);
@@ -308,6 +342,33 @@ pub enum SensorData {
         /// Luminance, eight bits for each pixel, row-major, top row first.
         luma: Vec<u8>,
     },
+    /// The magnetic field in the body axes, tesla. The navigator uses its
+    /// direction for the heading of an alignment at rest.
+    MagneticField {
+        /// The field, forward, right, down.
+        field_body_t: [f64; 3],
+    },
+    /// The vehicle is at a known position at the stamp, and may be
+    /// moving: a position and nothing about rest.
+    KnownPosition {
+        /// The position.
+        position: GeodeticPosition,
+        /// Horizontal one-sigma, each axis, metres.
+        horizontal_sigma_m: f64,
+        /// Vertical one-sigma, metres.
+        vertical_sigma_m: f64,
+    },
+    /// The vehicle is at rest on a surveyed point.
+    SurveyedPosition {
+        /// The point.
+        position: GeodeticPosition,
+        /// Horizontal one-sigma of the survey, each axis, metres.
+        horizontal_sigma_m: f64,
+        /// Vertical one-sigma of the survey, metres.
+        vertical_sigma_m: f64,
+    },
+    /// The start that an operator declares, at the stamp of the input.
+    DeclaredStart(crate::DeclaredStart),
     /// An observation that the sensor made itself.
     Observation(Observation),
 }
@@ -323,6 +384,10 @@ impl SensorData {
             Self::StarExposureMid => "star exposure",
             Self::StarCentroids { .. } => "star centroids",
             Self::TerrainFrame { .. } => "terrain frame",
+            Self::MagneticField { .. } => "magnetic field",
+            Self::SurveyedPosition { .. } => "surveyed position",
+            Self::KnownPosition { .. } => "known position",
+            Self::DeclaredStart(_) => "declared start",
             Self::Observation(_) => "observation",
         }
     }

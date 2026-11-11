@@ -302,8 +302,14 @@ Rules of both traits:
 
 - **Time.** Each input carries its acquisition and delivery stamps on the
   navigator clock domain. No navigator reads a wall clock.
-- **Alignment.** The initial state is an explicit input with its
-  covariances. A navigator gives no solution before it.
+- **Alignment.** A navigator gets its first state from its sensors, or
+  from a transfer alignment: the state of another estimator or of a
+  survey, with its covariances. The first state never comes from a value
+  that only a simulator knows; an evaluation that needs a true start uses
+  an entry of its own that is not part of the trait and is not in a
+  flight build. A navigator gives no solution before its first state,
+  and it states where its alignment is and what it lacks. It does not
+  align again by itself in flight: the host orders a realignment.
 - **State.** Each trait has `snapshot` and `restore`: a navigator
   duplicates its complete state into a boxed copy, so a simulator can fork
   a run and restore and replay it. A trait object cannot be cloned, so
@@ -329,6 +335,71 @@ Rules of both traits:
   in the trait.
 - The learned corridor stack (`navigate-visual-flight`) has its own
   filter. It is a second `Navigator`, not an aiding means of the first.
+
+The self-alignment of the reference navigator follows these rules:
+
+- **Rest.** The alignment works in rest windows: the inertial
+  increments of one unbroken stretch of time by their stamps, and the
+  inputs of other sensors stamped in it. Each test of rest is a multiple
+  of what the declared budgets say an honest window scatters by, never a
+  fixed constant. Inertial data alone cannot show rest, because steady
+  straight flight has the specific force and the body rate of rest. A
+  window counts only with the evidence of another sensor: a mean GNSS
+  velocity near zero within the receiver's stated error, or the
+  statement that the vehicle is on a surveyed point.
+- **One window, one state.** A window gives a state when rest, a heading
+  source, and a position are all in that window. Each window levels
+  again, so no part of a state is older than its window.
+- **Tilt.** Roll and pitch come from the mean specific force. Their
+  one-sigma holds the whole declared accelerometer bias, which a mean
+  does not make smaller, and the noise of the mean.
+- **Heading.** At rest the heading comes from the magnetometer and the
+  field of the place that the host states from a field model:
+  declination and intensity, with their one-sigmas. The sensor budget
+  holds only the sensor's own errors, in field units, so a new place or
+  epoch needs a new statement, not a new suite. Its one-sigma holds the
+  noise of the mean and the declared body field over the measured
+  horizontal intensity, the declination error, and the tilt error
+  through the dip of the field. A field whose strength is not the stated
+  one is disturbed and gives no heading. A heading that is less certain
+  than a set limit is not used, and the alignment waits. Course over
+  ground is not a heading: a multirotor moves in each direction at each
+  heading.
+- **Motion.** Course over ground is not a heading by default: a
+  multirotor moves in each direction at each heading. The host of a
+  vehicle that moves along its nose (wheels on the ground, a fixed wing
+  in the air) sets the one-sigma of the angle between course and
+  heading: the crab angle in wind. Such a vehicle also aligns in motion,
+  from two GNSS fixes with a velocity. The change of the velocity is the
+  acceleration, so the mean specific force of the span is known in the
+  north, east, down axes; the alignment does not take the vehicle as not
+  accelerated. The inertial increments of the span, summed in the body
+  axes of one instant, give the same vector in the body axes. The two
+  vectors and the course give the attitude. The span is the one whose
+  tilt one-sigma is the smallest by the declared budgets: the velocity
+  noise as an acceleration, the accelerometer noise and bias, and the
+  turn of the sum by the gyroscope bias and noise. The tilt one-sigma
+  also holds the heading error on the horizontal acceleration; the
+  heading one-sigma holds the crab allowance and the noise of the
+  course. Each part of the state is for the instant of the second fix;
+  increments that came after that fix go into the filter after the
+  state is set. The filter makes the heading better only when the
+  vehicle has a horizontal acceleration.
+- **Declared start.** A vehicle with no GNSS can start from what an
+  operator declares: position, height with its datum, true heading, and
+  speed marked as airspeed or ground speed, each with a one-sigma, and
+  the time. The navigator levels from its own inertial data and takes
+  the vehicle as not accelerated; the tilt one-sigma holds every
+  horizontal acceleration that the size of the specific force cannot
+  show, and a specific force of the wrong size gives no state. What the
+  statement does not say (wind, vertical speed, crab angle, geoid
+  undulation) enters the covariance as a stated allowance.
+- **Position.** A GNSS fix with a covariance, or the surveyed point. The
+  velocity is zero, with a one-sigma that covers each velocity the tests
+  of rest let through.
+- **After the state.** Several GNSS positions in a row that the filter
+  refuses at its gate make the alignment suspect. The navigator states
+  it and keeps its state.
 
 The terrain-camera means of the reference navigator follows these rules:
 

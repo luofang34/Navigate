@@ -18,7 +18,7 @@ fn noise(index: usize, seed: u64) -> f64 {
 
 /// A frame of a dark scene: an offset of ten counts and noise of `sigma`.
 #[cfg(test)]
-fn dark(sigma: f64, seed: u64) -> Vec<u8> {
+pub(super) fn dark(sigma: f64, seed: u64) -> Vec<u8> {
     (0..160 * 120)
         .map(|i| (10.0 + sigma * noise(i, seed)).round().clamp(0.0, 255.0) as u8)
         .collect()

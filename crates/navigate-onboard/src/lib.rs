@@ -25,7 +25,9 @@
 //! guidance laws.
 
 mod acceptance;
+mod alignment;
 mod bundle;
+mod declared;
 mod director;
 mod error;
 mod navigator;
@@ -33,16 +35,23 @@ mod reference;
 mod sensor;
 
 pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
+pub use alignment::{
+    AlignmentConfig, AlignmentNeed, AlignmentPhase, AlignmentRecord, AlignmentSource,
+    AlignmentStatus, HeadingSource, MagneticReference, PositionSource,
+};
 pub use bundle::Onboard;
+pub use declared::{DeclaredHeight, DeclaredSpeed, DeclaredStart, SpeedKind};
 pub use director::{
     DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector, SequenceCause,
 };
 pub use error::{MapRefusal, OnboardError};
+pub use navigate_fusion::ImuBiasPrior;
 pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 #[cfg(feature = "terrain-camera")]
-pub use reference::{
-    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, MapReport,
-    TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
+pub use reference::terrain::{
+    AccuracySource, AssumedAccuracy, BeliefSource, HostGeoid, LayerReport, Luma, MapReport,
+    MatchPair, OfferedFix, SolvedPose, TerrainConfig, TerrainMapRequest, TerrainMatch, ViewPose,
+    WorkingCamera, WorkingLimit,
 };
 pub use reference::{NavigatorFilter, ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{

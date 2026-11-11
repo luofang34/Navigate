@@ -17,7 +17,7 @@ use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
 use navigate_fusion::{FogmBias, Observation, ObservationValue};
 use navigate_visual::session::{ContinuityEpoch, FrameKey, MapCell, StreamId};
 
-use super::flight::{CAMERA, imager};
+use super::flight::{CAMERA, imager, show_events};
 use crate::reference::terrain::with_map_error;
 use crate::reference::tests::truth::{
     CLOCK, Draws, IMU, Imu, STEP_S, Truth, at, imu_budget, mix, moved, ned_offset, nees, start,
@@ -214,7 +214,9 @@ fn in_band(nees: &[f64]) -> bool {
 
 #[test]
 fn monte_carlo_a_cruise_across_cells_with_bound_map_errors_keeps_the_position_nees_in_band() {
+    show_events();
     let (nees, taken) = mean(cruise);
+    tracing::info!(?nees, taken, "a cruise across cells with bound map errors");
     assert!(in_band(&nees), "NEES {nees:?}");
     // Each anchor of the flight is taken.
     let anchors = (DURATION_S / STEP_S).round() / f64::from(ANCHOR_STEPS);
@@ -223,9 +225,11 @@ fn monte_carlo_a_cruise_across_cells_with_bound_map_errors_keeps_the_position_ne
 
 #[test]
 fn monte_carlo_a_loiter_in_one_cell_with_its_bound_map_error_keeps_the_position_nees_in_band() {
+    show_events();
     // The one-fix-for-each-cell admission takes one anchor here; the
     // bound map error lets the filter take each of them.
     let (nees, taken) = mean(loiter);
+    tracing::info!(?nees, taken, "a loiter in one cell with bound map errors");
     assert!(in_band(&nees), "NEES {nees:?}");
     let anchors = (DURATION_S / STEP_S).round() / f64::from(ANCHOR_STEPS);
     assert!(taken >= 0.99 * anchors, "{taken} of {anchors}");
@@ -271,7 +275,8 @@ fn a_cell_whose_block_a_newer_cell_took_is_withheld_before_the_filter() {
         outcomes.push(navigator.offer_terrain_fix(&observation, cell, frame, &input));
     }
     // The second cell takes the one map block; a later fix of the second
-    // cell reads it, and the first cell is withheld as before.
+    // cell reads it, and a fix of the first cell, whose error the filter
+    // no longer holds, is withheld before the filter.
     assert_eq!(
         outcomes,
         [

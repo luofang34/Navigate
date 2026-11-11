@@ -124,8 +124,8 @@ image geometry. A suite with a terrain camera gets one block for the
 map. The `MapCellLedger` of `navigate-visual` is the memory of the cells
 that had a fix: a fix of a cell that had one is offered while the block
 holds that cell, and withheld as `SharedMapError` once a newer cell took
-the block. This replaces the rule that only the first fix of each cell
-reaches the filter.
+the block. Every fix of a cell whose error a block holds reaches the
+filter, not only the first fix of the cell.
 
 ### 5. An altitude update does not correct the horizontal states
 

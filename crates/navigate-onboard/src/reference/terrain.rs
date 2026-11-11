@@ -21,6 +21,7 @@
 //! working resolution is resampled to it.
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use navigate_camera::Intrinsics;
@@ -41,6 +42,7 @@ mod budget;
 mod camera;
 mod config;
 mod content;
+mod inspection;
 mod keyframes;
 mod map;
 mod names;
@@ -48,6 +50,7 @@ mod view;
 
 pub use belief::BeliefSource;
 pub use config::{TerrainConfig, WorkingCamera, WorkingLimit};
+pub use inspection::{Luma, MatchPair, OfferedFix, SolvedPose, TerrainMatch, ViewPose};
 pub use map::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainMapRequest,
 };
@@ -110,14 +113,28 @@ pub(crate) fn admission(label: &FusionEligibility, bound: bool) -> Option<&'stat
 }
 
 /// The key of the correlated process of the map error of `cell`: the
-/// 64-bit FNV-1a hash of its text form. The key names the cell for the
-/// filter within one run of one build.
+/// 64-bit FNV-1a hash of the cell. Two cells share a key only by a hash
+/// collision.
 pub(crate) fn cell_key(cell: &MapCell) -> u64 {
-    format!("{cell:?}")
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        })
+    let mut hasher = Fnv(0xcbf2_9ce4_8422_2325);
+    cell.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// FNV-1a over the bytes that a `Hash` writes: the keys of the cells do not
+/// depend on the hasher of the standard library.
+struct Fnv(u64);
+
+impl Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
 }
 
 /// `observation` with the map error of `cell` declared as a constant
@@ -145,6 +162,15 @@ impl TerrainMeans {
             ledger: MapCellLedger::new(MAX_LEDGER_CELLS),
             cameras,
         })
+    }
+
+    /// Forgets which map cells gave a fix and what each camera kept: the
+    /// filter has a new state, and no map error is in it.
+    pub(crate) fn forget_fixes(&mut self) {
+        self.ledger = MapCellLedger::new(MAX_LEDGER_CELLS);
+        for camera in self.cameras.values_mut() {
+            camera.reset();
+        }
     }
 
     /// Whether the suite declares a terrain camera.
@@ -194,6 +220,16 @@ impl ReferenceNavigator {
     /// fetches. A second load replaces the map and keeps the record of the
     /// map cells that already gave a fix, because that record names the
     /// source of the imagery and not the package.
+    ///
+    /// The load and every later frame read the store by blocking on each
+    /// read, because a navigator step is not asynchronous. The store must
+    /// therefore complete each read without help from the calling thread,
+    /// as a [`DirectoryStore`](navigate_data::DirectoryStore) and a
+    /// [`MemoryStore`](navigate_data::MemoryStore) do. A store whose reads
+    /// complete on an event loop that the caller runs, such as a browser
+    /// store on the page's thread, would never return: a host with such a
+    /// store awaits [`navigate_data::resident_copy`] of the package and its
+    /// product list, and gives this load the memory store of the copy.
     ///
     /// # Errors
     ///
@@ -257,6 +293,25 @@ impl ReferenceNavigator {
         self.terrain.report()
     }
 
+    /// Keeps, or stops keeping, what each frame of each terrain camera did,
+    /// for a host that shows the match ([`Self::last_terrain_match`]). Off
+    /// by default. Keeping it changes no value that the navigator gives:
+    /// the frames are matched as without it.
+    pub fn set_terrain_match_inspection(&mut self, on: bool) {
+        for camera in self.terrain.cameras.values_mut() {
+            camera.set_inspect(on);
+        }
+    }
+
+    /// What the last frame of the terrain camera `sensor` did, when the
+    /// host turned on [`Self::set_terrain_match_inspection`]. `None` before
+    /// such a frame, after a frame that failed with an error, and after a
+    /// map load.
+    #[must_use]
+    pub fn last_terrain_match(&self, sensor: SourceId) -> Option<&TerrainMatch> {
+        self.terrain.cameras.get(&sensor.get())?.last_match()
+    }
+
     /// Takes one frame of a terrain camera.
     pub(super) fn terrain_frame(
         &mut self,
@@ -274,7 +329,42 @@ impl ReferenceNavigator {
         let Some(camera) = self.terrain.cameras.get_mut(&input.sensor.get()) else {
             return Err(OnboardError::UnknownSensor(input.sensor));
         };
-        let image = camera.image(*width, *height, luma)?;
+        camera.begin();
+        let taken = self.take_terrain_frame(input, (*width, *height, luma));
+        let camera = self.terrain.cameras.get_mut(&input.sensor.get());
+        let (outcome, context) = match taken {
+            Ok(taken) => taken,
+            Err(error) => {
+                if let Some(camera) = camera {
+                    camera.forget_match();
+                }
+                return Err(error);
+            }
+        };
+        if let Some(camera) = camera {
+            camera.finish(input.acquired_at, outcome.clone(), context);
+        }
+        sink.record(AcceptanceRecord {
+            sensor: input.sensor,
+            acquired_at: input.acquired_at,
+            measurement: MEASUREMENT,
+            outcome,
+            context,
+        });
+        Ok(())
+    }
+
+    /// What one frame of a terrain camera gives: the outcome of its fix and
+    /// the path of its reference view.
+    fn take_terrain_frame(
+        &mut self,
+        input: &SensorInput,
+        (width, height, luma): (u32, u32, &[u8]),
+    ) -> Result<(Outcome, Option<&'static str>), OnboardError> {
+        let Some(camera) = self.terrain.cameras.get_mut(&input.sensor.get()) else {
+            return Err(OnboardError::UnknownSensor(input.sensor));
+        };
+        let image = camera.image(width, height, luma)?;
         let Some(map) = self.terrain.map.clone() else {
             return Err(OnboardError::MapNotLoaded {
                 sensor: input.sensor,
@@ -283,14 +373,7 @@ impl ReferenceNavigator {
         // A frame with no structure gives no match, and it is found before
         // the filter, the map, or the matcher do any work for it.
         if content::Content::of(&image).is_featureless(map.config.min_structure) {
-            sink.record(AcceptanceRecord {
-                sensor: input.sensor,
-                acquired_at: input.acquired_at,
-                measurement: MEASUREMENT,
-                outcome: Outcome::Unused(names::FEATURELESS_FRAME),
-                context: None,
-            });
-            return Ok(());
+            return Ok((Outcome::Unused(names::FEATURELESS_FRAME), None));
         }
         let times = (input.acquired_at, input.delivered_at);
         let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
@@ -303,7 +386,7 @@ impl ReferenceNavigator {
             )?,
             Err(reason) => Sighting::Unused(reason, None),
         };
-        let (outcome, context) = match sighting {
+        Ok(match sighting {
             Sighting::Unused(reason, path) => (Outcome::Unused(reason), path),
             Sighting::Fix {
                 observation,
@@ -314,15 +397,7 @@ impl ReferenceNavigator {
                 self.offer_terrain_fix(&observation, cell, frame, input),
                 Some(path),
             ),
-        };
-        sink.record(AcceptanceRecord {
-            sensor: input.sensor,
-            acquired_at: input.acquired_at,
-            measurement: MEASUREMENT,
-            outcome,
-            context,
-        });
-        Ok(())
+        })
     }
 
     /// Offers the terrain fix `observation` of `cell` and `frame` to the

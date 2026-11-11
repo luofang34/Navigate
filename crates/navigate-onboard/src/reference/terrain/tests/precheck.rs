@@ -23,9 +23,9 @@ const ZOOM: u32 = 17;
 /// A second terrain camera that looks 20° forward of the nadir: from the
 /// height of the flights it sees the ground 290 m ahead, more than one
 /// cell of [`ZOOM`].
-const FORWARD: SourceId = SourceId::new(7);
+pub(super) const FORWARD: SourceId = SourceId::new(7);
 
-fn forward() -> CameraMount {
+pub(super) fn forward() -> CameraMount {
     CameraMount::rotated_forward(
         0.0,
         20.0_f64.to_radians() - core::f64::consts::FRAC_PI_2,
@@ -97,7 +97,7 @@ fn frames_that_can_only_show_cells_whose_block_a_newer_cell_took_are_not_matched
 }
 
 /// The alignment of `navigator` at step zero.
-fn aligned_state(navigator: &ReferenceNavigator) -> Alignment {
+pub(super) fn aligned_state(navigator: &ReferenceNavigator) -> Alignment {
     let mut copy = navigator.clone();
     let solution = copy.solution(at(0)).unwrap();
     Alignment {
@@ -108,6 +108,7 @@ fn aligned_state(navigator: &ReferenceNavigator) -> Alignment {
         velocity_cov: solution.velocity_cov,
         attitude_cov: solution.attitude_cov.unwrap(),
         at: at(0),
+        imu_bias_prior: None,
     }
 }
 
@@ -129,6 +130,7 @@ fn aligned_hover(imager: ImagerModel) -> ReferenceNavigator {
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator
