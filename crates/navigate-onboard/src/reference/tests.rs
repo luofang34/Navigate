@@ -4,7 +4,6 @@ use crate::{GuidanceLaw, Onboard, RouteDirector};
 use nalgebra::{Matrix2, UnitQuaternion, Vector2, Vector3};
 use navigate_camera::{CameraMount, ImagerModel, Intrinsics};
 use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity};
-use navigate_startrack::{StarCentroid, catalogue_ecef};
 
 pub(crate) const CLOCK: ClockDomainId = ClockDomainId::new(7);
 const IMU: SourceId = SourceId::new(1);
@@ -20,6 +19,8 @@ const UTC_AT_ZERO: f64 = 1_781_481_600.0;
 const STEP_NS: u64 = 20_000_000;
 /// IMU steps in one second.
 const RATE: u64 = 50;
+
+mod stars;
 
 #[cfg(test)]
 fn spec(id: SourceId, kind: SensorKind, budget: ErrorBudget) -> SensorSpec {
@@ -115,6 +116,7 @@ fn aligned_off(extra: &[SensorKind], north_m: f64, variance_m2: f64) -> Referenc
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator
@@ -309,80 +311,6 @@ fn undeclared_sensors_wrong_data_and_bad_suites_are_refused() {
     assert!(ReferenceNavigator::new(suite(&[SensorKind::StarCamera]), CLOCK, None).is_err());
 }
 
-/// The catalogue stars that a zenith camera on a level vehicle at the
-/// alignment sees at `acquired_at`, as ideal centroids.
-#[cfg(test)]
-fn zenith_centroids(acquired_at: MonotonicNanos) -> Vec<StarCentroid> {
-    let config = StarCatalogueConfig::with_utc_at_zero(UTC_AT_ZERO);
-    let catalogue = catalogue_ecef(config.epoch(acquired_at), 5.5).unwrap();
-    let ecef_from_body = UnitQuaternion::from_matrix(
-        &navigate_fusion::inertial::ned_to_body_fixed_dcm(LAT.to_radians(), LON.to_radians()),
-    );
-    let cam_from_ecef = CameraMount::zenith().cam_from_body * ecef_from_body.inverse();
-    let k = star_imager().intrinsics;
-    catalogue
-        .iter()
-        .filter_map(|s| k.project(&(cam_from_ecef * Vector3::from(s.direction))))
-        .filter(|p| (5.0..506.0).contains(&p.x) && (5.0..506.0).contains(&p.y))
-        .map(|pixel: Vector2<f64>| StarCentroid {
-            pixel,
-            flux: 50_000.0,
-            pixel_count: 9,
-            peak: 5_000.0,
-            saturated: false,
-            length_px: 0.0,
-            covariance_px2: Matrix2::identity() * 0.01,
-        })
-        .collect()
-}
-
-#[test]
-fn a_star_frame_is_identified_and_offered_as_lines_of_sight() {
-    let mut navigator = aligned(&[SensorKind::StarCamera]);
-    let mut sink = Vec::new();
-    run(&mut navigator, 1, None, &mut sink);
-    let mid = at(RATE);
-    let centroids = zenith_centroids(mid);
-    assert!(centroids.len() >= 6, "{}", centroids.len());
-    let exposure = SensorInput {
-        sensor: STARS,
-        acquired_at: mid,
-        delivered_at: mid,
-        data: SensorData::StarExposureMid,
-    };
-    navigator.ingest(&exposure, &mut sink).unwrap();
-    let frame = SensorInput {
-        sensor: STARS,
-        acquired_at: mid,
-        delivered_at: mid,
-        data: SensorData::StarCentroids { centroids },
-    };
-    navigator.ingest(&frame, &mut sink).unwrap();
-    let accepted = sink
-        .iter()
-        .filter(|r| r.measurement == "star_line_of_sight" && r.outcome == Outcome::Accepted)
-        .count();
-    assert!(accepted >= 4, "{sink:?}");
-    let empty = SensorInput {
-        sensor: STARS,
-        acquired_at: mid,
-        delivered_at: mid,
-        data: SensorData::StarCentroids { centroids: vec![] },
-    };
-    sink.clear();
-    navigator.ingest(&empty, &mut sink).unwrap();
-    assert!(
-        matches!(
-            sink.as_slice(),
-            [AcceptanceRecord {
-                outcome: Outcome::Unused(_),
-                ..
-            }]
-        ),
-        "{sink:?}"
-    );
-}
-
 #[test]
 fn the_bundle_links_a_navigator_and_a_director_as_trait_objects() {
     use navigate_contract::{AltitudeConstraint, Ident, Waypoint};
@@ -432,53 +360,4 @@ fn a_snapshot_forks_the_run_and_restores_it() {
     let then = at(5 * RATE);
     assert_eq!(navigator.solution(then), from_snapshot.solution(then));
     assert!(navigator.requirements().is_empty() && navigator.load_report().is_empty());
-}
-
-#[test]
-fn every_line_of_sight_of_a_second_frame_is_accepted() {
-    let mut navigator = aligned(&[SensorKind::StarCamera]);
-    let mut sink = Vec::new();
-    run(&mut navigator, 1, None, &mut sink);
-    let mut per_frame = Vec::new();
-    for second in [1_u64, 2] {
-        if second == 2 {
-            for step in RATE + 1..=2 * RATE {
-                navigator.ingest(&rest_increment(step), &mut sink).unwrap();
-            }
-        }
-        let mid = at(second * RATE);
-        let exposure = SensorInput {
-            sensor: STARS,
-            acquired_at: mid,
-            delivered_at: mid,
-            data: SensorData::StarExposureMid,
-        };
-        navigator.ingest(&exposure, &mut sink).unwrap();
-        let centroids = zenith_centroids(mid);
-        let frame = SensorInput {
-            sensor: STARS,
-            acquired_at: mid,
-            delivered_at: mid,
-            data: SensorData::StarCentroids { centroids },
-        };
-        sink.clear();
-        navigator.ingest(&frame, &mut sink).unwrap();
-        per_frame.push(sink.clone());
-    }
-    let [first, second] = [&per_frame[0], &per_frame[1]];
-    assert!(first.len() >= 4, "{first:?}");
-    assert!(
-        first.iter().all(|r| r.context == Some("lost_in_space")),
-        "{first:?}"
-    );
-    assert!(second.len() >= 4, "{second:?}");
-    let accepted = second
-        .iter()
-        .filter(|r| r.outcome == Outcome::Accepted)
-        .count();
-    assert_eq!(accepted, second.len(), "{second:?}");
-    assert!(
-        second.iter().all(|r| r.context == Some("tracking")),
-        "{second:?}"
-    );
 }

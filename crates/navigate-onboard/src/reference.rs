@@ -15,10 +15,11 @@ use navigate_fusion::{
 use navigate_startrack::line_of_sight_observations;
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, ErrorBudget, Navigator, OnboardError, Outcome,
-    SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentRecord, AlignmentStatus, ErrorBudget,
+    Navigator, OnboardError, Outcome, SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
+mod aligner;
 mod stars;
 #[cfg(feature = "terrain-camera")]
 mod terrain;
@@ -29,6 +30,7 @@ pub use terrain::{
     TerrainConfig, TerrainMapRequest, WorkingCamera, WorkingLimit,
 };
 
+use aligner::Aligner;
 use stars::{Sighting, StarChannel};
 #[cfg(feature = "terrain-camera")]
 use terrain::TerrainMeans;
@@ -45,6 +47,11 @@ pub struct ReferenceNavigator {
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
     stars: BTreeMap<u32, StarChannel>,
+    aligner: Aligner,
+    /// What the alignment of the present state used.
+    alignment: Option<AlignmentRecord>,
+    /// GNSS positions in a row that the filter refused at its gate.
+    gate_refusals: u32,
     #[cfg(feature = "terrain-camera")]
     terrain: TerrainMeans,
 }
@@ -120,6 +127,9 @@ impl ReferenceNavigator {
             });
         }
         Ok(Self {
+            aligner: Aligner::new(&suite),
+            alignment: None,
+            gate_refusals: 0,
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
             filter: Box::new(InertialNavigationFilter::new_surface(
@@ -171,11 +181,15 @@ impl ReferenceNavigator {
         observation: &Observation,
         context: Option<&'static str>,
         sink: &mut dyn AcceptanceSink,
-    ) {
+    ) -> bool {
         let outcome = match self.filter.ingest(observation, input.delivered_at) {
             IngestOutcome::Accepted => Outcome::Accepted,
             IngestOutcome::Rejected(reason) => Outcome::Rejected(reason),
         };
+        let gated = matches!(
+            outcome,
+            Outcome::Rejected(navigate_fusion::RejectionReason::InnovationGate { .. })
+        );
         sink.record(AcceptanceRecord {
             sensor: input.sensor,
             acquired_at: input.acquired_at,
@@ -183,6 +197,7 @@ impl ReferenceNavigator {
             outcome,
             context,
         });
+        gated
     }
 
     fn offer_value(
@@ -192,10 +207,10 @@ impl ReferenceNavigator {
         value: ObservationValue,
         class: SensorClass,
         sink: &mut dyn AcceptanceSink,
-    ) {
+    ) -> bool {
         let stamp = self.stamp(input.sensor, input.acquired_at);
         let observation = Observation::new(stamp, value, SourceComposition::of(class));
-        self.offer(input, measurement, &observation, None, sink);
+        self.offer(input, measurement, &observation, None, sink)
     }
 
     fn imu(
@@ -249,7 +264,14 @@ impl ReferenceNavigator {
             position: *position,
             covariance: position_cov,
         };
-        self.offer_value(input, "gnss_position", value, SensorClass::Gnss, sink);
+        let gated = self.offer_value(input, "gnss_position", value, SensorClass::Gnss, sink);
+        // A run of positions outside the gate says that the state is far
+        // from the receiver: the alignment is suspect.
+        self.gate_refusals = if gated {
+            self.gate_refusals.saturating_add(1)
+        } else {
+            0
+        };
         if let Some(velocity) = velocity {
             let covariance =
                 velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
@@ -301,27 +323,48 @@ impl ReferenceNavigator {
     }
 }
 
+/// Whether the reference navigator takes `data` from a sensor of `kind`,
+/// before its first state and after it.
+const fn fits(data: &SensorData, kind: SensorKind) -> bool {
+    let terrain = matches!(
+        (data, kind),
+        (SensorData::TerrainFrame { .. }, SensorKind::TerrainCamera)
+    );
+    (terrain && cfg!(feature = "terrain-camera"))
+        || matches!(
+            (data, kind),
+            (SensorData::ImuIncrement { .. }, SensorKind::Imu)
+                | (SensorData::GnssFix { .. }, SensorKind::Gnss)
+                | (SensorData::BaroAltitude { .. }, SensorKind::Barometer)
+                | (
+                    SensorData::StarExposureMid | SensorData::StarCentroids { .. },
+                    SensorKind::StarCamera,
+                )
+                | (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
+                | (
+                    SensorData::SurveyedPosition { .. },
+                    SensorKind::SurveyedPoint
+                )
+                | (SensorData::Observation(_), _)
+        )
+}
+
 impl Navigator for ReferenceNavigator {
     fn suite(&self) -> &SensorSuite {
         &self.suite
     }
 
     fn align(&mut self, a: &Alignment) -> Result<(), OnboardError> {
-        self.filter
-            .initialize_surface(
-                a.position,
-                a.velocity,
-                a.attitude,
-                a.position_cov,
-                a.velocity_cov,
-                a.attitude_cov,
-                a.at,
-                SourceComposition::of(SensorClass::Inertial),
-            )
-            .map_err(|reason| OnboardError::Refused {
-                stage: "alignment",
-                reason,
-            })
+        self.set_state(a, aligner::transfer_record(a))
+    }
+
+    fn alignment_status(&self) -> Option<AlignmentStatus> {
+        Some(self.alignment_now())
+    }
+
+    fn realign(&mut self) -> Result<(), OnboardError> {
+        self.forget_state();
+        Ok(())
     }
 
     fn ingest(
@@ -339,7 +382,18 @@ impl Navigator for ReferenceNavigator {
             kind: kind.name(),
             data: input.data.name(),
         };
+        if !fits(&input.data, kind) {
+            return Err(wrong());
+        }
+        if !self.filter.is_initialized() {
+            return self.aligning(input, budget, sink);
+        }
         match (&input.data, kind) {
+            (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
+            | (SensorData::SurveyedPosition { .. }, SensorKind::SurveyedPoint) => {
+                Self::alignment_only(input, sink);
+                Ok(())
+            }
             (
                 SensorData::ImuIncrement {
                     dt_s,

@@ -79,6 +79,9 @@ cargo test --release -p navigate-fusion --lib monte_carlo
 echo "== cargo test =="
 cargo test --all-targets
 cargo test -p navigate-onboard --features terrain-camera
+# The at-rest consistency of a self-alignment needs a minute of filter
+# steps for each of 24 vehicles; the debug build ignores that test.
+cargo test --release -p navigate-onboard --lib aligner
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \
