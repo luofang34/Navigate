@@ -62,7 +62,6 @@ mod tests;
 
 use navigate_contract::{
     ClockDomainId, FrameId, MonotonicNanos, ObservationStamp, SourceComposition, SourceEpoch,
-    WrappingSequence,
 };
 
 use self::estimate::InertialCore;
@@ -72,6 +71,7 @@ use crate::kinematic::stats::StatsTable;
 use crate::observation::{MeasurementKind, Observation};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
+use crate::solution_sequence::SolutionSequencer;
 pub use clock::ClockNoiseModel;
 pub use config::InertialConfig;
 pub use frame_change::FrameChange;
@@ -103,7 +103,7 @@ pub struct InertialNavigationFilter {
     /// The propagation mode before the initialization and after a reset.
     setup_mode: PropagationMode,
     epoch: SourceEpoch,
-    next_solution_sequence: WrappingSequence,
+    sequencer: SolutionSequencer,
     rejections: RejectionCounters,
     ledger: ProvenanceLedger,
     core: Option<InertialCore>,
@@ -144,7 +144,7 @@ impl InertialNavigationFilter {
             setup,
             setup_mode: PropagationMode::SensedImu,
             epoch: SourceEpoch::new(0),
-            next_solution_sequence: WrappingSequence::new(0),
+            sequencer: SolutionSequencer::new(),
             rejections: RejectionCounters::default(),
             ledger: ProvenanceLedger::default(),
             core: None,
@@ -325,7 +325,7 @@ impl InertialNavigationFilter {
         self.setup = self.active_regime();
         self.setup_mode = self.propagation_mode();
         self.epoch = self.epoch.next();
-        self.next_solution_sequence = WrappingSequence::new(0);
+        self.sequencer = SolutionSequencer::new();
         self.ledger.clear();
         self.core = None;
         self.history.clear();

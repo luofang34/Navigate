@@ -49,6 +49,7 @@ pub mod observation;
 pub mod particle;
 mod provenance;
 pub mod rejection;
+mod solution_sequence;
 
 pub use config::FusionConfig;
 pub use inertial::{
