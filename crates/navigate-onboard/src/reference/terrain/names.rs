@@ -12,6 +12,9 @@ pub(crate) const KEYFRAME: &str = "keyframe";
 /// Context: the navigator rendered the reference view from the package.
 pub(crate) const RENDER: &str = "render";
 
+/// The frame has no structure that a match can use: it is flat, or it has
+/// only the contrast of noise.
+pub(crate) const FEATURELESS_FRAME: &str = "featureless_frame";
 /// The acquisition time of the frame is after its delivery time.
 pub(crate) const ACQUIRED_AFTER_DELIVERY: &str = "acquired_after_delivery";
 /// The frame came later after its exposure than the configured bound.
