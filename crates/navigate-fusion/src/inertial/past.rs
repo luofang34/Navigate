@@ -10,7 +10,7 @@
 //! the filter has ingested. A later delayed measurement can change the
 //! answer of a later query.
 
-use navigate_contract::{MonotonicNanos, NavigationSolution, SolutionStamp};
+use navigate_contract::{DurationNanos, MonotonicNanos, NavigationSolution, SolutionStamp};
 use thiserror::Error;
 
 use super::InertialNavigationFilter;
@@ -95,8 +95,8 @@ impl InertialNavigationFilter {
     /// call does not change the filter and does not advance the solution
     /// sequence, so it is a pure function of the retained state.
     ///
-    /// The depth is the depth of the history: [`crate::inertial::MAX_INERTIAL_HISTORY`]
-    /// events, each IMU sample one event.
+    /// The depth is the depth of the history, which
+    /// [`Self::history_depth`] gives.
     ///
     /// # Errors
     ///
@@ -109,10 +109,9 @@ impl InertialNavigationFilter {
                 state_at: current.state_at,
             });
         }
-        let capacity = self.config.fusion.history_capacity;
         let (mut past, covering) = self
             .history
-            .base_at(current, at, capacity)
+            .base_at(current, at, &self.config)
             .map_err(|oldest| PastStateRefusal::BeforeHistory { at, oldest })?;
         past.propagate_with(at, covering, &self.config)
             .map_err(|reason| PastStateRefusal::Propagation { reason })?;
@@ -147,5 +146,25 @@ impl InertialNavigationFilter {
             }),
             angular_rate_body_rad_s: (rates.angular_rate - past.nominal.b_g).into(),
         })
+    }
+
+    /// The time from the oldest state that the history keeps to the
+    /// state time: the oldest past time that [`Self::state_at`] answers
+    /// and that a delayed observation can have. `None` before the
+    /// initialization.
+    ///
+    /// The history keeps [`crate::inertial::MAX_INERTIAL_HISTORY`]
+    /// events, or `FusionConfig::history_capacity` when it is smaller.
+    /// Each IMU sample, IMU increment, and observation is one event. It
+    /// drops the oldest events a checkpoint stride at a time, so the
+    /// depth is between the capacity less one stride and the capacity,
+    /// divided by the event rate.
+    #[must_use]
+    pub fn history_depth(&self) -> Option<DurationNanos> {
+        let current = self.core.as_ref()?;
+        let oldest = self
+            .history
+            .oldest(current, self.config.fusion.history_capacity);
+        current.state_at.elapsed_since(oldest)
     }
 }
