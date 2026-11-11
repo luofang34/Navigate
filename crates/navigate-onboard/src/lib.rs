@@ -31,6 +31,6 @@ pub use acceptance::{AcceptanceRecord, AcceptanceSink, Outcome};
 pub use bundle::Onboard;
 pub use director::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector};
 pub use error::OnboardError;
-pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport, ProductUse};
+pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
 pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};
