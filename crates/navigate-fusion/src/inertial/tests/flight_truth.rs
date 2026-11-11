@@ -283,6 +283,21 @@ impl Flight {
         (nees, (nn + ee).sqrt(), e.x.hypot(e.y))
     }
 
+    /// The NEES of the geodetic height error: the height of the filter
+    /// nominal less the height of the truth, against the vertical
+    /// variance of the published solution.
+    pub(super) fn height_nees(&mut self) -> f64 {
+        let at = self.filter.tick(t(u64::from(self.step) * (self.route.step_s * 1_000.0).round() as u64));
+        let vertical = at.map_or(f64::NAN, |s| s.position_cov.upper_triangle()[5]);
+        let height = |p: &Vector3<f64>| {
+            LocalLevel::at_body_fixed(p, BodyEllipsoid::WGS84)
+                .position
+                .altitude_m
+        };
+        let error = height(&core(&self.filter).nominal.p) - height(&self.truth.p);
+        error * error / vertical
+    }
+
     /// The attitude NEES: the rotation from the filter attitude to the
     /// truth, in the body axes, against the attitude block of the error
     /// covariance. It has three degrees of freedom.

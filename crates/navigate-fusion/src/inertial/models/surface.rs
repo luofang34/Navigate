@@ -88,15 +88,22 @@ pub(super) fn apply_vector_or_range(
 /// covariance in the same axes.
 ///
 /// The update does not correct the horizontal position and velocity
-/// (`InertialCore::update_vertical`). A height carries no first-order
-/// information about them. The covariance of the body-fixed error state
-/// correlates the vertical with the horizontal through the turn of the
-/// local vertical along the track and through the second-order term.
-/// These correlations are not information: on a route with turns and
-/// kilometers of horizontal error, a first-order update with them
-/// shrank the horizontal 1-sigma to a fifth of the error. The height
-/// still corrects the attitude and the biases, and those corrections
-/// reach the horizontal states through the dynamics.
+/// (`InertialCore::update_vertical`). The height depends on the
+/// horizontal error through `−d²/(2R)`. At kilometers of horizontal
+/// error this dependence is not Gaussian and is nearly constant within
+/// a flight, so it cannot be carried as a white variance: the updates
+/// would average it away, trust the vertical, and, once a turn makes the
+/// tilt observable, shrink the horizontal covariance far below the
+/// error. The horizontal states therefore take no correction from an
+/// altitude. The height still corrects the attitude and the biases,
+/// and those corrections reach the horizontal states through the
+/// dynamics.
+///
+/// Known limit: the height estimate is over-confident at kilometers of
+/// horizontal error. Its mean NEES is about 1 up to 5 km of horizontal
+/// error and 85 at 15 km on a route with turns. The error state measures
+/// the vertical along the local up of the nominal position, not as the
+/// geodetic height difference.
 pub(super) fn altitude(
     core: &InertialCore,
     ellipsoid: BodyEllipsoid,

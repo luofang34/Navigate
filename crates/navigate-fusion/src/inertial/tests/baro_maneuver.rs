@@ -55,6 +55,11 @@ const NEES_BAND: (f64, f64) = if cfg!(debug_assertions) {
     (0.5, 6.0)
 };
 
+/// The band of the mean NEES of the geodetic height error at the end of
+/// the trial route: the measured over-confidence (85), which a consistent
+/// vertical brings to about 1.
+const HEIGHT_LIMIT: (f64, f64) = (20.0, 400.0);
+
 /// The in-flight alignment of the trial.
 const ALIGNMENT: Alignment = Alignment {
     position_m: 20.0,
@@ -62,10 +67,11 @@ const ALIGNMENT: Alignment = Alignment {
     attitude_rad: 2e-3,
 };
 
-/// The horizontal NEES, the horizontal 1-sigma, and the horizontal
-/// error every 100 s of one run, with a 1 m altimeter that has the
-/// filter's bias model at each IMU step when `baro` holds.
-fn run(seed: u32, baro: bool) -> Vec<(f64, f64, f64)> {
+/// The horizontal NEES, the horizontal 1-sigma, the horizontal error,
+/// and the NEES of the geodetic height error every 100 s of one run,
+/// with a 1 m altimeter that has the filter's bias model at each IMU
+/// step when `baro` holds.
+fn run(seed: u32, baro: bool) -> Vec<[f64; 4]> {
     let config = tactical();
     let mut flight = Flight::new(ROUTE, seed, config, ALIGNMENT);
     let baro_bias = config.baro_bias.sigma() * gauss(seed, FREE_INDEX);
@@ -89,7 +95,8 @@ fn run(seed: u32, baro: bool) -> Vec<(f64, f64, f64)> {
             }
         }
         if k % per_report == 0 {
-            samples.push(flight.horizontal(at_ms));
+            let (nees, sigma, error) = flight.horizontal(at_ms);
+            samples.push([nees, sigma, error, flight.height_nees()]);
         }
     }
     // The 0.1 % innovation gate refuses a few true draws.
@@ -97,19 +104,18 @@ fn run(seed: u32, baro: bool) -> Vec<(f64, f64, f64)> {
     samples
 }
 
-/// Mean NEES, mean 1-sigma, and RMS error at each report over the
-/// seeds.
-fn statistics(baro: bool) -> Vec<(f64, f64, f64)> {
-    let runs: Vec<Vec<(f64, f64, f64)>> = (0..SEEDS).map(|seed| run(seed, baro)).collect();
+/// Mean horizontal NEES, mean horizontal 1-sigma, RMS horizontal error,
+/// and mean height NEES at each report over the seeds.
+fn statistics(baro: bool) -> Vec<[f64; 4]> {
+    let runs: Vec<Vec<[f64; 4]>> = (0..SEEDS).map(|seed| run(seed, baro)).collect();
     let n = f64::from(SEEDS);
     let reports = runs.first().map_or(0, Vec::len);
     (0..reports)
         .map(|i| {
-            let at = |run: &Vec<(f64, f64, f64)>| run.get(i).copied().unwrap_or_default();
-            let nees = runs.iter().map(|r| at(r).0).sum::<f64>() / n;
-            let sigma = runs.iter().map(|r| at(r).1).sum::<f64>() / n;
-            let rms = (runs.iter().map(|r| at(r).2.powi(2)).sum::<f64>() / n).sqrt();
-            (nees, sigma, rms)
+            let at = |run: &Vec<[f64; 4]>| run.get(i).copied().unwrap_or_default();
+            let mean = |j: usize| runs.iter().map(|r| at(r)[j]).sum::<f64>() / n;
+            let rms = (runs.iter().map(|r| at(r)[2].powi(2)).sum::<f64>() / n).sqrt();
+            [mean(0), mean(1), rms, mean(3)]
         })
         .collect()
 }
@@ -119,7 +125,7 @@ fn monte_carlo_an_altimeter_in_turns_keeps_the_horizontal_estimate_consistent() 
     let free = statistics(false);
     let baro = statistics(true);
     let (low, high) = NEES_BAND;
-    for (index, ((free_nees, _, free_rms), (nees, sigma, rms))) in
+    for (index, ([free_nees, _, free_rms, _], [nees, sigma, rms, _])) in
         free.iter().zip(&baro).enumerate()
     {
         let at_s = (index + 1) * 100;
@@ -135,6 +141,22 @@ fn monte_carlo_an_altimeter_in_turns_keeps_the_horizontal_estimate_consistent() 
         assert!(
             *rms <= 1.05 * free_rms,
             "{at_s} s: RMS {rms} vs INS {free_rms}"
+        );
+    }
+    // The known limit of the altitude model: at kilometers of horizontal
+    // error the height estimate is over-confident, because the height
+    // depends on the horizontal error through −d²/(2R) and that
+    // dependence is not in the error covariance. The mean NEES of the
+    // geodetic height error (one degree of freedom, 1 for a consistent
+    // filter) is about 1 up to 500 s and 85 at the end of the trial route,
+    // with 15 km of horizontal error. A vertical error state that is the
+    // geodetic height difference (ADR-0023) brings it into its band.
+    if !cfg!(debug_assertions) {
+        let height = baro.last().map_or(f64::NAN, |report| report[3]);
+        assert!(
+            (HEIGHT_LIMIT.0..=HEIGHT_LIMIT.1).contains(&height),
+            "height NEES {height}; by report {:?}",
+            baro.iter().map(|r| r[3]).collect::<Vec<_>>()
         );
     }
 }
