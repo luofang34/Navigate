@@ -205,3 +205,58 @@ parallel threads, and seals the package. The cache key is the tile key
 (`<source>/<revision>/<z>/<x>/<y>`), not the URL. `--plan-only` prints the
 resource plan and fetches nothing else. A `file://` template reads local
 files. An HTTP status of 404 or 204 is a gap.
+
+## 10. Derived products
+
+A derived product is a set of blobs and one canonical product manifest at
+`products/<sha256>.json`. Its blobs are in the same `chunks/` store. The
+product identity is the SHA-256 of the manifest bytes.
+
+| Field | Content |
+|---|---|
+| `format` | `navigate.data.product` |
+| `version` | `1` |
+| `kind` | `keyframes`, `corridor_landmarks`, or a reserved kind: `terrain_slopes`, `horizon_profiles`, `scalar_field`, `star_pairs`, `station_list`, `ephemeris_segments` |
+| `core` | Identity of the core package |
+| `recipe` | `algorithm`, `version`, `weights` (digest or `null`), `precision`, and each parameter as text |
+| `calibration` | Pinhole calibration of the camera, or `null` |
+| `altitude_band` | Altitude band, or `null` |
+| `envelope` | `lateral_m`, `vertical_m`, `heading_rad` about the planned pose of each entry, or `null` |
+| `entries[]` | `key`, `pose` (`position` `[lat, lon, h]`, `heading_rad`) or `null`, `blob`, `bytes`, in key order |
+
+`Product::open(store, identity, core)` refuses a manifest that is not
+canonical and a product of another core package. Each entry read checks
+the size and the digest of its blob. A change of any recipe parameter
+gives a new product identity. A navigator reports for each product that it
+loads: `use`, `fallback`, or `refusal`, with a reason.
+
+### Keyframes
+
+`navigate_visual_render::build_keyframes` renders one reference view at
+each planned pose along the legs, at a fixed spacing, with the sparse
+adaptive ray marcher. It reads the scene from the package through
+`scene_around`. The leg altitudes are heights above the WGS84 ellipsoid.
+Each entry blob is:
+
+```text
+"NVKEYV01" | u32 width | u32 height | luma (width × height bytes) | depth (width × height f32, little endian)
+```
+
+The depth is along the optical axis, in metres. Zero marks sky or missing
+data. A keyframe is valid only inside the envelope of the product.
+
+`scene_around` converts the stored heights with the geoid model that the
+host supplies. Without a model of the datum name, the window reports an
+undulation bound of 107 m.
+
+### Corridor landmarks
+
+`navigate_visual_flight::Surface::from_package` loads one imagery zoom and
+one elevation zoom of a package. Its `catalog_sha256` is the package
+identity. `build_corridor_bank_on_surface` writes this identity into the
+`NVKTILE1` bank, and `write_corridor_product` stores the bank as a
+`corridor_landmarks` product with its recipe: the build parameters, the
+`XFeat` weights digest, the encoder contract, the projector seed, the
+render camera, and the frame of the bank tiles. The bank tiles are in an
+east, north, up frame at the centre of the surface, so the cells of one
+bank are not the cells of the fixed grid.

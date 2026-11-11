@@ -11,6 +11,8 @@
 //!   manifest last;
 //! - [`Package`], which checks the manifest on open and each blob on read;
 //! - the fixed global [`grid`] of correlation cells and product tiles;
+//! - derived [`product`] manifests that bind a core package, a recipe, and
+//!   validity envelopes;
 //! - Web Mercator [`tile`] arithmetic and the Terrarium height decoder;
 //! - the [`resource`] model, which computes what each leg of a flight needs
 //!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned tiles
@@ -40,6 +42,7 @@ pub mod layer;
 pub mod manifest;
 pub mod package;
 pub mod prepare;
+pub mod product;
 pub mod resource;
 pub mod store;
 pub mod tile;

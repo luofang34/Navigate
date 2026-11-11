@@ -121,3 +121,15 @@ fn rule_breaks_are_refused() {
     m.grid.correlation_zoom = 15;
     assert!(m.validate().is_err());
 }
+
+#[test]
+fn floats_survive_the_canonical_round_trip() {
+    let mut writer = PackageWriter::new("r1");
+    let mut layer = imagery_layer();
+    layer.accuracy.horizontal = Sigma::Known(0.1 + 0.2);
+    layer.accuracy.age_growth_per_year = Sigma::Known(1.0 / 3.0);
+    writer.add_layer(layer).unwrap();
+    let manifest = writer.manifest().unwrap();
+    let bytes = manifest.canonical_bytes().unwrap();
+    assert_eq!(Manifest::from_canonical(&bytes, "m").unwrap(), manifest);
+}

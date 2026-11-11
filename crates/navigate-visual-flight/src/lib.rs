@@ -9,6 +9,7 @@ mod anchor_arrival;
 mod anchor_worker;
 pub mod canonical;
 pub mod corridor_build;
+pub mod corridor_product;
 pub mod diagnostics;
 pub mod engine;
 pub mod error;
@@ -24,7 +25,11 @@ pub mod tracks;
 pub mod types;
 pub mod worker;
 
-pub use corridor_build::{CorridorBuildSpec, CorridorBuildStats, build_corridor_bank_with_priors};
+pub use corridor_build::{
+    CorridorBuildSpec, CorridorBuildStats, build_corridor_bank_on_surface,
+    build_corridor_bank_with_priors,
+};
+pub use corridor_product::{CorridorProductRecipe, write_corridor_product};
 pub use diagnostics::{AnchorArrivalRecord, AttemptRecord, FrameDiagnostics};
 pub use engine::{
     FlightEngineConfig, FlightEngineResourcePaths, FlightEngineResources, FlightVisualEngine,
