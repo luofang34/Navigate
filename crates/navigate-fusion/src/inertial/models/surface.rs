@@ -85,14 +85,20 @@ where
 /// 1-sigma).
 ///
 /// The update does not correct the horizontal position and velocity
-/// (`InertialCore::update_vertical`). At kilometers of horizontal error
-/// on a route with turns, the vertical–horizontal cross-covariance does
-/// not carry real information: an update that uses it shrinks the
-/// horizontal 1-sigma to a fifth of the error (horizontal NEES 91 at the
-/// end of such a route), while an update that keeps off the horizontal
-/// states keeps the horizontal NEES and the height NEES in their bands.
-/// The height still corrects the attitude and the biases, and those
-/// corrections reach the horizontal states through the dynamics.
+/// (`InertialCore::update_vertical`). The body-fixed error state reads
+/// the vertical along the local up of the nominal position, and two
+/// points at the same height `d` apart differ along that up by the chord
+/// `−d²/(2R)`: 2 m at 5 km, 11 m at 12 km. At kilometers of horizontal
+/// error the chord is a residual that the linear model does not have,
+/// and a full-gain update spreads it through the vertical–horizontal
+/// cross-covariance. On a route with turns this shrinks the horizontal
+/// 1-sigma to a fifth of the error (horizontal NEES 91 at the end of the
+/// route); an altimeter that reads the height without the chord keeps
+/// the same full-gain filter in its band, which shows the chord as the
+/// cause. With the gain kept off the horizontal states, the horizontal
+/// NEES and the height NEES stay in their bands. The height still
+/// corrects the attitude and the biases, and those corrections reach the
+/// horizontal states through the dynamics.
 pub(super) fn altitude<const N: usize>(
     core: &InertialCore<N>,
     ellipsoid: BodyEllipsoid,
