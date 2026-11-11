@@ -15,12 +15,13 @@ use navigate_visual::{
 };
 
 use super::belief::{Belief, BeliefSource, Exposure, body_position};
-use super::budget::{ViewGeometry, external_covariance_ned};
+use super::budget::{ViewGeometry, unshared_covariance_ned};
 use super::config::WorkingCamera;
 use super::map::TerrainMap;
 use super::names::{self, rejection};
 use super::view::{NoView, Sight, Views, model};
-use super::{Sighting, admission};
+use super::{Sighting, admission, cell_key, with_map_error};
+use crate::NavigatorFilter;
 use crate::{ErrorBudget, OnboardError, SensorInput, SensorSpec};
 
 /// Largest count of map cells that the check before the match looks at.
@@ -172,7 +173,7 @@ impl TerrainCamera {
     fn all_cells_have_a_fix(
         &self,
         map: &TerrainMap,
-        ledger: &MapCellLedger,
+        (ledger, filter): (&MapCellLedger, &NavigatorFilter),
         belief: &Belief,
         position_radius_m: f64,
         frame: FrameKey,
@@ -203,7 +204,8 @@ impl TerrainCamera {
                 });
                 // One cell that the filter can still take a fix from is
                 // enough to match the frame.
-                reason = Some(admission(&ledger.label(&cell, frame))?);
+                let bound = filter.binds_correlated_key(cell_key(&cell));
+                reason = Some(admission(&ledger.label(&cell, frame), bound)?);
             }
         }
         reason
@@ -213,7 +215,7 @@ impl TerrainCamera {
     pub(super) fn sight(
         &mut self,
         map: &TerrainMap,
-        ledger: &MapCellLedger,
+        cells: (&MapCellLedger, &NavigatorFilter),
         input: &SensorInput,
         image: GrayImage,
         exposure: &Exposure,
@@ -231,8 +233,7 @@ impl TerrainCamera {
             continuity: ContinuityEpoch(0),
             index: sequence,
         };
-        if let Some(reason) =
-            self.all_cells_have_a_fix(map, ledger, &belief, position_radius_m, key)
+        if let Some(reason) = self.all_cells_have_a_fix(map, cells, &belief, position_radius_m, key)
         {
             return Ok(Sighting::Unused(reason, None));
         }
@@ -269,7 +270,7 @@ impl TerrainCamera {
         };
         let frame = resampled(stamp, image, &reference.working.intrinsics);
         match self.localizer.estimate_blocking(&frame, view, &prior) {
-            Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, (key, path))),
+            Ok(estimate) => Ok(self.fix(map, cells, estimate, view, (key, path))),
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain frame did not match");
                 Ok(Sighting::Unused(rejection(&error), Some(path)))
@@ -281,7 +282,7 @@ impl TerrainCamera {
     fn fix(
         &mut self,
         map: &TerrainMap,
-        ledger: &MapCellLedger,
+        (ledger, filter): (&MapCellLedger, &NavigatorFilter),
         mut estimate: Estimate,
         view: &ReferenceView,
         (frame, path): (FrameKey, &'static str),
@@ -298,14 +299,19 @@ impl TerrainCamera {
         let Ok(cell) = MapCell::of_layer(&map.imagery.layer, [lat, lon]) else {
             return Sighting::Unused(names::OUTSIDE_GRID, Some(path));
         };
-        if let Some(reason) = admission(&ledger.label(&cell, frame)) {
+        let bound = filter.binds_correlated_key(cell_key(&cell));
+        if let Some(reason) = admission(&ledger.label(&cell, frame), bound) {
             return Sighting::Unused(reason, Some(path));
         }
-        let external = external_covariance_ned(&map.sigmas, self.calibration_sigma_rad, &geometry);
+        // The map error of the cell is declared as a correlated error, so
+        // the covariance holds the rest.
+        let unshared = unshared_covariance_ned(&map.sigmas, self.calibration_sigma_rad, &geometry);
+        let sigmas = map.sigmas;
+        let map_sigma = [sigmas.horizontal_m, sigmas.horizontal_m, sigmas.height_m];
         estimate.pose.position = body_position(&estimate.pose, &self.mount);
-        match position_fix_observation_composed(&estimate, &self.identity, &external) {
+        match position_fix_observation_composed(&estimate, &self.identity, &unshared) {
             Ok(observation) => Sighting::Fix {
-                observation: Box::new(observation),
+                observation: Box::new(with_map_error(observation, &cell, map_sigma)),
                 cell,
                 frame,
                 path,

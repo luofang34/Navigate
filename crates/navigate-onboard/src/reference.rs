@@ -84,6 +84,14 @@ fn inertial_config(suite: &SensorSuite) -> Result<InertialConfig, OnboardError> 
     Ok(config)
 }
 
+/// The correlated-error blocks of the filter of `suite`: one for a GNSS
+/// receiver with a correlated error, and one for the map cells of the
+/// terrain cameras.
+fn correlated_blocks(suite: &SensorSuite) -> usize {
+    usize::from(suite.has_correlated_error())
+        + usize::from(suite.of_kind(SensorKind::TerrainCamera).next().is_some())
+}
+
 impl ReferenceNavigator {
     /// A navigator for `suite` on the clock `clock`. `stars` gives the star
     /// catalogue and the absolute time; it is required when the suite has a
@@ -125,7 +133,7 @@ impl ReferenceNavigator {
         Ok(Self {
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
-            filter: NavigatorFilter::new(config, clock, suite.has_correlated_error()).map_err(
+            filter: NavigatorFilter::new(config, clock, correlated_blocks(&suite)).map_err(
                 |error| OnboardError::Config {
                     field: "filter layout",
                     detail: error.to_string(),

@@ -11,90 +11,104 @@ use super::flight::{CAMERA, CLOCK, Flight, RATE, at, fly, load, navigator, reque
 use super::world::GROUND_M;
 use super::world::{CENTRE, World, WorldSpec, frame_at};
 use crate::{
-    Alignment, Navigator, Outcome, ReferenceNavigator, SensorData, SensorInput, TerrainConfig,
-    TerrainMapRequest, WorkingLimit,
+    Alignment, Navigator, Outcome, ReferenceNavigator, SensorData, SensorInput, SensorSuite,
+    TerrainConfig, TerrainMapRequest, WorkingLimit,
 };
 use navigate_camera::CameraMount;
+use navigate_contract::SourceId;
 
 /// Correlation cells of 228 m: twelve frames of the flight for each cell.
 const ZOOM: u32 = 17;
 
+/// A second terrain camera that looks 20° forward of the nadir: from the
+/// height of the flights it sees the ground 290 m ahead, more than one
+/// cell of [`ZOOM`].
+const FORWARD: SourceId = SourceId::new(7);
+
+fn forward() -> CameraMount {
+    CameraMount::rotated_forward(
+        0.0,
+        20.0_f64.to_radians() - core::f64::consts::FRAC_PI_2,
+        0.0,
+    )
+}
+
 #[test]
-fn frames_that_can_only_show_cells_with_a_fix_are_not_matched() {
+fn frames_that_can_only_show_cells_whose_block_a_newer_cell_took_are_not_matched() {
     let world = World::build(&WorldSpec {
         correlation_zoom: ZOOM,
         ..WorldSpec::default()
     });
     let flight = north_through_cells(ZOOM, 12.0, HEIGHT_M, -1.0);
+    // The belly camera and the forward camera: the forward camera reaches
+    // each cell first, and its fix takes the one map block from the cell
+    // under the vehicle.
+    let mut sensors = suite(super::flight::imager(), belly()).sensors().to_vec();
+    let mut second = sensors.last().cloned().unwrap();
+    second.id = FORWARD;
+    second.mount = Some(forward());
+    sensors.push(second);
     let mut navigator = navigator(&flight, belly(), [-20.0, 30.0, -8.0], 40.0);
+    let aligned = navigator.clone();
+    navigator = ReferenceNavigator::new(SensorSuite::new(sensors).unwrap(), CLOCK, None).unwrap();
+    navigator.align(&aligned_state(&aligned)).unwrap();
     load(&mut navigator, &world);
     let mut sink = Vec::new();
-    let each_half_second = |step: u64| step.is_multiple_of(25);
-    // Fifteen frames: the twelve of the first cell, 19 m apart from 9.5 m
-    // after its south edge, and the first three of the next cell.
-    fly(
-        &mut navigator,
-        &flight,
-        &world,
-        &belly(),
-        1..=375,
-        each_half_second,
-        &mut sink,
-    )
-    .unwrap();
-    let records = terrain(&sink);
-    assert_eq!(records.len(), 15);
-    // The first frame of each cell is matched and fused: the check costs
-    // no fix of a new cell and delays none.
-    for first in [0, 12] {
-        assert_eq!(
-            records[first],
-            (Outcome::Accepted, Some("render")),
-            "{records:?}"
-        );
+    for step in 1..=375 {
+        navigator
+            .ingest(&flight.increment(step), &mut sink)
+            .unwrap();
+        if step.is_multiple_of(25) {
+            navigator
+                .ingest(&flight.frame(&world, &belly(), step, 0), &mut sink)
+                .unwrap();
+            let mut ahead = flight.frame(&world, &forward(), step, 0);
+            ahead.sensor = FORWARD;
+            navigator.ingest(&ahead, &mut sink).unwrap();
+        }
     }
-    // Each other frame shares the map error of the fix of its cell.
+    let ahead: Vec<_> = sink
+        .iter()
+        .filter(|r| r.sensor == FORWARD && r.measurement == crate::reference::terrain::MEASUREMENT)
+        .map(|r| r.outcome.clone())
+        .collect();
+    let below = terrain(&sink);
+    assert_eq!((ahead.len(), below.len()), (15, 15));
+    // The forward camera fuses each frame: its ground is in the cell whose
+    // block it holds, or in a new cell.
+    assert!(ahead.iter().all(|o| *o == Outcome::Accepted), "{ahead:?}");
+    // Once the forward camera took the block for the next cell, the cell
+    // under the vehicle has a fix and no block: its frames are withheld,
+    // and a frame whose search disk holds only such cells is not matched.
     let shared = Outcome::Unused("shared_map_error");
-    assert!(
-        records
-            .iter()
-            .enumerate()
-            .all(|(i, r)| [0, 12].contains(&i) || r.0 == shared),
-        "{records:?}"
-    );
-    // A frame more than 80 m from each cell without a fix is recorded with
-    // no reference view: the search disk (three sigma of the position,
-    // 30 m at the least, and of the attitude at the range) is inside
-    // cells with a fix. Frames 4 to 7 are 85 m or more from the two
-    // edges of the first cell; frames 13 and 14 have the first cell
-    // behind them.
-    for skipped in [4, 5, 6, 7, 13, 14] {
-        assert_eq!(
-            records[skipped],
-            (shared.clone(), None),
-            "{skipped}: {records:?}"
-        );
-    }
-    // A frame within 30 m of the edge to a cell without a fix is matched,
-    // because its fix can be the first of that cell: frame 1 is 28.5 m
-    // after the south edge and frame 10 is 28.5 m before the north edge.
-    for matched in [1, 10, 11] {
-        assert_eq!(
-            records[matched],
-            (shared.clone(), Some("render")),
-            "{matched}: {records:?}"
-        );
-    }
-    let unmatched = records.iter().filter(|r| r.1.is_none()).count();
+    let withheld = below.iter().filter(|r| r.0 == shared).count();
+    let unmatched = below
+        .iter()
+        .filter(|r| r.0 == shared && r.1.is_none())
+        .count();
     tracing::info!(
-        frames = records.len(),
-        fused = 2,
+        withheld,
         unmatched,
-        "a flight over 228 m cells"
+        "the belly camera behind the forward camera"
     );
-    assert!(unmatched >= 6, "{records:?}");
+    assert!(withheld >= 10 && unmatched >= 6, "{below:?}");
     let error = flight.error_m(&navigator.solution(at(375)).unwrap(), 375);
     assert!(error.xy().norm() < 16.0, "{error}");
+}
+
+/// The alignment of `navigator` at step zero.
+fn aligned_state(navigator: &ReferenceNavigator) -> Alignment {
+    let mut copy = navigator.clone();
+    let solution = copy.solution(at(0)).unwrap();
+    Alignment {
+        position: solution.position,
+        velocity: solution.velocity,
+        attitude: solution.attitude.unwrap(),
+        position_cov: solution.position_cov,
+        velocity_cov: solution.velocity_cov,
+        attitude_cov: solution.attitude_cov.unwrap(),
+        at: at(0),
+    }
 }
 
 /// A navigator with the belly camera `imager`, aligned 30 m north, 20 m
@@ -251,11 +265,11 @@ fn the_working_resolution_follows_the_map_texel_inside_its_bounds() {
 
 /// A camera 25° off the nadir, 150 m above the ground: the ground that it
 /// sees is 70 m ahead of the vehicle, more than half a correlation cell
-/// of 114 m. The check is on that ground, not on the place of the
-/// vehicle, so the first frame of a new cell is matched while the vehicle
-/// is still above a cell with a fix.
+/// of 114 m. The cell of a fix is that of this ground, not of the place
+/// of the vehicle, so the first frame of a new cell is a fix while the
+/// vehicle is still above the cell before.
 #[test]
-fn a_tilted_low_camera_is_checked_at_the_ground_that_it_sees() {
+fn a_tilted_low_camera_fuses_each_frame_of_the_cells_that_it_sees() {
     let world = World::build(&WorldSpec {
         correlation_zoom: 18,
         imagery_zoom: 17,
@@ -285,16 +299,13 @@ fn a_tilted_low_camera_is_checked_at_the_ground_that_it_sees() {
     .unwrap();
     let records = terrain(&sink);
     assert_eq!(records.len(), 13);
-    let shared = Outcome::Unused("shared_map_error");
-    for (index, record) in records.iter().enumerate() {
-        match index {
-            // The ground enters a cell without a fix. At frame 12 the
-            // vehicle is 60 m inside the second cell, which has a fix.
-            0 | 6 | 12 => assert_eq!(*record, (Outcome::Accepted, Some("render")), "{records:?}"),
-            // The ground is 28 m or more inside the second cell, and the
-            // first cell behind it has a fix: no match.
-            7..=9 => assert_eq!(*record, (shared.clone(), None), "{index}: {records:?}"),
-            _ => assert_eq!(record.0, shared, "{index}: {records:?}"),
-        }
-    }
+    // The ground enters a new cell at frames 6 and 12, while the vehicle
+    // is still above the cell before: each new cell takes the block, and
+    // each frame of the cell that holds the block is fused.
+    assert!(
+        records
+            .iter()
+            .all(|r| *r == (Outcome::Accepted, Some("render"))),
+        "{records:?}"
+    );
 }

@@ -48,12 +48,12 @@ fn a_fork_after_a_fix_gives_the_same_records_and_solutions_as_the_original() {
         (sink, navigator.solution(at(110)).unwrap())
     };
     let (records, solution) = run(&mut original);
-    // The fork knows the fix of the first cell: its frame there shares the
-    // map error, and the frame in the next cell is a new fix.
+    // The fork holds the block of the first cell: its frame there reads
+    // it, and the frame in the next cell takes the block over.
     assert_eq!(
         terrain(&records),
         [
-            (Outcome::Unused("shared_map_error"), Some("render")),
+            (Outcome::Accepted, Some("render")),
             (Outcome::Accepted, Some("render"))
         ]
     );

@@ -12,7 +12,9 @@
 //! 4. The lever arm comes off with the solved attitude, and the external
 //!    error is a root sum square of independent terms ([`budget`]).
 //! 5. The map cell of the matched ground decides what the filter is told
-//!    ([`admission`]).
+//!    ([`admission`]). The map error of the cell is a constant correlated
+//!    error keyed by the cell ([`cell_key`]), and the fix covariance holds
+//!    the rest of the error.
 //!
 //! Before step 2, a frame that can only show map cells with a fix is
 //! recorded and not matched ([`camera`]), and a frame larger than the
@@ -25,7 +27,7 @@ use navigate_camera::Intrinsics;
 use navigate_contract::{ClockDomainId, SourceId};
 use navigate_data::product::ProductKind;
 use navigate_data::{LayerKind, ReadPort};
-use navigate_fusion::{IngestOutcome, Observation};
+use navigate_fusion::{CorrelatedError, IngestOutcome, Observation};
 use navigate_visual::fusion_bridge::EvidenceIndependence;
 use navigate_visual::session::{FrameKey, FusionEligibility, MapCell, MapCellLedger};
 
@@ -86,21 +88,49 @@ pub(crate) struct TerrainMeans {
     cameras: BTreeMap<u32, TerrainCamera>,
 }
 
-/// What the filter is told about a fix with `label`: `None` offers it as
-/// an independent position fix, and a reason withholds it. The filter has
-/// no state for an error that fixes share, so a fix that shares the map
-/// error of an earlier fix is withheld. A declared correlated error of the
-/// camera changes this answer here and nowhere else.
-pub(crate) fn admission(label: &FusionEligibility) -> Option<&'static str> {
+/// What the filter is told about a fix with `label` in a cell whose
+/// map error a filter block holds when `bound` is set: `None` offers it,
+/// and a reason withholds it. The first fix of a cell is offered, and
+/// the filter binds a block to the map error of the cell. A later fix of
+/// the cell is offered while that block holds the error, and withheld
+/// once a newer cell took the block over: the filter then no longer
+/// holds the error, and the fix would be taken as independent of the
+/// earlier fixes of the cell.
+pub(crate) fn admission(label: &FusionEligibility, bound: bool) -> Option<&'static str> {
     // The navigator made the fix from the image and the map alone, so the
     // map cell is the one error that it can share with the filter state.
     match EvidenceIndependence::ValidatedIndependent.restricted_by(label) {
         EvidenceIndependence::ValidatedIndependent => None,
-        EvidenceIndependence::Unknown => Some(match label {
-            FusionEligibility::SharedMapError { .. } => names::SHARED_MAP_ERROR,
-            _ => names::UNTRACKED_MAP_CELL,
-        }),
+        EvidenceIndependence::Unknown => match label {
+            FusionEligibility::SharedMapError { .. } if bound => None,
+            FusionEligibility::SharedMapError { .. } => Some(names::SHARED_MAP_ERROR),
+            _ => Some(names::UNTRACKED_MAP_CELL),
+        },
     }
+}
+
+/// The key of the correlated process of the map error of `cell`: the
+/// 64-bit FNV-1a hash of its text form. The key names the cell for the
+/// filter within one run of one build.
+pub(crate) fn cell_key(cell: &MapCell) -> u64 {
+    format!("{cell:?}")
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// `observation` with the map error of `cell` declared as a constant
+/// correlated error with the 1-sigma `sigma_ned_m`: the registration on
+/// each horizontal axis and the terrain height on the vertical.
+pub(crate) fn with_map_error(
+    observation: Observation,
+    cell: &MapCell,
+    sigma_ned_m: [f64; 3],
+) -> Observation {
+    observation.with_correlated_error(
+        CorrelatedError::new(f64::INFINITY, sigma_ned_m).with_key(cell_key(cell)),
+    )
 }
 
 impl TerrainMeans {
@@ -264,7 +294,13 @@ impl ReferenceNavigator {
         }
         let times = (input.acquired_at, input.delivered_at);
         let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
-            Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,
+            Ok(exposure) => camera.sight(
+                &map,
+                (&self.terrain.ledger, &self.filter),
+                input,
+                image,
+                &exposure,
+            )?,
             Err(reason) => Sighting::Unused(reason, None),
         };
         let (outcome, context) = match sighting {
@@ -274,15 +310,10 @@ impl ReferenceNavigator {
                 cell,
                 frame,
                 path,
-            } => match self.filter.ingest(&observation, input.delivered_at) {
-                IngestOutcome::Accepted => {
-                    // Only a fix that the filter took carries the map
-                    // error of its cell into the state.
-                    self.terrain.ledger.commit(cell, frame);
-                    (Outcome::Accepted, Some(path))
-                }
-                IngestOutcome::Rejected(reason) => (Outcome::Rejected(reason), Some(path)),
-            },
+            } => (
+                self.offer_terrain_fix(&observation, cell, frame, input),
+                Some(path),
+            ),
         };
         sink.record(AcceptanceRecord {
             sensor: input.sensor,
@@ -292,6 +323,31 @@ impl ReferenceNavigator {
             context,
         });
         Ok(())
+    }
+
+    /// Offers the terrain fix `observation` of `cell` and `frame` to the
+    /// filter when [`admission`] lets it, and records the cell when the
+    /// filter takes it.
+    pub(crate) fn offer_terrain_fix(
+        &mut self,
+        observation: &Observation,
+        cell: MapCell,
+        frame: FrameKey,
+        input: &SensorInput,
+    ) -> Outcome {
+        let label = self.terrain.ledger.label(&cell, frame);
+        if let Some(reason) = admission(&label, self.filter.binds_correlated_key(cell_key(&cell))) {
+            return Outcome::Unused(reason);
+        }
+        match self.filter.ingest(observation, input.delivered_at) {
+            IngestOutcome::Accepted => {
+                // Only a fix that the filter took carries the map error of
+                // its cell into the state.
+                self.terrain.ledger.commit(cell, frame);
+                Outcome::Accepted
+            }
+            IngestOutcome::Rejected(reason) => Outcome::Rejected(reason),
+        }
     }
 }
 

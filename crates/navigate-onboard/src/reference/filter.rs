@@ -13,20 +13,25 @@ use navigate_fusion::{
 
 /// The dimension of [`StateLayout::FULL`] with one correlated-error
 /// block.
-const CORRELATED_STATES: usize = 25;
+const ONE_BLOCK_STATES: usize = 25;
+/// The dimension of [`StateLayout::FULL`] with two correlated-error
+/// blocks.
+const TWO_BLOCK_STATES: usize = 28;
 
 /// The inertial filter of a navigator: the 22 states of
-/// [`StateLayout::FULL`], or those states and one correlated-error block
-/// when a sensor of the suite declares a time-correlated error. The
-/// block holds the error of the first such source that sends a fix. A
-/// second source has its fixes inflated by the filter instead.
+/// [`StateLayout::FULL`] and a correlated-error block for each means of
+/// the suite with a correlated error: a GNSS receiver that declares one,
+/// and the map cells of the terrain cameras. A second GNSS receiver with a
+/// correlated error has its fixes inflated by the filter instead.
 #[derive(Debug, Clone)]
 pub enum NavigatorFilter {
     /// The 22 states of [`StateLayout::FULL`]. Boxed: the inline history of
     /// a filter is hundreds of kilobytes.
     Full(Box<InertialNavigationFilter>),
     /// [`StateLayout::FULL`] with one correlated-error block.
-    Correlated(Box<InertialNavigationFilter<CORRELATED_STATES>>),
+    OneBlock(Box<InertialNavigationFilter<ONE_BLOCK_STATES>>),
+    /// [`StateLayout::FULL`] with two correlated-error blocks.
+    TwoBlocks(Box<InertialNavigationFilter<TWO_BLOCK_STATES>>),
 }
 
 /// Runs the same expression on the filter of either layout.
@@ -34,14 +39,15 @@ macro_rules! each {
     ($self:expr, $filter:ident => $body:expr) => {
         match $self {
             NavigatorFilter::Full($filter) => $body,
-            NavigatorFilter::Correlated($filter) => $body,
+            NavigatorFilter::OneBlock($filter) => $body,
+            NavigatorFilter::TwoBlocks($filter) => $body,
         }
     };
 }
 
 impl NavigatorFilter {
-    /// An uninitialized filter on WGS84 with `config`, with a
-    /// correlated-error block when `correlated` is set.
+    /// An uninitialized filter on WGS84 with `config` and `blocks`
+    /// correlated-error blocks, at most two.
     ///
     /// # Errors
     ///
@@ -50,24 +56,34 @@ impl NavigatorFilter {
     pub(crate) fn new(
         config: InertialConfig,
         clock: navigate_contract::ClockDomainId,
-        correlated: bool,
+        blocks: usize,
     ) -> Result<Self, LayoutError> {
         let body = PlanetaryBody::EARTH_WGS84;
-        if correlated {
-            let config = InertialConfig {
-                layout: StateLayout::FULL.with_correlated_blocks(1),
-                ..config
-            };
-            // Boxed at once: each move of the filter by value is a copy of
-            // its inline history on the stack.
-            return InertialNavigationFilter::<CORRELATED_STATES>::surface_with_layout(
+        let config = InertialConfig {
+            layout: StateLayout::FULL.with_correlated_blocks(blocks),
+            ..config
+        };
+        // Boxed at once: each move of a filter by value is a copy of its
+        // inline history on the stack.
+        match blocks {
+            0 => Ok(Self::Full(Box::new(InertialNavigationFilter::new_surface(
+                config, clock, body,
+            )))),
+            1 => InertialNavigationFilter::<ONE_BLOCK_STATES>::surface_with_layout(
                 config, clock, body,
             )
-            .map(|filter| Self::Correlated(Box::new(filter)));
+            .map(|filter| Self::OneBlock(Box::new(filter))),
+            _ => InertialNavigationFilter::<TWO_BLOCK_STATES>::surface_with_layout(
+                config, clock, body,
+            )
+            .map(|filter| Self::TwoBlocks(Box::new(filter))),
         }
-        Ok(Self::Full(Box::new(InertialNavigationFilter::new_surface(
-            config, clock, body,
-        ))))
+    }
+
+    /// Whether a correlated-error block holds the keyed process `key`.
+    #[must_use]
+    pub fn binds_correlated_key(&self, key: u64) -> bool {
+        each!(self, f => f.binds_correlated_key(key))
     }
 
     /// The layout of the error state.

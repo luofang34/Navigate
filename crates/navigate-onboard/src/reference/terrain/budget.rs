@@ -68,7 +68,23 @@ impl ViewGeometry {
     }
 }
 
-/// The external covariance of a fix in north, east, down axes, m².
+#[cfg(test)]
+impl MapSigmas {
+    /// The covariance of the map error in north, east, down axes, m²:
+    /// the registration on each horizontal axis and the terrain height
+    /// on the vertical. Every fix of one map cell shares this error.
+    pub(crate) fn covariance_ned(&self) -> Matrix3<f64> {
+        Matrix3::from_diagonal(&Vector3::new(
+            self.horizontal_m.powi(2),
+            self.horizontal_m.powi(2),
+            self.height_m.powi(2),
+        ))
+    }
+}
+
+/// The external covariance of a fix in north, east, down axes, m²: the
+/// map covariance ([`MapSigmas::covariance_ned`]) and the rest
+/// ([`unshared_covariance_ned`]).
 ///
 /// - Imagery registration: `horizontal_m²` on each horizontal axis.
 /// - Terrain height: the camera height follows the terrain height, so
@@ -78,7 +94,19 @@ impl ViewGeometry {
 ///   direction. A view straight down has no such term.
 /// - Calibration: an angular error `calibration_sigma_rad` moves the fix by
 ///   that angle times the range, on each axis.
+#[cfg(test)]
 pub(crate) fn external_covariance_ned(
+    map: &MapSigmas,
+    calibration_sigma_rad: f64,
+    view: &ViewGeometry,
+) -> Matrix3<f64> {
+    map.covariance_ned() + unshared_covariance_ned(map, calibration_sigma_rad, view)
+}
+
+/// The external covariance of a fix without the map error, in north,
+/// east, down axes, m²: the relief and the calibration terms of
+/// [`external_covariance_ned`].
+pub(crate) fn unshared_covariance_ned(
     map: &MapSigmas,
     calibration_sigma_rad: f64,
     view: &ViewGeometry,
@@ -87,11 +115,7 @@ pub(crate) fn external_covariance_ned(
     let relief_m = map.height_m * view.off_nadir_rad.clamp(0.0, MAX_OFF_NADIR_RAD).tan();
     let [north, east] = view.ground_direction;
     let along = Vector3::new(north, east, 0.0) * relief_m;
-    Matrix3::from_diagonal(&Vector3::new(
-        map.horizontal_m.powi(2) + calibration_m2,
-        map.horizontal_m.powi(2) + calibration_m2,
-        map.height_m.powi(2) + calibration_m2,
-    )) + along * along.transpose()
+    Matrix3::identity() * calibration_m2 + along * along.transpose()
 }
 
 #[cfg(test)]

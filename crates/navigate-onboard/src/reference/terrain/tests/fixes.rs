@@ -53,8 +53,6 @@ pub(crate) fn north_through_cells(zoom: u32, frames: f64, height_m: f64, ahead_m
     }
 }
 
-const SHARED: Outcome = Outcome::Unused("shared_map_error");
-
 /// Bound on the error of the solution after a fix, on each of the
 /// horizontal and the vertical, metres: three pixels of the test camera,
 /// which are 5.3 m on the ground from 800 m. Over the poses of
@@ -89,17 +87,12 @@ fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_
         &mut sink,
     )
     .unwrap();
-    // The first frame is the first fix of its map cell. The vehicle does
-    // not move, so each later frame shares the map error of that fix and
-    // is not offered to the filter as a second independent fix.
-    assert_eq!(
-        terrain(&sink),
-        [
-            (Outcome::Accepted, Some("render")),
-            (SHARED, Some("render")),
-            (SHARED, Some("render"))
-        ]
-    );
+    // The vehicle does not move, so each frame is of one map cell. The
+    // first fix binds a filter block to the map error of the cell, and
+    // each later fix reads that block: the fixes do not average the map
+    // error away.
+    let fused = (Outcome::Accepted, Some("render"));
+    assert_eq!(terrain(&sink), vec![fused; 3]);
     let solution = navigator.solution(at(3 * RATE)).unwrap();
     let error = hover.error_m(&solution, 3 * RATE);
     let (nn, ee, dd) = solution.position_cov.diagonal();
@@ -116,15 +109,16 @@ fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_
     // The alignment error was 43 m horizontal and 12 m vertical.
     assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
     assert!(error.z.abs() < FIX_BOUND_M, "{error}");
-    // The declared one-sigma holds the error and is of its order, and it
-    // is not less than the stated error of the map.
+    // The declared one-sigma holds the error and is of its order, and
+    // after three fixes of one cell it is not less than the stated error
+    // of the map.
     assert!(error.xy().norm() < 3.0 * sigma_h && error.z.abs() < 3.0 * sigma_v);
     assert!(sigma_h < 25.0, "{sigma_h}");
     assert!(nn.sqrt() >= report.imagery.sigma_m && dd.sqrt() >= report.elevation.sigma_m);
 }
 
 #[test]
-fn a_flight_takes_one_independent_fix_in_each_map_cell() {
+fn a_flight_takes_each_fix_and_binds_the_map_error_of_each_cell() {
     show_events();
     let world = World::build(&WorldSpec::default());
     let flight = across_cells();
@@ -142,21 +136,11 @@ fn a_flight_takes_one_independent_fix_in_each_map_cell() {
         &mut sink,
     )
     .unwrap();
-    // Ten frames over three cells and the first frame of a fourth: the
-    // first frame of each cell is fused, and the two others share its map
+    // Ten frames over three cells and the first frame of a fourth: each
+    // is fused, and the frames of one cell read the block of its map
     // error.
     let fused = (Outcome::Accepted, Some("render"));
-    let shared = (SHARED, Some("render"));
-    let expected: Vec<_> = (0..10)
-        .map(|frame| {
-            if frame % 3 == 0 {
-                fused.clone()
-            } else {
-                shared.clone()
-            }
-        })
-        .collect();
-    assert_eq!(terrain(&sink), expected);
+    assert_eq!(terrain(&sink), vec![fused; 10]);
     let solution = navigator.solution(at(250)).unwrap();
     let error = flight.error_m(&solution, 250);
     let (nn, ee, _) = solution.position_cov.diagonal();
@@ -164,7 +148,7 @@ fn a_flight_takes_one_independent_fix_in_each_map_cell() {
     tracing::info!(north_m, east_m, sigma_h, "a flight after four fixes");
     assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
     assert!(error.xy().norm() < 3.0 * (nn + ee).sqrt());
-    // Four fixes with independent map error: the filter may go below the
+    // Four cells with independent map error: the filter may go below the
     // error of one fix, but not below the map error over the square root
     // of their count.
     assert!(nn.sqrt() > 1.5 / 2.0, "{}", nn.sqrt());
