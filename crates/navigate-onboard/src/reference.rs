@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use navigate_contract::{
     ClockDomainId, MonotonicNanos, NavigationSolution, ObservationStamp, SensorClass,
-    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
+    SourceComposition, SourceEpoch, SourceId, WrappingSequence,
 };
 use navigate_fusion::{
     FogmBias, ImuIncrement, InertialConfig, IngestOutcome, Observation, ObservationValue,
@@ -15,12 +15,14 @@ use navigate_fusion::{
 use navigate_startrack::line_of_sight_observations;
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentRecord, AlignmentStatus, ErrorBudget,
-    Navigator, OnboardError, Outcome, SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
+    ErrorBudget, MagneticReference, Navigator, OnboardError, Outcome, SensorData, SensorInput,
+    SensorKind, SensorSuite,
 };
 
 mod aligner;
 mod filter;
+mod gnss;
 mod stars;
 #[cfg(feature = "terrain-camera")]
 mod terrain;
@@ -243,62 +245,6 @@ impl ReferenceNavigator {
         }
     }
 
-    fn gnss(&mut self, input: &SensorInput, budget: ErrorBudget, sink: &mut dyn AcceptanceSink) {
-        let SensorData::GnssFix {
-            position,
-            velocity,
-            position_cov,
-            velocity_cov,
-        } = &input.data
-        else {
-            return;
-        };
-        let (h, v, s, correlated) = match budget {
-            ErrorBudget::Gnss {
-                horizontal_sigma_m,
-                vertical_sigma_m,
-                velocity_sigma_m_s,
-                correlated,
-            } => (
-                horizontal_sigma_m,
-                vertical_sigma_m,
-                velocity_sigma_m_s,
-                correlated,
-            ),
-            _ => (f64::NAN, f64::NAN, f64::NAN, None),
-        };
-        let position_cov =
-            position_cov.unwrap_or(SymmetricCov3::from_diagonal(h * h, h * h, v * v));
-        let value = ObservationValue::PositionFix {
-            position: *position,
-            covariance: position_cov,
-        };
-        let stamp = self.stamp(input.sensor, input.acquired_at);
-        let observation = Observation::new(stamp, value, SourceComposition::of(SensorClass::Gnss));
-        // The velocity is from Doppler and stays white.
-        let observation = match correlated {
-            Some(c) => observation.with_correlated_error(c.filter_error()),
-            None => observation,
-        };
-        let gated = self.offer(input, "gnss_position", &observation, None, sink);
-        // A run of positions outside the gate says that the state is far
-        // from the receiver: the alignment is suspect.
-        self.gate_refusals = if gated {
-            self.gate_refusals.saturating_add(1)
-        } else {
-            0
-        };
-        if let Some(velocity) = velocity {
-            let covariance =
-                velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
-            let value = ObservationValue::VelocityFix {
-                velocity: *velocity,
-                covariance,
-            };
-            self.offer_value(input, "gnss_velocity", value, SensorClass::Gnss, sink);
-        }
-    }
-
     fn star_frame(
         &mut self,
         input: &SensorInput,
@@ -358,9 +304,10 @@ const fn fits(data: &SensorData, kind: SensorKind) -> bool {
                 )
                 | (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
                 | (
-                    SensorData::SurveyedPosition { .. },
-                    SensorKind::SurveyedPoint
+                    SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                    SensorKind::SurveyedPoint,
                 )
+                | (SensorData::DeclaredStart(_), SensorKind::Operator)
                 | (SensorData::Observation(_), _)
         )
 }
@@ -371,11 +318,26 @@ impl Navigator for ReferenceNavigator {
     }
 
     fn align(&mut self, a: &Alignment) -> Result<(), OnboardError> {
-        self.set_state(a, aligner::transfer_record(a), None)
+        self.set_state(a, aligner::transfer_record(a))
     }
 
     fn alignment_status(&self) -> Option<AlignmentStatus> {
         Some(self.alignment_now())
+    }
+
+    fn set_magnetic_reference(&mut self, reference: MagneticReference) -> Result<(), OnboardError> {
+        if !reference.is_usable() {
+            return Err(OnboardError::Config {
+                field: "magnetic reference",
+                detail: format!("{reference:?}"),
+            });
+        }
+        self.aligner.reference = Some(reference);
+        Ok(())
+    }
+
+    fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+        self.configure_alignment(config)
     }
 
     fn realign(&mut self) -> Result<(), OnboardError> {
@@ -406,7 +368,11 @@ impl Navigator for ReferenceNavigator {
         }
         match (&input.data, kind) {
             (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
-            | (SensorData::SurveyedPosition { .. }, SensorKind::SurveyedPoint) => {
+            | (
+                SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                SensorKind::SurveyedPoint,
+            )
+            | (SensorData::DeclaredStart(_), SensorKind::Operator) => {
                 Self::alignment_only(input, sink);
                 Ok(())
             }

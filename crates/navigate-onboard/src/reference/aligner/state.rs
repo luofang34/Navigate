@@ -2,9 +2,8 @@
 //! with an input while it aligns, and how a state is set and forgotten.
 
 use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
-use navigate_fusion::ImuBiasPrior;
 
-use super::{measurement, names};
+use super::{Increment, Moving, measurement, names};
 use crate::{
     AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
     ErrorBudget, GnssCorrelatedError, OnboardError, Outcome, ReferenceNavigator, SensorData,
@@ -30,12 +29,15 @@ impl ReferenceNavigator {
                 delta_theta_rad,
                 delta_velocity_m_s,
             } => {
-                let solved =
-                    self.aligner
-                        .increment(at, *dt_s, *delta_theta_rad, *delta_velocity_m_s);
-                return solved.map_or(Ok(()), |s| {
-                    self.set_state(&s.alignment, s.record, Some(s.biases))
+                let solved = self.aligner.increment(Increment {
+                    sensor: input.sensor,
+                    acquired_at: at,
+                    delivered_at: input.delivered_at,
+                    dt_s: *dt_s,
+                    delta_theta_rad: *delta_theta_rad,
+                    delta_velocity_m_s: *delta_velocity_m_s,
                 });
+                return solved.map_or(Ok(()), |moving| self.set_moving_state(&moving));
             }
             SensorData::StarExposureMid => {
                 if let Some(channel) = self.stars.get_mut(&input.sensor.get()) {
@@ -70,9 +72,12 @@ impl ReferenceNavigator {
                         n.max(e).max(d).sqrt()
                     })
                     .or(declared_speed);
-                let velocity = velocity.zip(speed_sigma);
+                let velocity = velocity.map(|v| (v, speed_sigma));
                 let covariance = position_cov.or(declared).map(|c| with_slow_error(c, slow));
-                self.aligner.gnss(at, *position, velocity, covariance);
+                let moving = self.aligner.gnss(at, *position, velocity, covariance);
+                if let Some(moving) = moving {
+                    self.set_moving_state(&moving)?;
+                }
             }
             SensorData::MagneticField { field_body_t } => {
                 self.aligner.magnetic(at, *field_body_t);
@@ -84,6 +89,18 @@ impl ReferenceNavigator {
             } => self
                 .aligner
                 .surveyed(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
+            SensorData::DeclaredStart(start) => {
+                if let Some(moving) = self.aligner.declared(at, *start) {
+                    self.set_moving_state(&moving)?;
+                }
+            }
+            SensorData::KnownPosition {
+                position,
+                horizontal_sigma_m,
+                vertical_sigma_m,
+            } => self
+                .aligner
+                .known(at, *position, (*horizontal_sigma_m, *vertical_sigma_m)),
             _ => {}
         }
         sink.record(AcceptanceRecord {
@@ -96,21 +113,48 @@ impl ReferenceNavigator {
         Ok(())
     }
 
-    /// Sets the state of the filter, with the IMU biases of a
-    /// self-alignment or none for a state that the host gave, and what the
-    /// navigator states about it. What the navigator kept about an earlier
-    /// state goes.
+    /// Sets the state of a moving vehicle at a GNSS fix, then gives the
+    /// filter the inertial increments that came after that fix.
+    fn set_moving_state(&mut self, moving: &Moving) -> Result<(), OnboardError> {
+        let solved = &moving.solved;
+        self.set_state(&solved.alignment, solved.record)?;
+        for step in &moving.later {
+            let input = SensorInput {
+                sensor: step.sensor,
+                acquired_at: step.acquired_at,
+                delivered_at: step.delivered_at,
+                data: SensorData::ImuIncrement {
+                    dt_s: step.dt_s,
+                    delta_theta_rad: step.delta_theta_rad,
+                    delta_velocity_m_s: step.delta_velocity_m_s,
+                },
+            };
+            self.imu(
+                &input,
+                step.dt_s,
+                step.delta_theta_rad,
+                step.delta_velocity_m_s,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Sets the state of the filter, with the IMU bias prior of the
+    /// alignment, and what the navigator states about it. What the
+    /// navigator kept about an earlier state goes, and an alignment without
+    /// a prior clears the prior of an earlier one.
     pub(in crate::reference) fn set_state(
         &mut self,
         a: &Alignment,
         record: AlignmentRecord,
-        biases: Option<ImuBiasPrior>,
     ) -> Result<(), OnboardError> {
         let refused = |reason| OnboardError::Refused {
             stage: "alignment",
             reason,
         };
-        self.filter.set_imu_bias_prior(biases).map_err(refused)?;
+        self.filter
+            .set_imu_bias_prior(a.imu_bias_prior)
+            .map_err(refused)?;
         self.filter
             .initialize_surface(
                 a.position,
@@ -143,7 +187,7 @@ impl ReferenceNavigator {
             source: crate::AlignmentSource::Truth,
             ..super::transfer_record(truth)
         };
-        self.set_state(truth, record, None)
+        self.set_state(truth, record)
     }
 
     /// Forgets the state: the navigator aligns again from its sensors.
@@ -180,11 +224,10 @@ impl ReferenceNavigator {
     }
 
     /// Sets how the navigator aligns itself.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a value that is not finite and positive.
-    pub fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+    pub(in crate::reference) fn configure_alignment(
+        &mut self,
+        config: AlignmentConfig,
+    ) -> Result<(), OnboardError> {
         if !config.is_usable() {
             return Err(OnboardError::Config {
                 field: "alignment configuration",

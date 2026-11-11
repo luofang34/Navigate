@@ -6,8 +6,7 @@ use nalgebra::Vector3;
 
 use super::rig::{Rig, at};
 use super::{ATTITUDE_DEG, feed, normalized_errors, waiting};
-use crate::reference::aligner::names;
-use crate::{AlignmentPhase, Navigator};
+use crate::{AlignmentNeed, AlignmentPhase, Navigator};
 
 /// The velocity error of the state of a navigator aligned at `step`, each
 /// axis as a multiple of its stated one-sigma.
@@ -47,7 +46,7 @@ fn a_steady_drift_waits_or_aligns_within_its_stated_velocity() {
                 }
                 None => assert_eq!(
                     waiting(&navigator),
-                    (AlignmentPhase::Levelling, names::REST),
+                    (AlignmentPhase::Levelling, AlignmentNeed::Rest),
                     "{speed} m/s, seed {seed}"
                 ),
             }
@@ -87,7 +86,7 @@ fn the_start_of_a_roll_is_not_rest() {
     assert!(navigator.solution(at(200)).is_none());
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST)
+        (AlignmentPhase::Levelling, AlignmentNeed::Rest)
     );
 }
 

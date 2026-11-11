@@ -6,13 +6,19 @@ use navigate_contract::{NavigationSolution, SymmetricCov3};
 
 use super::names;
 use crate::{
-    AcceptanceRecord, AlignmentPhase, AlignmentSource, AlignmentStatus, ErrorBudget,
-    GnssCorrelatedError, HeadingSource, Navigator, NavigatorFilter, Outcome, PositionSource,
-    ReferenceNavigator,
+    AcceptanceRecord, AlignmentNeed, AlignmentPhase, AlignmentSource, AlignmentStatus,
+    HeadingSource, Navigator, Outcome, PositionSource, ReferenceNavigator,
 };
 
+mod bias;
+mod calibration;
+mod declared;
+mod envelope;
 mod inputs;
+mod lacks;
 mod motion;
+mod moving;
+mod path;
 mod rig;
 mod window;
 use rig::{GNSS, HEIGHT_M, LAT_DEG, LON_DEG, MAGNETOMETER, Rig, at};
@@ -80,7 +86,7 @@ fn a_vehicle_at_rest_aligns_itself_from_its_sensors() {
         navigator.alignment_status(),
         Some(AlignmentStatus::Aligning {
             phase: AlignmentPhase::Levelling,
-            waiting_for: names::INERTIAL_INCREMENTS
+            waiting_for: AlignmentNeed::InertialIncrements
         })
     );
     feed(&mut navigator, &mut rig, 1..=150, &mut sink);
@@ -92,7 +98,7 @@ fn a_vehicle_at_rest_aligns_itself_from_its_sensors() {
         navigator.alignment_status(),
         Some(AlignmentStatus::Aligning {
             phase: AlignmentPhase::Levelling,
-            waiting_for: names::REST_WINDOW
+            waiting_for: AlignmentNeed::RestWindow
         })
     );
     // The inputs before the state are recorded as taken by the alignment.
@@ -239,7 +245,7 @@ fn a_declination_worse_than_declared_shows_in_the_normalized_error() {
 }
 
 #[cfg(test)]
-fn waiting(navigator: &ReferenceNavigator) -> (AlignmentPhase, &'static str) {
+fn waiting(navigator: &ReferenceNavigator) -> (AlignmentPhase, AlignmentNeed) {
     match navigator.alignment_status() {
         Some(AlignmentStatus::Aligning { phase, waiting_for }) => (phase, waiting_for),
         other => panic!("not aligned: {other:?}"),
@@ -263,7 +269,7 @@ fn an_alignment_names_what_it_lacks_and_gives_no_state_without_it() {
     }
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST_EVIDENCE)
+        (AlignmentPhase::Levelling, AlignmentNeed::RestEvidence)
     );
     // No magnetometer in the suite: no heading source at rest.
     let suite = rig.suite(None);
@@ -278,14 +284,15 @@ fn an_alignment_names_what_it_lacks_and_gives_no_state_without_it() {
     }
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Heading, names::HEADING_SOURCE)
+        (AlignmentPhase::Heading, AlignmentNeed::HeadingSource)
     );
     // A magnetometer with 17° of body disturbance is not a heading.
-    let mut navigator = ReferenceNavigator::new(rig.suite(Some(0.3)), rig::CLOCK, None).unwrap();
+    let mut navigator =
+        rig.told(ReferenceNavigator::new(rig.suite(Some(0.3)), rig::CLOCK, None).unwrap());
     feed(&mut navigator, &mut rig, 1..=200, &mut sink);
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Heading, names::HEADING_UNCERTAIN)
+        (AlignmentPhase::Heading, AlignmentNeed::HeadingUncertain)
     );
     assert!(navigator.solution(at(200)).is_none());
 }
@@ -337,6 +344,7 @@ fn a_transfer_alignment_and_a_realignment_replace_the_state() {
         velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
         attitude_cov: SymmetricCov3::from_diagonal(1e-4, 1e-4, 4e-4),
         at: at(200),
+        imu_bias_prior: None,
     };
     navigator.align(&transfer).unwrap();
     let Some(AlignmentStatus::Aligned { record, .. }) = navigator.alignment_status() else {
@@ -409,65 +417,4 @@ fn a_fork_in_a_rest_window_aligns_as_the_original_does() {
     let (records, status, solution) = run(&mut original);
     assert!(matches!(status, Some(AlignmentStatus::Aligned { .. })));
     assert_eq!(run(&mut *fork), (records, status, solution));
-}
-
-/// The heading drift over 3 s after a state at 2 s, for a vehicle at rest
-/// with 2 mrad/s of gyroscope bias about the vertical: aligned by itself,
-/// or given the same state by transfer, which carries no bias. `slow` is
-/// the time-correlated error that the GNSS receiver declares.
-#[cfg(test)]
-fn heading_drift(transfer: bool, slow: Option<GnssCorrelatedError>) -> f64 {
-    let mut rig = Rig::new(ATTITUDE_DEG, 71, 1.0);
-    rig.gyro_bias = Vector3::new(2e-4, -3e-4, 2e-3);
-    let b = rig.budgets;
-    let mut navigator = rig.navigator_with_gnss(ErrorBudget::Gnss {
-        horizontal_sigma_m: b.gnss_horizontal_m,
-        vertical_sigma_m: b.gnss_vertical_m,
-        velocity_sigma_m_s: b.gnss_velocity_m_s,
-        correlated: slow,
-    });
-    let correlated = matches!(navigator.filter(), NavigatorFilter::Correlated(_));
-    assert_eq!(correlated, slow.is_some());
-    let mut sink = Vec::new();
-    feed(&mut navigator, &mut rig, 1..=200, &mut sink);
-    let aligned = navigator.solution(at(200)).unwrap();
-    if transfer {
-        navigator
-            .align(&crate::Alignment {
-                position: aligned.position,
-                velocity: aligned.velocity,
-                attitude: aligned.attitude.unwrap(),
-                position_cov: aligned.position_cov,
-                velocity_cov: aligned.velocity_cov,
-                attitude_cov: aligned.attitude_cov.unwrap(),
-                at: at(200),
-            })
-            .unwrap();
-    }
-    let start = normalized_errors(&rig, &aligned).3;
-    feed(&mut navigator, &mut rig, 201..=500, &mut sink);
-    let end = normalized_errors(&rig, &navigator.solution(at(500)).unwrap()).3;
-    (end - start).abs()
-}
-
-/// The gyroscope bias of the rest window starts the filter's bias: the
-/// vehicle keeps its heading after the state. A transfer alignment gives
-/// no bias, and the same vehicle turns its heading by the bias times the
-/// time. The filter with a correlated-error block takes the bias as the
-/// 22-state filter does.
-#[test]
-fn the_window_gyro_bias_starts_the_filter_of_either_layout() {
-    let slow = GnssCorrelatedError {
-        tau_s: 60.0,
-        horizontal_sigma_m: 2.0,
-        vertical_sigma_m: 3.0,
-    };
-    for slow in [None, Some(slow)] {
-        let own = heading_drift(false, slow);
-        let transferred = heading_drift(true, slow);
-        // 2 mrad/s over 3 s is 6 mrad; the bias of the window is known to
-        // the gyroscope noise over 2 s, 0.07 mrad/s.
-        assert!(own < 1e-3, "{slow:?} {own}");
-        assert!(transferred > 4e-3, "{slow:?} {transferred}");
-    }
 }

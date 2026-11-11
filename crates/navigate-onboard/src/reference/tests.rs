@@ -5,7 +5,7 @@ use crate::sensor::SensorSpec;
 use crate::{GuidanceLaw, Onboard, RouteDirector};
 use nalgebra::{Matrix2, UnitQuaternion, Vector2, Vector3};
 use navigate_camera::{CameraMount, ImagerModel, Intrinsics};
-use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity};
+use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 
 pub(crate) const CLOCK: ClockDomainId = ClockDomainId::new(7);
 const IMU: SourceId = SourceId::new(1);
@@ -119,6 +119,7 @@ fn aligned_off(extra: &[SensorKind], north_m: f64, variance_m2: f64) -> Referenc
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     navigator

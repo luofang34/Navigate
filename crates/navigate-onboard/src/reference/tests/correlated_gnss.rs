@@ -293,6 +293,7 @@ fn run(seed: u32, correlated: bool) -> Vec<f64> {
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-6),
             at: at(0),
+            imu_bias_prior: None,
         })
         .unwrap();
     let b_a = draws.vec3([accel_bias.sigma(); 3]);

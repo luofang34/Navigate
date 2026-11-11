@@ -163,9 +163,6 @@ impl NavigatorFilter {
         &mut self,
         prior: Option<ImuBiasPrior>,
     ) -> Result<(), RejectionReason> {
-        match self {
-            NavigatorFilter::Full(f) => f.set_imu_bias_prior(prior),
-            NavigatorFilter::Correlated(_) => Ok(()),
-        }
+        each!(self, f => f.set_imu_bias_prior(prior))
     }
 }
