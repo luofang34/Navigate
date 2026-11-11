@@ -1,10 +1,12 @@
 //! Ellipsoidal terrain surface and ray-marching renderer.
 
 mod coords;
+mod from_package;
 pub mod gpu;
 mod sparse;
 
 pub use coords::{enu_frame, enu_frame_on, mercator_tile_coords};
+pub use from_package::SurfaceLayers;
 pub use gpu::{GpuQueueRole, GpuSurfaceView, SharedSurfaceGpu, SurfaceGpuRenderer};
 pub use sparse::{SurfaceAdaptiveStats, SurfaceRayHit};
 

@@ -70,6 +70,12 @@ fn a_sealed_package_opens_and_reads_tile_for_tile() {
     };
     assert!(block_on(package.tile(&store, other, outside)).is_err());
     assert!(block_on(package.descriptor(&store)).unwrap().is_some());
+    assert_eq!(
+        block_on(package.verify_all(&store)).unwrap(),
+        addresses().len()
+    );
+    let records = block_on(package.layer_entries(IMAGERY)).unwrap();
+    assert_eq!(records.len(), addresses().len());
 }
 
 #[test]

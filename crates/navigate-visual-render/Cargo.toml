@@ -8,9 +8,10 @@ publish.workspace = true
 
 [dependencies]
 navigate-geodesy = { workspace = true, features = ["std"] }
+navigate-data = { workspace = true, features = ["std"] }
 navigate-visual.workspace = true
 nalgebra = { workspace = true, features = ["std"] }
-image.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
 thiserror.workspace = true
 wgpu = "30"
 bytemuck = "1"

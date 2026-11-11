@@ -3,7 +3,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::index::{IndexEntry, find, verify_index};
+use alloc::collections::BTreeSet;
+
+use crate::index::{IndexEntry, entries, find, verify_index};
 use crate::store::read_all;
 use crate::{
     DataError, Descriptor, LayerKey, Manifest, RandomAccess, ReadPort, Sha256Digest, TileAddress,
@@ -153,6 +155,74 @@ impl<F: RandomAccess> Package<F> {
                 read_blob(store, blob, bytes).await.map(TileRead::Present)
             }
         }
+    }
+
+    /// Every record of the index of a layer, in index order.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a layer that the package does not hold and an index read that
+    /// fails.
+    pub async fn layer_entries(
+        &self,
+        layer: LayerKey,
+    ) -> Result<Vec<(TileAddress, IndexEntry)>, DataError> {
+        let position = self
+            .manifest
+            .layers
+            .iter()
+            .position(|l| l.key == layer)
+            .ok_or_else(|| DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            })?;
+        let (Some(file), Some(spec)) = (
+            self.indexes.get(position),
+            self.manifest.layers.get(position),
+        ) else {
+            return Err(DataError::Invalid {
+                field: "layer",
+                detail: alloc::format!("{layer:?}"),
+            });
+        };
+        entries(file, spec.index.records(), &blob_path(spec.index.blob)).await
+    }
+
+    /// The digests of every tile blob of the package.
+    ///
+    /// # Errors
+    ///
+    /// Returns index read failures.
+    pub async fn blobs(&self) -> Result<BTreeSet<Sha256Digest>, DataError> {
+        let mut out = BTreeSet::new();
+        for layer in &self.manifest.layers {
+            for (_, entry) in self.layer_entries(layer.key).await? {
+                if let IndexEntry::Tile { blob, .. } = entry {
+                    out.insert(blob);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Reads and checks each tile blob once. Returns the count of distinct
+    /// blobs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first blob that is missing or does not agree.
+    pub async fn verify_all<S: ReadPort + ?Sized>(&self, store: &S) -> Result<usize, DataError> {
+        let mut seen = BTreeSet::new();
+        for layer in &self.manifest.layers {
+            for (_, entry) in self.layer_entries(layer.key).await? {
+                if let IndexEntry::Tile { blob, bytes } = entry
+                    && seen.insert(blob)
+                {
+                    read_blob(store, blob, bytes).await?;
+                }
+            }
+        }
+        Ok(seen.len())
     }
 
     /// The descriptor, if the store holds one.

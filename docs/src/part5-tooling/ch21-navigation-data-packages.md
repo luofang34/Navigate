@@ -179,7 +179,142 @@ give the same keys.
 holds them in a directory and writes each file through a temporary file
 and a rename.
 
-## 9. The onboard boundary
+## 9. Resource model
+
+`plan_resources` computes what each leg of a flight needs before any
+fetch. Its inputs are the legs (position and altitude), the cameras
+(focal length, image size, depression of the optical axis), the search
+radius, the allowed deviation, the farthest slant range, and the limits
+and measured sizes of the imagery and elevation sources. A
+`GroundHeight` port supplies the ground heights, for example from coarse
+Terrarium tiles.
+
+The zoom rule is the rule of the map renderer: one texel for one pixel.
+
+```text
+texel(z, φ) = 40 075 016.69 m × cos φ / (T × 2^z)     T = tile pixels
+pixel(d)    = d / f                                  d = slant range, f = focal length in pixels
+z(d)        = log2(f × 40 075 016.69 m × cos φ / (T × d))
+```
+
+For tiles of 256 pixels, a texel at zoom 16 and 41.7° latitude is
+1.78 m. The renderer uses tiles of 512 pixels, so its level for the same
+texel is one less.
+
+For each camera, the model finds the slant range of the steepest and the
+shallowest ray and gives one band for each zoom between them. Each band
+has a ground range ahead of the vehicle and a half width: the slant range
+at the far edge times the tangent of the horizontal half field of view,
+plus the search radius and the deviation. The elevation band of an
+imagery band is `elevation_offset` levels coarser. The size estimate uses
+the measured size of each source at a reference zoom and a growth factor
+for each level.
+
+A higher leg needs coarser levels, and costs less for each kilometre. The
+far field of an oblique camera uses coarser levels than its near field.
+The altitude band of a leg is `floor(log2(agl / 100 m))`.
+
+## 10. Preparing a package
+
+`plan_tiles` turns the resource plan into tiles: for each band, the
+corridor of the band half width along the leg and `far_m` past its end.
+`prepare` fetches each tile once through the host `FetchPort` with the
+source and revision of the `LayerSpec` of its layer, writes a gap for each
+`Absent` answer, and seals the package with the descriptor that the host
+supplies. It refuses a plan
+over `max_tiles` before the first fetch.
+
+`navigate-visual-pipeline package` is a host for this step:
+
+```sh
+navigate-visual-pipeline package \
+  --plan plan.json --store store --cache tile-cache \
+  --imagery-url 'https://imagery.example/{z}/{y}/{x}' \
+  --imagery-source esri_world_imagery --imagery-revision unversioned \
+  --dem-url 'https://elevation.example/terrarium/{z}/{x}/{y}.png' \
+  --dem-source mapzen_terrarium
+```
+
+The plan file gives `release_id`, `waypoints` (`lat_deg`, `lon_deg`,
+`altitude_m` above mean sea level), `cameras` (`width_px`, `height_px`,
+`horizontal_fov_deg`, `depression_deg`), `search_radius_m`,
+`deviation_m`, and `max_range_m`. The tool fetches zoom 10 Terrarium tiles
+for the ground heights, plans, fetches the planned tiles into the cache on
+parallel threads, and seals the package. The cache key is the tile key
+(`<source>/<revision>/<z>/<x>/<y>`), not the URL. A source is a registry
+name; a revision is `unversioned`, `release:N`, or `collected:YYYY-MM-DD`. `--plan-only` prints the
+resource plan and fetches nothing else. A `file://` template reads local
+files. An HTTP status of 404 or 204 is a gap.
+
+## 11. Derived products
+
+Derived products have two levels.
+
+```text
+products/chunks/<sha256>.json     one product chunk, reusable across missions
+products/lists/<sha256>.json      one product list, per mission
+chunks/<sha256>                   recipes and entry blobs
+```
+
+A **product chunk**:
+
+| Field | Content |
+|---|---|
+| `format`, `version` | `navigate.data.product_chunk`, `1` |
+| `kind` | `keyframes`, `corridor_landmarks`, a reserved kind (`terrain_slopes`, `horizon_profiles`, `scalar_field`, `star_pairs`, `station_list`, `ephemeris_segments`), or an unknown name |
+| `recipe` | digest of the recipe document |
+| `binding.cell` | grid cell (zoom, x, y) or `null` |
+| `binding.altitude_band` | integer or `null` |
+| `binding.inputs` | sorted digests of the input blobs |
+| `binding.route` | route digest or `null` |
+| `binding.envelope` | `lateral_mm`, `vertical_mm`, `heading_urad`, or `null` |
+| `binding.calibration` | `width`, `height`, `fx_upx`, `fy_upx`, `cx_upx`, `cy_upx` (micro-pixels), or `null` |
+| `entries[]` | `key` (increasing integer), `pose` (`lat_ndeg`, `lon_ndeg`, `height_mm`, `heading_urad`) or `null`, `blob`, `bytes` |
+
+A **recipe** is `navigate.data.recipe` version 1 with `algorithm` and
+`code_version` (constants of the builder code), `weights` (digest or
+`null`), `precision` (`f16`, `f32`, `f64`), and `parameters`: integers by
+name, with the unit in the name (`spacing_mm`, `far_mm`).
+
+A **product list** is `navigate.data.product_list` version 1 with
+`package` (the package identity) and `chunks[]` (`kind`, `chunk`), sorted.
+
+The documents follow the canonical rule of the manifest. The chunk names
+no package, so a chunk serves each mission whose package holds its input
+blobs (`ProductChunk::applies_to`). A route chunk serves only its route
+digest, inside its envelope, in its altitude band. `open_list` refuses a
+list of another package. An unknown kind in a list is carried and
+enumerated (`ProductList::unknown_kinds`); `open_chunk` refuses to read a
+chunk of an unknown kind.
+
+### Keyframes
+
+`navigate_visual_render::build_keyframes` renders one reference view at
+each planned pose along the legs, at a fixed spacing, with the sparse
+adaptive ray marcher, and seals one `keyframes` chunk. Its binding holds
+the route digest, the envelope, the altitude band, the calibration, and
+the digests of each tile blob that a view was rendered from. Each entry
+blob is:
+
+```text
+"NVKEYV01" | u32 width | u32 height | luma (width × height bytes) | depth (width × height f32, little endian)
+```
+
+The depth is along the optical axis, in metres. Zero marks sky or missing
+data.
+
+### Corridor landmarks
+
+`navigate_visual_flight::Surface::from_package` loads one imagery zoom and
+one elevation zoom of a package and gives the digests of the tile blobs
+that it holds. Its `catalog_sha256` is the inputs digest of those blobs
+(`inputs_digest`). `build_corridor_bank_on_surface` writes that digest into
+the `NVKTILE1` bank, and `write_corridor_product` stores the bank as a
+`corridor_landmarks` chunk with its recipe. The bank tiles are in an east,
+north, up frame at the centre of the surface, not on the fixed grid, so
+one bank is one chunk with `cell` set to `null`.
+
+## 12. The onboard boundary
 
 `navigate-onboard` holds the composition that a host links:
 

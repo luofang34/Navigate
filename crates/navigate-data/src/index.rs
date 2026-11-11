@@ -174,6 +174,30 @@ pub async fn verify_index<F: RandomAccess>(
     Ok(counts)
 }
 
+/// Reads every record of an index, in order.
+///
+/// # Errors
+///
+/// Returns read failures and records that do not decode.
+pub async fn entries<F: RandomAccess>(
+    file: &F,
+    records: u64,
+    path: &str,
+) -> Result<Vec<(TileAddress, IndexEntry)>, DataError> {
+    let mut out = Vec::new();
+    let mut done = 0_u64;
+    while done < records {
+        let take = (records - done).min(RECORDS_PER_READ as u64);
+        let offset = INDEX_MAGIC.len() as u64 + done * RECORD_BYTES as u64;
+        let chunk = file.read_at(offset, take as usize * RECORD_BYTES).await?;
+        for record in chunk.chunks(RECORD_BYTES) {
+            out.push(decode_record(record, path)?);
+        }
+        done = done.wrapping_add(take);
+    }
+    Ok(out)
+}
+
 /// Finds the record of `address` by binary search over ranged reads.
 /// `None` means the address is outside the declared coverage.
 ///

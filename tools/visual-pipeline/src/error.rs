@@ -46,6 +46,9 @@ pub enum PipelineError {
     /// GPU reference renderer error.
     #[error("terrain renderer error: {0}")]
     Render(#[from] navigate_visual_render::RenderError),
+    /// Navigation data contract error.
+    #[error("navigation data error: {0}")]
+    Data(#[from] navigate_data::DataError),
     /// External media tool (`ffmpeg`, `ffprobe`, `curl`, `magick`) failed.
     #[error("external tool '{tool}' failed: {message}")]
     Tool {
@@ -70,6 +73,7 @@ impl From<navigate_visual_flight::FlightVisualError> for PipelineError {
             F::Segment(s) => Self::Segment(s),
             F::Visual(v) => Self::Visual(v),
             F::Render(r) => Self::Render(r),
+            F::Data(d) => Self::Data(d),
             other => Self::Invalid(other.to_string()),
         }
     }
