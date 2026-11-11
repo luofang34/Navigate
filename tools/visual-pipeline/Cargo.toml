@@ -26,6 +26,7 @@ navigate-locate = { workspace = true, features = ["serde"] }
 navigate-visual-flight.workspace = true
 navigate-fusion = { workspace = true, features = ["std"] }
 navigate-recording.workspace = true
+navigate-data = { workspace = true, features = ["std"] }
 navigate-match = { workspace = true, features = ["ort", "optim"] }
 burn = { version = "0.22.1", default-features = false, features = ["std", "flex"] }
 clap = "4"

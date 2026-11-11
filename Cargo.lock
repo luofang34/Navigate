@@ -5101,6 +5101,7 @@ dependencies = [
  "kamadak-exif",
  "nalgebra 0.35.0",
  "navigate-contract",
+ "navigate-data",
  "navigate-fusion",
  "navigate-geodesy",
  "navigate-locate",

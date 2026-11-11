@@ -6,6 +6,7 @@ pub mod clock;
 pub mod console;
 pub mod contact_sheet;
 pub mod corridor;
+pub mod data_package;
 pub mod digest;
 pub mod error;
 pub mod external_tool;
