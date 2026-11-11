@@ -165,7 +165,7 @@ pub fn joseph_covariance_update<const M: usize, const N: usize>(
 }
 
 /// `(I − KH)·P·(I − KH)ᵀ + K·R·Kᵀ` for the gain `gain`.
-fn joseph<const M: usize, const N: usize>(
+pub(crate) fn joseph<const M: usize, const N: usize>(
     p: &SMatrix<f64, N, N>,
     h: &SMatrix<f64, M, N>,
     r: &SMatrix<f64, M, M>,

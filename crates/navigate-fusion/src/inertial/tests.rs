@@ -1,3 +1,5 @@
+mod baro_consistency;
+mod baro_maneuver;
 mod bias_prior;
 mod checkpoints;
 mod coast;

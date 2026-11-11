@@ -75,6 +75,28 @@ pub(super) fn apply_vector_or_range(
 /// position row is the outward normal of the ellipsoid,
 /// `[cos φ·cos λ, cos φ·sin λ, sin φ]`, which is the exact gradient of
 /// the ellipsoidal height.
+///
+/// The height also has a second-order term in the horizontal position
+/// error: a point `d` meters off along the tangent plane is `d²/(2·R)`
+/// higher, with `R` the radius of curvature of that direction. It is
+/// 2 m at 5 km and 11 m at 12 km, more than the noise of an altimeter.
+/// The model is second order (Gaussian second-order filter): the
+/// predicted height adds the mean `½·tr(K·P_h)` of the term, and the
+/// variance adds its variance `½·tr(K·P_h·K·P_h)`, with
+/// `K = diag(1/(M + h), 1/(N + h))` the curvature of the ellipsoid in
+/// the local north and east axes and `P_h` the horizontal position
+/// covariance in the same axes.
+///
+/// The update does not correct the horizontal position and velocity
+/// (`InertialCore::update_vertical`). A height carries no first-order
+/// information about them. The covariance of the body-fixed error state
+/// correlates the vertical with the horizontal through the turn of the
+/// local vertical along the track and through the second-order term.
+/// These correlations are not information: on a route with turns and
+/// kilometers of horizontal error, a first-order update with them
+/// shrank the horizontal 1-sigma to a fifth of the error. The height
+/// still corrects the attitude and the biases, and those corrections
+/// reach the horizontal states through the dynamics.
 pub(super) fn altitude(
     core: &InertialCore,
     ellipsoid: BodyEllipsoid,
@@ -91,9 +113,27 @@ pub(super) fn altitude(
     if barometric {
         h[(0, ALT_BIAS)] = 1.0;
     }
+    let (mean_m, variance_term_m2) = curvature_term(core, &local, ellipsoid);
     scalar(
-        altitude_m - (local.position.altitude_m + bias),
+        altitude_m - (local.position.altitude_m + bias + mean_m),
         h,
-        variance_m2,
+        variance_m2 + variance_term_m2,
     )
+}
+
+/// The mean and the variance of the second-order height term
+/// `½·δₕᵀ·K·δₕ` for a horizontal position error `δₕ ~ N(0, P_h)`.
+fn curvature_term(core: &InertialCore, local: &LocalLevel, ellipsoid: BodyEllipsoid) -> (f64, f64) {
+    let position = local.position;
+    let (meridian_m, prime_vertical_m) = ellipsoid.radii_of_curvature_m(position.latitude_rad);
+    let k_north = 1.0 / (meridian_m + position.altitude_m);
+    let k_east = 1.0 / (prime_vertical_m + position.altitude_m);
+    let p_ned = local.bf_to_ned_cov(&core.p.fixed_view::<3, 3>(POS, POS).into_owned());
+    let (nn, ne, ee) = (p_ned[(0, 0)], p_ned[(0, 1)], p_ned[(1, 1)]);
+    let mean = 0.5 * (k_north * nn + k_east * ee);
+    let variance = 0.5
+        * (k_north * k_north * nn * nn
+            + 2.0 * k_north * k_east * ne * ne
+            + k_east * k_east * ee * ee);
+    (mean, variance)
 }

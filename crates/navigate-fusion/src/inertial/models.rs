@@ -102,7 +102,8 @@ fn apply_geodetic(
         } => {
             let model =
                 surface::altitude(core, ellipsoid, *altitude_m, *variance_m2, obs.composition);
-            core.update(&model, fusion.scalar_gate_chi2, mode)
+            let up = vehicle_level(core, ellipsoid).up();
+            core.update_vertical(&model, &up, fusion.scalar_gate_chi2, mode)
         }
         ObservationValue::TerrainClearance { .. } => {
             let model = terrain::terrain_clearance(core, ellipsoid, &obs.value)?;
