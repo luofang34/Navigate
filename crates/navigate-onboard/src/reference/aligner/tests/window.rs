@@ -6,8 +6,7 @@ use navigate_contract::{NedVelocity, SymmetricCov3};
 
 use super::rig::{GNSS, Rig, at};
 use super::{ATTITUDE_DEG, feed, waiting};
-use crate::reference::aligner::names;
-use crate::{AlignmentPhase, AlignmentStatus, ErrorBudget, Navigator, SensorData};
+use crate::{AlignmentNeed, AlignmentPhase, AlignmentStatus, ErrorBudget, Navigator, SensorData};
 
 /// Half a second without inertial increments clears the window: the state
 /// comes two seconds after the gap, not two seconds of increments after
@@ -54,7 +53,7 @@ fn a_window_of_too_few_increments_is_not_rest() {
     assert!(navigator.solution(at(200)).is_none());
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST_SAMPLES)
+        (AlignmentPhase::Levelling, AlignmentNeed::RestSamples)
     );
 }
 
@@ -77,7 +76,7 @@ fn evidence_from_before_the_window_does_not_count() {
     assert!(navigator.solution(at(300)).is_none());
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST_EVIDENCE)
+        (AlignmentPhase::Levelling, AlignmentNeed::RestEvidence)
     );
 }
 
@@ -110,7 +109,7 @@ fn a_window_without_a_position_waits_for_one() {
     assert!(navigator.solution(at(200)).is_none());
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Position, names::POSITION_SOURCE)
+        (AlignmentPhase::Position, AlignmentNeed::PositionSource)
     );
 }
 
@@ -134,6 +133,6 @@ fn a_moving_receiver_is_not_rest() {
     }
     assert_eq!(
         waiting(&navigator),
-        (AlignmentPhase::Levelling, names::REST)
+        (AlignmentPhase::Levelling, AlignmentNeed::Rest)
     );
 }

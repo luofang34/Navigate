@@ -9,7 +9,8 @@ use navigate_contract::{ClockDomainId, GeodeticPosition, MonotonicNanos, NedVelo
 use navigate_fusion::FogmBias;
 
 use crate::{
-    ErrorBudget, ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite,
+    ErrorBudget, MagneticReference, Navigator, ReferenceNavigator, SensorData, SensorInput,
+    SensorKind, SensorSpec, SensorSuite,
 };
 
 pub(crate) const CLOCK: ClockDomainId = ClockDomainId::new(9);
@@ -25,7 +26,9 @@ pub(crate) const LON_DEG: f64 = -1.0;
 pub(crate) const HEIGHT_M: f64 = 300.0;
 /// Horizontal intensity of the Earth's field at the place: 45 µT with a
 /// dip of 57°.
-const HORIZONTAL_FIELD_T: f64 = 45e-6 * 0.544_639_035;
+pub(crate) const HORIZONTAL_FIELD_T: f64 = 45e-6 * 0.544_639_035;
+/// Total intensity of the Earth's field at the place, tesla.
+pub(crate) const FIELD_T: f64 = 45e-6;
 
 /// The declared errors of the sensors of the rig.
 #[derive(Debug, Clone, Copy)]
@@ -224,17 +227,18 @@ impl Rig {
     /// the field about the vertical, and the hard iron adds in the body
     /// axes.
     pub(crate) fn magnetic(&mut self, step: u64) -> SensorInput {
-        let declination = self.budgets.declination_rad
-            + self.declination_error_rad
-            + self.noise.normal() * self.budgets.mag_noise_rad;
+        let declination = self.budgets.declination_rad + self.declination_error_rad;
         let dip = 57.0_f64.to_radians();
         let field_ned = Vector3::new(
             dip.cos() * declination.cos(),
             dip.cos() * declination.sin(),
             dip.sin(),
-        ) * 45e-6;
+        ) * FIELD_T;
+        let noise = self
+            .noise
+            .vector(self.budgets.mag_noise_rad * HORIZONTAL_FIELD_T);
         let field_body_t: [f64; 3] =
-            (self.body_to_ned.inverse() * field_ned + self.hard_iron_t).into();
+            (self.body_to_ned.inverse() * field_ned + self.hard_iron_t + noise).into();
         Self::input(
             MAGNETOMETER,
             step,
@@ -329,25 +333,42 @@ impl Rig {
                 MAGNETOMETER,
                 SensorKind::Magnetometer,
                 ErrorBudget::Magnetometer {
-                    noise_sigma_rad: b.mag_noise_rad,
-                    disturbance_sigma_rad,
-                    declination_rad: b.declination_rad,
-                    declination_sigma_rad: b.declination_sigma_rad,
+                    noise_sigma_t: b.mag_noise_rad * HORIZONTAL_FIELD_T,
+                    disturbance_sigma_t: disturbance_sigma_rad * HORIZONTAL_FIELD_T,
                 },
             ));
         }
         SensorSuite::new(sensors).unwrap()
     }
 
-    /// A navigator of the suite of the rig that no one aligned.
+    /// A navigator of the suite of the rig that no one aligned, told the
+    /// field of the place.
     pub(crate) fn navigator(&self) -> ReferenceNavigator {
         let suite = self.suite(Some(self.budgets.mag_disturbance_rad));
-        ReferenceNavigator::new(suite, CLOCK, None).unwrap()
+        self.told(ReferenceNavigator::new(suite, CLOCK, None).unwrap())
+    }
+
+    /// The field of the place as the host states it: the declared
+    /// declination and its one-sigma, and the intensity to half a
+    /// microtesla.
+    pub(crate) fn reference(&self) -> MagneticReference {
+        MagneticReference {
+            declination_rad: self.budgets.declination_rad,
+            declination_sigma_rad: self.budgets.declination_sigma_rad,
+            intensity_t: FIELD_T,
+            intensity_sigma_t: 0.5e-6,
+        }
+    }
+
+    /// `navigator` told the field of the place.
+    pub(crate) fn told(&self, mut navigator: ReferenceNavigator) -> ReferenceNavigator {
+        navigator.set_magnetic_reference(self.reference()).unwrap();
+        navigator
     }
 
     /// A navigator of the suite of the rig with the GNSS budget `gnss`.
     pub(crate) fn navigator_with_gnss(&self, gnss: ErrorBudget) -> ReferenceNavigator {
         let suite = self.suite_with(Some(self.budgets.mag_disturbance_rad), gnss);
-        ReferenceNavigator::new(suite, CLOCK, None).unwrap()
+        self.told(ReferenceNavigator::new(suite, CLOCK, None).unwrap())
     }
 }

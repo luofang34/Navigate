@@ -221,6 +221,7 @@ fn a_host_declares_the_camera_loads_the_map_and_gives_a_frame() {
             velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
             attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
             at,
+            imu_bias_prior: None,
         })
         .unwrap();
     let input = SensorInput {

@@ -15,8 +15,9 @@ use navigate_fusion::{
 use navigate_startrack::line_of_sight_observations;
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentRecord, AlignmentStatus, ErrorBudget,
-    Navigator, OnboardError, Outcome, SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
+    ErrorBudget, MagneticReference, Navigator, OnboardError, Outcome, SensorData, SensorInput,
+    SensorKind, SensorSuite,
 };
 
 mod aligner;
@@ -342,9 +343,10 @@ const fn fits(data: &SensorData, kind: SensorKind) -> bool {
                 )
                 | (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
                 | (
-                    SensorData::SurveyedPosition { .. },
-                    SensorKind::SurveyedPoint
+                    SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                    SensorKind::SurveyedPoint,
                 )
+                | (SensorData::DeclaredStart(_), SensorKind::Operator)
                 | (SensorData::Observation(_), _)
         )
 }
@@ -355,11 +357,26 @@ impl Navigator for ReferenceNavigator {
     }
 
     fn align(&mut self, a: &Alignment) -> Result<(), OnboardError> {
-        self.set_state(a, aligner::transfer_record(a), None)
+        self.set_state(a, aligner::transfer_record(a))
     }
 
     fn alignment_status(&self) -> Option<AlignmentStatus> {
         Some(self.alignment_now())
+    }
+
+    fn set_magnetic_reference(&mut self, reference: MagneticReference) -> Result<(), OnboardError> {
+        if !reference.is_usable() {
+            return Err(OnboardError::Config {
+                field: "magnetic reference",
+                detail: format!("{reference:?}"),
+            });
+        }
+        self.aligner.reference = Some(reference);
+        Ok(())
+    }
+
+    fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+        self.configure_alignment(config)
     }
 
     fn realign(&mut self) -> Result<(), OnboardError> {
@@ -390,7 +407,11 @@ impl Navigator for ReferenceNavigator {
         }
         match (&input.data, kind) {
             (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
-            | (SensorData::SurveyedPosition { .. }, SensorKind::SurveyedPoint) => {
+            | (
+                SensorData::SurveyedPosition { .. } | SensorData::KnownPosition { .. },
+                SensorKind::SurveyedPoint,
+            )
+            | (SensorData::DeclaredStart(_), SensorKind::Operator) => {
                 Self::alignment_only(input, sink);
                 Ok(())
             }
