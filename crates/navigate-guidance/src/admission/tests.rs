@@ -11,6 +11,8 @@ use crate::refusal::GuidanceRefusal;
 use crate::scenario::{CLOCK, deg, equator_leg, id, now, solution};
 use crate::velocity::guide_velocity;
 
+mod vertical_limit;
+
 /// The lunar mean radius in meters.
 const MOON_RADIUS_M: f64 = 1_737_400.0;
 
