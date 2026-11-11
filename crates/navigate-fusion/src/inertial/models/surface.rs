@@ -88,8 +88,8 @@ pub(super) fn apply_vector_or_range(
 /// `−d²/(2R)`: 2 m at 5 km, 11 m at 12 km. With a full-gain update the
 /// height stays consistent but, at kilometers of horizontal error on a
 /// route with turns, the horizontal breaks: the horizontal 1-sigma
-/// shrinks to a fifth of the error (horizontal NEES 134 at the end of
-/// the route). An altimeter that reads the height without the chord
+/// falls far below the error (horizontal NEES 134 at the end of the
+/// route). An altimeter that reads the height without the chord
 /// keeps the same full-gain filter in its band, so the chord is the
 /// cause; an injection along geodetic coordinates instead of the
 /// body-fixed axes does not help (NEES 296). With the gain kept off the
