@@ -1,19 +1,19 @@
 //! The initialized state of the inertial filter and its propagation
 //! (ADR-0014, ADR-0017, ADR-0018).
 
-use nalgebra::{SMatrix, SVector};
+use nalgebra::{SMatrix, SVector, Vector3};
 use navigate_contract::{MonotonicNanos, SourceId};
 
 use super::coast::coast_transition;
 use super::config::InertialConfig;
 use super::imu::ImuIncrement;
 use super::mechanization::{ImuRates, increment_transition, transition};
-use super::nominal::{ErrorMat, ErrorVec, InertialNominal, N, reset_covariance};
+use super::nominal::{ErrorMat, ErrorVec, InertialNominal, N, POS, VEL, reset_covariance};
 use super::propagation::{ForceModelCoast, PropagationMode};
 use super::regime::Regime;
 use crate::admission::seconds;
 use crate::float_math::{ceil, round};
-use crate::kalman::{KalmanState, MeasurementModel};
+use crate::kalman::{KalmanState, MeasurementModel, joseph};
 use crate::rejection::RejectionReason;
 
 /// Longest propagation step in seconds. A longer interval is split into
@@ -201,6 +201,46 @@ impl InertialCore {
         self.nominal = self.nominal.inject(&updated.x);
         self.p = reset_covariance(&updated.p, &updated.x);
         Ok(prepared.chi2)
+    }
+
+    /// Applies one scalar measurement of a height whose gain does not
+    /// reach the horizontal position and the horizontal velocity: the
+    /// rows of the gain at those states keep only their component along
+    /// `up`, the unit local vertical in the frame axes. The covariance
+    /// update is the Joseph form, which is exact for any gain, so the
+    /// horizontal position and velocity covariance does not change and
+    /// the rest stays consistent (a Schmidt "consider" update of those
+    /// four states). The gate is that of [`Self::update`].
+    pub(crate) fn update_vertical(
+        &mut self,
+        model: &Linearized<1>,
+        up: &Vector3<f64>,
+        gate_chi2: f64,
+        mode: Mode,
+    ) -> Result<f64, RejectionReason> {
+        let s = (model.h * self.p * model.h.transpose() + model.r).x;
+        if !(s.is_finite() && s > 0.0) {
+            return Err(RejectionReason::ImplausibleCovariance);
+        }
+        let residual = model.residual.x;
+        let chi2 = residual * residual / s;
+        if mode == Mode::Gated && (chi2.is_nan() || chi2 > gate_chi2) {
+            return Err(RejectionReason::InnovationGate {
+                chi2,
+                threshold: gate_chi2,
+            });
+        }
+        let mut gain = self.p * model.h.transpose() / s;
+        let vertical = up * up.transpose();
+        for offset in [POS, VEL] {
+            let kept = vertical * gain.fixed_view::<3, 1>(offset, 0);
+            gain.fixed_view_mut::<3, 1>(offset, 0).copy_from(&kept);
+        }
+        let x = gain * residual;
+        let p = joseph(&self.p, &model.h, &model.r, &gain);
+        self.nominal = self.nominal.inject(&x);
+        self.p = reset_covariance(&((p + p.transpose()) * 0.5), &x);
+        Ok(chi2)
     }
 }
 

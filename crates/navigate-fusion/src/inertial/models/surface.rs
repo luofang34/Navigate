@@ -74,7 +74,29 @@ pub(super) fn apply_vector_or_range(
 /// barometric source, and `h_ellipsoid(p)` for any other source. The
 /// position row is the outward normal of the ellipsoid,
 /// `[cos φ·cos λ, cos φ·sin λ, sin φ]`, which is the exact gradient of
-/// the ellipsoidal height.
+/// the ellipsoidal height. The residual `z − h(x_nom)` is the geodetic
+/// height difference between the vehicle and the nominal state, and the
+/// vertical error state is that difference. The model adds no term for
+/// the curvature of the ellipsoid along a horizontal error: such a term
+/// would bias the height by about `σ_h²/R` (30 m at 14 km of horizontal
+/// 1-sigma).
+///
+/// The update does not correct the horizontal position and velocity
+/// (`InertialCore::update_vertical`). The body-fixed error state reads
+/// the vertical along the local up of the nominal position, and two
+/// points at the same height `d` apart differ along that up by the chord
+/// `−d²/(2R)`: 2 m at 5 km, 11 m at 12 km. With a full-gain update the
+/// height stays consistent but, at kilometers of horizontal error on a
+/// route with turns, the horizontal breaks: the horizontal 1-sigma
+/// falls far below the error (horizontal NEES 134 at the end of the
+/// route). An altimeter that reads the height without the chord
+/// keeps the same full-gain filter in its band, so the chord is the
+/// cause; an injection along geodetic coordinates instead of the
+/// body-fixed axes does not help (NEES 296). With the gain kept off the
+/// horizontal states, the horizontal NEES and the height NEES stay in
+/// their bands. The height still corrects the attitude and the biases,
+/// and those corrections reach the horizontal states through the
+/// dynamics.
 pub(super) fn altitude(
     core: &InertialCore,
     ellipsoid: BodyEllipsoid,
