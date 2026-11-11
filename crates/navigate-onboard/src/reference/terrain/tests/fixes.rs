@@ -88,7 +88,15 @@ fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_
     let error = hover.error_m(&solution, 3 * RATE);
     let (nn, ee, dd) = solution.position_cov.diagonal();
     let (sigma_h, sigma_v) = ((nn + ee).sqrt(), dd.sqrt());
-    tracing::info!(%error, sigma_h, sigma_v, "a hovering vehicle after one fix");
+    let (north_m, east_m, up_m) = (error.x, error.y, error.z);
+    tracing::info!(
+        north_m,
+        east_m,
+        up_m,
+        sigma_h,
+        sigma_v,
+        "a hovering vehicle after one fix"
+    );
     // One pixel of the camera is 5.3 m on the ground. The alignment error
     // was 43 m horizontal and 12 m vertical.
     assert!(error.xy().norm() < 8.0, "{error}");
@@ -137,7 +145,8 @@ fn a_flight_takes_one_independent_fix_in_each_map_cell() {
     let solution = navigator.solution(at(250)).unwrap();
     let error = flight.error_m(&solution, 250);
     let (nn, ee, _) = solution.position_cov.diagonal();
-    tracing::info!(%error, sigma_h = (nn + ee).sqrt(), "a flight after four fixes");
+    let (north_m, east_m, sigma_h) = (error.x, error.y, (nn + ee).sqrt());
+    tracing::info!(north_m, east_m, sigma_h, "a flight after four fixes");
     assert!(error.xy().norm() < 8.0, "{error}");
     assert!(error.xy().norm() < 3.0 * (nn + ee).sqrt());
     // Four fixes with independent map error: the filter may go below the
