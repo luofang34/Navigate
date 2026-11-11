@@ -17,15 +17,33 @@ pub enum GuidanceLaw {
     Velocity(VelocityGuidanceConfig),
 }
 
+/// Why the director sequenced a waypoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SequenceCause {
+    /// Turn anticipation sequenced it before the fix.
+    Anticipated,
+    /// The fix captured inside the capture radius.
+    Overflown,
+    /// The vehicle crossed the perpendicular through the fix outside the
+    /// capture distance; the fix can no longer capture.
+    Passed {
+        /// Signed cross-track distance from the inbound course, metres,
+        /// positive right of the course.
+        cross_track_m: f64,
+    },
+    /// A reason that this crate does not know yet.
+    Other,
+}
+
 /// A waypoint that the director sequenced at one step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectorEvent {
     /// The sequenced waypoint.
     pub waypoint_index: usize,
     /// Whether it completed the plan.
     pub plan_complete: bool,
-    /// Whether turn anticipation sequenced it.
-    pub anticipated: bool,
+    /// Why it sequenced.
+    pub cause: SequenceCause,
 }
 
 /// What a director decided at one step.

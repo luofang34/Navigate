@@ -357,5 +357,6 @@ inertial filter on WGS84: IMU increments, GNSS position and velocity
 fixes (with the declared budget when a fix has no covariance), barometric
 altitude (with the barometer bias state), star-camera frames (identified
 lost in space or with the navigator's own attitude as the prior, then one
-line of sight for each star), and observations that a sensor makes
-itself.
+line of sight for each star, with consecutive sequence numbers; each
+record of a star frame names its identification mode, `tracking` or
+`lost_in_space`), and observations that a sensor makes itself.

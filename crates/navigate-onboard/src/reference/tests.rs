@@ -433,3 +433,52 @@ fn a_snapshot_forks_the_run_and_restores_it() {
     assert_eq!(navigator.solution(then), from_snapshot.solution(then));
     assert!(navigator.requirements().is_empty() && navigator.load_report().is_empty());
 }
+
+#[test]
+fn every_line_of_sight_of_a_second_frame_is_accepted() {
+    let mut navigator = aligned(&[SensorKind::StarCamera]);
+    let mut sink = Vec::new();
+    run(&mut navigator, 1, None, &mut sink);
+    let mut per_frame = Vec::new();
+    for second in [1_u64, 2] {
+        if second == 2 {
+            for step in RATE + 1..=2 * RATE {
+                navigator.ingest(&rest_increment(step), &mut sink).unwrap();
+            }
+        }
+        let mid = at(second * RATE);
+        let exposure = SensorInput {
+            sensor: STARS,
+            acquired_at: mid,
+            delivered_at: mid,
+            data: SensorData::StarExposureMid,
+        };
+        navigator.ingest(&exposure, &mut sink).unwrap();
+        let centroids = zenith_centroids(mid);
+        let frame = SensorInput {
+            sensor: STARS,
+            acquired_at: mid,
+            delivered_at: mid,
+            data: SensorData::StarCentroids { centroids },
+        };
+        sink.clear();
+        navigator.ingest(&frame, &mut sink).unwrap();
+        per_frame.push(sink.clone());
+    }
+    let [first, second] = [&per_frame[0], &per_frame[1]];
+    assert!(first.len() >= 4, "{first:?}");
+    assert!(
+        first.iter().all(|r| r.context == Some("lost_in_space")),
+        "{first:?}"
+    );
+    assert!(second.len() >= 4, "{second:?}");
+    let accepted = second
+        .iter()
+        .filter(|r| r.outcome == Outcome::Accepted)
+        .count();
+    assert_eq!(accepted, second.len(), "{second:?}");
+    assert!(
+        second.iter().all(|r| r.context == Some("tracking")),
+        "{second:?}"
+    );
+}

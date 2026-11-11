@@ -131,11 +131,20 @@ impl ReferenceNavigator {
         stamp
     }
 
+    fn skip_sequence(&mut self, sensor: SourceId, count: usize) {
+        if let Some(sequence) = self.sequences.get_mut(&sensor.get()) {
+            for _ in 0..count {
+                *sequence = sequence.next();
+            }
+        }
+    }
+
     fn offer(
         &mut self,
         input: &SensorInput,
         measurement: &'static str,
         observation: &Observation,
+        context: Option<&'static str>,
         sink: &mut dyn AcceptanceSink,
     ) {
         let outcome = match self.filter.ingest(observation, input.delivered_at) {
@@ -147,6 +156,7 @@ impl ReferenceNavigator {
             acquired_at: input.acquired_at,
             measurement,
             outcome,
+            context,
         });
     }
 
@@ -160,7 +170,7 @@ impl ReferenceNavigator {
     ) {
         let stamp = self.stamp(input.sensor, input.acquired_at);
         let observation = Observation::new(stamp, value, SourceComposition::of(class));
-        self.offer(input, measurement, &observation, sink);
+        self.offer(input, measurement, &observation, None, sink);
     }
 
     fn imu(
@@ -239,24 +249,28 @@ impl ReferenceNavigator {
         };
         let sighting = channel.sight(centroids, input.acquired_at)?;
         let variance = channel.mount_variance_rad2;
-        let Sighting::Solved(solution) = sighting else {
-            if let Sighting::Unsolved(reason) = sighting {
-                let record = AcceptanceRecord {
+        let (solution, mode) = match sighting {
+            Sighting::Solved(solution, mode) => (solution, mode),
+            Sighting::Unsolved(reason, mode) => {
+                sink.record(AcceptanceRecord {
                     sensor: input.sensor,
                     acquired_at: input.acquired_at,
                     measurement: "star_line_of_sight",
                     outcome: Outcome::Unused(reason),
-                };
-                sink.record(record);
+                    context: Some(mode),
+                });
+                return Ok(());
             }
-            return Ok(());
         };
         let stamp = self.stamp(input.sensor, input.acquired_at);
         let observations =
             line_of_sight_observations(&solution, stamp, self.filter.frame(), variance)
                 .map_err(|e| OnboardError::StarTrack(e.to_string()))?;
+        // The observations of one frame take consecutive sequence numbers
+        // from the stamp; the next frame continues after the last one.
+        self.skip_sequence(input.sensor, observations.len().saturating_sub(1));
         for observation in &observations {
-            self.offer(input, "star_line_of_sight", observation, sink);
+            self.offer(input, "star_line_of_sight", observation, Some(mode), sink);
         }
         Ok(())
     }
@@ -335,7 +349,7 @@ impl Navigator for ReferenceNavigator {
                 self.star_frame(input, sink)
             }
             (SensorData::Observation(observation), _) => {
-                self.offer(input, "observation", observation, sink);
+                self.offer(input, "observation", observation, None, sink);
                 Ok(())
             }
             _ => Err(wrong()),

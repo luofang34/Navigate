@@ -61,6 +61,15 @@ pub fn own_prior(solution: &NavigationSolution) -> Option<AttitudePrior> {
     })
 }
 
+/// The identification mode of a frame, as an acceptance record names it.
+const fn mode_name(lost_in_space: bool) -> &'static str {
+    if lost_in_space {
+        "lost_in_space"
+    } else {
+        "tracking"
+    }
+}
+
 /// One star camera.
 #[derive(Debug, Clone)]
 pub(crate) struct StarChannel {
@@ -75,10 +84,10 @@ pub(crate) struct StarChannel {
 
 /// What one frame gave.
 pub(crate) enum Sighting {
-    /// Identified and solved.
-    Solved(AttitudeSolution),
-    /// Not solved, for the stated reason.
-    Unsolved(&'static str),
+    /// Identified and solved, in the stated mode.
+    Solved(AttitudeSolution, &'static str),
+    /// Not solved, for the stated reason, in the stated mode.
+    Unsolved(&'static str, &'static str),
 }
 
 impl StarChannel {
@@ -164,9 +173,8 @@ impl StarChannel {
         });
         self.tracker.record(solved.is_ok());
         Ok(match solved {
-            Ok(solution) => Sighting::Solved(solution),
-            Err(_) if lost => Sighting::Unsolved("star frame not identified lost in space"),
-            Err(_) => Sighting::Unsolved("star frame not identified with the prior"),
+            Ok(solution) => Sighting::Solved(solution, mode_name(lost)),
+            Err(_) => Sighting::Unsolved("star frame not identified", mode_name(lost)),
         })
     }
 }

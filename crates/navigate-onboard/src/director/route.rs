@@ -7,7 +7,7 @@ use navigate_contract::{
 use navigate_guidance::{guide, guide_velocity};
 use navigate_route::{ExecutionConfig, PlanExecution, SequenceEvent, SequenceReason};
 
-use super::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw};
+use super::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, SequenceCause};
 use crate::OnboardError;
 
 /// Executes one flight plan on WGS84: leg sequencing with capture and
@@ -88,6 +88,16 @@ impl RouteDirector {
     }
 }
 
+/// The cause of a sequencing decision, each known reason by name.
+fn cause(reason: SequenceReason) -> SequenceCause {
+    match reason {
+        SequenceReason::Anticipated => SequenceCause::Anticipated,
+        SequenceReason::Overflown => SequenceCause::Overflown,
+        SequenceReason::Passed { cross_track_m } => SequenceCause::Passed { cross_track_m },
+        _ => SequenceCause::Other,
+    }
+}
+
 impl FlightDirector for RouteDirector {
     fn step(
         &mut self,
@@ -113,7 +123,7 @@ impl FlightDirector for RouteDirector {
         .map(|(plan_complete, reason)| DirectorEvent {
             waypoint_index: index,
             plan_complete,
-            anticipated: reason == SequenceReason::Anticipated,
+            cause: cause(reason),
         });
         let leg = execution.active_leg();
         output.active_index = leg.map(|leg| leg.index);

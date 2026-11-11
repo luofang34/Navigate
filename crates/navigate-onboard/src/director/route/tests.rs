@@ -1,5 +1,6 @@
 use super::*;
 use crate::Navigator;
+use crate::SequenceCause;
 use crate::reference::tests::{CLOCK, aligned};
 use navigate_contract::{AltitudeConstraint, GeodeticPosition, GuidanceSetpoint, TurnType};
 use navigate_guidance::{GuidanceConfig, VelocityGuidanceConfig};
@@ -112,4 +113,30 @@ fn a_director_snapshot_restores_the_sequencing_state() {
     assert_eq!(director.active_index(), Some(1));
     director.restore(&*saved).unwrap();
     assert_eq!(director.active_index(), Some(0));
+}
+
+#[test]
+fn a_fix_passed_outside_the_capture_radius_is_a_passed_event() {
+    let waypoints = waypoints();
+    let mut director = director(&waypoints, tracking());
+    let mut navigator = aligned(&[]);
+    let now = MonotonicNanos::from_nanos(1_000_000_000);
+    let mut solution = navigator.solution(now).unwrap();
+    solution.position = waypoints[0].position;
+    director.step(Some(&solution), now);
+    // Past B (lon -0.96) along the A→B course, 300 m south of it: outside
+    // the 100 m capture radius and beyond the perpendicular through B.
+    let b = waypoints[1].position;
+    solution.position = GeodeticPosition::new(
+        b.latitude_rad - 300.0 / 6_364_000.0,
+        b.longitude_rad + 0.0005_f64.to_radians(),
+        HEIGHT,
+    );
+    let output = director.step(Some(&solution), now);
+    let event = output.event.unwrap();
+    assert_eq!(event.waypoint_index, 1);
+    assert!(
+        matches!(event.cause, SequenceCause::Passed { cross_track_m } if (cross_track_m - 300.0).abs() < 20.0),
+        "{event:?}"
+    );
 }

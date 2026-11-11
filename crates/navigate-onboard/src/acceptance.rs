@@ -26,6 +26,9 @@ pub struct AcceptanceRecord {
     pub measurement: &'static str,
     /// What the navigator did with it.
     pub outcome: Outcome,
+    /// More about the measurement, where it has more: for a star frame, the
+    /// identification mode, `tracking` or `lost_in_space`.
+    pub context: Option<&'static str>,
 }
 
 /// Where a navigator writes its acceptance records. The caller owns the
