@@ -7,6 +7,7 @@ mod deep_space;
 mod flight_truth;
 mod frame_change;
 mod increment;
+mod layout;
 mod lunar_beacon;
 mod magnetic;
 mod measurements;
