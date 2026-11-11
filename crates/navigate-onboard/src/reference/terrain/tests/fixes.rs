@@ -8,7 +8,7 @@ use navigate_fusion::RejectionReason;
 use super::flight::{CAMERA, Flight, RATE, at, fly, load, navigator, request, show_events};
 use super::world::{CENTRE, GROUND_M, World, WorldSpec, camera_model, correlation_cell};
 use crate::reference::terrain::MEASUREMENT;
-use crate::{AcceptanceRecord, Navigator, Outcome, TerrainConfig, TerrainMapRequest};
+use crate::{AcceptanceRecord, BeliefSource, Navigator, Outcome, TerrainConfig, TerrainMapRequest};
 
 /// 800 m above the mean ground.
 pub(crate) const HEIGHT_M: f64 = GROUND_M + 800.0;
@@ -33,15 +33,22 @@ pub(crate) fn belly() -> CameraMount {
 /// sixth, one half, and five sixths of each cell: no frame is near a cell
 /// boundary.
 pub(crate) fn across_cells() -> Flight {
-    let ([lat, lon], cell_m) = correlation_cell(CENTRE);
+    // The belly camera is one metre behind the reference point.
+    north_through_cells(super::world::CORRELATION_ZOOM, 3.0, HEIGHT_M, -1.0)
+}
+
+/// A flight to the north at `height_m` from just south of a cell of
+/// `zoom`, at one cell for `frames` frames of each half second. The
+/// ground that the camera sees is `ahead_m` north of the reference point,
+/// and it is half a frame step into the cell at the first frame.
+pub(crate) fn north_through_cells(zoom: u32, frames: f64, height_m: f64, ahead_m: f64) -> Flight {
+    let ([lat, lon], cell_m) = correlation_cell(CENTRE, zoom);
     let south_edge = lat - (cell_m / 2.0 / 6_364_000.0_f64).to_degrees();
-    let speed_m_s = cell_m / 3.0 / 0.5;
-    // The camera is one metre behind the reference point, and the first
-    // frame comes after a third of a cell.
-    let start = south_edge + ((1.0 - cell_m / 6.0) / 6_364_000.0_f64).to_degrees();
+    let step_m = cell_m / frames;
+    let start = south_edge - ((ahead_m + step_m / 2.0) / 6_364_000.0_f64).to_degrees();
     Flight {
-        start: [start, lon, HEIGHT_M],
-        speed_m_s,
+        start: [start, lon, height_m],
+        speed_m_s: step_m / 0.5,
     }
 }
 
@@ -230,6 +237,11 @@ fn a_late_frame_is_matched_at_its_exposure_and_an_old_frame_is_not_matched() {
             .ingest(&flight.increment(step), &mut sink)
             .unwrap();
     }
+    // The filter gave its own state at the exposure.
+    assert_eq!(
+        navigator.terrain_belief_source(CAMERA),
+        Some(BeliefSource::FilterAtExposure)
+    );
     // The vehicle moved 2.3 m in the 60 ms. The fix is for the exposure.
     let error = flight.error_m(&navigator.solution(at(100)).unwrap(), 100);
     assert!(error.xy().norm() < FIX_BOUND_M, "{error}");
@@ -244,6 +256,45 @@ fn a_late_frame_is_matched_at_its_exposure_and_an_old_frame_is_not_matched() {
             (Outcome::Unused("capture_lag"), None)
         ]
     );
+}
+
+#[test]
+fn a_frame_older_than_the_history_of_the_filter_takes_the_moved_back_belief() {
+    let world = World::build(&WorldSpec::default());
+    let flight = across_cells();
+    let mut navigator = navigator(&flight, belly(), [15.0, -20.0, 5.0], 30.0);
+    // The host accepts frames up to a second old.
+    let patient = TerrainMapRequest {
+        config: TerrainConfig {
+            max_capture_lag_s: 1.0,
+            ..request(&world).config
+        },
+        ..request(&world)
+    };
+    navigator
+        .load_terrain_map(std::sync::Arc::clone(&world.store), &patient, None)
+        .unwrap();
+    let mut sink = Vec::new();
+    // The frame of step 25 comes 0.8 s later, after 40 more increments:
+    // more than the history of the filter holds.
+    for step in 1..=65 {
+        navigator
+            .ingest(&flight.increment(step), &mut sink)
+            .unwrap();
+    }
+    assert!(navigator.filter().state_at(at(25)).is_err());
+    navigator
+        .ingest(&flight.frame(&world, &belly(), 25, 40), &mut sink)
+        .unwrap();
+    assert_eq!(
+        navigator.terrain_belief_source(CAMERA),
+        Some(BeliefSource::MovedBackFromDelivery)
+    );
+    // The frame is matched from the moved-back belief: the vehicle went
+    // 30 m in the 0.8 s. The filter then judges the age of the fix.
+    let records = terrain(&sink);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].1, Some("render"), "{records:?}");
 }
 
 #[test]

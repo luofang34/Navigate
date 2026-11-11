@@ -13,73 +13,51 @@
 //!    error is a root sum square of independent terms ([`budget`]).
 //! 5. The map cell of the matched ground decides what the filter is told
 //!    ([`admission`]).
+//!
+//! Before step 2, a frame that can only show map cells with a fix is
+//! recorded and not matched ([`camera`]), and a frame larger than the
+//! working resolution is resampled to it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use image::GrayImage;
-use nalgebra::Vector3;
-use navigate_camera::{CameraMount, Distortion, SpectralBand};
-use navigate_contract::{ClockDomainId, NavigationSolution, SourceEpoch, SourceId};
-use navigate_data::product::{Calibration, ProductKind};
+use navigate_camera::Intrinsics;
+use navigate_contract::{ClockDomainId, SourceId};
+use navigate_data::product::ProductKind;
 use navigate_data::{LayerKind, ReadPort};
 use navigate_fusion::{IngestOutcome, Observation};
-use navigate_visual::fusion_bridge::{
-    EvidenceIndependence, VisualSourceIdentity, position_fix_observation_composed,
-};
-use navigate_visual::session::{
-    ContinuityEpoch, FrameKey, FusionEligibility, MapCell, MapCellLedger, StreamId,
-};
-use navigate_visual::{
-    CameraModel, Estimate, Frame, FrameStamp, Localizer, LocalizerConfig, PosePrior,
-    PyramidalMatcher, ReferenceView,
-};
+use navigate_visual::fusion_bridge::EvidenceIndependence;
+use navigate_visual::session::{FrameKey, FusionEligibility, MapCell, MapCellLedger};
 
 use crate::{
-    AcceptanceRecord, AcceptanceSink, DataRequirement, ErrorBudget, MapRefusal, Need, OnboardError,
-    Outcome, ProductReport, ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSpec,
-    SensorSuite,
+    AcceptanceRecord, AcceptanceSink, DataRequirement, MapRefusal, Need, OnboardError, Outcome,
+    ProductReport, ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
 mod belief;
 mod budget;
+mod camera;
 mod config;
 mod keyframes;
 mod map;
 mod names;
 mod view;
 
-pub use config::TerrainConfig;
+pub use belief::BeliefSource;
+pub use config::{TerrainConfig, WorkingCamera, WorkingLimit};
 pub use map::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainMapRequest,
 };
 
-use belief::{Belief, body_position};
-use budget::{ViewGeometry, external_covariance_ned};
+use belief::at_exposure;
+use camera::TerrainCamera;
 use map::TerrainMap;
 pub(crate) use names::MEASUREMENT;
-use names::rejection;
-use view::{NoView, Views, lat_lon};
 
 /// Largest count of map cells whose first fix the navigator records. A
 /// zoom 16 cell is some hundreds of metres on a side, so this covers some
 /// thousands of kilometres of route.
 const MAX_LEDGER_CELLS: usize = 16_384;
-
-/// One declared terrain camera and the state of its capture stream.
-#[derive(Debug, Clone)]
-pub(crate) struct TerrainCamera {
-    sensor: SourceId,
-    camera: CameraModel,
-    calibration: Calibration,
-    mount: CameraMount,
-    calibration_sigma_rad: f64,
-    identity: VisualSourceIdentity,
-    localizer: Localizer<PyramidalMatcher>,
-    /// Count of frames taken; the sequence of the next frame.
-    frames: u64,
-    views: Views,
-}
 
 /// What one frame gave.
 pub(crate) enum Sighting {
@@ -121,196 +99,6 @@ pub(crate) fn admission(label: &FusionEligibility) -> Option<&'static str> {
             FusionEligibility::SharedMapError { .. } => names::SHARED_MAP_ERROR,
             _ => names::UNTRACKED_MAP_CELL,
         }),
-    }
-}
-
-impl TerrainCamera {
-    fn new(spec: &SensorSpec, clock: ClockDomainId) -> Result<Self, OnboardError> {
-        let invalid = |detail: String| OnboardError::Config {
-            field: "terrain camera",
-            detail,
-        };
-        let (
-            Some(imager),
-            Some(mount),
-            ErrorBudget::TerrainCamera {
-                calibration_sigma_rad,
-            },
-        ) = (spec.imager, spec.mount, spec.budget)
-        else {
-            return Err(invalid(format!(
-                "{:?} needs an imager, a mount, and a budget",
-                spec.id
-            )));
-        };
-        if imager.band != SpectralBand::Visible {
-            return Err(OnboardError::UnsupportedBand {
-                sensor: spec.id,
-                band: imager.band,
-            });
-        }
-        // The means does not remove lens distortion. A declared distortion
-        // says that the frames have it, so their geometry would be wrong.
-        if imager.distortion != Distortion::None {
-            return Err(invalid(format!(
-                "{:?} declares a lens distortion; the terrain means takes undistorted frames",
-                spec.id
-            )));
-        }
-        let k = imager.intrinsics;
-        let camera = CameraModel {
-            width: k.width,
-            height: k.height,
-            fx: k.fx,
-            fy: k.fy,
-            cx: k.cx,
-            cy: k.cy,
-        };
-        let usable = calibration_sigma_rad.is_finite() && calibration_sigma_rad >= 0.0;
-        if camera.validate().is_err() || !usable {
-            return Err(invalid(format!("{:?} intrinsics or budget", spec.id)));
-        }
-        Ok(Self {
-            sensor: spec.id,
-            calibration: keyframes::calibration_of(&camera),
-            camera,
-            mount,
-            calibration_sigma_rad,
-            identity: VisualSourceIdentity {
-                source: spec.id,
-                epoch: SourceEpoch::new(0),
-                clock,
-            },
-            localizer: Localizer::new(PyramidalMatcher, LocalizerConfig::default())
-                .map_err(|e| invalid(e.to_string()))?,
-            frames: 0,
-            views: Views::default(),
-        })
-    }
-
-    /// The image of a frame, when its size is the declared size.
-    fn image(&self, width: u32, height: u32, luma: &[u8]) -> Result<GrayImage, OnboardError> {
-        let declared = (self.camera.width, self.camera.height);
-        let image = ((width, height) == declared)
-            .then(|| GrayImage::from_raw(width, height, luma.to_vec()))
-            .flatten();
-        image.ok_or(OnboardError::FrameSize {
-            sensor: self.sensor,
-            declared,
-            frame: (width, height),
-            bytes: luma.len(),
-        })
-    }
-
-    /// Matches one frame and gives the fix, or why there is none.
-    fn sight(
-        &mut self,
-        map: &TerrainMap,
-        ledger: &MapCellLedger,
-        input: &SensorInput,
-        image: GrayImage,
-        solution: Option<&NavigationSolution>,
-    ) -> Result<Sighting, OnboardError> {
-        let sequence = self.frames;
-        self.frames = self.frames.wrapping_add(1);
-        let (acquired, delivered) = (input.acquired_at.as_nanos(), input.delivered_at.as_nanos());
-        let Some(lag_ns) = delivered.checked_sub(acquired) else {
-            return Ok(Sighting::Unused(names::ACQUIRED_AFTER_DELIVERY, None));
-        };
-        let lag_s = lag_ns as f64 * 1e-9;
-        if lag_s > map.config.max_capture_lag_s {
-            return Ok(Sighting::Unused(names::CAPTURE_LAG, None));
-        }
-        let Some(belief) = solution.and_then(|s| Belief::before(s, lag_s)) else {
-            return Ok(Sighting::Unused(names::NO_SOLUTION, None));
-        };
-        let (position_radius_m, attitude_radius_rad) = map.config.search(belief.sigma_h_m, lag_s);
-        let reference = match self.views.reference(
-            map,
-            &self.camera,
-            self.calibration,
-            &self.mount,
-            &belief,
-            position_radius_m,
-        ) {
-            Ok(reference) => reference,
-            Err(NoView::Unused(reason)) => return Ok(Sighting::Unused(reason, None)),
-            Err(NoView::Read(detail)) => {
-                return Err(OnboardError::MapRead {
-                    sensor: self.sensor,
-                    detail,
-                });
-            }
-        };
-        let (view, path) = (&*reference.view, reference.path);
-        let Ok(pose) = belief.camera_in(view.frame, &self.mount) else {
-            return Ok(Sighting::Unused(names::BELIEF_OUT_OF_RANGE, Some(path)));
-        };
-        let prior = PosePrior {
-            pose,
-            position_radius_m,
-            attitude_radius_rad,
-        };
-        let frame = Frame {
-            stamp: FrameStamp {
-                sequence,
-                capture_time_ns: acquired,
-            },
-            camera: self.camera,
-            image,
-        };
-        match self.localizer.estimate_blocking(&frame, view, &prior) {
-            Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, path)),
-            Err(error) => {
-                tracing::debug!(sensor = ?self.sensor, %error, "the terrain frame did not match");
-                Ok(Sighting::Unused(rejection(&error), Some(path)))
-            }
-        }
-    }
-
-    /// The fix of a solved camera pose, when the filter may take it.
-    fn fix(
-        &self,
-        map: &TerrainMap,
-        ledger: &MapCellLedger,
-        mut estimate: Estimate,
-        view: &ReferenceView,
-        path: &'static str,
-    ) -> Sighting {
-        let geometry = ViewGeometry::of(&estimate, view);
-        // The map error of a fix is the error of the imagery that the
-        // camera saw: the cell is that of the matched ground, not of the
-        // vehicle.
-        let axis = estimate.pose.orientation * -Vector3::z();
-        let ground = lat_lon(
-            estimate.frame,
-            estimate.pose.position + axis * geometry.range_m,
-        );
-        let Ok(cell) = MapCell::of_layer(&map.imagery.layer, ground) else {
-            return Sighting::Unused(names::OUTSIDE_GRID, Some(path));
-        };
-        let frame = FrameKey {
-            stream: StreamId(self.sensor.get()),
-            continuity: ContinuityEpoch(0),
-            index: estimate.stamp.sequence,
-        };
-        if let Some(reason) = admission(&ledger.label(&cell, frame)) {
-            return Sighting::Unused(reason, Some(path));
-        }
-        let external = external_covariance_ned(&map.sigmas, self.calibration_sigma_rad, &geometry);
-        estimate.pose.position = body_position(&estimate.pose, &self.mount);
-        match position_fix_observation_composed(&estimate, &self.identity, &external) {
-            Ok(observation) => Sighting::Fix {
-                observation: Box::new(observation),
-                cell,
-                frame,
-                path,
-            },
-            Err(error) => {
-                tracing::debug!(sensor = ?self.sensor, %error, "the terrain fix was not built");
-                Sighting::Unused(names::FIX_REFUSED, Some(path))
-            }
-        }
     }
 }
 
@@ -400,18 +188,35 @@ impl ReferenceNavigator {
         if !self.terrain.has_cameras() {
             return Err(refused(MapRefusal::NoTerrainCamera));
         }
-        let calibrations: Vec<Calibration> = self
+        let cameras: Vec<Intrinsics> = self
             .terrain
             .cameras
             .values()
-            .map(|camera| camera.calibration)
+            .map(|camera| camera.declared)
             .collect();
-        let loaded = map::load(store, request, geoid, &calibrations).map_err(refused)?;
+        let loaded = map::load(store, request, geoid, &cameras).map_err(refused)?;
         for camera in self.terrain.cameras.values_mut() {
-            camera.views = Views::default();
+            camera.reset();
         }
         let map = self.terrain.map.insert(Arc::new(loaded));
         Ok(&map.report)
+    }
+
+    /// The camera of the last reference view and match of the terrain
+    /// camera `sensor`: the working resolution, the ground size of its
+    /// pixels, and what set it. `None` before the first matched frame.
+    #[must_use]
+    pub fn terrain_working_camera(&self, sensor: SourceId) -> Option<WorkingCamera> {
+        self.terrain.cameras.get(&sensor.get())?.working()
+    }
+
+    /// Where the belief of the last frame of the terrain camera `sensor`
+    /// came from: the state of the filter at the exposure, or the solution
+    /// on delivery moved back. `None` before the first frame with a
+    /// belief.
+    #[must_use]
+    pub fn terrain_belief_source(&self, sensor: SourceId) -> Option<BeliefSource> {
+        self.terrain.cameras.get(&sensor.get())?.belief_source()
     }
 
     /// What the navigator loaded as its terrain map, or `None` before a
@@ -444,8 +249,11 @@ impl ReferenceNavigator {
                 sensor: input.sensor,
             });
         };
-        let solution = self.filter.tick(input.delivered_at);
-        let sighting = camera.sight(&map, &self.terrain.ledger, input, image, solution.as_ref())?;
+        let times = (input.acquired_at, input.delivered_at);
+        let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
+            Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,
+            Err(reason) => Sighting::Unused(reason, None),
+        };
         let (outcome, context) = match sighting {
             Sighting::Unused(reason, path) => (Outcome::Unused(reason), path),
             Sighting::Fix {

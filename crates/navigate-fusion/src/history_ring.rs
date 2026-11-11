@@ -47,6 +47,11 @@ impl<T: Copy, const N: usize> HistoryRing<T, N> {
         self.len
     }
 
+    /// Whether the ring holds no entry.
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// The entry at logical position `index`, oldest first.
     pub(crate) fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len {
@@ -82,7 +87,7 @@ impl<T: Copy, const N: usize> HistoryRing<T, N> {
     }
 
     /// Removes the oldest entry.
-    fn pop_front(&mut self) {
+    pub(crate) fn pop_front(&mut self) {
         if self.len == 0 {
             return;
         }
