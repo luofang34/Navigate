@@ -14,6 +14,25 @@ pub enum DataError {
         /// Why it is not usable.
         detail: String,
     },
+    /// A document of another format version. There is one current schema
+    /// and no reader for other versions.
+    #[error("{document} version {found} is not version {supported}")]
+    Version {
+        /// The document kind, for example `package manifest`.
+        document: &'static str,
+        /// The version in the document.
+        found: u32,
+        /// The version that this crate reads.
+        supported: u32,
+    },
+    /// A value that this crate does not know, in a place where an unknown
+    /// value changes the meaning of the data: a body, grid scheme, layer
+    /// kind, encoding, datum, geoid model, or source.
+    #[error("unsupported {field}")]
+    Unsupported {
+        /// The field.
+        field: &'static str,
+    },
     /// The store does not hold a file that the package needs.
     #[error("missing {path}")]
     Missing {
@@ -28,11 +47,10 @@ pub enum DataError {
         /// The message of the store.
         message: String,
     },
-    /// The manifest is not a package manifest of this version, or it is
-    /// not in canonical form.
-    #[error("manifest {path}: {detail}")]
-    Manifest {
-        /// Logical path of the manifest.
+    /// A document does not decode, or is not in canonical form.
+    #[error("document {path}: {detail}")]
+    Document {
+        /// Logical path of the document.
         path: String,
         /// What is wrong.
         detail: String,

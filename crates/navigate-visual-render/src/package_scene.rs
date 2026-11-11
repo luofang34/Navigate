@@ -1,27 +1,32 @@
 //! Render scenes from a navigation data package (ADR-0022, representation
 //! R).
 
-use navigate_data::datum::EllipsoidalHeight;
+use std::collections::BTreeSet;
+
+use navigate_data::index::IndexEntry;
 use navigate_data::tile::tile_lat_lon;
-use navigate_data::{Package, ReadPort, TileAddress, TileRead, VerticalDatum};
+use navigate_data::{
+    EllipsoidalHeight, GeoidModel, LayerKey, Package, ReadPort, Sha256Digest, TileAddress,
+    VerticalDatum, read_blob,
+};
 use navigate_geodesy::GeoidUndulation;
 use navigate_visual::{LocalFrame, MapRevision};
 
 use crate::{AtlasLayout, ImageAtlas, RenderError, RenderScene, TerrainAtlas};
 
-/// The host geoid model and its name, for elevation layers with an
-/// orthometric datum.
-pub type Geoid<'a> = Option<(&'a str, &'a dyn GeoidUndulation)>;
+/// The host geoid model and the model that it implements, for elevation
+/// layers with an orthometric datum.
+pub type Geoid<'a> = Option<(GeoidModel, &'a dyn GeoidUndulation)>;
 
 /// What [`scene_around`] reads from a package.
 #[derive(Clone, Copy, Debug)]
-pub struct SceneRequest<'a> {
-    /// Imagery layer identifier.
-    pub imagery_layer: &'a str,
+pub struct SceneRequest {
+    /// Imagery layer.
+    pub imagery_layer: LayerKey,
     /// Imagery zoom.
     pub imagery_zoom: u32,
-    /// Elevation layer identifier.
-    pub elevation_layer: &'a str,
+    /// Elevation layer.
+    pub elevation_layer: LayerKey,
     /// Elevation zoom.
     pub elevation_zoom: u32,
     /// `[lat, lon]` of the window centre and of the frame anchor, degrees.
@@ -39,6 +44,8 @@ pub struct SceneWindow {
     /// Bound in metres on the height error from an unknown geoid
     /// undulation; zero when the heights are ellipsoidal.
     pub undulation_bound_m: f64,
+    /// Digests of the tile blobs that the scene holds.
+    pub inputs: BTreeSet<Sha256Digest>,
 }
 
 /// Assembles the scene of a square window from the tiles of a package.
@@ -50,9 +57,9 @@ pub struct SceneWindow {
 /// across the antimeridian, a changed or missing blob, and a tile that does
 /// not decode at the declared size.
 pub async fn scene_around<S: ReadPort + ?Sized>(
-    package: &Package,
+    package: &Package<S::File>,
     store: &S,
-    request: &SceneRequest<'_>,
+    request: &SceneRequest,
     geoid: Geoid<'_>,
 ) -> Result<SceneWindow, RenderError> {
     let [lat, lon] = request.centre;
@@ -60,7 +67,7 @@ pub async fn scene_around<S: ReadPort + ?Sized>(
     let datum = package
         .manifest()
         .layer(request.elevation_layer)
-        .and_then(|l| l.vertical_datum.clone())
+        .and_then(|l| l.vertical_datum)
         .ok_or(RenderError::Invalid(
             "elevation layer has no vertical datum",
         ))?;
@@ -68,10 +75,11 @@ pub async fn scene_around<S: ReadPort + ?Sized>(
         window_tiles(request.centre, request.half_side_m, request.imagery_zoom)?;
     let (terrain_layout, terrain_tiles) =
         window_tiles(request.centre, request.half_side_m, request.elevation_zoom)?;
+    let mut inputs = BTreeSet::new();
     let mut imagery = Grid::new(image_layout, 0_u8);
     for address in image_tiles {
-        if let TileRead::Present(bytes) =
-            read(package, store, request.imagery_layer, address).await?
+        if let Some(bytes) =
+            read(package, store, request.imagery_layer, address, &mut inputs).await?
         {
             let luma = decode(&bytes)?.to_luma8();
             imagery.put(address, luma.as_raw())?;
@@ -80,8 +88,14 @@ pub async fn scene_around<S: ReadPort + ?Sized>(
     let mut terrain = Grid::new(terrain_layout, 0.0_f32);
     let mut bound = 0.0_f64;
     for address in terrain_tiles {
-        if let TileRead::Present(bytes) =
-            read(package, store, request.elevation_layer, address).await?
+        if let Some(bytes) = read(
+            package,
+            store,
+            request.elevation_layer,
+            address,
+            &mut inputs,
+        )
+        .await?
         {
             let (heights, tile_bound) = terrain_heights(&bytes, address, &datum, geoid)?;
             bound = bound.max(tile_bound);
@@ -93,7 +107,9 @@ pub async fn scene_around<S: ReadPort + ?Sized>(
     Ok(SceneWindow {
         scene: RenderScene {
             map: MapRevision {
-                release_id: package.release_id().to_owned(),
+                // The release label is in the descriptor, outside the identity;
+                // the identity names the release here.
+                release_id: package.identity().to_string(),
                 manifest_sha256: package.identity().to_string(),
             },
             frame,
@@ -110,16 +126,27 @@ pub async fn scene_around<S: ReadPort + ?Sized>(
         },
         imagery_coverage,
         undulation_bound_m: bound,
+        inputs,
     })
 }
 
+/// The bytes of one tile, or `None` for a gap or an address outside the
+/// coverage. The blob digest goes into `inputs`.
 async fn read<S: ReadPort + ?Sized>(
-    package: &Package,
+    package: &Package<S::File>,
     store: &S,
-    layer: &str,
+    layer: LayerKey,
     address: TileAddress,
-) -> Result<TileRead, RenderError> {
-    Ok(package.tile(store, layer, address).await?)
+    inputs: &mut BTreeSet<Sha256Digest>,
+) -> Result<Option<Vec<u8>>, RenderError> {
+    match package.entry(layer, address).await? {
+        Some(IndexEntry::Tile { blob, bytes }) => {
+            let data = read_blob(store, blob, bytes).await?;
+            inputs.insert(blob);
+            Ok(Some(data))
+        }
+        Some(IndexEntry::Gap) | None => Ok(None),
+    }
 }
 
 fn decode(bytes: &[u8]) -> Result<image::DynamicImage, RenderError> {

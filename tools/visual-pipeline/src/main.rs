@@ -81,11 +81,11 @@ fn package_command() -> Command {
         .arg(path_arg("cache", true))
         .arg(str_arg("imagery-url", None))
         .arg(str_arg("imagery-source", None))
-        .arg(str_arg("imagery-revision", Some("unknown")))
+        .arg(str_arg("imagery-revision", Some("unversioned")))
         .arg(str_arg("imagery-attribution", Some("")))
         .arg(str_arg("dem-url", None))
         .arg(str_arg("dem-source", None))
-        .arg(str_arg("dem-revision", Some("unknown")))
+        .arg(str_arg("dem-revision", Some("unversioned")))
         .arg(str_arg("dem-attribution", Some("")))
         .arg(
             Arg::new("max-tiles")

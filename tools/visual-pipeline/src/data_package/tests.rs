@@ -1,5 +1,5 @@
 use super::*;
-use navigate_data::{GroundHeight, MemoryStore, Package, TileAddress, TileRead};
+use navigate_data::{FetchPort, GroundHeight, MemoryStore, Package, TileAddress, TileRead};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -35,19 +35,21 @@ fn the_template_cache_is_keyed_by_the_tile_key_not_the_url() {
     let cache = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(provider.path().join("15/9")).unwrap();
     std::fs::write(provider.path().join("15/9/4.jpg"), b"tile").unwrap();
+    let spec = layer_spec(
+        LayerKind::Imagery,
+        SourceKey::EsriWorldImagery,
+        Revision::Release(1),
+    );
     let layer = |dir: &Path| TemplateLayer {
         url: format!("file://{}/{{z}}/{{x}}/{{y}}.jpg", dir.display()),
-        source: SourceRef {
-            id: "src".into(),
-            revision: "r1".into(),
-            attribution: String::new(),
-        },
+        spec,
+        attribution: String::new(),
     };
     let fetch =
         TemplateFetch::new(cache.path()).with_layer(LayerKind::Imagery, layer(provider.path()));
     let key = TileKey {
-        source: "src".into(),
-        revision: "r1".into(),
+        source: SourceKey::EsriWorldImagery,
+        revision: Revision::Release(1),
         layer: LayerKind::Imagery,
         address: TileAddress::new(15, 9, 4).unwrap(),
     };
@@ -55,7 +57,12 @@ fn the_template_cache_is_keyed_by_the_tile_key_not_the_url() {
         fetch.fetch_blocking(&key).unwrap(),
         navigate_data::Fetched::Tile(b"tile".to_vec())
     );
-    assert!(cache.path().join("src/r1/15/9/4").is_file());
+    assert!(
+        cache
+            .path()
+            .join("esri_world_imagery/release-1/15/9/4")
+            .is_file()
+    );
     let moved = TemplateFetch::new(cache.path())
         .with_layer(LayerKind::Imagery, layer(Path::new("/nonexistent")));
     assert_eq!(
@@ -103,7 +110,19 @@ fn write_catalog(root: &Path, route: &[[f64; 2]]) {
 /// Packages every tile of a catalog and compares the package with it.
 #[cfg(test)]
 fn assert_catalog_round_trip(root: &Path) -> usize {
-    let catalog = CatalogFetch::open_blocking(root, "catalog-r1").unwrap();
+    let catalog = CatalogFetch::open_blocking(root).unwrap();
+    let specs = [
+        layer_spec(
+            LayerKind::Imagery,
+            SourceKey::EsriWorldImagery,
+            Revision::Unversioned,
+        ),
+        layer_spec(
+            LayerKind::Elevation,
+            SourceKey::MapzenTerrarium,
+            Revision::Unversioned,
+        ),
+    ];
     let mut tiles = navigate_data::PlannedTiles::new();
     for kind in [LayerKind::Imagery, LayerKind::Elevation] {
         let set = tiles.entry(kind).or_default();
@@ -113,9 +132,9 @@ fn assert_catalog_round_trip(root: &Path) -> usize {
     }
     let mut store = MemoryStore::default();
     let summary = pollster::block_on(prepare(
-        "catalog",
         &tiles,
-        &default_templates(),
+        &specs,
+        &Descriptor::default(),
         100_000,
         &catalog,
         &mut store,
@@ -125,20 +144,16 @@ fn assert_catalog_round_trip(root: &Path) -> usize {
     let package = pollster::block_on(Package::open(&store, summary.identity)).unwrap();
     let mut compared = 0;
     for (&kind, addresses) in &tiles {
-        let id = if kind == LayerKind::Imagery {
-            "imagery"
-        } else {
-            "elevation"
-        };
+        let layer = specs.iter().find(|s| s.key.kind == kind).unwrap().key;
         for &a in addresses {
             let key = TileKey {
-                source: String::new(),
-                revision: String::new(),
+                source: layer.source,
+                revision: Revision::Unversioned,
                 layer: kind,
                 address: a,
             };
             let expected = pollster::block_on(catalog.fetch(&key)).unwrap();
-            let read = pollster::block_on(package.tile(&store, id, a)).unwrap();
+            let read = pollster::block_on(package.tile(&store, layer, a)).unwrap();
             match (read, expected) {
                 (TileRead::Present(got), navigate_data::Fetched::Tile(want)) => {
                     assert_eq!(got, want)
@@ -164,4 +179,24 @@ fn a_package_from_the_delaware_catalog_equals_it_tile_for_tile() {
     let home = std::env::var_os("HOME").unwrap();
     let root = Path::new(&home).join("Downloads/delaware-videos/claw/reference-watergap");
     assert!(assert_catalog_round_trip(&root) > 300);
+}
+
+#[test]
+fn sources_and_revisions_parse_from_the_registry_and_one_spelling() {
+    assert_eq!(
+        parse_source("esri_world_imagery").unwrap(),
+        SourceKey::EsriWorldImagery
+    );
+    assert!(parse_source("someone").is_err());
+    assert_eq!(
+        parse_revision("unversioned").unwrap(),
+        Revision::Unversioned
+    );
+    assert_eq!(parse_revision("release:3").unwrap(), Revision::Release(3));
+    assert_eq!(
+        parse_revision("collected:2024-06-01").unwrap(),
+        Revision::Collected(navigate_data::DayNumber::from_ymd(2024, 6, 1).unwrap())
+    );
+    assert!(parse_revision("2024").is_err());
+    assert!(parse_revision("collected:2024-02-30").is_err());
 }

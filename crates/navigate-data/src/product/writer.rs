@@ -1,60 +1,38 @@
-//! Writing a product: blobs first, the manifest last.
+//! Writing product chunks and product lists: blobs first, documents last.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::vec::Vec;
 
+use crate::product::document::{ListEntry, chunk_path, list_path};
 use crate::product::{
-    Calibration, PRODUCT_FORMAT, PRODUCT_FORMAT_VERSION, PlannedPose, ProductEntry, ProductKind,
-    ProductManifest, Recipe, ValidityEnvelope, product_path,
+    CHUNK_FORMAT, ChunkBinding, ChunkEntry, KindName, LIST_FORMAT, PRODUCT_FORMAT_VERSION,
+    PlannedPose, ProductChunk, ProductKind, ProductList, Recipe, canonical,
 };
 use crate::{DataError, Sha256Digest, WritePort, blob_path};
 
-/// Builds one product for one core package.
+/// Builds one product chunk.
 #[derive(Clone, Debug)]
 pub struct ProductWriter {
     kind: ProductKind,
-    core: Sha256Digest,
     recipe: Recipe,
-    calibration: Option<Calibration>,
-    altitude_band: Option<u32>,
-    envelope: Option<ValidityEnvelope>,
-    entries: BTreeMap<String, ProductEntry>,
+    binding: ChunkBinding,
+    entries: BTreeMap<u32, ChunkEntry>,
 }
 
 impl ProductWriter {
-    /// A writer for a product of `kind` from the core package `core`.
+    /// A writer for a chunk of `kind` made with `recipe` for `binding`. The
+    /// binding inputs are sorted and repeats removed.
     #[must_use]
-    pub const fn new(kind: ProductKind, core: Sha256Digest, recipe: Recipe) -> Self {
+    pub fn new(kind: ProductKind, recipe: Recipe, mut binding: ChunkBinding) -> Self {
+        binding.inputs.sort_unstable();
+        binding.inputs.dedup();
         Self {
             kind,
-            core,
             recipe,
-            calibration: None,
-            altitude_band: None,
-            envelope: None,
+            binding,
             entries: BTreeMap::new(),
         }
-    }
-
-    /// Records the camera calibration that the product is made for.
-    #[must_use]
-    pub const fn with_calibration(mut self, calibration: Calibration) -> Self {
-        self.calibration = Some(calibration);
-        self
-    }
-
-    /// Records the altitude band.
-    #[must_use]
-    pub const fn with_altitude_band(mut self, band: u32) -> Self {
-        self.altitude_band = Some(band);
-        self
-    }
-
-    /// Records the validity envelope of each entry.
-    #[must_use]
-    pub const fn with_envelope(mut self, envelope: ValidityEnvelope) -> Self {
-        self.envelope = Some(envelope);
-        self
     }
 
     /// Stores the blob of one entry and declares it.
@@ -65,22 +43,22 @@ impl ProductWriter {
     pub async fn add_entry<W: WritePort + ?Sized>(
         &mut self,
         store: &mut W,
-        key: &str,
+        key: u32,
         pose: Option<PlannedPose>,
         bytes: &[u8],
     ) -> Result<Sha256Digest, DataError> {
-        if self.entries.contains_key(key) {
+        if self.entries.contains_key(&key) {
             return Err(DataError::Invalid {
                 field: "key",
-                detail: String::from(key),
+                detail: alloc::format!("{key} twice"),
             });
         }
         let blob = Sha256Digest::of(bytes);
         store.write(&blob_path(blob), bytes).await?;
         self.entries.insert(
-            String::from(key),
-            ProductEntry {
-                key: String::from(key),
+            key,
+            ChunkEntry {
+                key,
                 pose,
                 blob,
                 bytes: bytes.len() as u64,
@@ -89,48 +67,83 @@ impl ProductWriter {
         Ok(blob)
     }
 
-    /// The manifest that [`Self::seal`] would write.
+    /// The chunk that [`Self::seal`] would write, with its recipe bytes.
     ///
     /// # Errors
     ///
-    /// Refuses a manifest that breaks the rules.
-    pub fn manifest(&self) -> Result<ProductManifest, DataError> {
-        let manifest = ProductManifest {
-            format: String::from(PRODUCT_FORMAT),
+    /// Refuses a chunk that breaks a rule.
+    pub fn chunk(&self) -> Result<(ProductChunk, Vec<u8>), DataError> {
+        let recipe = canonical(&self.recipe, "<recipe>")?;
+        let chunk = ProductChunk {
+            format: String::from(CHUNK_FORMAT),
             version: PRODUCT_FORMAT_VERSION,
-            kind: self.kind,
-            core: self.core,
-            recipe: self.recipe.clone(),
-            calibration: self.calibration,
-            altitude_band: self.altitude_band,
-            envelope: self.envelope,
-            entries: self.entries.values().cloned().collect(),
+            kind: KindName::Known(self.kind),
+            recipe: Sha256Digest::of(&recipe),
+            binding: self.binding.clone(),
+            entries: self.entries.values().copied().collect(),
         };
-        manifest.validate()?;
-        Ok(manifest)
+        chunk.validate()?;
+        Ok((chunk, recipe))
     }
 
-    /// Checks that the store holds each blob, then writes the manifest.
-    /// Returns the product identity.
+    /// Checks that the store holds each entry blob, writes the recipe, then
+    /// the chunk. Returns the chunk digest.
     ///
     /// # Errors
     ///
-    /// Refuses a manifest that breaks the rules, a missing blob, and a
-    /// failed write.
+    /// Refuses a chunk that breaks a rule, a missing blob, and a failed
+    /// write.
     pub async fn seal<W: WritePort + ?Sized>(
         &self,
         store: &mut W,
     ) -> Result<Sha256Digest, DataError> {
-        let manifest = self.manifest()?;
-        for entry in &manifest.entries {
+        let (chunk, recipe) = self.chunk()?;
+        for entry in &chunk.entries {
             let path = blob_path(entry.blob);
             if !store.contains(&path).await? {
                 return Err(DataError::Missing { path });
             }
         }
-        let bytes = manifest.canonical_bytes()?;
-        let identity = Sha256Digest::of(&bytes);
-        store.write(&product_path(identity), &bytes).await?;
-        Ok(identity)
+        store.write(&blob_path(chunk.recipe), &recipe).await?;
+        let (bytes, digest) = chunk.canonical()?;
+        store.write(&chunk_path(digest), &bytes).await?;
+        Ok(digest)
     }
+}
+
+/// Writes the product list of `package` that names `chunks`. Returns the
+/// list digest.
+///
+/// # Errors
+///
+/// Refuses a chunk that the store does not hold and a failed write.
+pub async fn write_list<W: WritePort + ?Sized>(
+    store: &mut W,
+    package: Sha256Digest,
+    chunks: &[(KindName, Sha256Digest)],
+) -> Result<Sha256Digest, DataError> {
+    let mut entries: Vec<ListEntry> = chunks
+        .iter()
+        .map(|(kind, chunk)| ListEntry {
+            kind: kind.clone(),
+            chunk: *chunk,
+        })
+        .collect();
+    entries.sort();
+    entries.dedup();
+    for entry in &entries {
+        let path = chunk_path(entry.chunk);
+        if matches!(entry.kind, KindName::Known(_)) && !store.contains(&path).await? {
+            return Err(DataError::Missing { path });
+        }
+    }
+    let list = ProductList {
+        format: String::from(LIST_FORMAT),
+        version: PRODUCT_FORMAT_VERSION,
+        package,
+        chunks: entries,
+    };
+    let (bytes, digest) = list.canonical()?;
+    store.write(&list_path(digest), &bytes).await?;
+    Ok(digest)
 }

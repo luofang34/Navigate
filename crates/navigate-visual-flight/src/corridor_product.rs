@@ -1,12 +1,17 @@
-//! The `NVKTILE1` corridor bank as a derived product of a navigation data
-//! package (ADR-0022, representation L).
+//! The `NVKTILE1` corridor bank as a derived product chunk (ADR-0022,
+//! representation L).
+//!
+//! The bank tiles are in an east, north, up frame at the centre of the
+//! surface, not on the fixed grid, so one bank is one chunk for its whole
+//! area (`cell` is `null`) and is not reusable cell for cell.
 
 use crate::{corridor_build::CorridorBuildSpec, error::FlightVisualError};
-use navigate_data::product::{ProductKind, ProductWriter, Recipe};
+use navigate_data::product::{
+    ChunkBinding, Precision, ProductKind, ProductWriter, Recipe, inputs_digest,
+};
 use navigate_data::resource::altitude_band;
 use navigate_data::{Sha256Digest, WritePort};
 use navigate_match::{CORRIDOR_MAGIC, CorridorLandmarkBank};
-use std::collections::BTreeMap;
 
 /// What the recipe of a corridor product records beyond the build spec.
 #[derive(Clone, Copy, Debug)]
@@ -18,70 +23,62 @@ pub struct CorridorProductRecipe {
     pub tile_frame_origin: [f64; 2],
 }
 
-/// The complete recipe of a bank built with `spec`.
+fn round(v: f64, scale: f64) -> i64 {
+    (v * scale).round() as i64
+}
+
+/// The complete recipe of a bank built with `spec`, in integer units.
 #[must_use]
 pub fn corridor_recipe(
     spec: &CorridorBuildSpec,
     bank: &CorridorLandmarkBank,
     extra: &CorridorProductRecipe,
 ) -> Recipe {
-    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    let priors: Vec<String> = spec
-        .priors
-        .iter()
-        .map(|p| format!("{},{}", p.lat_deg, p.lon_deg))
-        .collect();
     let [lat, lon] = extra.tile_frame_origin;
-    let parameters = BTreeMap::from([
-        ("tile_size_m".into(), spec.tile_size_m.to_string()),
-        (
-            "corridor_radius_m".into(),
-            spec.corridor_radius_m.to_string(),
-        ),
-        ("nominal_agl_m".into(), spec.nominal_agl_m.to_string()),
-        (
-            "max_landmarks_per_tile".into(),
-            spec.max_landmarks_per_tile.to_string(),
-        ),
-        ("adaptive_stride".into(), spec.adaptive_stride.to_string()),
-        ("include_obliques".into(), spec.include_obliques.to_string()),
-        ("xfeat_runtime".into(), format!("{:?}", spec.xfeat_runtime)),
-        ("priors".into(), priors.join(";")),
-        (
-            "render".into(),
-            "800x600, fx=fy=600, cx=399.5, cy=299.5".into(),
-        ),
-        ("encoder_contract".into(), hex(&bank.encoder_contract)),
-        ("kashin_seed".into(), bank.seed.to_string()),
-        (
-            "tile_frame".into(),
-            format!("east, north, up at {lat}, {lon}"),
-        ),
-        (
-            "heights".into(),
-            "provider-native, not converted to the ellipsoid".into(),
-        ),
-        ("encoding".into(), "NVKTILE1".into()),
-    ]);
-    Recipe {
-        algorithm: "navigate-visual-flight corridor_build XFeat Kashin".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        weights: Some(extra.weights_sha256),
-        precision: "f32".into(),
-        parameters,
+    let mut recipe = Recipe::new(
+        "navigate-visual-flight/corridor-build-xfeat-kashin",
+        env!("CARGO_PKG_VERSION"),
+        Some(extra.weights_sha256),
+        Precision::F32,
+    )
+    .with("tile_size_mm", round(spec.tile_size_m, 1e3))
+    .with("corridor_radius_mm", round(spec.corridor_radius_m, 1e3))
+    .with("nominal_agl_mm", round(spec.nominal_agl_m, 1e3))
+    .with("max_landmarks_per_tile", spec.max_landmarks_per_tile as i64)
+    .with("adaptive_stride_px", i64::from(spec.adaptive_stride))
+    .with("include_obliques", i64::from(spec.include_obliques))
+    .with("render_width_px", 800)
+    .with("render_height_px", 600)
+    .with("render_focal_upx", 600_000_000)
+    .with("kashin_seed", bank.seed as i64)
+    .with("tile_frame_lat_ndeg", round(lat, 1e9))
+    .with("tile_frame_lon_ndeg", round(lon, 1e9))
+    .with("heights_provider_native", 1)
+    .with("encoding_nvktile1", 1);
+    let (words, _) = bank.encoder_contract.as_chunks::<8>();
+    for (i, word) in words.iter().enumerate() {
+        recipe = recipe.with(&format!("encoder_contract_{i}"), i64::from_le_bytes(*word));
     }
+    for (i, prior) in spec.priors.iter().enumerate() {
+        recipe = recipe
+            .with(&format!("prior_{i:04}_lat_ndeg"), round(prior.lat_deg, 1e9))
+            .with(&format!("prior_{i:04}_lon_ndeg"), round(prior.lon_deg, 1e9));
+    }
+    recipe
 }
 
-/// Writes a monolithic `NVKTILE1` bank as a product of the core package
-/// `core`. The bank must name `core` as its source map.
+/// Writes a monolithic `NVKTILE1` bank as a `corridor_landmarks` chunk.
+/// `inputs` are the tile blobs of the surface that the bank was built on;
+/// the bank must name their [`inputs_digest`] as its source map. Returns
+/// the chunk digest.
 ///
 /// # Errors
 ///
-/// Refuses bytes that are not a monolithic bank, a bank made from another
-/// map, and a failed write.
+/// Refuses bytes that are not a monolithic bank, a bank made from other
+/// inputs, and a failed write.
 pub async fn write_corridor_product<W: WritePort + ?Sized>(
     store: &mut W,
-    core: Sha256Digest,
+    inputs: &[Sha256Digest],
     spec: &CorridorBuildSpec,
     extra: &CorridorProductRecipe,
     bank_bytes: &[u8],
@@ -92,17 +89,24 @@ pub async fn write_corridor_product<W: WritePort + ?Sized>(
         ));
     }
     let bank = CorridorLandmarkBank::from_bytes(bank_bytes)?;
-    if bank.catalog_sha256 != core.0 {
-        return Err(FlightVisualError::Invalid(format!(
-            "the bank was made from another map than package {core}"
-        )));
+    if bank.catalog_sha256 != inputs_digest(inputs).0 {
+        return Err(FlightVisualError::Invalid(
+            "the bank was made from other inputs".into(),
+        ));
     }
+    let binding = ChunkBinding {
+        cell: None,
+        altitude_band: Some(altitude_band(spec.nominal_agl_m)),
+        inputs: inputs.to_vec(),
+        route: None,
+        envelope: None,
+        calibration: None,
+    };
     let mut writer = ProductWriter::new(
         ProductKind::CorridorLandmarks,
-        core,
         corridor_recipe(spec, &bank, extra),
-    )
-    .with_altitude_band(altitude_band(spec.nominal_agl_m));
-    writer.add_entry(store, "bank", None, bank_bytes).await?;
+        binding,
+    );
+    writer.add_entry(store, 0, None, bank_bytes).await?;
     Ok(writer.seal(store).await?)
 }

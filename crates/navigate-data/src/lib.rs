@@ -4,19 +4,24 @@
 //! tiles through its own [`FetchPort`], installs blobs in a store, and gives
 //! Navigate a [`ReadPort`]. This crate holds:
 //!
-//! - the package [`Manifest`]: layers, their sources, vertical datums,
-//!   accuracy, tiles, and gaps, in one canonical encoding;
+//! - the package [`Manifest`]: body, ellipsoid, grid scheme, and layers with
+//!   their source, datums, accuracy, correlation zoom, and tile index, in
+//!   one canonical encoding with integers only;
 //! - the package identity: the SHA-256 of the canonical manifest bytes;
+//! - tile indexes: canonical binary blobs that bind each address to a blob
+//!   digest or a gap;
 //! - [`PackageWriter`], which stores each blob by its digest and writes the
-//!   manifest last;
-//! - [`Package`], which checks the manifest on open and each blob on read;
-//! - the fixed global [`grid`] of correlation cells and product tiles;
-//! - derived [`product`] manifests that bind a core package, a recipe, and
-//!   validity envelopes;
-//! - Web Mercator [`tile`] arithmetic and the Terrarium height decoder;
+//!   manifest last, and [`Package`], which checks the manifest and the
+//!   indexes on open and each blob on read;
+//! - the [`Descriptor`]: labels, attribution, and licence text outside the
+//!   identity;
+//! - [`CorrelationKey`]: correlated map error by source and grid cell;
+//! - derived [`product`] chunks, reusable across missions, and per-mission
+//!   product lists;
+//! - Web Mercator tile arithmetic and the Terrarium height decoder;
 //! - the [`resource`] model, which computes what each leg of a flight needs
-//!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned tiles
-//!   through the host port and seals a package.
+//!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned
+//!   tiles through the host port and seals a package.
 //!
 //! The crate is `#![no_std]` with `alloc`. The `std` feature (the default)
 //! adds [`DirectoryStore`]; the `libm` feature supplies the float functions
@@ -31,37 +36,47 @@ extern crate std;
 #[cfg(not(any(feature = "std", feature = "libm")))]
 compile_error!("navigate-data needs the `std` or the `libm` feature for float functions");
 
-pub mod accuracy;
+mod accuracy;
+mod body;
+mod correlation;
 pub mod corridor;
-pub mod datum;
-pub mod digest;
+mod datum;
+mod descriptor;
+mod digest;
 mod error;
-pub mod fetch;
-pub mod grid;
-pub mod layer;
-pub mod manifest;
-pub mod package;
-pub mod prepare;
+mod fetch;
+mod grid;
+pub mod index;
+mod manifest;
+mod package;
+mod prepare;
 pub mod product;
 pub mod resource;
-pub mod store;
+mod source;
+mod store;
 pub mod tile;
 
-pub use accuracy::{Accuracy, Acquisition, Sigma, SurfaceModel};
-pub use datum::{EllipsoidalHeight, UNKNOWN_UNDULATION_BOUND_M, VerticalDatum};
+pub use accuracy::{Accuracy, SurfaceModel};
+pub use body::{Body, DayNumber, EllipsoidId, HorizontalDatum};
+pub use correlation::CorrelationKey;
+pub use datum::{EllipsoidalHeight, GeoidModel, UNKNOWN_UNDULATION_BOUND_M, VerticalDatum};
+pub use descriptor::{Descriptor, LayerLabel};
 pub use digest::Sha256Digest;
 pub use error::DataError;
 pub use fetch::{FetchPort, Fetched, TileKey};
-pub use grid::{CORRELATION_ZOOM, GridCell, GridSpec};
-pub use layer::{Encoding, LayerKind, SourceRef};
-pub use manifest::{Layer, LayerZoom, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION, TileRef};
-pub use package::{Package, PackageWriter, TileRead};
-pub use prepare::{LayerTemplate, PlannedTiles, PrepareSummary, plan_tiles, prepare};
+pub use grid::{DEFAULT_CORRELATION_ZOOM, GridCell, GridScheme};
+pub use manifest::{IndexRef, Layer, LayerKey, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION};
+pub use package::{LayerSpec, Package, PackageWriter, TileRead, read_blob};
+pub use prepare::{PlannedTiles, PrepareSummary, plan_tiles, prepare};
 pub use resource::{
     GroundHeight, LayerLimits, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
     ResourceRequest, ZoomBand, plan_resources,
 };
+pub use source::{Encoding, LayerKind, Revision, SourceKey};
 #[cfg(feature = "std")]
-pub use store::DirectoryStore;
-pub use store::{MemoryStore, ReadPort, WritePort, blob_path, manifest_path};
+pub use store::{DirectoryFile, DirectoryStore};
+pub use store::{
+    MemoryFile, MemoryStore, RandomAccess, ReadPort, WritePort, blob_path, checked_path,
+    descriptor_path, manifest_path, read_all,
+};
 pub use tile::{MAX_TILE_LATITUDE_DEG, MAX_ZOOM, TileAddress};

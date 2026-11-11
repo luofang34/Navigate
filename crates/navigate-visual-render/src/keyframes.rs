@@ -1,14 +1,15 @@
 //! Route keyframes (ADR-0022, representation K): reference views rendered
 //! at planned poses, stored as a derived product with a validity envelope.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
 use navigate_data::product::{
-    Calibration, PlannedPose, ProductKind, ProductWriter, Recipe, ValidityEnvelope,
+    Calibration, ChunkBinding, PlannedPose, Precision, ProductKind, ProductWriter, Recipe,
+    ValidityEnvelope, route_digest,
 };
 use navigate_data::resource::{great_circle_m, point_along};
-use navigate_data::{Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
+use navigate_data::{LayerKey, Package, PlannedLeg, ReadPort, Sha256Digest, WritePort};
 use navigate_visual::{CameraModel, CameraPose, ReferenceView};
 
 use crate::package_scene::{Geoid, SceneRequest, scene_around};
@@ -17,15 +18,16 @@ use crate::{RenderError, SparseSceneSampler};
 /// Magic of one encoded keyframe view.
 pub const KEYFRAME_MAGIC: &[u8; 8] = b"NVKEYV01";
 
-/// How keyframes are made. Each value goes into the product recipe.
+/// How keyframes are made. Each value goes into the product recipe as an
+/// integer.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct KeyframeSpec<'a> {
-    /// Imagery layer identifier.
-    pub imagery_layer: &'a str,
+pub struct KeyframeSpec {
+    /// Imagery layer.
+    pub imagery_layer: LayerKey,
     /// Imagery zoom.
     pub imagery_zoom: u32,
-    /// Elevation layer identifier.
-    pub elevation_layer: &'a str,
+    /// Elevation layer.
+    pub elevation_layer: LayerKey,
     /// Elevation zoom.
     pub elevation_zoom: u32,
     /// The camera.
@@ -52,34 +54,44 @@ pub struct KeyframeSpec<'a> {
     pub altitude_band: u32,
 }
 
-impl KeyframeSpec<'_> {
-    /// The complete recipe of the product.
+fn micro(v: f64) -> i64 {
+    (v * 1e6).round() as i64
+}
+
+impl KeyframeSpec {
+    /// The complete recipe of the product, in integer units.
     #[must_use]
     pub fn recipe(&self) -> Recipe {
-        let parameters = BTreeMap::from([
-            ("imagery_layer".into(), self.imagery_layer.to_owned()),
-            ("imagery_zoom".into(), self.imagery_zoom.to_string()),
-            ("elevation_layer".into(), self.elevation_layer.to_owned()),
-            ("elevation_zoom".into(), self.elevation_zoom.to_string()),
-            ("depression_rad".into(), self.depression_rad.to_string()),
-            ("spacing_m".into(), self.spacing_m.to_string()),
-            ("far_m".into(), self.far_m.to_string()),
-            ("steps".into(), self.steps.to_string()),
-            ("refinements".into(), self.refinements.to_string()),
-            ("stride".into(), self.stride.to_string()),
-            ("luma_edge".into(), self.luma_edge.to_string()),
-            ("depth_edge".into(), self.depth_edge.to_string()),
-            (
-                "encoding".into(),
-                "NVKEYV01 u32 width, u32 height, luma, f32 depth".into(),
-            ),
-        ]);
-        Recipe {
-            algorithm: "navigate-visual-render sparse adaptive ray march".into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            weights: None,
-            precision: "f32".into(),
-            parameters,
+        Recipe::new(
+            "navigate-visual-render/sparse-adaptive-ray-march",
+            env!("CARGO_PKG_VERSION"),
+            None,
+            Precision::F32,
+        )
+        .with("imagery_zoom", i64::from(self.imagery_zoom))
+        .with("elevation_zoom", i64::from(self.elevation_zoom))
+        .with("depression_urad", micro(self.depression_rad))
+        .with("spacing_mm", (self.spacing_m * 1e3).round() as i64)
+        .with("far_mm", (self.far_m * 1e3).round() as i64)
+        .with("steps", i64::from(self.steps))
+        .with("refinements", i64::from(self.refinements))
+        .with("stride_px", i64::from(self.stride))
+        .with("luma_edge", i64::from(self.luma_edge))
+        .with("depth_edge_ppm", micro(f64::from(self.depth_edge)))
+        .with("encoding_nvkeyv01", 1)
+    }
+
+    /// The camera calibration in micro-pixels.
+    #[must_use]
+    pub fn calibration(&self) -> Calibration {
+        let c = &self.camera;
+        Calibration {
+            width: c.width,
+            height: c.height,
+            fx_upx: micro(c.fx),
+            fy_upx: micro(c.fy),
+            cx_upx: micro(c.cx),
+            cy_upx: micro(c.cy),
         }
     }
 }
@@ -157,10 +169,7 @@ fn planned_poses(legs: &[PlannedLeg], spacing_m: f64) -> Vec<PlannedPose> {
             let after = point_along(a, b, (t + step).min(1.0));
             let heading = bearing(before, after);
             let altitude = leg.from[2] + (leg.to[2] - leg.from[2]) * t;
-            poses.push(PlannedPose {
-                position: [lat, lon, altitude],
-                heading_rad: heading,
-            });
+            poses.push(PlannedPose::from_si([lat, lon], altitude, heading));
         }
     }
     poses
@@ -176,47 +185,51 @@ fn bearing([lat1, lon1]: [f64; 2], [lat2, lon2]: [f64; 2]) -> f64 {
 }
 
 /// Renders a keyframe at each planned pose along `legs` from the package
-/// and writes them as a sealed product. The leg altitudes are heights above
-/// the WGS84 ellipsoid. Returns the product identity and the keyframe
-/// count.
+/// and writes them as one sealed product chunk. The leg altitudes are
+/// heights above the WGS84 ellipsoid. The chunk binds the route digest, the
+/// envelope, the altitude band, the calibration, and the digests of the
+/// tile blobs that the views were rendered from. Returns the chunk digest
+/// and the keyframe count.
 ///
 /// # Errors
 ///
 /// Refuses an unusable spec, a scene that the package cannot supply, a
 /// failed render, and a failed write.
 pub async fn build_keyframes<S: ReadPort + WritePort + ?Sized>(
-    package: &Package,
+    package: &Package<S::File>,
     store: &mut S,
     legs: &[PlannedLeg],
-    spec: &KeyframeSpec<'_>,
+    spec: &KeyframeSpec,
     geoid: Geoid<'_>,
 ) -> Result<(Sha256Digest, usize), RenderError> {
     spec.camera.validate()?;
     if !(spec.spacing_m.is_finite() && spec.spacing_m > 0.0) {
         return Err(RenderError::Invalid("keyframe spacing"));
     }
-    let c = &spec.camera;
-    let mut writer = ProductWriter::new(ProductKind::Keyframes, package.identity(), spec.recipe())
-        .with_calibration(Calibration {
-            width: c.width,
-            height: c.height,
-            fx: c.fx,
-            fy: c.fy,
-            cx: c.cx,
-            cy: c.cy,
-        })
-        .with_altitude_band(spec.altitude_band)
-        .with_envelope(spec.envelope);
     let poses = planned_poses(legs, spec.spacing_m);
-    for (index, pose) in poses.iter().enumerate() {
-        let view = render_at(package, &*store, spec, pose, geoid).await?;
-        let key = format!("k{index:06}");
-        writer
-            .add_entry(store, &key, Some(*pose), &encode_view(&view))
-            .await?;
+    let mut views = Vec::with_capacity(poses.len());
+    let mut inputs = BTreeSet::new();
+    for pose in &poses {
+        let (view, used) = render_with_inputs(package, &*store, spec, pose, geoid).await?;
+        inputs.extend(used);
+        views.push(encode_view(&view));
     }
-    let identity = writer.seal(store).await?;
-    Ok((identity, poses.len()))
+    let mut points: Vec<[f64; 3]> = legs.iter().map(|l| l.from).collect();
+    points.extend(legs.last().map(|l| l.to));
+    let binding = ChunkBinding {
+        cell: None,
+        altitude_band: Some(spec.altitude_band),
+        inputs: inputs.into_iter().collect(),
+        route: Some(route_digest(&points)),
+        envelope: Some(spec.envelope),
+        calibration: Some(spec.calibration()),
+    };
+    let mut writer = ProductWriter::new(ProductKind::Keyframes, spec.recipe(), binding);
+    for (key, (pose, view)) in (0_u32..).zip(poses.iter().zip(&views)) {
+        writer.add_entry(store, key, Some(*pose), view).await?;
+    }
+    let digest = writer.seal(store).await?;
+    Ok((digest, poses.len()))
 }
 
 /// Renders the reference view of one planned pose.
@@ -225,13 +238,25 @@ pub async fn build_keyframes<S: ReadPort + WritePort + ?Sized>(
 ///
 /// Refuses a scene that the package cannot supply and a failed render.
 pub async fn render_at<S: ReadPort + ?Sized>(
-    package: &Package,
+    package: &Package<S::File>,
     store: &S,
-    spec: &KeyframeSpec<'_>,
+    spec: &KeyframeSpec,
     pose: &PlannedPose,
     geoid: Geoid<'_>,
 ) -> Result<ReferenceView, RenderError> {
-    let [lat, lon, height] = pose.position;
+    render_with_inputs(package, store, spec, pose, geoid)
+        .await
+        .map(|(view, _)| view)
+}
+
+async fn render_with_inputs<S: ReadPort + ?Sized>(
+    package: &Package<S::File>,
+    store: &S,
+    spec: &KeyframeSpec,
+    pose: &PlannedPose,
+    geoid: Geoid<'_>,
+) -> Result<(ReferenceView, BTreeSet<Sha256Digest>), RenderError> {
+    let ([lat, lon], height, heading) = pose.to_si();
     let request = SceneRequest {
         imagery_layer: spec.imagery_layer,
         imagery_zoom: spec.imagery_zoom,
@@ -243,7 +268,7 @@ pub async fn render_at<S: ReadPort + ?Sized>(
     let window = scene_around(package, store, &request, geoid).await?;
     let camera_pose = CameraPose {
         position: window.scene.frame.local([lat, lon, height])?,
-        orientation: camera_orientation(pose.heading_rad, spec.depression_rad),
+        orientation: camera_orientation(heading, spec.depression_rad),
     };
     let sampler = SparseSceneSampler::new(&window.scene, spec.far_m, spec.steps, spec.refinements)?;
     let (view, _) = sampler.render_adaptive(
@@ -253,7 +278,7 @@ pub async fn render_at<S: ReadPort + ?Sized>(
         spec.luma_edge,
         spec.depth_edge,
     )?;
-    Ok(view)
+    Ok((view, window.inputs))
 }
 
 #[cfg(test)]

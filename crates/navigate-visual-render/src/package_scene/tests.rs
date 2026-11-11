@@ -1,14 +1,14 @@
 use super::*;
-use crate::test_package::{CENTRE, synthetic_package};
+use crate::test_package::{CENTRE, ELEVATION, IMAGERY, synthetic_package};
 use navigate_contract::Ellipsoid;
 use navigate_geodesy::ZeroUndulation;
 
 #[cfg(test)]
-fn request() -> SceneRequest<'static> {
+fn request() -> SceneRequest {
     SceneRequest {
-        imagery_layer: "imagery",
+        imagery_layer: IMAGERY,
         imagery_zoom: 15,
-        elevation_layer: "elevation",
+        elevation_layer: ELEVATION,
         elevation_zoom: 12,
         centre: CENTRE,
         half_side_m: 1_500.0,
@@ -33,7 +33,7 @@ fn a_scene_window_carries_the_package_identity_and_the_datum_bound() {
         &package,
         &store,
         &request(),
-        Some(("egm96", &zero)),
+        Some((GeoidModel::Egm96, &zero)),
     ))
     .unwrap();
     assert_eq!(named.undulation_bound_m, 0.0);
@@ -59,10 +59,19 @@ fn gaps_leave_pixels_uncovered_and_a_changed_tile_is_refused() {
         window.imagery_coverage
     );
     let (mut store, package) = synthetic_package(&[]);
-    for (path, bytes) in store.files.iter_mut() {
-        if path.starts_with("chunks/") {
-            *bytes = b"changed".to_vec();
-        }
+    let tiles: Vec<String> = store
+        .paths()
+        .filter(|p| p.starts_with("chunks/"))
+        .map(String::from)
+        .collect();
+    let index_blobs: Vec<String> = package
+        .manifest()
+        .layers
+        .iter()
+        .map(|l| navigate_data::blob_path(l.index.blob))
+        .collect();
+    for path in tiles.iter().filter(|p| !index_blobs.contains(p)) {
+        store.replace(path, b"changed");
     }
     assert!(pollster::block_on(scene_around(&package, &store, &request(), None)).is_err());
 }

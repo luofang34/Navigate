@@ -3,10 +3,11 @@
 //! and its complete recipe.
 
 use image::{ImageFormat, Rgb, RgbImage};
-use navigate_data::product::{Product, ProductKind};
+use navigate_data::product::{KindName, ProductKind, inputs_digest, open_chunk, read_recipe};
 use navigate_data::{
-    Accuracy, DirectoryStore, Encoding, Layer, LayerKind, Package, PackageWriter, Sha256Digest,
-    SourceRef, TileAddress, VerticalDatum,
+    Accuracy, DEFAULT_CORRELATION_ZOOM, Descriptor, DirectoryFile, DirectoryStore, Encoding,
+    GeoidModel, HorizontalDatum, LayerKey, LayerKind, LayerSpec, Package, PackageWriter, Revision,
+    Sha256Digest, SourceKey, TileAddress, VerticalDatum,
 };
 use navigate_match::{CorridorLandmarkBank, WeightTensor, Weights};
 use navigate_visual_flight::canonical::PriorWaypoint;
@@ -89,37 +90,38 @@ fn png(image: &RgbImage) -> Vec<u8> {
     out.into_inner()
 }
 
+const IMAGERY: LayerKey = LayerKey {
+    kind: LayerKind::Imagery,
+    source: SourceKey::Synthetic,
+};
+const ELEVATION: LayerKey = LayerKey {
+    kind: LayerKind::Elevation,
+    source: SourceKey::Synthetic,
+};
+
 #[cfg(test)]
-fn layer(id: &str, kind: LayerKind, datum: Option<VerticalDatum>) -> Layer {
-    Layer {
-        id: id.into(),
-        kind,
-        source: SourceRef {
-            id: format!("synthetic-{id}"),
-            revision: "1".into(),
-            attribution: String::new(),
-        },
+fn layer(key: LayerKey, datum: Option<VerticalDatum>) -> LayerSpec {
+    LayerSpec {
+        key,
+        revision: Revision::Unversioned,
+        horizontal_datum: HorizontalDatum::Wgs84,
+        vertical_datum: datum,
         encoding: Encoding::Png,
         tile_pixels: 256,
-        vertical_datum: datum,
         accuracy: Accuracy::unknown(),
-        zooms: Vec::new(),
+        correlation_zoom: DEFAULT_CORRELATION_ZOOM,
     }
 }
 
 /// The synthetic terrain of the corridor suite, as a package.
 #[cfg(test)]
-fn write_package(store: &mut DirectoryStore) -> Package {
-    let mut writer = PackageWriter::new("corridor");
-    writer
-        .add_layer(layer("imagery", LayerKind::Imagery, None))
-        .unwrap();
+fn write_package(store: &mut DirectoryStore) -> Package<DirectoryFile> {
+    let mut writer = PackageWriter::new();
+    writer.add_layer(layer(IMAGERY, None)).unwrap();
     let datum = VerticalDatum::Orthometric {
-        geoid_model: "egm96".into(),
+        geoid: GeoidModel::Egm96,
     };
-    writer
-        .add_layer(layer("elevation", LayerKind::Elevation, Some(datum)))
-        .unwrap();
+    writer.add_layer(layer(ELEVATION, Some(datum))).unwrap();
     let dem = RgbImage::from_fn(256, 256, |x, y| {
         Rgb([128, (((x * 3 + y * 5) % 40) as u8).saturating_add(160), 0])
     });
@@ -133,7 +135,7 @@ fn write_package(store: &mut DirectoryStore) -> Package {
                 centre12.y.wrapping_add_signed(oy),
             )
             .unwrap();
-            pollster::block_on(writer.add_tile(store, "elevation", a, &png(&dem))).unwrap();
+            pollster::block_on(writer.add_tile(store, ELEVATION, a, &png(&dem))).unwrap();
             let salt = ((ox + 2) * 53 + (oy + 2) * 97) as u32;
             let img = RgbImage::from_fn(256, 256, |x, y| {
                 let h1 = ((x.wrapping_mul(37) ^ y.wrapping_mul(73) ^ salt) & 0x7f) as u8;
@@ -155,10 +157,10 @@ fn write_package(store: &mut DirectoryStore) -> Package {
                 centre14.y.wrapping_add_signed(oy),
             )
             .unwrap();
-            pollster::block_on(writer.add_tile(store, "imagery", a, &png(&img))).unwrap();
+            pollster::block_on(writer.add_tile(store, IMAGERY, a, &png(&img))).unwrap();
         }
     }
-    let identity = pollster::block_on(writer.seal(store)).unwrap();
+    let identity = pollster::block_on(writer.seal(store, &Descriptor::default())).unwrap();
     pollster::block_on(Package::open(store, identity)).unwrap()
 }
 
@@ -185,7 +187,7 @@ fn spec(dir: &Path, weights: &Path) -> CorridorBuildSpec {
 }
 
 #[test]
-fn a_corridor_bank_built_on_a_package_is_a_product_of_that_package() {
+fn a_corridor_bank_built_on_package_tiles_is_a_chunk_bound_to_those_tiles() {
     let dir = tempfile::tempdir().unwrap();
     let weights = dir.path().join("xfeat.safetensors");
     let weight_bytes = synthetic_xfeat_weights().to_safetensors(false).unwrap();
@@ -193,17 +195,25 @@ fn a_corridor_bank_built_on_a_package_is_a_product_of_that_package() {
     let mut store = DirectoryStore::new(dir.path().join("store"));
     let package = write_package(&mut store);
     let layers = SurfaceLayers {
-        imagery_layer: "imagery",
+        imagery_layer: IMAGERY,
         imagery_zoom: 14,
-        elevation_layer: "elevation",
+        elevation_layer: ELEVATION,
         elevation_zoom: 12,
     };
-    let surface = pollster::block_on(Surface::from_package(&package, &store, &layers)).unwrap();
-    assert_eq!(surface.catalog_sha256, package.identity().to_string());
+    let (surface, inputs) =
+        pollster::block_on(Surface::from_package(&package, &store, &layers)).unwrap();
+    let inputs: Vec<Sha256Digest> = inputs.into_iter().collect();
+    // Nine imagery tiles and nine identical elevation tiles (one blob).
+    assert_eq!(inputs.len(), 10);
+    assert_eq!(surface.catalog_sha256, inputs_digest(&inputs).to_string());
 
     let spec = spec(dir.path(), &weights);
-    let stats = build_corridor_bank_on_surface(&spec, &surface, package.identity().0).unwrap();
+    let stats = build_corridor_bank_on_surface(&spec, &surface, inputs_digest(&inputs).0).unwrap();
     assert!(stats.tiles >= 1, "{stats:?}");
+    assert_eq!(
+        stats.xfeat_weights_sha256,
+        Sha256Digest::of(&weight_bytes).0
+    );
     let bank_bytes = std::fs::read(&spec.output_bank_path).unwrap();
     let extra = CorridorProductRecipe {
         weights_sha256: Sha256Digest::of(&weight_bytes),
@@ -211,44 +221,43 @@ fn a_corridor_bank_built_on_a_package_is_a_product_of_that_package() {
     };
     let id = pollster::block_on(write_corridor_product(
         &mut store,
-        package.identity(),
+        &inputs,
         &spec,
         &extra,
         &bank_bytes,
     ))
     .unwrap();
 
-    let product = pollster::block_on(Product::open(&store, id, &package)).unwrap();
-    let manifest = product.manifest();
-    assert_eq!(manifest.kind, ProductKind::CorridorLandmarks);
-    assert_eq!(
-        manifest.recipe.weights,
-        Some(Sha256Digest::of(&weight_bytes))
-    );
+    let chunk = pollster::block_on(open_chunk(&store, id)).unwrap();
+    assert_eq!(chunk.kind, KindName::Known(ProductKind::CorridorLandmarks));
+    assert!(chunk.applies_to(&pollster::block_on(package.blobs()).unwrap()));
+    assert_eq!(chunk.binding.altitude_band, Some(3));
+    assert_eq!(chunk.binding.cell, None);
+    let recipe = pollster::block_on(read_recipe(&store, chunk.recipe)).unwrap();
+    assert_eq!(recipe.weights, Some(Sha256Digest::of(&weight_bytes)));
     for key in [
-        "tile_size_m",
-        "nominal_agl_m",
+        "tile_size_mm",
+        "nominal_agl_mm",
         "kashin_seed",
-        "encoder_contract",
-        "tile_frame",
-        "xfeat_runtime",
+        "encoder_contract_0",
+        "tile_frame_lat_ndeg",
+        "prior_0000_lat_ndeg",
     ] {
-        assert!(manifest.recipe.parameters.contains_key(key), "{key}");
+        assert!(recipe.parameters.contains_key(key), "{key}");
     }
-    assert_eq!(manifest.altitude_band, Some(3));
-    let entry = manifest.entries[0].clone();
+    let entry = chunk.entries[0];
     let bank = CorridorLandmarkBank::from_bytes(
-        &pollster::block_on(product.entry_bytes(&store, &entry)).unwrap(),
+        &pollster::block_on(chunk.entry_bytes(&store, &entry)).unwrap(),
     )
     .unwrap();
-    assert_eq!(bank.catalog_sha256, package.identity().0);
+    assert_eq!(bank.catalog_sha256, inputs_digest(&inputs).0);
     assert!(bank.total_landmarks() >= 32);
 
-    let other = Sha256Digest::of(b"another package");
+    let other = [Sha256Digest::of(b"another tile")];
     assert!(
         pollster::block_on(write_corridor_product(
             &mut store,
-            other,
+            &other,
             &spec,
             &extra,
             &bank_bytes

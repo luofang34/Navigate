@@ -6,7 +6,10 @@ use navigate_visual_pipeline::{
     PipelineError, PipelineMatcher, build_reference_catalog_zoom,
     clock::seed_live_prior,
     compose_survey_debrief,
-    data_package::{PackageOptions, TemplateLayer, build_package_blocking},
+    data_package::{
+        PackageOptions, TemplateLayer, build_package_blocking, layer_spec, parse_revision,
+        parse_source,
+    },
     export_preview, export_publication, freeze_anchors, interpolate_flight_priors,
     json_file::write_json,
     prepare_photo_testset,
@@ -50,14 +53,17 @@ fn matcher_from(args: &ArgMatches) -> Result<PipelineMatcher, PipelineError> {
     PipelineMatcher::from_options(&backend, model, lg)
 }
 
-fn layer(args: &ArgMatches, prefix: &str) -> Result<TemplateLayer, PipelineError> {
+fn layer(
+    args: &ArgMatches,
+    prefix: &str,
+    kind: navigate_data::LayerKind,
+) -> Result<TemplateLayer, PipelineError> {
+    let source = parse_source(&req::<String>(args, &format!("{prefix}-source"))?)?;
+    let revision = parse_revision(&req::<String>(args, &format!("{prefix}-revision"))?)?;
     Ok(TemplateLayer {
         url: req(args, &format!("{prefix}-url"))?,
-        source: navigate_data::SourceRef {
-            id: req(args, &format!("{prefix}-source"))?,
-            revision: req(args, &format!("{prefix}-revision"))?,
-            attribution: req(args, &format!("{prefix}-attribution"))?,
-        },
+        spec: layer_spec(kind, source, revision),
+        attribution: req(args, &format!("{prefix}-attribution"))?,
     })
 }
 
@@ -66,8 +72,8 @@ fn package_options(args: &ArgMatches) -> Result<PackageOptions, PipelineError> {
         plan: req(args, "plan")?,
         store: req(args, "store")?,
         cache: req(args, "cache")?,
-        imagery: layer(args, "imagery")?,
-        elevation: layer(args, "dem")?,
+        imagery: layer(args, "imagery", navigate_data::LayerKind::Imagery)?,
+        elevation: layer(args, "dem", navigate_data::LayerKind::Elevation)?,
         max_tiles: req(args, "max-tiles")?,
         plan_only: args.get_flag("plan-only"),
     })

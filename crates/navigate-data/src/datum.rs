@@ -6,8 +6,6 @@
 //! reader reports [`EllipsoidalHeight::UnknownUndulation`] with a bound;
 //! it never takes an orthometric height as an ellipsoidal height.
 
-use alloc::string::String;
-
 use navigate_contract::Ellipsoid;
 use navigate_geodesy::{GeoidUndulation, orthometric_to_ellipsoidal_m};
 use serde::{Deserialize, Serialize};
@@ -16,20 +14,35 @@ use serde::{Deserialize, Serialize};
 /// geoid is between approximately −107 m and +86 m.
 pub const UNKNOWN_UNDULATION_BOUND_M: f64 = 107.0;
 
+/// A geoid model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeoidModel {
+    /// EGM96.
+    Egm96,
+    /// EGM2008.
+    Egm2008,
+    /// A model that this crate does not know.
+    #[serde(other)]
+    Unsupported,
+}
+
 /// The vertical reference of the heights in an elevation layer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum VerticalDatum {
-    /// Heights above the WGS84 ellipsoid.
+    /// Heights above the ellipsoid of the body.
     Ellipsoidal,
-    /// Heights above a geoid, for example mean sea level of `egm96`.
+    /// Heights above a geoid, for example mean sea level of EGM96.
     Orthometric {
-        /// Name of the geoid model.
-        geoid_model: String,
+        /// The geoid model.
+        geoid: GeoidModel,
     },
     /// No one states the datum.
     Unknown,
+    /// A datum that this crate does not know.
+    #[serde(other)]
+    Unsupported,
 }
 
 /// A height above the WGS84 ellipsoid, or why the reader cannot give one.
@@ -49,8 +62,8 @@ pub enum EllipsoidalHeight {
 
 impl VerticalDatum {
     /// The ellipsoidal height of a stored height at a position in radians.
-    /// `geoid` is the host model and its name. A model with another name
-    /// than the datum, or no model, gives
+    /// `geoid` is the host model and the model it implements. Another model
+    /// than the datum names, or no model, gives
     /// [`EllipsoidalHeight::UnknownUndulation`].
     #[must_use]
     pub fn to_ellipsoidal<M: GeoidUndulation + ?Sized>(
@@ -58,7 +71,7 @@ impl VerticalDatum {
         height_m: f64,
         latitude_rad: f64,
         longitude_rad: f64,
-        geoid: Option<(&str, &M)>,
+        geoid: Option<(GeoidModel, &M)>,
     ) -> EllipsoidalHeight {
         let unknown = EllipsoidalHeight::UnknownUndulation {
             height_m,
@@ -66,8 +79,8 @@ impl VerticalDatum {
         };
         match self {
             Self::Ellipsoidal => EllipsoidalHeight::Known(height_m),
-            Self::Orthometric { geoid_model } => geoid
-                .filter(|(name, _)| *name == geoid_model.as_str())
+            Self::Orthometric { geoid: wanted } => geoid
+                .filter(|(model, _)| *model == *wanted && *wanted != GeoidModel::Unsupported)
                 .and_then(|(_, model)| {
                     orthometric_to_ellipsoidal_m(
                         model,
@@ -78,7 +91,7 @@ impl VerticalDatum {
                     )
                 })
                 .map_or(unknown, EllipsoidalHeight::Known),
-            Self::Unknown => unknown,
+            Self::Unknown | Self::Unsupported => unknown,
         }
     }
 }

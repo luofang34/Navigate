@@ -1,12 +1,19 @@
-//! Derived products: files that a builder makes from the layers of a core
-//! package.
+//! Derived products in two levels (ADR-0022 §12).
 //!
-//! A product is outside the core identity. Its manifest binds the core
-//! package identity, the complete recipe, the camera calibration where it
-//! applies, the altitude band, and the validity envelope of each entry.
-//! The SHA-256 of the canonical product manifest is the product identity.
-//! Its blobs are in the same `chunks/` store as the core blobs, and its
-//! manifest is at `products/<sha256>.json`.
+//! - A **product chunk** (`products/chunks/<sha256>.json`) is identified by
+//!   its kind, the digest of its complete [`Recipe`], its grid cell, its
+//!   altitude band, the sorted digests of the input blobs it was computed
+//!   from, and, for route products, the route digest and the validity
+//!   envelope. It names no package, so any mission whose package holds the
+//!   same input blobs can use it.
+//! - A **product list** (`products/lists/<sha256>.json`) is per mission. It
+//!   names the package identity and the chunks. It is outside the core
+//!   identity.
+//!
+//! The documents follow the canonical rule of the manifest: integers only,
+//! closed names or digests as strings, sorted collections, explicit nulls.
+//! A product kind that this crate does not know is carried in a list and
+//! enumerated as unknown, but never read.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -14,33 +21,33 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DataError, Package, ReadPort, Sha256Digest, blob_path};
+use crate::{DataError, GridCell, Sha256Digest};
 
+mod document;
 mod writer;
-pub use writer::ProductWriter;
+pub use document::{
+    ListEntry, ProductChunk, ProductList, chunk_path, list_path, open_chunk, open_list, read_recipe,
+};
+pub use writer::{ProductWriter, write_list};
 
-/// The `format` of a product manifest.
-pub const PRODUCT_FORMAT: &str = "navigate.data.product";
-/// The `version` that this crate writes and reads.
+/// The `format` of a product chunk.
+pub const CHUNK_FORMAT: &str = "navigate.data.product_chunk";
+/// The `format` of a product list.
+pub const LIST_FORMAT: &str = "navigate.data.product_list";
+/// The `format` of a recipe.
+pub const RECIPE_FORMAT: &str = "navigate.data.recipe";
+/// The one version of the three product documents.
 pub const PRODUCT_FORMAT_VERSION: u32 = 1;
 
-/// Logical path of a product manifest.
-#[must_use]
-pub fn product_path(identity: Sha256Digest) -> String {
-    alloc::format!("products/{identity}.json")
-}
-
-/// What a product holds. The kinds after `CorridorLandmarks` are reserved
-/// names: no builder makes them yet.
+/// The product kinds that this crate knows. Kinds after
+/// [`ProductKind::CorridorLandmarks`] are reserved names with no builder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ProductKind {
-    /// Route keyframes: reference views or features made at planned poses,
-    /// each with a validity envelope (representation K).
+    /// Route keyframes: reference views at planned poses (representation K).
     Keyframes,
-    /// Sparse 3D landmarks with descriptors (representation L), for example
-    /// the `NVKTILE1` corridor bank.
+    /// Sparse 3D landmarks with descriptors, for example the `NVKTILE1`
+    /// corridor bank (representation L).
     CorridorLandmarks,
     /// Reserved: terrain slope grids.
     TerrainSlopes,
@@ -56,70 +63,154 @@ pub enum ProductKind {
     EphemerisSegments,
 }
 
-/// The complete recipe of a product: what made it, with each parameter.
+/// A product kind as a list carries it: a known kind, or the name of a kind
+/// that this crate does not know.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum KindName {
+    /// A known kind.
+    Known(ProductKind),
+    /// An unknown kind, carried and enumerated, never read.
+    Unknown(String),
+}
+
+/// Numeric precision of a recipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Precision {
+    /// 16-bit floats.
+    F16,
+    /// 32-bit floats.
+    F32,
+    /// 64-bit floats.
+    F64,
+}
+
+/// The complete recipe of a product: what made it, with each parameter as
+/// an integer in the unit that its name states (for example `spacing_mm`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
-    /// Name of the algorithm, for example `sparse-ray-march`.
+    /// [`RECIPE_FORMAT`].
+    pub format: String,
+    /// [`PRODUCT_FORMAT_VERSION`].
+    pub version: u32,
+    /// Name of the algorithm, a constant of the builder code.
     pub algorithm: String,
-    /// Version of the algorithm code, for example the crate version.
-    pub version: String,
+    /// Version of the builder code.
+    pub code_version: String,
     /// Digest of the model weights, if the algorithm uses a model.
     pub weights: Option<Sha256Digest>,
-    /// Numeric precision, for example `f32`.
-    pub precision: String,
-    /// Each parameter, by name, as text.
-    pub parameters: BTreeMap<String, String>,
+    /// Numeric precision.
+    pub precision: Precision,
+    /// Each parameter, by name.
+    pub parameters: BTreeMap<String, i64>,
 }
 
-/// Pinhole calibration of the camera that a product is made for.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+impl Recipe {
+    /// A recipe of the current format.
+    #[must_use]
+    pub fn new(
+        algorithm: &str,
+        code_version: &str,
+        weights: Option<Sha256Digest>,
+        precision: Precision,
+    ) -> Self {
+        Self {
+            format: String::from(RECIPE_FORMAT),
+            version: PRODUCT_FORMAT_VERSION,
+            algorithm: String::from(algorithm),
+            code_version: String::from(code_version),
+            weights,
+            precision,
+            parameters: BTreeMap::new(),
+        }
+    }
+
+    /// The same recipe with one more parameter.
+    #[must_use]
+    pub fn with(mut self, name: &str, value: i64) -> Self {
+        self.parameters.insert(String::from(name), value);
+        self
+    }
+}
+
+/// Pinhole calibration in micro-pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Calibration {
-    /// Image width in pixels.
+    /// Image width, pixels.
     pub width: u32,
-    /// Image height in pixels.
+    /// Image height, pixels.
     pub height: u32,
-    /// Focal length along `x` in pixels.
-    pub fx: f64,
-    /// Focal length along `y` in pixels.
-    pub fy: f64,
-    /// Principal point `x` in pixels.
-    pub cx: f64,
-    /// Principal point `y` in pixels.
-    pub cy: f64,
+    /// Focal length along `x`, micro-pixels.
+    pub fx_upx: i64,
+    /// Focal length along `y`, micro-pixels.
+    pub fy_upx: i64,
+    /// Principal point `x`, micro-pixels.
+    pub cx_upx: i64,
+    /// Principal point `y`, micro-pixels.
+    pub cy_upx: i64,
 }
 
-/// The poses in which an entry is valid, about its planned pose.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// The poses in which a route product entry is valid, about its planned
+/// pose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidityEnvelope {
-    /// Largest horizontal distance from the planned position, metres.
-    pub lateral_m: f64,
-    /// Largest height difference from the planned position, metres.
-    pub vertical_m: f64,
-    /// Largest heading difference from the planned heading, radians.
-    pub heading_rad: f64,
+    /// Largest horizontal distance, millimetres.
+    pub lateral_mm: u32,
+    /// Largest height difference, millimetres.
+    pub vertical_mm: u32,
+    /// Largest heading difference, microradians.
+    pub heading_urad: u32,
 }
 
-/// The planned pose of an entry.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// A planned pose in integers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedPose {
-    /// `[lat, lon]` in degrees and the height above the WGS84 ellipsoid in
-    /// metres.
-    pub position: [f64; 3],
-    /// Heading in radians, clockwise from north.
-    pub heading_rad: f64,
+    /// Latitude, nanodegrees.
+    pub lat_ndeg: i64,
+    /// Longitude, nanodegrees.
+    pub lon_ndeg: i64,
+    /// Height above the WGS84 ellipsoid, millimetres.
+    pub height_mm: i64,
+    /// Heading clockwise from north, microradians.
+    pub heading_urad: i64,
 }
 
-/// One entry of a product.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl PlannedPose {
+    /// The pose of `[lat, lon]` in degrees, a height in metres, and a heading
+    /// in radians, rounded to the integer units.
+    #[must_use]
+    pub fn from_si([lat, lon]: [f64; 2], height_m: f64, heading_rad: f64) -> Self {
+        let round = |v: f64| navigate_geodesy::float_math::round(v) as i64;
+        Self {
+            lat_ndeg: round(lat * 1e9),
+            lon_ndeg: round(lon * 1e9),
+            height_mm: round(height_m * 1e3),
+            heading_urad: round(heading_rad * 1e6),
+        }
+    }
+
+    /// `([lat, lon]` degrees, height metres, heading radians`)`.
+    #[must_use]
+    pub fn to_si(&self) -> ([f64; 2], f64, f64) {
+        (
+            [self.lat_ndeg as f64 * 1e-9, self.lon_ndeg as f64 * 1e-9],
+            self.height_mm as f64 * 1e-3,
+            self.heading_urad as f64 * 1e-6,
+        )
+    }
+}
+
+/// One entry of a chunk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProductEntry {
-    /// Key of the entry, unique in the product, for example a grid cell
-    /// identifier or a keyframe index.
-    pub key: String,
+pub struct ChunkEntry {
+    /// Key of the entry, unique and increasing in the chunk.
+    pub key: u32,
     /// The planned pose, where the entry has one.
     pub pose: Option<PlannedPose>,
     /// Digest of the blob.
@@ -128,172 +219,23 @@ pub struct ProductEntry {
     pub bytes: u64,
 }
 
-/// The manifest of one product.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// What a chunk is for: the binding that decides whether a mission can use
+/// it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProductManifest {
-    /// [`PRODUCT_FORMAT`].
-    pub format: String,
-    /// [`PRODUCT_FORMAT_VERSION`].
-    pub version: u32,
-    /// What the product holds.
-    pub kind: ProductKind,
-    /// The identity of the core package that the product comes from.
-    pub core: Sha256Digest,
-    /// The complete recipe.
-    pub recipe: Recipe,
+pub struct ChunkBinding {
+    /// The grid cell, for cell products.
+    pub cell: Option<GridCell>,
+    /// The altitude band.
+    pub altitude_band: Option<u32>,
+    /// The sorted digests of the input blobs.
+    pub inputs: Vec<Sha256Digest>,
+    /// The digest of the route, for route products.
+    pub route: Option<Sha256Digest>,
+    /// The validity envelope of each entry, for route products.
+    pub envelope: Option<ValidityEnvelope>,
     /// The camera calibration, where it applies.
     pub calibration: Option<Calibration>,
-    /// The altitude band, where it applies.
-    pub altitude_band: Option<u32>,
-    /// The validity envelope of each entry about its planned pose.
-    pub envelope: Option<ValidityEnvelope>,
-    /// The entries, in key order.
-    pub entries: Vec<ProductEntry>,
-}
-
-impl ProductManifest {
-    /// Checks the format, the order, and the values.
-    ///
-    /// # Errors
-    ///
-    /// Refuses another format or version, an empty algorithm, entries out
-    /// of key order or repeated, and values that are not finite.
-    pub fn validate(&self) -> Result<(), DataError> {
-        let invalid = |field: &'static str, detail: String| DataError::Invalid { field, detail };
-        if self.format != PRODUCT_FORMAT || self.version != PRODUCT_FORMAT_VERSION {
-            return Err(invalid(
-                "format",
-                alloc::format!("{} {}", self.format, self.version),
-            ));
-        }
-        if self.recipe.algorithm.is_empty() || self.recipe.version.is_empty() {
-            return Err(invalid(
-                "recipe",
-                String::from("empty algorithm or version"),
-            ));
-        }
-        if self
-            .entries
-            .windows(2)
-            .any(|w| matches!(w, [a, b] if a.key >= b.key))
-        {
-            return Err(invalid("entries", String::from("not in strict key order")));
-        }
-        let envelope_ok = self.envelope.is_none_or(|e| {
-            [e.lateral_m, e.vertical_m, e.heading_rad]
-                .iter()
-                .all(|v| v.is_finite() && *v >= 0.0)
-        });
-        let poses_ok = self
-            .entries
-            .iter()
-            .filter_map(|e| e.pose)
-            .all(|p| p.position.iter().all(|v| v.is_finite()) && p.heading_rad.is_finite());
-        if !envelope_ok || !poses_ok {
-            return Err(invalid("entries", String::from("a value is not finite")));
-        }
-        Ok(())
-    }
-
-    /// The canonical bytes: compact JSON in declaration order.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a manifest that [`Self::validate`] refuses.
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, DataError> {
-        self.validate()?;
-        serde_json::to_vec(self).map_err(|error| DataError::Manifest {
-            path: String::from("<memory>"),
-            detail: alloc::format!("{error}"),
-        })
-    }
-}
-
-/// A product whose manifest has been checked against its core package.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Product {
-    manifest: ProductManifest,
-    identity: Sha256Digest,
-}
-
-impl Product {
-    /// Opens the product `identity` for the core package `core`.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a missing manifest, a digest that differs, a manifest that
-    /// is not canonical, and a product of another core package.
-    pub async fn open<S: ReadPort + ?Sized>(
-        store: &S,
-        identity: Sha256Digest,
-        core: &Package,
-    ) -> Result<Self, DataError> {
-        let path = product_path(identity);
-        let bytes = store
-            .read(&path)
-            .await?
-            .ok_or_else(|| DataError::Missing { path: path.clone() })?;
-        if Sha256Digest::of(&bytes) != identity {
-            return Err(DataError::Integrity {
-                path,
-                detail: String::from("product manifest digest differs"),
-            });
-        }
-        let refuse = |detail: String| DataError::Manifest {
-            path: path.clone(),
-            detail,
-        };
-        let manifest: ProductManifest =
-            serde_json::from_slice(&bytes).map_err(|e| refuse(alloc::format!("{e}")))?;
-        if manifest.canonical_bytes()? != bytes {
-            return Err(refuse(String::from("the bytes are not in canonical form")));
-        }
-        if manifest.core != core.identity() {
-            return Err(refuse(alloc::format!(
-                "made from core {}, not {}",
-                manifest.core,
-                core.identity()
-            )));
-        }
-        Ok(Self { manifest, identity })
-    }
-
-    /// The manifest.
-    #[must_use]
-    pub const fn manifest(&self) -> &ProductManifest {
-        &self.manifest
-    }
-
-    /// The product identity.
-    #[must_use]
-    pub const fn identity(&self) -> Sha256Digest {
-        self.identity
-    }
-
-    /// Reads the blob of one entry and checks it.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a missing or changed blob.
-    pub async fn entry_bytes<S: ReadPort + ?Sized>(
-        &self,
-        store: &S,
-        entry: &ProductEntry,
-    ) -> Result<Vec<u8>, DataError> {
-        let path = blob_path(entry.blob);
-        let bytes = store
-            .read(&path)
-            .await?
-            .ok_or_else(|| DataError::Missing { path: path.clone() })?;
-        if bytes.len() as u64 != entry.bytes || Sha256Digest::of(&bytes) != entry.blob {
-            return Err(DataError::Integrity {
-                path,
-                detail: alloc::format!("entry {} does not agree with the manifest", entry.key),
-            });
-        }
-        Ok(bytes)
-    }
 }
 
 /// What a navigator does with one product at load.
@@ -307,6 +249,38 @@ pub enum ProductUse {
     Fallback(String),
     /// The navigator refuses the product, for the stated reason.
     Refusal(String),
+}
+
+/// The digest of a route: the canonical JSON of its points as
+/// `[lat_ndeg, lon_ndeg, height_mm]`, in fly order.
+#[must_use]
+pub fn route_digest(points: &[[f64; 3]]) -> Sha256Digest {
+    let round = |v: f64| navigate_geodesy::float_math::round(v) as i64;
+    let integers: Vec<[i64; 3]> = points
+        .iter()
+        .map(|[lat, lon, h]| [round(lat * 1e9), round(lon * 1e9), round(h * 1e3)])
+        .collect();
+    Sha256Digest::of(&serde_json::to_vec(&integers).unwrap_or_default())
+}
+
+/// The digest of a set of input blobs: the SHA-256 of their sorted digests
+/// in binary. A builder that writes one source identity into its own
+/// format (for example the `NVKTILE1` bank) writes this one.
+#[must_use]
+pub fn inputs_digest(inputs: &[Sha256Digest]) -> Sha256Digest {
+    let mut sorted = inputs.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let bytes: Vec<u8> = sorted.iter().flat_map(|d| d.0).collect();
+    Sha256Digest::of(&bytes)
+}
+
+/// Canonical bytes of a product document.
+pub(crate) fn canonical<T: Serialize>(document: &T, path: &str) -> Result<Vec<u8>, DataError> {
+    serde_json::to_vec(document).map_err(|error| DataError::Document {
+        path: String::from(path),
+        detail: alloc::format!("{error}"),
+    })
 }
 
 #[cfg(test)]

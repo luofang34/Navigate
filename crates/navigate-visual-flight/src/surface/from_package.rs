@@ -3,20 +3,23 @@
 use super::{Surface, enu_frame_on};
 use crate::error::FlightVisualError;
 use image::RgbImage;
+use navigate_data::index::IndexEntry;
+use navigate_data::product::inputs_digest;
 use navigate_data::tile::{decode_terrarium_m, tile_lat_lon};
-use navigate_data::{Package, ReadPort, TileAddress, TileRead};
+use navigate_data::{LayerKey, Package, ReadPort, Sha256Digest, TileAddress, read_blob};
 use navigate_geodesy::BodyEllipsoid;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// The layers and zoom levels of a package that a [`Surface`] reads.
 #[derive(Clone, Copy, Debug)]
-pub struct SurfaceLayers<'a> {
-    /// Imagery layer identifier.
-    pub imagery_layer: &'a str,
+pub struct SurfaceLayers {
+    /// Imagery layer.
+    pub imagery_layer: LayerKey,
     /// Imagery zoom.
     pub imagery_zoom: u32,
-    /// Elevation layer identifier.
-    pub elevation_layer: &'a str,
+    /// Elevation layer.
+    pub elevation_layer: LayerKey,
     /// Elevation zoom.
     pub elevation_zoom: u32,
 }
@@ -24,18 +27,21 @@ pub struct SurfaceLayers<'a> {
 impl Surface {
     /// Loads the tiles of two layers of a package at one zoom each. The
     /// heights stay as the provider supplies them, as in
-    /// [`Surface::from_catalog`]. `catalog_sha256` is the package identity,
-    /// so each product made from the surface binds the package.
+    /// [`Surface::from_catalog`]. `catalog_sha256` is the inputs digest of
+    /// the tile blobs that the surface holds
+    /// (`navigate_data::product::inputs_digest`), so a product made from
+    /// the surface binds its inputs, not one mission package. Returns the
+    /// surface and the input blob digests.
     ///
     /// # Errors
     ///
     /// Refuses a layer or zoom that the package does not hold, a changed or
     /// missing blob, and a tile that does not decode.
     pub async fn from_package<S: ReadPort + ?Sized>(
-        package: &Package,
+        package: &Package<S::File>,
         store: &S,
-        layers: &SurfaceLayers<'_>,
-    ) -> Result<Self, FlightVisualError> {
+        layers: &SurfaceLayers,
+    ) -> Result<(Self, BTreeSet<Sha256Digest>), FlightVisualError> {
         let imagery = read_layer(package, store, layers.imagery_layer, layers.imagery_zoom).await?;
         let dem = read_layer(
             package,
@@ -58,7 +64,7 @@ impl Surface {
             f64::NEG_INFINITY,
             f64::NEG_INFINITY,
         ];
-        for (address, bytes) in &imagery {
+        for (address, _, bytes) in &imagery {
             let image = decode(bytes)?;
             let [north, west] =
                 tile_lat_lon(f64::from(address.x), f64::from(address.y), address.zoom);
@@ -77,7 +83,7 @@ impl Surface {
         }
         let mut dem_tiles = HashMap::new();
         let (mut low, mut high, mut side) = (f64::INFINITY, f64::NEG_INFINITY, 256_u32);
-        for (address, bytes) in &dem {
+        for (address, _, bytes) in &dem {
             let image = decode(bytes)?;
             side = image.width().max(1);
             let heights: Vec<f32> = image
@@ -98,14 +104,19 @@ impl Surface {
         let origin_lon = 0.5 * (bbox[0] + bbox[2]);
         let (origin_ecef, enu_from_ecef) =
             enu_frame_on(BodyEllipsoid::WGS84, origin_lat, origin_lon);
-        Ok(Self {
+        let inputs: BTreeSet<Sha256Digest> = imagery
+            .iter()
+            .chain(&dem)
+            .map(|(_, blob, _)| *blob)
+            .collect();
+        let surface = Self {
             ellipsoid: BodyEllipsoid::WGS84,
             origin_lat,
             origin_lon,
             bbox,
             imagery_zoom: layers.imagery_zoom,
             dem_zoom: layers.elevation_zoom,
-            catalog_sha256: package.identity().to_string(),
+            catalog_sha256: inputs_digest(&inputs.iter().copied().collect::<Vec<_>>()).to_string(),
             min_elev_m: low,
             max_elev_m: high,
             origin_ecef,
@@ -113,7 +124,8 @@ impl Surface {
             imagery_tiles,
             dem_tiles,
             dem_tile_size: side,
-        })
+        };
+        Ok((surface, inputs))
     }
 }
 
@@ -127,24 +139,15 @@ fn decode(bytes: &[u8]) -> Result<RgbImage, FlightVisualError> {
 }
 
 async fn read_layer<S: ReadPort + ?Sized>(
-    package: &Package,
+    package: &Package<S::File>,
     store: &S,
-    layer_id: &str,
+    layer: LayerKey,
     zoom: u32,
-) -> Result<Vec<(TileAddress, Vec<u8>)>, FlightVisualError> {
-    let layer = package.manifest().layer(layer_id).ok_or_else(|| {
-        FlightVisualError::Invalid(format!(
-            "package {} has no layer {layer_id}",
-            package.identity()
-        ))
-    })?;
+) -> Result<Vec<(TileAddress, Sha256Digest, Vec<u8>)>, FlightVisualError> {
     let mut out = Vec::new();
-    for level in layer.zooms.iter().filter(|z| z.zoom == zoom) {
-        for tile in &level.tiles {
-            let address = TileAddress::new(zoom, tile.x, tile.y)?;
-            if let TileRead::Present(bytes) = package.tile(store, layer_id, address).await? {
-                out.push((address, bytes));
-            }
+    for (address, entry) in package.layer_entries(layer).await? {
+        if let (true, IndexEntry::Tile { blob, bytes }) = (address.zoom == zoom, entry) {
+            out.push((address, blob, read_blob(store, blob, bytes).await?));
         }
     }
     Ok(out)

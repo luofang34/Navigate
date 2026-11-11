@@ -1,6 +1,8 @@
 use super::*;
+use crate::manifest::tests::{elevation_spec, imagery_spec};
 use crate::resource::{GroundHeight, LayerLimits, PlannedCamera, ResourceRequest, plan_resources};
-use crate::{MemoryStore, Package, SourceRef, TileRead};
+use crate::{LayerKey, MemoryStore, Package, Revision, TileRead};
+use alloc::string::String;
 use core::cell::Cell;
 use pollster::block_on;
 
@@ -17,19 +19,10 @@ impl GroundHeight for Flat {
 /// multiple of 5, which the source does not have.
 #[cfg(test)]
 struct Synthetic {
-    revision: &'static str,
     calls: Cell<usize>,
 }
 
 impl FetchPort for Synthetic {
-    fn source(&self, layer: LayerKind) -> Option<SourceRef> {
-        Some(SourceRef {
-            id: alloc::format!("synthetic-{layer:?}"),
-            revision: self.revision.into(),
-            attribution: "test".into(),
-        })
-    }
-
     async fn fetch(&self, key: &TileKey) -> Result<Fetched, String> {
         self.calls.set(self.calls.get() + 1);
         let a = key.address;
@@ -76,59 +69,57 @@ fn planned() -> PlannedTiles {
 }
 
 #[cfg(test)]
-fn templates() -> Vec<LayerTemplate> {
+fn specs(revision: Revision) -> Vec<LayerSpec> {
     alloc::vec![
-        LayerTemplate {
-            id: "imagery".into(),
-            kind: LayerKind::Imagery,
-            encoding: Encoding::Jpeg,
-            tile_pixels: 256,
-            vertical_datum: None,
-            accuracy: Accuracy::unknown(),
+        LayerSpec {
+            revision,
+            ..imagery_spec()
         },
-        LayerTemplate {
-            id: "elevation".into(),
-            kind: LayerKind::Elevation,
-            encoding: Encoding::TerrariumPng,
-            tile_pixels: 256,
-            vertical_datum: Some(VerticalDatum::Orthometric {
-                geoid_model: "egm96".into()
-            }),
-            accuracy: Accuracy::unknown(),
-        },
+        LayerSpec {
+            revision,
+            ..elevation_spec()
+        }
     ]
+}
+
+#[cfg(test)]
+fn run(
+    source: &Synthetic,
+    revision: Revision,
+    max: usize,
+    store: &mut MemoryStore,
+) -> Result<PrepareSummary, DataError> {
+    block_on(prepare(
+        &planned(),
+        &specs(revision),
+        &Descriptor::default(),
+        max,
+        source,
+        store,
+    ))
 }
 
 #[test]
 fn a_prepared_package_holds_each_planned_tile_or_its_gap() {
     let tiles = planned();
     let source = Synthetic {
-        revision: "r1",
         calls: Cell::new(0),
     };
     let mut store = MemoryStore::default();
-    let summary = block_on(prepare(
-        "trip",
-        &tiles,
-        &templates(),
-        10_000,
-        &source,
-        &mut store,
-    ))
-    .unwrap();
+    let summary = run(&source, Revision::Unversioned, 10_000, &mut store).unwrap();
     let total: usize = tiles.values().map(BTreeSet::len).sum();
     assert_eq!(summary.tiles + summary.gaps, total);
     assert_eq!(source.calls.get(), total);
     assert!(summary.gaps > 0 && summary.tiles > summary.gaps);
     let package = block_on(Package::open(&store, summary.identity)).unwrap();
     for (&kind, addresses) in &tiles {
-        let id = if kind == LayerKind::Imagery {
-            "imagery"
-        } else {
-            "elevation"
-        };
+        let key: LayerKey = specs(Revision::Unversioned)
+            .iter()
+            .find(|s| s.key.kind == kind)
+            .unwrap()
+            .key;
         for &a in addresses {
-            let read = block_on(package.tile(&store, id, a)).unwrap();
+            let read = block_on(package.tile(&store, key, a)).unwrap();
             if kind == LayerKind::Imagery && a.x.is_multiple_of(5) {
                 assert_eq!(read, TileRead::Gap);
             } else {
@@ -140,43 +131,35 @@ fn a_prepared_package_holds_each_planned_tile_or_its_gap() {
 
 #[test]
 fn the_identity_follows_the_content_and_the_source_revision() {
-    let tiles = planned();
-    let run = |revision: &'static str| {
+    let identity = |revision| {
         let source = Synthetic {
-            revision,
             calls: Cell::new(0),
         };
-        let mut store = MemoryStore::default();
-        block_on(prepare(
-            "trip",
-            &tiles,
-            &templates(),
-            10_000,
-            &source,
-            &mut store,
-        ))
-        .unwrap()
-        .identity
+        run(&source, revision, 10_000, &mut MemoryStore::default())
+            .unwrap()
+            .identity
     };
-    assert_eq!(run("r1"), run("r1"));
-    assert_ne!(run("r1"), run("r2"));
+    assert_eq!(
+        identity(Revision::Release(1)),
+        identity(Revision::Release(1))
+    );
+    assert_ne!(
+        identity(Revision::Release(1)),
+        identity(Revision::Release(2))
+    );
+    assert_ne!(
+        identity(Revision::Release(1)),
+        identity(Revision::Unversioned)
+    );
 }
 
 #[test]
 fn an_oversized_plan_is_refused_before_a_fetch() {
     let source = Synthetic {
-        revision: "r1",
         calls: Cell::new(0),
     };
     let mut store = MemoryStore::default();
-    let refused = block_on(prepare(
-        "trip",
-        &planned(),
-        &templates(),
-        3,
-        &source,
-        &mut store,
-    ));
+    let refused = run(&source, Revision::Unversioned, 3, &mut store);
     assert!(matches!(
         refused,
         Err(DataError::Invalid {
@@ -185,21 +168,18 @@ fn an_oversized_plan_is_refused_before_a_fetch() {
         })
     ));
     assert_eq!(source.calls.get(), 0);
-    assert!(store.files.is_empty());
-    let mut only_imagery = templates();
-    only_imagery.truncate(1);
-    assert!(
-        block_on(prepare(
-            "trip",
-            &planned(),
-            &only_imagery,
-            10_000,
-            &source,
-            &mut store
-        ))
-        .is_err()
-    );
-    assert!(store.files.keys().all(|p| p.starts_with("chunks/")));
+    assert_eq!(store.paths().count(), 0);
+    let only_imagery = &specs(Revision::Unversioned)[..1];
+    let missing = block_on(prepare(
+        &planned(),
+        only_imagery,
+        &Descriptor::default(),
+        10_000,
+        &source,
+        &mut store,
+    ));
+    assert!(missing.is_err());
+    assert_eq!(store.paths().count(), 0);
 }
 
 #[test]

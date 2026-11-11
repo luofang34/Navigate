@@ -1,13 +1,13 @@
 use super::*;
-use crate::test_package::{CENTRE, synthetic_package};
-use navigate_data::product::Product;
+use crate::test_package::{CENTRE, ELEVATION, IMAGERY, synthetic_package};
+use navigate_data::product::{KindName, open_chunk, read_recipe};
 
 #[cfg(test)]
-fn spec() -> KeyframeSpec<'static> {
+fn spec() -> KeyframeSpec {
     KeyframeSpec {
-        imagery_layer: "imagery",
+        imagery_layer: IMAGERY,
         imagery_zoom: 15,
-        elevation_layer: "elevation",
+        elevation_layer: ELEVATION,
         elevation_zoom: 12,
         camera: CameraModel {
             width: 160,
@@ -20,9 +20,9 @@ fn spec() -> KeyframeSpec<'static> {
         depression_rad: std::f64::consts::FRAC_PI_2,
         spacing_m: 400.0,
         envelope: ValidityEnvelope {
-            lateral_m: 120.0,
-            vertical_m: 80.0,
-            heading_rad: 0.2,
+            lateral_mm: 120_000,
+            vertical_mm: 80_000,
+            heading_urad: 200_000,
         },
         far_m: 1_500.0,
         steps: 32,
@@ -55,29 +55,24 @@ fn keyframes_are_a_product_of_the_core_with_their_recipe_and_envelope() {
     ))
     .unwrap();
     assert_eq!(count, 3, "1 km leg at 400 m spacing");
-    let product = pollster::block_on(Product::open(&store, identity, &package)).unwrap();
-    let manifest = product.manifest();
-    assert_eq!(manifest.kind, ProductKind::Keyframes);
-    assert_eq!(manifest.core, package.identity());
-    assert_eq!(manifest.envelope, Some(spec().envelope));
-    assert_eq!(
-        manifest
-            .recipe
-            .parameters
-            .get("spacing_m")
-            .map(String::as_str),
-        Some("400")
-    );
-    assert_eq!(manifest.calibration.map(|c| c.width), Some(160));
-    let first = manifest.entries[0].clone();
+    let chunk = pollster::block_on(open_chunk(&store, identity)).unwrap();
+    assert_eq!(chunk.kind, KindName::Known(ProductKind::Keyframes));
+    assert_eq!(chunk.binding.envelope, Some(spec().envelope));
+    assert_eq!(chunk.binding.calibration.map(|c| c.width), Some(160));
+    assert!(chunk.binding.route.is_some());
+    assert!(chunk.applies_to(&pollster::block_on(package.blobs()).unwrap()));
+    assert!(!chunk.binding.inputs.is_empty());
+    let recipe = pollster::block_on(read_recipe(&store, chunk.recipe)).unwrap();
+    assert_eq!(recipe.parameters.get("spacing_mm"), Some(&400_000));
+    let first = chunk.entries[0];
     let pose = first.pose.unwrap();
+    let (_, _, heading) = pose.to_si();
     assert!(
-        (pose.heading_rad - std::f64::consts::FRAC_PI_2).abs() < 1e-3,
-        "{}",
-        pose.heading_rad
+        (heading - std::f64::consts::FRAC_PI_2).abs() < 1e-3,
+        "{heading}"
     );
     let (w, h, luma, depth) =
-        decode_view(&pollster::block_on(product.entry_bytes(&store, &first)).unwrap()).unwrap();
+        decode_view(&pollster::block_on(chunk.entry_bytes(&store, &first)).unwrap()).unwrap();
     assert_eq!((w, h), (160, 120));
     let fresh = pollster::block_on(render_at(&package, &store, &spec(), &pose, None)).unwrap();
     assert_eq!(luma, fresh.image.as_raw().clone());

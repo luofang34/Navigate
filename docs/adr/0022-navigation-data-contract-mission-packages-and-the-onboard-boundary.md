@@ -22,20 +22,17 @@ At this time, each host gets and identifies this data in its own way:
   fetches data, but its rule is "consumes, never fetches".
 - The NVKTILE1 corridor bank and the NVKBANK1 reference bank bind to the
   catalog digest. They do not record the complete recipe that made them.
-- A simulator that tested a visual prototype selected tiles, fetched them,
-  and built atlases itself. A copy of this logic in each host can differ
-  from the onboard logic.
+- `navigate-visual` keys a `MapCell` by the digest of the map manifest
+  (`session/evidence.rs`). Two packages cut from the same imagery then
+  count as independent evidence, but their registration error is common.
 
 ADR-0007 gave the map release identity to Pilotage. ADR-0010 named one
 package identity for the display and the reference renderer, but no crate
 computes it. Pilotage ADR-0044 defines one logical store with a
 content-addressed `Offline/chunks/<sha256>` layout, a package store that is
-the only writer, and a read port that starts from the `navigate-data` read
-port. `pilotage-svs-db` holds signed aeronautical database packages.
-
-`navigate-data`, `navigate-data-fs`, and `navigate-imagery` had a read port,
-storage classes, a coverage planner, and a chunked package. No crate used
-them, and they were removed.
+the only writer, and an asynchronous read port with `open`, `len`, and
+`read_at`. `pilotage-svs-db` holds signed aeronautical database packages
+with integer accuracy fields and day numbers.
 
 Each host also composes the filter, the route sequencer, and the guidance
 law itself. A simulator that scores Navigate must then copy this
@@ -45,130 +42,229 @@ composition, and the score then does not apply to Navigate.
 
 ### 1. Navigate consumes and never fetches
 
-The host fetches, decides trust, and installs. The planner and the package
-store of the host do this work. Navigate owns:
+The host fetches, decides trust, and installs. Navigate owns:
 
-- the data contract: the manifest, its canonical encoding, the digests, the
-  integrity checks, and an asynchronous read port that needs no file
-  system;
-- the content specification of each navigation layer and each derived
-  product;
+- the data contract: the manifest, its canonical encoding, the digests,
+  the integrity checks, and the read port;
+- the content specification of each layer and each derived product;
 - the resource model that computes what a flight needs;
-- the builders that turn supplied raw layers into derived products.
+- the builders that turn supplied layers into derived products.
 
 ### 2. One light crate holds the contract
 
 `navigate-data` holds the contract. It has no `burn`, no render types, and
 no network client. It is `#![no_std]` with `alloc`, and it compiles for
 `wasm32-unknown-unknown` and for the bare-metal targets of the core crates.
-The `std` feature adds a directory store.
+The `std` feature adds a directory store. The crate allocates (manifests
+and tile indexes are variable in size), so it is not a zero-heap core
+crate of ADR-0015 and ADR-0016.
 
 The crate has two ports:
 
 - `FetchPort`: the host implements it. A builder calls it when the host
-  prepares a package. A tile key is (source identifier, source revision,
-  layer, zoom, column, row). The key names the content, not a URL. Map
-  caches key tiles by URL, and the URL of one tile is different between
-  hosts.
-- `ReadPort`: the host implements it on its store. `Package` reads tiles by
-  layer through it.
+  prepares a package. A tile key is (source, revision, layer kind, zoom,
+  column, row). The key names the content, not a URL.
+- `ReadPort`: the host implements it on its store. It has the shape of the
+  ADR-0044 read port: asynchronous `open` of a logical path, then `len` and
+  `read_at` of a byte range on the open file. A reader reads a range of a
+  tile index without reading the whole index.
 
-`navigate_locate::TileSource` stays where it is until a later change binds
-the locate pipeline to packages.
+### 3. What is hashed
 
-### 3. Packages are content addressed
+The package identity is the SHA-256 of the canonical manifest bytes. The
+manifest holds only content and its physical meaning:
 
-- Each blob is stored at `chunks/<sha256>`, the layout of ADR-0044.
-  Packages that cover the same ground share blobs.
-- A mission package is a canonical manifest at `packages/<sha256>.json`.
-  The manifest refers to blobs by digest. The writer writes the manifest
-  last, so a store without the manifest holds no package.
-- The SHA-256 of the canonical manifest is the package identity. It covers
-  the layers, their sources, the vertical datums, the grid, the declared
-  accuracy, the tiles, and the gaps. A host fills
-  `navigate_visual::MapRevision::manifest_sha256` with this identity.
-- The canonical encoding is compact JSON with a fixed field order and
-  sorted content. A reader encodes the decoded manifest again and refuses
-  bytes that differ. Fetch times, host paths, and URLs are not in the
-  manifest.
-- `Package::open` checks the manifest digest. Each tile read checks the
-  digest and the size of its blob.
-- Each layer declares its coverage as tiles and gaps. A read in a gap gives
-  `Gap`, and a read outside the coverage gives `Outside`. A missing tile is
+| In the identity | Why |
+|---|---|
+| format and version | A reader must refuse a format it does not know. |
+| body, ellipsoid | Heights and positions have no meaning without them. |
+| grid scheme | The tile addresses have no meaning without it. |
+| per layer: kind, source key, source revision, horizontal datum, vertical datum, encoding, tile pixels, accuracy, correlation zoom | These change what a tile means and how much a navigator can trust it. |
+| per layer: the digest, size, and counts of its tile index blob | The index binds each address to a blob digest or a gap. |
+
+| Not in the identity | Where it is |
+|---|---|
+| release identifier, layer labels | the descriptor |
+| attribution text, licence, terms | the descriptor |
+| fetch time, host paths, URLs, notes | the descriptor |
+
+The descriptor is a JSON file beside the manifest at
+`packages/<identity>.descriptor.json`. The writer writes it, and a reader
+reads it for display and licence text. It does not change the identity,
+and Navigate never uses it to navigate.
+
+A source key comes from a small registry in `navigate-data`, for example
+`esri-world-imagery` and `mapzen-terrarium`. A new provider is a new
+registry entry. A source revision is a provider release number, a
+collection date, or `unversioned`. The blob digests are the content
+identity; the revision only tells a reader when the provider changes
+content under the same key.
+
+### 4. Canonical encoding
+
+The canonical encoding is compact JSON (no spaces) with these rules:
+
+- Object fields are in the declared order of the type. Unknown fields are
+  refused.
+- Numbers are integers only. Lengths are in millimetres, angles in
+  microradians or microdegrees, rates in millimetres per year, dates in
+  days from 2000-01-01 (`DayNumber`). There is no floating-point value in
+  a hashed document.
+- Strings are only names from closed vocabularies (snake case) or digests
+  (64 lower-case hexadecimal digits).
+- Collections are sorted in a stated order, with no repeats.
+- Each optional value is present as `null` when it is absent. No field is
+  left out.
+
+A reader decodes the manifest, encodes it again, and refuses bytes that
+differ. The same rules apply to tile indexes (binary), product chunks, and
+product lists.
+
+### 5. Tile indexes
+
+Each layer has one tile index blob. It is a canonical binary file:
+the magic `NVDIDX01`, then records of 49 bytes, sorted by zoom, row, and
+column: zoom (u8), column (u32), row (u32), size (u64, zero for a gap), and
+blob digest (32 bytes, zero for a gap). Integers are little endian. The manifest holds the index
+digest, its size, and its tile and gap counts. A reader checks the index
+digest once, then reads records by range and binary search.
+
+Measured (release build, Apple M-series, in-memory store; the 1 000 km
+route is 43 790 zoom 17 imagery tiles in a 2.2 km strip and 1 096 zoom 14
+elevation tiles):
+
+| Package | Inline JSON list: manifest, open | Index blobs: manifest, indexes, open, one lookup |
+|---|---|---|
+| Zaragoza (494 + 15 tiles) | 54 713 B, 0.35 ms | 987 B, 24 957 B, 0.02 ms, 0.7 µs |
+| 1 000 km at 300 m above ground | 4 756 513 B, 33 ms | 995 B, 2 199 430 B, 1.2 ms, 0.8 µs |
+
+The open time with index blobs includes the check of each index digest.
+The manifest stays under 1 KB for any route, and a vehicle reads index
+records by range.
+
+### 6. Package identity, missions, and blobs
+
+- Each blob is stored at `chunks/<sha256>`, the ADR-0044 layout. Packages
+  that cover the same ground share blobs.
+- A mission package is a manifest at `packages/<sha256>.json`. The writer
+  writes the blobs, then the tile indexes, then the manifest last. A store
+  without the manifest holds no package.
+- A host fills `navigate_visual::MapRevision::manifest_sha256` with the
+  package identity.
+- `Package::open` checks the manifest digest and its canonical form. Each
+  tile read checks the digest and size of its blob. A read in a gap gives
+  `Gap`; a read outside the coverage gives `Outside`. A missing tile is
   never skipped silently.
+- Retirement: a blob is live while an installed manifest, tile index,
+  product chunk, or product list refers to it. The host store computes
+  this from its installed documents and deletes the other blobs. Navigate
+  never deletes.
 
-### 4. Accuracy, correlation, and datum are data
+### 7. Accuracy, correlation, and datum
 
-- Each layer states its horizontal and vertical sigma, the date of
-  collection, the growth of the error per year, and the surface model (bare
-  earth or first return). Each value can be `unknown`.
-- A fixed global grid defines the correlation cells: the XYZ tiles at zoom
-  16 (approximately 460 m at 41° latitude). The grid has no anchor, so the
-  cells and the `MapCell` identifiers are the same in each mission. Derived
-  products tile on the same pyramid.
-- Each elevation layer states its vertical datum: `ellipsoidal`,
-  `orthometric` with a geoid model name, or `unknown`. Heights are stored as
-  the provider supplies them. The reader converts them with a
-  `navigate_geodesy::GeoidUndulation` model that the host supplies. If the
-  host has no model with that name, the reader gives `UnknownUndulation`
-  with a bound of 107 m, and the error budget must carry it. The reader
-  never takes an orthometric height as an ellipsoidal height.
-- `navigate-geodesy` has only `ZeroUndulation` at this time. An EGM96 grid
-  at 5° has 37 × 72 values: approximately 5 KB as 16-bit decimetres, with an
-  error of approximately 2 m RMS and 23 m at the worst point. It goes in
-  `navigate-geodesy`. A finer grid is a derived product of the package.
+- Each layer states its horizontal and vertical one-sigma in millimetres,
+  the date of collection as a day number, the growth of the error in
+  millimetres per year, and the surface model (bare earth or first
+  return). Each value can be absent (`null`), which means unknown.
+- Correlated error is keyed by (source key, source revision, grid cell at
+  the layer correlation zoom), not by the package identity. Two packages
+  cut from the same imagery have the same keys, so their fixes in one cell
+  share error. The correlation zoom is per layer; zoom 16 is the default.
+  `navigate-visual` changes its `MapCell` key to this key when the visual
+  means of `navigate-onboard` lands.
+- A Web Mercator cell is not of constant size: a zoom 16 cell is
+  approximately 611 m on a side at the equator, 460 m at 41° latitude, and
+  306 m at 60°.
+- Each layer states its horizontal datum (WGS84 at this time) and, for
+  elevation, its vertical datum: `ellipsoidal`, `orthometric` with a named
+  geoid model, or `unknown`. Heights are stored as the provider supplies
+  them. A reader converts them with a `navigate_geodesy::GeoidUndulation`
+  model of that name, which the host supplies. Without one, the reader
+  gives `UnknownUndulation` with a bound of 107 m (the EGM96 undulation is
+  between approximately −107 m and +86 m), and the error budget carries the
+  bound. `navigate-geodesy` has no EGM96 model at this time. The error of
+  a coarse grid model is to be measured when such a model is added.
 
-### 5. A resource model before a fetch
+### 8. Grid schemes and bodies
 
-A pure function computes, before a fetch, what each leg of a flight plan
-needs. Its inputs are:
+The manifest states the body (Earth) and its ellipsoid (WGS84). The grid
+scheme is a named scheme. The one scheme at this time is the Web Mercator
+XYZ pyramid, with the latitude limit 85.051 128°. A request past the limit
+gets a typed refusal. A polar scheme and the schemes of other bodies are
+reserved: ADR-0020 covers polar TRN, and `navigate-visual-render` refuses
+`BodyTangentEnu` frames. This record adds no code for them.
 
-- the legs, with position and altitude above ground (from the DEM);
-- the declared cameras: intrinsics and mount pitch;
-- the expected navigation uncertainty: the search radius;
-- a deviation allowance.
+### 9. Unknown values and format evolution
 
-For each leg it gives the layers, the zoom levels, the corridor width, and
-an estimate of the size. The zoom rule is the rule of the map renderer: one
-zoom level for each doubling of the slant range, with one texel for one
-pixel. For tiles of 256 pixels, the texel size at zoom `z` and latitude `φ`
-is `156 543.03 m × cos φ / 2^z`. The renderer uses tiles of 512 pixels, so
+- A manifest, tile index, product chunk, or product list of another format
+  version is refused with a typed error. There is one current schema. A
+  change of schema is a new version, and a host makes its packages again
+  from its sources and caches. There is no migration code and no second
+  reader.
+- In the core manifest, an unknown body, grid scheme, layer kind,
+  encoding, datum, or source key is refused with a typed error.
+- In a product list, an unknown product kind is carried and enumerated as
+  unknown. A navigator never reads it.
+
+### 10. Resource model in two phases
+
+1. **Ground.** The host fetches elevation tiles at zoom 10 (approximately
+   120 m pixels) along the route corridor, through the same fetch port.
+   The ground heights come from these tiles.
+2. **Plan.** A pure function computes, for each leg, the layers, the zoom
+   levels, the corridor width, and an estimate of the size. Its inputs are
+   the legs with their height above ground (from phase 1), the declared
+   cameras (intrinsics, mount depression), the expected navigation
+   uncertainty, and a deviation allowance.
+
+The zoom rule is the rule of the map renderer: one texel for one pixel, so
+one zoom level for each doubling of the slant range. For tiles of 256
+pixels, the texel size at zoom `z` and latitude `φ` is
+`156 543.03 m × cos φ / 2^z`. The renderer uses tiles of 512 pixels, so
 its level for the same texel is one less. A higher leg and an oblique view
-need coarser levels and cost less for each kilometre. The far field of an
-oblique view uses coarser levels than the near field. Altitude octave bands
-key the derived products.
+need coarser levels and cost less for each kilometre. Altitude octave
+bands key the derived products.
 
-Measured sizes: imagery is approximately 18 KB/km² at zoom 15 and 70 KB/km²
-at zoom 16. Terrarium elevation is approximately 2 KB/km² at zoom 12 and
-7.5 KB/km² at zoom 13. The NVKTILE1 bank at its default settings is
+Measured sizes: imagery approximately 18 KB/km² at zoom 15 and 70 KB/km²
+at zoom 16; Terrarium elevation approximately 2 KB/km² at zoom 12 and
+7.5 KB/km² at zoom 13; the NVKTILE1 bank at its default settings
 approximately 4.2 MB/km².
 
-### 6. Three onboard representations
+### 11. Three onboard representations
 
 The host selects one representation for each leg, against a storage budget
 and the requirements that the navigator declares:
 
 - **R**: raw layers at the matched levels.
-- **L**: sparse landmarks and a coarse DEM, with no imagery. The landmarks
-  carry their usable-geometry gate (range ratio 0.22 to 5.5, incidence, and
-  orientation).
-- **K**: route keyframes: reference features or views made at planned poses,
-  each with a validity envelope (lateral, vertical, and heading ranges).
+- **L**: sparse landmarks and a coarse DEM, with no imagery. This
+  representation is specified, but no navigator implements it at this
+  time: the corridor engine refuses to start without imagery.
+- **K**: route keyframes: reference views or features made at planned
+  poses, each with a validity envelope (lateral, vertical, and heading
+  ranges).
 
-A derived product is outside the core identity. Each product records:
+### 12. Derived products in two levels
 
-- the core package identity that it binds to;
-- the complete recipe: algorithm, weights digest, numeric precision, and
-  each parameter;
-- the camera calibration, where it applies;
-- the altitude band and the validity envelope.
+- A **product chunk** is a canonical document at
+  `products/chunks/<sha256>.json` with its blobs in `chunks/`. Its identity
+  covers: the product kind, the digest of the complete recipe (algorithm,
+  version, weights digest, precision, and each parameter as an integer),
+  the grid cell or `null`, the altitude band or `null`, the sorted digests
+  of the input blobs, and for route products the route digest and the
+  validity envelope. A chunk does not name a package, so any mission whose
+  package holds the same input blobs can use it.
+- A **product list** is a canonical document per mission at
+  `products/lists/<sha256>.json`. It names the package identity and the
+  chunks. It is outside the core identity.
+- A chunk built for another altitude band, another route digest, or other
+  input blobs does not match, and the navigator does not use it. A keyframe
+  is used only inside its envelope.
+- NVKTILE1 limitation: the bank tiles are in an east, north, up frame at
+  the centre of the surface, not on the fixed grid. A bank is thus one
+  chunk for its whole area, and it is not reusable cell for cell. The
+  builder must tile on the grid before banks can be shared by cell.
 
-A navigator declares the products that it needs. At load, it reports for
-each product: use, fallback, or refusal. Product kinds are reserved for
-terrain slopes, horizon profiles, scalar fields, star pair tables, station
-lists, and ephemeris segments. This record defines no code for them.
-
-### 7. The onboard boundary
+### 13. The onboard boundary
 
 A new `std` crate, `navigate-onboard`, holds the composition that a host
 links:
@@ -179,65 +275,103 @@ links:
   setpoint from a `&NavigationSolution`.
 - A bundle that owns one of each. A host links each one as a trait object.
 
-The host declares the sensor suite once, when it builds the navigator: for
-each sensor, an identifier, a kind, the imager model of `navigate-camera`
-(ADR-0021), the mount and lever arm, the spectral band, the rates, and the
-error budget. Each input carries the sensor identifier, the data, and the
-time stamp. The input type is `#[non_exhaustive]` and has a variant that
-passes a `navigate_fusion::Observation` through.
+Rules of both traits:
 
-A sensor is unavailable only when its input does not come. The navigator
-has no mode that disables a sensor, so a host cannot hide a failure with
-one. The navigator writes acceptance records into a sink that the caller
-supplies. `navigate-onboard` is not a core crate of ADR-0015 and ADR-0016,
-but the sink keeps each step free of allocation in the trait.
+- **Time.** Each input carries its acquisition and delivery stamps on the
+  navigator clock domain. No navigator reads a wall clock.
+- **Alignment.** The initial state is an explicit input with its
+  covariances. A navigator gives no solution before it.
+- **State.** Each trait has `snapshot` and `restore`: a navigator
+  duplicates its complete state into a boxed copy, so a simulator can fork
+  a run and restore and replay it. A trait object cannot be cloned, so
+  this operation is part of the trait.
+- **Sensors.** The host declares the sensor suite once: for each sensor,
+  an identifier, a kind, the imager model of `navigate-camera`
+  (ADR-0021), the mount and lever arm, the rate, and the error budget.
+  Each input carries the sensor identifier, the stamps, and the data. The
+  data type is `#[non_exhaustive]` and has a variant that passes a
+  `navigate_fusion::Observation` through.
+- **Availability.** A sensor is unavailable only when its input does not
+  come. The navigator has no mode that disables a sensor, so a host cannot
+  hide a failure with one.
+- **Data requirements.** Before load, a navigator gives its requirements:
+  the layers and product kinds it needs or can use, with the altitude
+  bands and representations. After load, it gives a report for each
+  product: used, fallback to another representation (with the reason), or
+  refused (with the reason). A required layer that is missing is a
+  refusal of the load, not a silent degradation.
+- **Acceptance records.** The navigator writes each record into a sink
+  that the caller supplies. `navigate-onboard` is not a core crate of
+  ADR-0015 and ADR-0016, but the sink keeps each step free of allocation
+  in the trait.
+- The learned corridor stack (`navigate-visual-flight`) has its own
+  filter. It is a second `Navigator`, not an aiding means of the first.
 
-The learned corridor stack (`navigate-visual-flight`) has its own filter. It
-is a second `Navigator`, not an aiding means of the first one.
+### 14. Host obligations
+
+| Host | Fetch port | Read port | Store writer |
+|---|---|---|---|
+| Desktop and tools | HTTP with a cache, or a catalog on disk | directory store | the tool or the package store |
+| Browser | `fetch` in a worker | OPFS (ADR-0044) | the package store, in a worker |
+| Vehicle | none in flight | the installed store, read only | none in flight: install before flight |
+
+### 15. Decisions not taken
+
+| Decision | Seam |
+|---|---|
+| Signing and trust | The host signs the package identity (a digest), for example with the `pilotage-svs-db` trust root. |
+| Transport | The fetch port and the host store. |
+| Compression | A future encoding value, which is a new format version. |
+| Licence enforcement | The descriptor carries the terms; the host enforces them. |
+| Polar and other-body grids | The grid scheme value (§8). |
+| Representation L in a navigator | The data requirements of a navigator (§13). |
 
 ### Relation to Pilotage
 
-- **ADR-0044.** The `ReadPort` of this crate is the read port that ADR-0044
-  starts from. The store layout is the ADR-0044 layout. The package store of
-  Pilotage writes; Navigate reads.
+- **ADR-0044.** The read port has the shape of the ADR-0044 read port. The
+  store layout is the ADR-0044 layout. The package store of Pilotage
+  writes; Navigate reads.
 - **`pilotage-svs-db`.** That crate signs and activates aeronautical
-  databases. `navigate-data` does not sign and does not activate. A host
-  that requires a signature signs the package identity with its trust root.
-  The package store then installs the blobs and the manifest, and activates
-  the package with its pointer file.
-- **`pilotage-mission`.** It uses `PlanExecution` (from `navigate-fpl` at
-  the revision that Pilotage pins; `navigate-route` in this workspace) and
-  `navigate_guidance::guide_velocity`. Pilotage holds the control authority
-  and the command leases. `FlightDirector` holds no authority, no leases,
-  and no command output. Its setpoint includes the velocity guidance, so
-  Pilotage can put its sequencing and guidance behind it and keep its
-  authority logic. This record does not require that change.
+  databases. `navigate-data` does not sign and does not activate. It uses
+  the same integer conventions (millimetres, day numbers).
+- **`pilotage-mission`.** It uses `PlanExecution` and
+  `navigate_guidance::guide_velocity`. Pilotage holds the control
+  authority and the command leases. `FlightDirector` holds no authority,
+  no leases, and no command output. Its setpoint includes the velocity
+  guidance, so Pilotage can put its sequencing and guidance behind it and
+  keep its authority logic. This record does not require that change.
 
 ## Consequences
 
 - One identity names the map of a fix, and the library computes it. Two
-  hosts that install the same tiles get the same identity.
-- Overlapping missions share blobs, and derived products tile on a fixed
-  grid, so products made for one mission serve the next one.
-- A changed blob, a changed manifest, and a non-canonical manifest are
-  found. A gap is reported as a gap.
+  hosts that install the same tiles from the same source get the same
+  identity, whatever labels they give.
+- Overlapping missions share blobs and product chunks.
+- Fixes from two packages of the same source in one cell count as
+  correlated.
+- A changed blob, a changed manifest, a non-canonical document, and a
+  document of another version are found and refused.
 - The reader must apply the geoid model, or carry the unknown undulation in
   the error budget.
 - A simulator links the onboard bundle and scores the onboard composition.
 - `photo-reference-catalog` stays a tool input. A builder converts it to a
-  package. The NVKTILE1 bank must record its recipe and bind to the package
-  identity.
+  package.
 
 ## Alternatives considered
 
 - A route field in `photo-reference-catalog`. Rejected: the catalog has no
   datum, accuracy, or gaps, and its bytes change with the fetch order.
-- Fetch in Navigate. Rejected: Navigate consumes and never fetches, and
-  trust and installation belong to the host.
-- A manifest that holds the tile bytes or the fetch times. Rejected: the
-  identity would then change with each fetch, and missions could not share
-  blobs.
-- Grid cells anchored at the mission origin. Rejected: products and cell
-  identifiers of one mission could not serve another mission.
-- One trait for navigation and guidance. Rejected: a host could not replace
-  one and keep the other.
+- Fetch in Navigate. Rejected: Navigate consumes and never fetches.
+- Labels, attribution, or fetch time in the identity. Rejected: the
+  identity would change with the host and the time.
+- Floating-point values in hashed documents. Rejected: two encoders can
+  write one value in two ways.
+- An inline tile list in the manifest. Rejected: see the measurements in
+  §5.
+- Products bound to the package identity. Rejected: no product could
+  serve a second mission.
+- Correlation cells keyed by the package identity. Rejected: two packages
+  of one source would count as independent.
+- A migration reader for old versions. Rejected: one current schema.
+- One trait for navigation and guidance. Rejected: a host could not
+  replace one and keep the other.
