@@ -54,7 +54,8 @@ mod solution_sequence;
 pub use config::FusionConfig;
 pub use inertial::{
     ClockNoiseModel, ForceModelCoast, FrameChange, ImuBiasPrior, ImuIncrement, ImuSample,
-    InertialConfig, InertialNavigationFilter, PastState, PastStateRefusal, PropagationMode,
+    InertialConfig, InertialNavigationFilter, LayoutError, PastState, PastStateRefusal,
+    PropagationMode, StateLayout,
 };
 pub use kalman::FogmBias;
 pub use kinematic::{InnovationStats, NavigationFilter};
@@ -62,7 +63,9 @@ pub use navigate_astrodynamics::{
     CannonballSrp, CentralBodyGravity, ExponentialDrag, PlanetaryBody, PointMassBody,
     SpaceEnvironment, SpaceGravityModel, SphericalHarmonicField, ThirdBodySet,
 };
-pub use observation::{LineOfSightReference, MeasurementKind, Observation, ObservationValue};
+pub use observation::{
+    CorrelatedError, LineOfSightReference, MeasurementKind, Observation, ObservationValue,
+};
 pub use particle::{
     MarginalizedParticleFilter, MpfConfig, MpfError, MpfEstimate, MpfParticle, ParticlePool,
     ScalarFieldMap,

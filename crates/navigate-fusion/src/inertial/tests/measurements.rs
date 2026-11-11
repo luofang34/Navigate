@@ -49,6 +49,8 @@ fn test_core() -> InertialCore {
         state_at: t(0),
         last_rates: None,
         mag_key: None,
+        correlated: crate::inertial::correlated::CorrelatedSources::default(),
+        pending: None,
         mode: PropagationMode::SensedImu,
     }
 }

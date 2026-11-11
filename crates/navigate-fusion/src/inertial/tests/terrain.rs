@@ -48,6 +48,8 @@ fn sloped_core() -> InertialCore {
         last_rates: None,
         mode: crate::inertial::PropagationMode::SensedImu,
         mag_key: None,
+        correlated: crate::inertial::correlated::CorrelatedSources::default(),
+        pending: None,
     }
 }
 

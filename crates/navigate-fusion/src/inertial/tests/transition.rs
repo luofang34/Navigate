@@ -58,6 +58,7 @@ fn nominal() -> InertialNominal {
         a_dmc: Vector3::new(2e-6, -1e-6, 4e-7),
         clock_bias_m: 35.0,
         clock_drift_mps: -0.2,
+        correlated: [nalgebra::Vector3::zeros(); crate::inertial::MAX_CORRELATED_BLOCKS],
     }
 }
 

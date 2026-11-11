@@ -78,7 +78,11 @@ echo "== navigate-fusion Monte Carlo consistency (release) =="
 monte_carlo_tests="inertial::tests::baro_consistency::monte_carlo_a_barometric_altitude_improves_the_horizontal_estimate_consistently
 inertial::tests::baro_maneuver::monte_carlo_an_altimeter_in_turns_keeps_the_horizontal_estimate_consistent
 inertial::tests::star_distribution::monte_carlo_stars_do_not_make_the_horizontal_estimate_worse
-inertial::tests::star_distribution::monte_carlo_a_constant_mount_error_declared_as_white_makes_the_attitude_over_confident"
+inertial::tests::star_distribution::monte_carlo_a_constant_mount_error_needs_its_correlated_declaration
+inertial::tests::correlated_gnss::monte_carlo_a_correlated_gnss_error_declared_as_white_makes_the_position_over_confident
+inertial::tests::correlated_gnss::monte_carlo_a_declared_correlated_gnss_error_with_a_block_keeps_the_position_nees_in_band
+inertial::tests::correlated_gnss::monte_carlo_a_declared_correlated_gnss_error_without_a_block_is_inflated_into_band
+inertial::tests::correlated_gnss::monte_carlo_a_correlation_time_declared_three_times_too_short_or_too_long_stays_in_band"
 monte_carlo_count=$(echo "$monte_carlo_tests" | wc -l | tr -d ' ')
 # shellcheck disable=SC2086
 monte_carlo_out=$(cargo test --release -p navigate-fusion --lib -- --exact $monte_carlo_tests 2>&1) \
