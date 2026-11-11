@@ -13,6 +13,7 @@ mod regimes;
 mod schuler;
 mod sequence;
 mod space;
+mod star_distribution;
 mod stochastic;
 mod surface;
 mod terrain;
