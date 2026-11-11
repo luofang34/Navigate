@@ -1,3 +1,4 @@
+mod checkpoints;
 mod coast;
 mod deep_space;
 mod frame_change;
