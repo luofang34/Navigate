@@ -5,8 +5,12 @@ use navigate_match::segment::{ColorMode, TrainPolicy};
 use navigate_visual_pipeline::{
     PipelineError, PipelineMatcher, build_reference_catalog_zoom,
     clock::seed_live_prior,
-    compose_survey_debrief, export_preview, export_publication, freeze_anchors,
-    interpolate_flight_priors,
+    compose_survey_debrief,
+    data_package::{
+        PackageOptions, TemplateLayer, build_package_blocking, layer_spec, parse_revision,
+        parse_source,
+    },
+    export_preview, export_publication, freeze_anchors, interpolate_flight_priors,
     json_file::write_json,
     prepare_photo_testset,
     realtime::{BankBuildOptions, BankMatchOptions, build_reference_bank, run_realtime_bank_match},
@@ -49,6 +53,32 @@ fn matcher_from(args: &ArgMatches) -> Result<PipelineMatcher, PipelineError> {
     PipelineMatcher::from_options(&backend, model, lg)
 }
 
+fn layer(
+    args: &ArgMatches,
+    prefix: &str,
+    kind: navigate_data::LayerKind,
+) -> Result<TemplateLayer, PipelineError> {
+    let source = parse_source(&req::<String>(args, &format!("{prefix}-source"))?)?;
+    let revision = parse_revision(&req::<String>(args, &format!("{prefix}-revision"))?)?;
+    Ok(TemplateLayer {
+        url: req(args, &format!("{prefix}-url"))?,
+        spec: layer_spec(kind, source, revision),
+        attribution: req(args, &format!("{prefix}-attribution"))?,
+    })
+}
+
+fn package_options(args: &ArgMatches) -> Result<PackageOptions, PipelineError> {
+    Ok(PackageOptions {
+        plan: req(args, "plan")?,
+        store: req(args, "store")?,
+        cache: req(args, "cache")?,
+        imagery: layer(args, "imagery", navigate_data::LayerKind::Imagery)?,
+        elevation: layer(args, "dem", navigate_data::LayerKind::Elevation)?,
+        max_tiles: req(args, "max-tiles")?,
+        plan_only: args.get_flag("plan-only"),
+    })
+}
+
 pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<serde_json::Value, PipelineError> {
     match sub {
         "prepare" => prepare_photo_testset(
@@ -70,6 +100,7 @@ pub(crate) fn dispatch(sub: &str, args: &ArgMatches) -> Result<serde_json::Value
             req::<u32>(args, "imagery-zoom")?,
             req::<u32>(args, "dem-zoom")?,
         ),
+        "package" => build_package_blocking(&package_options(args)?),
         "mask" => run_photo_masks(
             &req::<PathBuf>(args, "dataset")?,
             &req::<PathBuf>(args, "model")?,

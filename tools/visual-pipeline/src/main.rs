@@ -73,6 +73,33 @@ fn matcher_args(cmd: Command) -> Command {
         .arg(path_arg("lighterglue", false))
 }
 
+fn package_command() -> Command {
+    Command::new("package")
+        .about("Plan a flight and seal a navigation data package of the planned tiles")
+        .arg(path_arg("plan", true))
+        .arg(path_arg("store", true))
+        .arg(path_arg("cache", true))
+        .arg(str_arg("imagery-url", None))
+        .arg(str_arg("imagery-source", None))
+        .arg(str_arg("imagery-revision", Some("unversioned")))
+        .arg(str_arg("imagery-attribution", Some("")))
+        .arg(str_arg("dem-url", None))
+        .arg(str_arg("dem-source", None))
+        .arg(str_arg("dem-revision", Some("unversioned")))
+        .arg(str_arg("dem-attribution", Some("")))
+        .arg(
+            Arg::new("max-tiles")
+                .long("max-tiles")
+                .default_value("20000")
+                .value_parser(value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("plan-only")
+                .long("plan-only")
+                .action(ArgAction::SetTrue),
+        )
+}
+
 fn cli() -> Command {
     Command::new("navigate-visual-pipeline")
         .about("Run photo and video preparation, terrain pose search, segmentation, and debrief export")
@@ -121,6 +148,7 @@ fn cli() -> Command {
                         .value_parser(value_parser!(u32)),
                 ),
         )
+        .subcommand(package_command())
         .subcommand(
             Command::new("mask")
                 .about("Generate SegFormer-B0 occlusion masks for a photo dataset")

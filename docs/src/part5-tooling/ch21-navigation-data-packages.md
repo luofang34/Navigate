@@ -178,3 +178,70 @@ give the same keys.
 `MemoryStore` holds files in memory. `DirectoryStore` (feature `std`)
 holds them in a directory and writes each file through a temporary file
 and a rename.
+
+## 9. Resource model
+
+`plan_resources` computes what each leg of a flight needs before any
+fetch. Its inputs are the legs (position and altitude), the cameras
+(focal length, image size, depression of the optical axis), the search
+radius, the allowed deviation, the farthest slant range, and the limits
+and measured sizes of the imagery and elevation sources. A
+`GroundHeight` port supplies the ground heights, for example from coarse
+Terrarium tiles.
+
+The zoom rule is the rule of the map renderer: one texel for one pixel.
+
+```text
+texel(z, φ) = 40 075 016.69 m × cos φ / (T × 2^z)     T = tile pixels
+pixel(d)    = d / f                                  d = slant range, f = focal length in pixels
+z(d)        = log2(f × 40 075 016.69 m × cos φ / (T × d))
+```
+
+For tiles of 256 pixels, a texel at zoom 16 and 41.7° latitude is
+1.78 m. The renderer uses tiles of 512 pixels, so its level for the same
+texel is one less.
+
+For each camera, the model finds the slant range of the steepest and the
+shallowest ray and gives one band for each zoom between them. Each band
+has a ground range ahead of the vehicle and a half width: the slant range
+at the far edge times the tangent of the horizontal half field of view,
+plus the search radius and the deviation. The elevation band of an
+imagery band is `elevation_offset` levels coarser. The size estimate uses
+the measured size of each source at a reference zoom and a growth factor
+for each level.
+
+A higher leg needs coarser levels, and costs less for each kilometre. The
+far field of an oblique camera uses coarser levels than its near field.
+The altitude band of a leg is `floor(log2(agl / 100 m))`.
+
+## 10. Preparing a package
+
+`plan_tiles` turns the resource plan into tiles: for each band, the
+corridor of the band half width along the leg and `far_m` past its end.
+`prepare` fetches each tile once through the host `FetchPort` with the
+source and revision of the `LayerSpec` of its layer, writes a gap for each
+`Absent` answer, and seals the package with the descriptor that the host
+supplies. It refuses a plan
+over `max_tiles` before the first fetch.
+
+`navigate-visual-pipeline package` is a host for this step:
+
+```sh
+navigate-visual-pipeline package \
+  --plan plan.json --store store --cache tile-cache \
+  --imagery-url 'https://imagery.example/{z}/{y}/{x}' \
+  --imagery-source esri_world_imagery --imagery-revision unversioned \
+  --dem-url 'https://elevation.example/terrarium/{z}/{x}/{y}.png' \
+  --dem-source mapzen_terrarium
+```
+
+The plan file gives `release_id`, `waypoints` (`lat_deg`, `lon_deg`,
+`altitude_m` above mean sea level), `cameras` (`width_px`, `height_px`,
+`horizontal_fov_deg`, `depression_deg`), `search_radius_m`,
+`deviation_m`, and `max_range_m`. The tool fetches zoom 10 Terrarium tiles
+for the ground heights, plans, fetches the planned tiles into the cache on
+parallel threads, and seals the package. The cache key is the tile key
+(`<source>/<revision>/<z>/<x>/<y>`), not the URL. A source is a registry
+name; a revision is `unversioned`, `release:N`, or `collected:YYYY-MM-DD`. `--plan-only` prints the
+resource plan and fetches nothing else. A `file://` template reads local
+files. An HTTP status of 404 or 204 is a gap.
