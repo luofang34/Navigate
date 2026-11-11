@@ -10,7 +10,9 @@
 //! the size test cannot see, spread evenly up to the largest one. A turn
 //! is seen: its body rate and the declared speed give the centripetal
 //! acceleration, which a vehicle that moves along its nose takes out of
-//! the specific force.
+//! the specific force. A host that states how steady its flight was over
+//! the window bounds the unseen acceleration by its statement instead,
+//! when that is the smaller bound.
 //!
 //! The statement does not say the wind, the vertical speed, or the crab
 //! angle; the configuration states each as an allowance.
@@ -80,7 +82,11 @@ pub(crate) fn solve(
     }
     // A size inside the band admits a horizontal acceleration up to
     // √(4 g band); spread evenly, a third of its square is its variance.
-    let unseen_var = 4.0 * GRAVITY_MPS2 * band / 3.0;
+    // A host that states the acceleration of its start bounds it too.
+    let size_bound_var = 4.0 * GRAVITY_MPS2 * band / 3.0;
+    let unseen_var = config
+        .declared_acceleration_sigma_m_s2
+        .map_or(size_bound_var, |sigma| size_bound_var.min(sigma * sigma));
     let gravity = level_force.norm();
     let roll = (-level_force.y).atan2(-level_force.z);
     let pitch = level_force.x.atan2(level_force.y.hypot(level_force.z));

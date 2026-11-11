@@ -53,5 +53,7 @@ pub use reference::terrain::{
     MatchPair, OfferedFix, SolvedPose, TerrainConfig, TerrainMapRequest, TerrainMatch, ViewPose,
     WorkingCamera, WorkingLimit,
 };
-pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
-pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};
+pub use reference::{NavigatorFilter, ReferenceNavigator, StarCatalogueConfig, own_prior};
+pub use sensor::{
+    ErrorBudget, GnssCorrelatedError, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite,
+};
