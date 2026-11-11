@@ -302,8 +302,14 @@ Rules of both traits:
 
 - **Time.** Each input carries its acquisition and delivery stamps on the
   navigator clock domain. No navigator reads a wall clock.
-- **Alignment.** The initial state is an explicit input with its
-  covariances. A navigator gives no solution before it.
+- **Alignment.** A navigator gets its first state from its sensors, or
+  from a transfer alignment: the state of another estimator or of a
+  survey, with its covariances. The first state never comes from a value
+  that only a simulator knows; an evaluation that needs a true start uses
+  an entry of its own that is not part of the trait and is not in a
+  flight build. A navigator gives no solution before its first state,
+  and it states where its alignment is and what it lacks. It does not
+  align again by itself in flight: the host orders a realignment.
 - **State.** Each trait has `snapshot` and `restore`: a navigator
   duplicates its complete state into a boxed copy, so a simulator can fork
   a run and restore and replay it. A trait object cannot be cloned, so
@@ -329,6 +335,33 @@ Rules of both traits:
   in the trait.
 - The learned corridor stack (`navigate-visual-flight`) has its own
   filter. It is a second `Navigator`, not an aiding means of the first.
+
+The self-alignment of the reference navigator follows these rules:
+
+- **Rest.** The alignment works in rest windows. Inertial data alone
+  cannot show rest, because steady straight flight has the specific force
+  and the body rate of rest. A window counts only with the evidence of
+  another sensor: a GNSS velocity below a bound, or the statement that
+  the vehicle is on a surveyed point.
+- **One window, one state.** A window gives a state when rest, a heading
+  source, and a position are all in that window. Each window levels
+  again, so no part of a state is older than its window.
+- **Tilt.** Roll and pitch come from the mean specific force. Their
+  one-sigma holds the whole declared accelerometer bias, which a mean
+  does not make smaller, and the noise of the mean.
+- **Heading.** At rest the heading comes from the magnetometer and the
+  declination that the host declares from a field model. Its one-sigma
+  holds the noise of the mean, the declared disturbance of the body
+  (hard and soft iron, motor currents), the declination error, and the
+  tilt error through the dip of the field. A heading that is less certain
+  than a set limit is not used, and the alignment waits. Course over
+  ground is not a heading: a multirotor moves in each direction at each
+  heading.
+- **Position.** A GNSS fix with a covariance, or the surveyed point. The
+  velocity is zero with the one-sigma of rest.
+- **After the state.** Several GNSS positions in a row that the filter
+  refuses at its gate make the alignment suspect. The navigator states
+  it and keeps its state.
 
 The terrain-camera means of the reference navigator follows these rules:
 

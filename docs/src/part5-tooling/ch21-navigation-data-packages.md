@@ -390,6 +390,43 @@ record of a star frame names its identification mode, `tracking` or
 `lost_in_space`), terrain-camera frames, and observations that a sensor
 makes itself.
 
+### Alignment
+
+A navigator that the host does not align finds its first state from its
+sensors. `Navigator::alignment_status` gives `Aligning { phase,
+waiting_for }` or `Aligned { record, suspect }`; `solution` gives `None`
+before the state. Before the state, an inertial increment goes to the
+alignment, and each aiding input gives a record `Unused("alignment")`.
+
+The reference navigator aligns at rest, in windows of
+`AlignmentConfig::window_s` (2 s). A window gives a state when it has:
+
+| Part | Source | `waiting_for` when it is absent |
+|---|---|---|
+| Rest | specific force scatter, mean body rate, and mean specific force near gravity; and a GNSS velocity below `rest_speed_m_s` or a `SurveyedPosition` input | `rest`, `rest_evidence` |
+| Roll, pitch | mean specific force | (`rest_window` while the window fills) |
+| Heading | `SensorKind::Magnetometer` with `SensorData::MagneticField`, and the declination of `ErrorBudget::Magnetometer` | `heading_source`, `heading_uncertain` |
+| Position | a GNSS fix with a covariance or a declared budget, or `SensorKind::SurveyedPoint` with `SensorData::SurveyedPosition` | `position_source` |
+
+`ErrorBudget::Magnetometer` states four terms as heading errors: the
+noise of one sample, the disturbance of the body (a bias: hard and soft
+iron and motor currents), the declination, and its one-sigma. The host
+takes the declination from a field model. When the heading one-sigma is
+above `max_heading_sigma_rad`, the alignment waits with
+`heading_uncertain`. The `AlignmentRecord` states the sources, the
+one-sigma of the tilt and of the heading, and the gyroscope bias of the
+window (the mean rate less the Earth rate), which the filter cannot take
+at this time. After the state, a magnetometer or surveyed-point input
+gives a record `Unused("alignment_only")`.
+
+`Navigator::align` is a transfer alignment: the state of another
+estimator or of a survey. It replaces an alignment in progress and an
+earlier state. `Navigator::realign` forgets the state, and the sensors
+give the next one. Each new state forgets the map cells that gave a
+terrain fix. `ReferenceNavigator::align_from_truth` exists only with the
+Cargo feature `evaluation`: an evaluation uses it for a navigator with a
+known start, and a flight build does not have it.
+
 ### Terrain camera
 
 The terrain-camera means is in the Cargo feature `terrain-camera` of

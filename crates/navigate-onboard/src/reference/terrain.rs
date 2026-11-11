@@ -114,6 +114,15 @@ impl TerrainMeans {
         })
     }
 
+    /// Forgets which map cells gave a fix and what each camera kept: the
+    /// filter has a new state, and no map error is in it.
+    pub(crate) fn forget_fixes(&mut self) {
+        self.ledger = MapCellLedger::new(MAX_LEDGER_CELLS);
+        for camera in self.cameras.values_mut() {
+            camera.reset();
+        }
+    }
+
     /// Whether the suite declares a terrain camera.
     pub(crate) fn has_cameras(&self) -> bool {
         !self.cameras.is_empty()
