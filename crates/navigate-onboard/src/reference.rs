@@ -26,7 +26,7 @@ pub use stars::{StarCatalogueConfig, own_prior};
 #[cfg(feature = "terrain-camera")]
 pub use terrain::{
     AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainConfig,
-    TerrainMapRequest,
+    TerrainMapRequest, WorkingCamera, WorkingLimit,
 };
 
 use stars::{Sighting, StarChannel};

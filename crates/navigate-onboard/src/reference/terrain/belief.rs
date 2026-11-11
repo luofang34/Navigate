@@ -16,6 +16,8 @@ pub(crate) struct Belief {
     pub body_to_ned: UnitQuaternion<f64>,
     /// Horizontal one-sigma of the position, metres.
     pub sigma_h_m: f64,
+    /// One-sigma of the attitude, radians, when the solution states it.
+    pub sigma_attitude_rad: Option<f64>,
 }
 
 /// Rotation from the north, east, down axes into the east, north, up axes.
@@ -47,6 +49,10 @@ impl Belief {
             position: frame.geodetic(back),
             body_to_ned: UnitQuaternion::from_quaternion(Quaternion::new(q.w, q.x, q.y, q.z)),
             sigma_h_m: (nn + ee).max(0.0).sqrt(),
+            sigma_attitude_rad: solution.attitude_cov.map(|c| {
+                let (xx, yy, zz) = c.diagonal();
+                (xx + yy + zz).max(0.0).sqrt()
+            }),
         })
     }
 
@@ -73,6 +79,38 @@ impl Belief {
         let frame = LocalFrame::wgs84_enu(lat, lon)?;
         let pose = self.camera_in(frame, mount)?;
         Ok((frame.geodetic(pose.position), pose))
+    }
+}
+
+/// Largest angle of the optical axis from the local down at which the
+/// ground point of the axis is taken, radians.
+const MAX_GROUND_ANGLE_RAD: f64 = 1.3;
+
+impl Belief {
+    /// Where the believed optical axis meets ground at the height
+    /// `ground_height_m` above the ellipsoid: `[lat, lon]` in degrees and
+    /// the range along the axis in metres. `None` for an axis near or
+    /// above the horizon, a camera at or below that ground, and a range
+    /// past `far_m`.
+    pub(crate) fn ground(
+        &self,
+        mount: &CameraMount,
+        ground_height_m: f64,
+        far_m: f64,
+    ) -> Option<([f64; 2], f64)> {
+        let [lat, lon, _] = self.position;
+        let frame = LocalFrame::wgs84_enu(lat, lon).ok()?;
+        let pose = self.camera_in(frame, mount).ok()?;
+        // The eye axes are right, up, and back: the camera looks along -Z.
+        let axis = pose.orientation * -Vector3::z();
+        let down = -axis.z;
+        let height_m = frame.geodetic(pose.position)[2] - ground_height_m;
+        if down < MAX_GROUND_ANGLE_RAD.cos() || height_m <= 0.0 {
+            return None;
+        }
+        let range_m = height_m / down;
+        let [lat, lon, _] = frame.geodetic(pose.position + axis * range_m);
+        (range_m <= far_m).then_some(([lat, lon], range_m))
     }
 }
 

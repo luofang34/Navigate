@@ -5,9 +5,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use navigate_camera::Intrinsics;
 use navigate_data::index::IndexEntry;
 use navigate_data::product::{
-    Calibration, KindName, ListEntry, ProductKind, ProductUse, open_chunk, open_list, read_recipe,
+    KindName, ListEntry, ProductKind, ProductUse, open_chunk, open_list, read_recipe,
 };
 use navigate_data::tile::{ground_sample_distance_m, tile_lat_lon};
 use navigate_data::{
@@ -22,7 +23,7 @@ use super::{
     TerrainMapRequest, decided,
 };
 use crate::reference::terrain::budget::MapSigmas;
-use crate::reference::terrain::keyframes::{Keyframe, KeyframeSet};
+use crate::reference::terrain::keyframes::{Keyframe, KeyframeSet, resampled_to};
 use crate::{MapRefusal, ProductReport};
 
 /// Pixels on a tile side that the scene assembly of the renderer reads.
@@ -34,7 +35,7 @@ pub(crate) fn load<S>(
     store: Arc<S>,
     request: &TerrainMapRequest,
     geoid: Option<HostGeoid>,
-    cameras: &[Calibration],
+    cameras: &[Intrinsics],
 ) -> Result<TerrainMap, MapRefusal>
 where
     S: ReadPort + Send + Sync + 'static,
@@ -203,8 +204,8 @@ struct Mission<'a> {
     request: &'a TerrainMapRequest,
     /// The tile blobs of the package.
     blobs: &'a BTreeSet<Sha256Digest>,
-    /// The calibrations of the declared terrain cameras.
-    cameras: &'a [Calibration],
+    /// The declared terrain cameras.
+    cameras: &'a [Intrinsics],
     /// The vertical datum of the elevation layer.
     datum: Option<VerticalDatum>,
     /// The geoid model of the host.
@@ -282,9 +283,12 @@ fn keyframes<S: ReadPort + ?Sized>(
             "the chunk states no envelope or no calibration".into(),
         ));
     };
-    if !cameras.contains(&calibration) {
+    if !cameras
+        .iter()
+        .any(|declared| resampled_to(declared, &calibration).is_some())
+    {
         return Err(ProductUse::Fallback(
-            "the calibration is not that of a declared terrain camera".into(),
+            "the calibration is not that of a declared terrain camera at any size".into(),
         ));
     }
     let recipe =

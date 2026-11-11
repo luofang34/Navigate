@@ -349,6 +349,19 @@ The terrain-camera means of the reference navigator follows these rules:
 - **Reference.** Inside the envelope of a stored keyframe, the keyframe is
   the reference view. Outside, the navigator renders the reference from
   the package at its believed camera pose.
+- **Working resolution.** A match finer than the map gains nothing. The
+  reference and the match use the declared camera resampled until one
+  pixel on the ground is one pixel of the map imagery, inside an upper
+  bound for the cost and a lower bound for the matcher. The frame is
+  resampled to its reference. The navigator states the camera of the last
+  match and which limit set it.
+- **Check before the match.** A frame is not matched when each map cell
+  that it can show has a fix: each cell that the search disk about the
+  believed ground point of the optical axis touches. The disk has the
+  position search radius plus the attitude uncertainty times the range.
+  A fix that the match can give has its ground in that disk, so the
+  check loses no fix of a cell without one while the error of the belief
+  is inside the search bounds.
 - **Belief at the exposure.** The filter gives a solution only at or
   after its state time. The search starts at the solution on delivery,
   moved back along its velocity, and its bounds grow with the delay. A

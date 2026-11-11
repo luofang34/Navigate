@@ -55,6 +55,12 @@ pub(crate) struct WorldSpec {
     pub vertical_datum: Option<VerticalDatum>,
     /// Half width of the imagery about [`CENTRE`], metres.
     pub radius_m: f64,
+    /// Zoom of the correlation cells of the imagery.
+    pub correlation_zoom: u32,
+    /// Zoom of the imagery.
+    pub imagery_zoom: u32,
+    /// Height of the hills from valley to top, metres.
+    pub relief_m: f64,
 }
 
 impl Default for WorldSpec {
@@ -66,12 +72,16 @@ impl Default for WorldSpec {
             elevation: true,
             vertical_datum: Some(VerticalDatum::Ellipsoidal),
             radius_m: 3_000.0,
+            correlation_zoom: CORRELATION_ZOOM,
+            imagery_zoom: IMAGERY_ZOOM,
+            relief_m: 80.0,
         }
     }
 }
 
 /// A package in a directory store.
 pub(crate) struct World {
+    pub spec: WorldSpec,
     /// The directory of the store; it lives as long as the world.
     pub dir: tempfile::TempDir,
     pub store: Arc<DirectoryStore>,
@@ -128,9 +138,9 @@ fn ground_luma(gx: f64, gy: f64) -> u8 {
 }
 
 /// The height of the ground above the ellipsoid at one global elevation
-/// pixel: hills of 40 m with a kilometre between them.
-pub(crate) fn ground_height_m(gx: f64, gy: f64) -> f64 {
-    GROUND_M + 80.0 * (noise(gx, gy, 40.0, 7) - 0.5)
+/// pixel: hills of `relief_m` from valley to top, a kilometre apart.
+pub(crate) fn ground_height_m(gx: f64, gy: f64, relief_m: f64) -> f64 {
+    GROUND_M + relief_m * (noise(gx, gy, 40.0, 7) - 0.5)
 }
 
 fn png(image: &RgbImage) -> Vec<u8> {
@@ -146,9 +156,10 @@ fn imagery_tile(a: TileAddress, pixels: u32) -> Vec<u8> {
     }))
 }
 
-fn elevation_tile(a: TileAddress) -> Vec<u8> {
+fn elevation_tile(a: TileAddress, relief_m: f64) -> Vec<u8> {
     png(&RgbImage::from_fn(256, 256, |x, y| {
-        let h = ground_height_m(f64::from(a.x * 256 + x), f64::from(a.y * 256 + y)) + 32_768.0;
+        let (gx, gy) = (f64::from(a.x * 256 + x), f64::from(a.y * 256 + y));
+        let h = ground_height_m(gx, gy, relief_m) + 32_768.0;
         Rgb([
             (h / 256.0) as u8,
             (h % 256.0) as u8,
@@ -184,7 +195,7 @@ fn layer(key: LayerKey, spec: &WorldSpec) -> LayerSpec {
             256
         },
         accuracy,
-        correlation_zoom: if imagery { CORRELATION_ZOOM } else { 16 },
+        correlation_zoom: if imagery { spec.correlation_zoom } else { 16 },
     }
 }
 
@@ -196,7 +207,7 @@ impl World {
         let mut writer = PackageWriter::new();
         writer.add_layer(layer(IMAGERY, spec)).unwrap();
         let mut tiles = BTreeSet::new();
-        corridor_tiles(&[CENTRE], spec.radius_m, IMAGERY_ZOOM, &mut tiles).unwrap();
+        corridor_tiles(&[CENTRE], spec.radius_m, spec.imagery_zoom, &mut tiles).unwrap();
         for a in tiles {
             let tile = imagery_tile(a, spec.imagery_tile_pixels);
             pollster::block_on(writer.add_tile(&mut store, IMAGERY, a, &tile)).unwrap();
@@ -212,12 +223,13 @@ impl World {
             )
             .unwrap();
             for a in tiles {
-                let tile = elevation_tile(a);
+                let tile = elevation_tile(a, spec.relief_m);
                 pollster::block_on(writer.add_tile(&mut store, ELEVATION, a, &tile)).unwrap();
             }
         }
         let package = pollster::block_on(writer.seal(&mut store, &Descriptor::default())).unwrap();
         Self {
+            spec: *spec,
             dir,
             store: Arc::new(store),
             package,
@@ -237,7 +249,7 @@ impl World {
         };
         let spec = KeyframeSpec {
             imagery_layer: IMAGERY,
-            imagery_zoom: IMAGERY_ZOOM,
+            imagery_zoom: self.spec.imagery_zoom,
             elevation_layer: ELEVATION,
             elevation_zoom: ELEVATION_ZOOM,
             camera,
@@ -360,20 +372,33 @@ pub(crate) fn frame_at(
     mount: &CameraMount,
     seed: u64,
 ) -> Vec<u8> {
+    frame_with_rays(world, camera, body, body_to_ned, mount, (seed, 2))
+}
+
+/// The frame of [`frame_at`] with one ray for each block of `stride`
+/// pixels on a side: a stride of one casts a ray for each pixel.
+pub(crate) fn frame_with_rays(
+    world: &World,
+    camera: &CameraModel,
+    body: [f64; 3],
+    body_to_ned: &UnitQuaternion<f64>,
+    mount: &CameraMount,
+    (seed, stride): (u64, u32),
+) -> Vec<u8> {
     let request = SceneRequest {
         imagery_layer: IMAGERY,
-        imagery_zoom: IMAGERY_ZOOM,
+        imagery_zoom: world.spec.imagery_zoom,
         elevation_layer: ELEVATION,
         elevation_zoom: ELEVATION_ZOOM,
         centre: [body[0], body[1]],
-        half_side_m: 2_400.0,
+        half_side_m: world.spec.radius_m.min(2_400.0),
     };
     let package = world.open();
     let window = pollster::block_on(scene_around(&package, &*world.store, &request, None)).unwrap();
     let pose = true_camera([body[0], body[1]], body, body_to_ned, mount);
     let (view, _) = SparseSceneSampler::new(&window.scene, 2_500.0, 16, 10)
         .unwrap()
-        .render_adaptive(camera, &pose, 2, u8::MAX, 0.05)
+        .render_adaptive(camera, &pose, stride, u8::MAX, 0.05)
         .unwrap();
     let image: GrayImage = view.image;
     image
@@ -389,14 +414,14 @@ pub(crate) fn frame_at(
         .collect()
 }
 
-/// The centre of the tile of [`CORRELATION_ZOOM`] that holds `point`, and
-/// the north-south size of that tile in metres.
-pub(crate) fn correlation_cell(point: [f64; 2]) -> ([f64; 2], f64) {
-    let cell = TileAddress::containing(point, CORRELATION_ZOOM).unwrap();
+/// The centre of the tile of `zoom` that holds `point`, and the
+/// north-south size of that tile in metres.
+pub(crate) fn correlation_cell(point: [f64; 2], zoom: u32) -> ([f64; 2], f64) {
+    let cell = TileAddress::containing(point, zoom).unwrap();
     let (x, y) = (f64::from(cell.x), f64::from(cell.y));
-    let centre = tile_lat_lon(x + 0.5, y + 0.5, CORRELATION_ZOOM);
-    let [north, _] = tile_lat_lon(x, y, CORRELATION_ZOOM);
-    let [south, _] = tile_lat_lon(x, y + 1.0, CORRELATION_ZOOM);
+    let centre = tile_lat_lon(x + 0.5, y + 0.5, zoom);
+    let [north, _] = tile_lat_lon(x, y, zoom);
+    let [south, _] = tile_lat_lon(x, y + 1.0, zoom);
     (centre, (north - south).to_radians() * 6_364_000.0)
 }
 
