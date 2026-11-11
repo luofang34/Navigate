@@ -245,3 +245,71 @@ parallel threads, and seals the package. The cache key is the tile key
 name; a revision is `unversioned`, `release:N`, or `collected:YYYY-MM-DD`. `--plan-only` prints the
 resource plan and fetches nothing else. A `file://` template reads local
 files. An HTTP status of 404 or 204 is a gap.
+
+## 11. Derived products
+
+Derived products have two levels.
+
+```text
+products/chunks/<sha256>.json     one product chunk, reusable across missions
+products/lists/<sha256>.json      one product list, per mission
+chunks/<sha256>                   recipes and entry blobs
+```
+
+A **product chunk**:
+
+| Field | Content |
+|---|---|
+| `format`, `version` | `navigate.data.product_chunk`, `1` |
+| `kind` | `keyframes`, `corridor_landmarks`, a reserved kind (`terrain_slopes`, `horizon_profiles`, `scalar_field`, `star_pairs`, `station_list`, `ephemeris_segments`), or an unknown name |
+| `recipe` | digest of the recipe document |
+| `binding.cell` | grid cell (zoom, x, y) or `null` |
+| `binding.altitude_band` | integer or `null` |
+| `binding.inputs` | sorted digests of the input blobs |
+| `binding.route` | route digest or `null` |
+| `binding.envelope` | `lateral_mm`, `vertical_mm`, `heading_urad`, or `null` |
+| `binding.calibration` | `width`, `height`, `fx_upx`, `fy_upx`, `cx_upx`, `cy_upx` (micro-pixels), or `null` |
+| `entries[]` | `key` (increasing integer), `pose` (`lat_ndeg`, `lon_ndeg`, `height_mm`, `heading_urad`) or `null`, `blob`, `bytes` |
+
+A **recipe** is `navigate.data.recipe` version 1 with `algorithm` and
+`code_version` (constants of the builder code), `weights` (digest or
+`null`), `precision` (`f16`, `f32`, `f64`), and `parameters`: integers by
+name, with the unit in the name (`spacing_mm`, `far_mm`).
+
+A **product list** is `navigate.data.product_list` version 1 with
+`package` (the package identity) and `chunks[]` (`kind`, `chunk`), sorted.
+
+The documents follow the canonical rule of the manifest. The chunk names
+no package, so a chunk serves each mission whose package holds its input
+blobs (`ProductChunk::applies_to`). A route chunk serves only its route
+digest, inside its envelope, in its altitude band. `open_list` refuses a
+list of another package. An unknown kind in a list is carried and
+enumerated (`ProductList::unknown_kinds`); `open_chunk` refuses to read a
+chunk of an unknown kind.
+
+### Keyframes
+
+`navigate_visual_render::build_keyframes` renders one reference view at
+each planned pose along the legs, at a fixed spacing, with the sparse
+adaptive ray marcher, and seals one `keyframes` chunk. Its binding holds
+the route digest, the envelope, the altitude band, the calibration, and
+the digests of each tile blob that a view was rendered from. Each entry
+blob is:
+
+```text
+"NVKEYV01" | u32 width | u32 height | luma (width × height bytes) | depth (width × height f32, little endian)
+```
+
+The depth is along the optical axis, in metres. Zero marks sky or missing
+data.
+
+### Corridor landmarks
+
+`navigate_visual_flight::Surface::from_package` loads one imagery zoom and
+one elevation zoom of a package and gives the digests of the tile blobs
+that it holds. Its `catalog_sha256` is the inputs digest of those blobs
+(`inputs_digest`). `build_corridor_bank_on_surface` writes that digest into
+the `NVKTILE1` bank, and `write_corridor_product` stores the bank as a
+`corridor_landmarks` chunk with its recipe. The bank tiles are in an east,
+north, up frame at the centre of the surface, not on the fixed grid, so
+one bank is one chunk with `cell` set to `null`.

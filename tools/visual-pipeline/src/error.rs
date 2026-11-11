@@ -73,6 +73,7 @@ impl From<navigate_visual_flight::FlightVisualError> for PipelineError {
             F::Segment(s) => Self::Segment(s),
             F::Visual(v) => Self::Visual(v),
             F::Render(r) => Self::Render(r),
+            F::Data(d) => Self::Data(d),
             other => Self::Invalid(other.to_string()),
         }
     }

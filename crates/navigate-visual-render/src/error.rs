@@ -30,6 +30,12 @@ pub enum RenderError {
     /// The device dropped a pending readback callback.
     #[error("GPU readback callback disconnected")]
     Disconnected(#[from] futures_channel::oneshot::Canceled),
+    /// A navigation data package refused a read.
+    #[error("navigation data: {0}")]
+    Data(#[from] navigate_data::DataError),
+    /// A package tile does not decode.
+    #[error("decode package tile: {0}")]
+    Decode(#[from] image::ImageError),
     /// The camera, pose, or coordinate frame is invalid.
     #[error("render geometry: {0}")]
     Geometry(#[from] navigate_visual::VisualError),

@@ -188,6 +188,23 @@ impl<F: RandomAccess> Package<F> {
         entries(file, spec.index.records(), &blob_path(spec.index.blob)).await
     }
 
+    /// The digests of every tile blob of the package.
+    ///
+    /// # Errors
+    ///
+    /// Returns index read failures.
+    pub async fn blobs(&self) -> Result<BTreeSet<Sha256Digest>, DataError> {
+        let mut out = BTreeSet::new();
+        for layer in &self.manifest.layers {
+            for (_, entry) in self.layer_entries(layer.key).await? {
+                if let IndexEntry::Tile { blob, .. } = entry {
+                    out.insert(blob);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Reads and checks each tile blob once. Returns the count of distinct
     /// blobs.
     ///

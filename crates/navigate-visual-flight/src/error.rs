@@ -23,6 +23,10 @@ pub enum FlightVisualError {
         message: String,
     },
 
+    /// A navigation data package or product refused a read or a write.
+    #[error("navigation data: {0}")]
+    Data(#[from] navigate_data::DataError),
+
     /// Input parameters or map contracts failed validation.
     #[error("{0}")]
     Invalid(String),

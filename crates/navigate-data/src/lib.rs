@@ -16,6 +16,8 @@
 //! - the [`Descriptor`]: labels, attribution, and licence text outside the
 //!   identity;
 //! - [`CorrelationKey`]: correlated map error by source and grid cell;
+//! - derived [`product`] chunks, reusable across missions, and per-mission
+//!   product lists;
 //! - Web Mercator tile arithmetic and the Terrarium height decoder;
 //! - the [`resource`] model, which computes what each leg of a flight needs
 //!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned
@@ -48,6 +50,7 @@ pub mod index;
 mod manifest;
 mod package;
 mod prepare;
+pub mod product;
 pub mod resource;
 mod source;
 mod store;
