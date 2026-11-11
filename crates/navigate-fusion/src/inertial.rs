@@ -50,6 +50,7 @@ mod local_level;
 pub(crate) mod mechanization;
 mod models;
 pub(crate) mod nominal;
+mod past;
 mod propagation;
 mod publish;
 mod reference;
@@ -80,6 +81,7 @@ pub use history::MAX_INERTIAL_HISTORY;
 pub use imu::{ImuIncrement, ImuSample};
 pub use local_level::ned_to_body_fixed_dcm;
 use navigate_astrodynamics::{PlanetaryBody, SpaceEnvironment};
+pub use past::{PastState, PastStateRefusal};
 pub use propagation::{ForceModelCoast, PropagationMode};
 pub use reference::{
     ERROR_ACCEL_BIAS, ERROR_ALT_BIAS, ERROR_ATTITUDE, ERROR_CLOCK_BIAS, ERROR_CLOCK_DRIFT,

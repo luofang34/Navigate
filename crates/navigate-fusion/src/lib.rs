@@ -54,7 +54,7 @@ mod solution_sequence;
 pub use config::FusionConfig;
 pub use inertial::{
     ClockNoiseModel, ForceModelCoast, FrameChange, ImuIncrement, ImuSample, InertialConfig,
-    InertialNavigationFilter, PropagationMode,
+    InertialNavigationFilter, PastState, PastStateRefusal, PropagationMode,
 };
 pub use kalman::FogmBias;
 pub use kinematic::{InnovationStats, NavigationFilter};
