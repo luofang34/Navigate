@@ -84,6 +84,10 @@ pub struct Estimate {
 ///
 /// The caller supplies each frame's prior and reference. This component does not
 /// feed its own result back as an independent measurement or fuse IMU data.
+///
+/// A clone continues the same capture stream: it holds the last admitted
+/// stamp, so a host can copy a localizer with the state of its navigator.
+#[derive(Clone, Debug)]
 pub struct Localizer<M> {
     matcher: M,
     verifier: crate::PoseVerifier,

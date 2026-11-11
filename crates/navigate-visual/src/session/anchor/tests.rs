@@ -115,6 +115,7 @@ fn anchor(pose: Pose) -> AnchorObservation {
             },
             change: RegionChange::Unknown,
         },
+        correlation: None,
     }
 }
 

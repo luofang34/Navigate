@@ -34,6 +34,7 @@ pub struct CandidateEvaluation {
 ///
 /// Repeated calls evaluate alternatives from the same evidence. They do not
 /// consume a stream stamp, fuse estimates, or reduce uncertainty across calls.
+#[derive(Clone, Copy, Debug)]
 pub struct PoseVerifier {
     config: LocalizerConfig,
 }

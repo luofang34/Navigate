@@ -149,6 +149,40 @@ fn anchors_in_one_map_cell_share_map_error() {
     }
 }
 
+/// Two packages cut from the same imagery have different manifest digests.
+/// Their anchors carry the same correlation key, so the second anchor
+/// shares the map error of the first (ADR-0022 §7).
+#[test]
+fn anchors_from_two_packages_of_one_source_share_map_error() {
+    use navigate_data::{CorrelationKey, GridCell, Revision, SourceKey};
+    let mut flight = Flight::standard();
+    straight(&mut flight, 30, 5.0);
+    let keys: Vec<_> = flight.truth.iter().map(|(k, _, _)| *k).collect();
+    let key = CorrelationKey {
+        source: SourceKey::EsriWorldImagery,
+        revision: Revision::Release(3),
+        cell: GridCell::containing([47.0, 11.0], 16).unwrap(),
+    };
+    let from_package = |frame: &navigate_visual::session::FrameKey, manifest: &str| {
+        let mut observation = anchor(&flight, frame, Vector3::zeros()).with_correlation(key);
+        observation.map.manifest_sha256 = manifest.repeat(64);
+        observation
+    };
+    let first = from_package(&keys[0], "1");
+    let second = from_package(&keys[29], "2");
+    assert_ne!(first.map, second.map);
+    flight.session.submit_anchor(first).unwrap();
+    match flight.session.submit_anchor(second).unwrap() {
+        AnchorDecision::Accepted {
+            eligibility: FusionEligibility::SharedMapError { earlier, cell },
+        } => {
+            assert_eq!(earlier, keys[0]);
+            assert_eq!(cell, navigate_visual::session::MapCell::Source(key));
+        }
+        other => panic!("the second package shares the map error: {other:?}"),
+    }
+}
+
 #[test]
 fn a_seek_starts_an_unlocated_segment_and_late_anchors_revise_only_their_segment() {
     let mut flight = Flight::standard();

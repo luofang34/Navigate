@@ -139,11 +139,7 @@ impl CorridorTracker {
         (capture_ns, arrival_ns): (u64, u64),
         q_vo_enu_m2: &Matrix3<f64>,
     ) -> Result<SessionAnchorReport, String> {
-        let cell = MapCell {
-            map_manifest_sha256: catalog_sha256.to_owned(),
-            east: (cand.eye[0] / cell_m).floor() as i64,
-            north: (cand.eye[1] / cell_m).floor() as i64,
-        };
+        let cell = MapCell::local(catalog_sha256, cand.eye[0], cand.eye[1], cell_m);
         self.visited_cells
             .entry(cell)
             .or_insert_with(|| case_id.to_owned());

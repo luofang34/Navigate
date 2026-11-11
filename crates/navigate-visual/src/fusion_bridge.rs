@@ -2,6 +2,8 @@
 //!
 //! [`position_fix_observation`] converts a [`crate::Estimate`] into a
 //! [`navigate_fusion::Observation`] with a `PositionFix` value.
+//! [`position_fix_observation_composed`] does the same for a caller that
+//! composes the external error covariance itself.
 //! [`visual_pose_observation`] converts it into a `VisualPose` value with the
 //! camera position and the vehicle body attitude (ADR-0020).
 //! [`position_fix_observation_propagated`] and
@@ -51,7 +53,8 @@ pub use adapter::{
 pub use budget::{VerticalDatum, VisualAttitudeBudget, VisualErrorBudget};
 pub use error::VisualFusionError;
 pub use observation::{
-    position_fix_observation, position_fix_observation_propagated, visual_pose_observation,
+    position_fix_observation, position_fix_observation_composed,
+    position_fix_observation_propagated, visual_pose_observation,
     visual_pose_observation_propagated,
 };
 pub use prior::{FrameCapture, PropagationBudget, search_prior};

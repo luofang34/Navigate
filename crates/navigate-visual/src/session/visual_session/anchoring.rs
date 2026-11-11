@@ -235,11 +235,10 @@ impl VisualSession {
         {
             self.biases.insert(cell.clone(), Vector3::zeros());
         }
-        let eligibility = self.ledger.label(
-            cell.clone(),
-            anchor.frame,
-            self.config.limits.max_ledger_cells,
-        );
+        // The session admits the anchor here, so it labels and commits in
+        // one step.
+        let eligibility = self.ledger.label(&cell, anchor.frame);
+        self.ledger.commit(cell.clone(), anchor.frame);
         let frame = anchor.frame;
         let capture_ns = self
             .frames
@@ -293,13 +292,12 @@ impl VisualSession {
     }
 
     fn cell(&self, anchor: &AnchorObservation) -> MapCell {
+        if let Some(key) = anchor.correlation {
+            return MapCell::Source(key);
+        }
         let size = self.config.anchors.shared_error_cell_m;
         let p = anchor.pose.translation.vector;
-        MapCell {
-            map_manifest_sha256: anchor.map.manifest_sha256.clone(),
-            east: (p.x / size).floor() as i64,
-            north: (p.y / size).floor() as i64,
-        }
+        MapCell::local(&anchor.map.manifest_sha256, p.x, p.y, size)
     }
 
     fn queue_pending(&mut self, segment: SegmentId, anchor: AnchorObservation) {

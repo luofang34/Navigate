@@ -126,10 +126,13 @@ pub(super) fn solve_frame_pose(
         (force_anchor && !provisional_confirm && eng.config.anchor_on_cell_boundary)
             .then_some(pred_pose)
             .flatten()
-            .map(|(pe, _)| MapCell {
-                map_manifest_sha256: eng.resources.surface.catalog_sha256.clone(),
-                east: (pe[0] / inp.cell_m).floor() as i64,
-                north: (pe[1] / inp.cell_m).floor() as i64,
+            .map(|(pe, _)| {
+                MapCell::local(
+                    &eng.resources.surface.catalog_sha256,
+                    pe[0],
+                    pe[1],
+                    inp.cell_m,
+                )
             });
 
     let effective_query_prior = resolve_anchor_query_prior(

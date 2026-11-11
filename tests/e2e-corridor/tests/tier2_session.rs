@@ -210,7 +210,7 @@ fn t2_08_04_submit_anchor_before_first_frame() -> TestResult {
 fn t2_08_05_duplicate_cell_anchor_rejection() -> TestResult {
     let ind = navigate_visual::fusion_bridge::EvidenceIndependence::ValidatedIndependent;
     let label = navigate_visual::session::FusionEligibility::SharedMapError {
-        cell: navigate_visual::session::MapCell {
+        cell: navigate_visual::session::MapCell::Local {
             map_manifest_sha256: "manifest_1".to_string(),
             east: 10,
             north: 20,

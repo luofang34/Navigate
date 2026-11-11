@@ -73,6 +73,7 @@ fn make_anchor(frame: FrameKey, pos: [f64; 3]) -> Result<AnchorObservation, Box<
             surface: SurfaceModel::Surface,
             change: RegionChange::Unchanged,
         },
+        correlation: None,
     })
 }
 

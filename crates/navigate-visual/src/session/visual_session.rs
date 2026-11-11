@@ -15,7 +15,7 @@ use crate::session::{
     SegmentId, SegmentStart, SessionConfig, SessionError, SessionEvent, StreamId,
     anchor::{AnchorBudget, AnchorObservation},
     events::EventQueue,
-    evidence::{Ledger, MapCell},
+    evidence::{MapCell, MapCellLedger},
     pose::{Pose, finite},
     store::{Frames, Keyframe, KeyframeId, Odometry, Segment},
 };
@@ -128,7 +128,7 @@ pub struct VisualSession {
     grounds: BTreeMap<KeyframeId, Ground>,
     biases: BTreeMap<MapCell, Vector3<f64>>,
     local_frame: Option<LocalFrame>,
-    ledger: Ledger,
+    ledger: MapCellLedger,
     events: EventQueue,
     revision: u64,
     topology: query::Topology,
@@ -147,6 +147,7 @@ impl VisualSession {
             .map_err(|_| SessionError::Invalid {
                 field: "camera intrinsics",
             })?;
+        let ledger = MapCellLedger::new(config.limits.max_ledger_cells);
         Ok(Self {
             config,
             calibration,
@@ -164,7 +165,7 @@ impl VisualSession {
             grounds: BTreeMap::new(),
             biases: BTreeMap::new(),
             local_frame: None,
-            ledger: Ledger::default(),
+            ledger,
             events: EventQueue::default(),
             revision: 0,
             topology: query::Topology::default(),

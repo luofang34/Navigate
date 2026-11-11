@@ -16,6 +16,7 @@ gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 [dependencies]
 navigate-contract.workspace = true
 navigate-camera = { workspace = true, features = ["std"] }
+navigate-data = { workspace = true, features = ["std"] }
 navigate-fusion = { workspace = true, features = ["std"], optional = true }
 navigate-geodesy = { workspace = true, features = ["std"] }
 sha2 = "0.11"
@@ -35,6 +36,9 @@ cv-core = { version = "0.15", optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"], optional = true }
+
+[dev-dependencies]
+pollster = "1.0"
 
 [[test]]
 name = "polar_visual_pose"

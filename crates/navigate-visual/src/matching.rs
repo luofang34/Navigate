@@ -107,7 +107,7 @@ impl<M: ImageMatcher + ?Sized> ImageMatcher for Box<M> {
 /// This backend uses image pyramids and checks tracking in both directions.
 /// It requires overlapping views with similar appearance. It does not perform
 /// global image retrieval or neural model inference.
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PyramidalMatcher;
 
 /// Backend for feature identities that persist across camera frames.

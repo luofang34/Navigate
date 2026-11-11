@@ -69,7 +69,8 @@ pub struct AnchorPolicy {
     pub consensus_separation_m: f64,
     /// Largest number of anchors that wait for agreement in one track.
     pub max_pending: usize,
-    /// Side length of the map cells that share one map-error bias, in metres.
+    /// Side length of the local cells that share one map-error bias, in
+    /// metres, for an anchor without a correlation key.
     pub shared_error_cell_m: f64,
 }
 

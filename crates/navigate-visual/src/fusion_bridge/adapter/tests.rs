@@ -354,11 +354,7 @@ fn session_labels_refuse_shared_map_cells_and_never_grant_independence() {
         index: 4,
     };
     let shared = FusionEligibility::SharedMapError {
-        cell: MapCell {
-            map_manifest_sha256: "a".repeat(64),
-            east: 0,
-            north: 0,
-        },
+        cell: MapCell::local(&"a".repeat(64), 0.0, 0.0, 500.0),
         earlier,
     };
     let validated = EvidenceIndependence::ValidatedIndependent;
