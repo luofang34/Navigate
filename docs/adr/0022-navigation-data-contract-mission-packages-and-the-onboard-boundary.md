@@ -182,10 +182,16 @@ records by range.
   the layer correlation zoom), not by the package identity. Two packages
   cut from the same imagery have the same keys, so their fixes in one cell
   share error. The correlation zoom is per layer; zoom 16 is the default.
-  `navigate_visual::session::MapCell` holds this key for a fix from a
-  package layer. A map without a key (a tile catalog, a frame at a pole
-  or on another body, where no grid scheme applies) gets a local cell of
-  that one map.
+- `navigate_visual::session::MapCell` is the cell of one fix. A fix from
+  a package layer always has the cell `Source` with this key. The cell
+  `Local` is only for a map without a key: a tile catalog, and a tangent
+  frame at a pole or on another body, where no grid scheme applies (§8).
+  It is a square of the local frame of that one map. A `Source` cell and
+  a `Local` cell are never the same cell.
+- A fix in a cell with no earlier fix is taken as independent. This is
+  optimistic for orthoimagery: the registration error of a source has a
+  correlation length that is usually much larger than one cell. A filter
+  state for time-correlated position error replaces this rule (§15).
 - A Web Mercator cell is not of constant size: a zoom 16 cell is
   approximately 611 m on a side at the equator, 460 m at 41° latitude, and
   306 m at 60°.
@@ -385,7 +391,7 @@ The terrain-camera means of the reference navigator follows these rules:
 | Licence enforcement | The descriptor carries the terms; the host enforces them. |
 | Polar and other-body grids | The grid scheme value (§8). |
 | Representation L in a navigator | The data requirements of a navigator (§13). |
-| Fusion of a fix that shares the map error of an earlier fix | The one function of the terrain means that turns the label of a fix into what the filter is told. A filter state for time-correlated position error lets it pass the fix with a declared correlated error. |
+| Fusion of fixes that share map error | A filter state for time-correlated position error. A source then declares its correlated error, and a fix in a cell that has a fix is fused with that declaration and is not withheld. In the terrain means, one function turns the label of a fix into what the filter is told. |
 | The belief of the navigator at a past exposure | The one function of the terrain means that makes the belief. A query of the filter history replaces the move back along the velocity. |
 
 ### Relation to Pilotage
