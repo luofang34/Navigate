@@ -414,3 +414,48 @@ fn a_frame_outside_the_package_is_not_matched_and_a_changed_tile_is_an_error() {
     ));
     assert!(sink.is_empty());
 }
+
+#[test]
+fn a_resident_copy_loads_and_matches_as_its_store_does() {
+    let world = World::build(&WorldSpec::default());
+    let keyframes = world.keyframes(camera_model(), HEIGHT_M);
+    let with_products = TerrainMapRequest {
+        products: Some(keyframes.list),
+        ..request(&world)
+    };
+    let copy = pollster::block_on(navigate_data::resident_copy(
+        &*world.store,
+        world.package,
+        Some(keyframes.list),
+    ))
+    .unwrap();
+    let resident = Arc::new(copy.store);
+    let mut on_store = navigator(&hover(), belly(), [0.0; 3], 20.0);
+    let mut on_copy = navigator(&hover(), belly(), [0.0; 3], 20.0);
+    let report = on_store
+        .load_terrain_map(Arc::clone(&world.store), &with_products, None)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        on_copy.load_terrain_map(resident, &with_products, None),
+        Ok(&report)
+    );
+    assert_eq!(report.keyframes, 4);
+    let mut sinks = [Vec::new(), Vec::new()];
+    for (navigator, sink) in [&mut on_store, &mut on_copy].into_iter().zip(&mut sinks) {
+        let each_second = |step: u64| step.is_multiple_of(RATE);
+        fly(
+            navigator,
+            &hover(),
+            &world,
+            &belly(),
+            1..=2 * RATE,
+            each_second,
+            sink,
+        )
+        .unwrap();
+    }
+    let [records_store, records_copy] = &sinks;
+    assert_eq!(terrain(records_copy), terrain(records_store));
+    assert_eq!(terrain(records_store)[0].0, Outcome::Accepted);
+}

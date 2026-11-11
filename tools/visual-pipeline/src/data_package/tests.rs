@@ -1,5 +1,7 @@
 use super::*;
-use navigate_data::{FetchPort, GroundHeight, MemoryStore, Package, TileAddress, TileRead};
+use navigate_data::{
+    FetchPort, GroundHeight, MemoryStore, Package, TileAddress, TileKey, TileRead,
+};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -23,10 +25,10 @@ fn terrarium_ground_reads_the_planning_tiles() {
     let point = [41.7, -1.0];
     let address = TileAddress::containing(point, GROUND_ZOOM).unwrap();
     let mut ground = TerrariumGround::default();
-    ground.insert(address, &terrarium_png(312.5)).unwrap();
+    insert_png(&mut ground, address, &terrarium_png(312.5)).unwrap();
     assert_eq!(ground.ground_m(point), Some(312.5));
     assert_eq!(ground.ground_m([10.0, 10.0]), None);
-    assert!(ground.insert(address, b"not a png").is_err());
+    assert!(insert_png(&mut ground, address, b"not a png").is_err());
 }
 
 #[test]

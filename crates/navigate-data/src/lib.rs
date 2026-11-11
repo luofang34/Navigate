@@ -21,7 +21,11 @@
 //! - Web Mercator tile arithmetic and the Terrarium height decoder;
 //! - the [`resource`] model, which computes what each leg of a flight needs
 //!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned
-//!   tiles through the host port and seals a package.
+//!   tiles through the host port and seals a package;
+//! - the [`package_plan`]: the host values around the resource model that a
+//!   package identity depends on, for every host to call;
+//! - [`resident_copy`], a package copied into memory for a reader that
+//!   cannot wait on its store.
 //!
 //! The crate is `#![no_std]` with `alloc`. The `std` feature (the default)
 //! adds [`DirectoryStore`]; the `libm` feature supplies the float functions
@@ -49,8 +53,10 @@ mod grid;
 pub mod index;
 mod manifest;
 mod package;
+pub mod package_plan;
 mod prepare;
 pub mod product;
+mod resident;
 pub mod resource;
 mod source;
 mod store;
@@ -68,6 +74,7 @@ pub use grid::{DEFAULT_CORRELATION_ZOOM, GridCell, GridScheme};
 pub use manifest::{IndexRef, Layer, LayerKey, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION};
 pub use package::{LayerSpec, Package, PackageWriter, TileRead, read_blob};
 pub use prepare::{PlannedTiles, PrepareSummary, plan_tiles, prepare};
+pub use resident::{ResidentPackage, resident_copy};
 pub use resource::{
     GroundHeight, LayerLimits, LayerSize, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
     ResourceRequest, SizeEstimate, ZoomBand, estimate_size, plan_resources,

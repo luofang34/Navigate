@@ -165,6 +165,16 @@ impl ReferenceNavigator {
     /// map cells that already gave a fix, because that record names the
     /// source of the imagery and not the package.
     ///
+    /// The load and every later frame read the store by blocking on each
+    /// read, because a navigator step is not asynchronous. The store must
+    /// therefore complete each read without help from the calling thread,
+    /// as a [`DirectoryStore`](navigate_data::DirectoryStore) and a
+    /// [`MemoryStore`](navigate_data::MemoryStore) do. A store whose reads
+    /// complete on an event loop that the caller runs, such as a browser
+    /// store on the page's thread, would never return: a host with such a
+    /// store awaits [`navigate_data::resident_copy`] of the package and its
+    /// product list, and gives this load the memory store of the copy.
+    ///
     /// # Errors
     ///
     /// [`OnboardError::MapRefused`] with the reason: no terrain camera in
