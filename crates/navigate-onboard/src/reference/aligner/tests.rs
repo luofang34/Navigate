@@ -20,6 +20,7 @@ mod motion;
 mod moving;
 mod path;
 mod rig;
+mod slow;
 mod window;
 use rig::{GNSS, HEIGHT_M, LAT_DEG, LON_DEG, MAGNETOMETER, Rig, at};
 
