@@ -253,6 +253,18 @@ pub struct AlignmentConfig {
     /// One-sigma of the vertical speed of a declared start, m/s: the
     /// statement does not say it. An engineering choice for the vehicle.
     pub declared_vertical_speed_sigma_m_s: f64,
+    /// One-sigma of the horizontal acceleration of the vehicle over the
+    /// levelling window of a declared start, on each horizontal axis,
+    /// m/s², or `None`. Levelling takes the vehicle as not accelerated,
+    /// and the size of the specific force hardly shows a horizontal
+    /// acceleration, so without this statement the tilt one-sigma holds
+    /// every acceleration up to what the size test can see: about 0.2 rad
+    /// for a tactical unit at 55 m/s, outside the linear range of the
+    /// filter when GNSS does not follow. A host that states a start in
+    /// steady flight, with its speed and track held over the window,
+    /// states what it holds them to; the smaller of the two bounds is
+    /// taken.
+    pub declared_acceleration_sigma_m_s2: Option<f64>,
 }
 
 impl Default for AlignmentConfig {
@@ -264,6 +276,7 @@ impl Default for AlignmentConfig {
             course_heading_sigma_rad: None,
             declared_wind_sigma_m_s: 10.0,
             declared_vertical_speed_sigma_m_s: 3.0,
+            declared_acceleration_sigma_m_s2: None,
         }
     }
 }
@@ -284,5 +297,8 @@ impl AlignmentConfig {
             && self
                 .course_heading_sigma_rad
                 .is_none_or(|v| v.is_finite() && v >= 0.0)
+            && self
+                .declared_acceleration_sigma_m_s2
+                .is_none_or(|v| v.is_finite() && v > 0.0)
     }
 }
