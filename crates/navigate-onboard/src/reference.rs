@@ -1,16 +1,16 @@
-//! The reference navigator: Navigate's 22-state inertial filter on WGS84
-//! with GNSS, barometric, star-camera, terrain-camera, and pass-through
-//! aiding.
+//! The reference navigator: Navigate's inertial filter on WGS84 with GNSS,
+//! barometric, star-camera, terrain-camera, and pass-through aiding. The
+//! filter has 22 states, and a correlated-error block when a sensor
+//! declares a time-correlated error.
 
 use std::collections::BTreeMap;
 
 use navigate_contract::{
     ClockDomainId, MonotonicNanos, NavigationSolution, ObservationStamp, SensorClass,
-    SourceComposition, SourceEpoch, SourceId, SymmetricCov3, WrappingSequence,
+    SourceComposition, SourceEpoch, SourceId, WrappingSequence,
 };
 use navigate_fusion::{
-    FogmBias, ImuIncrement, InertialConfig, InertialNavigationFilter, IngestOutcome, Observation,
-    ObservationValue, PlanetaryBody,
+    FogmBias, ImuIncrement, InertialConfig, IngestOutcome, Observation, ObservationValue,
 };
 use navigate_startrack::line_of_sight_observations;
 
@@ -21,9 +21,12 @@ use crate::{
 };
 
 mod aligner;
+mod filter;
+mod gnss;
 mod stars;
 #[cfg(feature = "terrain-camera")]
 mod terrain;
+pub use filter::NavigatorFilter;
 pub use stars::{StarCatalogueConfig, own_prior};
 #[cfg(feature = "terrain-camera")]
 pub use terrain::{
@@ -42,8 +45,7 @@ use terrain::TerrainMeans;
 pub struct ReferenceNavigator {
     suite: SensorSuite,
     clock: ClockDomainId,
-    /// Boxed: the filter's inline history is hundreds of kilobytes.
-    filter: Box<InertialNavigationFilter>,
+    filter: NavigatorFilter,
     /// Keyed by `SourceId::get`.
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
@@ -97,7 +99,8 @@ impl ReferenceNavigator {
     ///
     /// # Errors
     ///
-    /// Refuses a suite without an IMU budget, a star camera without a
+    /// Refuses a suite without an IMU budget, a configuration whose model
+    /// has no block in the layout, a star camera without a
     /// catalogue configuration, and a terrain camera that is not a visible
     /// camera with usable intrinsics. Without the feature `terrain-camera`
     /// it refuses each terrain camera
@@ -133,11 +136,12 @@ impl ReferenceNavigator {
             gate_refusals: 0,
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
-            filter: Box::new(InertialNavigationFilter::new_surface(
-                config,
-                clock,
-                PlanetaryBody::EARTH_WGS84,
-            )),
+            filter: NavigatorFilter::new(config, clock, suite.has_correlated_error()).map_err(
+                |error| OnboardError::Config {
+                    field: "filter layout",
+                    detail: error.to_string(),
+                },
+            )?,
             suite,
             clock,
             sequences: BTreeMap::new(),
@@ -147,7 +151,7 @@ impl ReferenceNavigator {
 
     /// The filter, for its configuration and rejection counters.
     #[must_use]
-    pub fn filter(&self) -> &InertialNavigationFilter {
+    pub fn filter(&self) -> &NavigatorFilter {
         &self.filter
     }
 
@@ -238,49 +242,6 @@ impl ReferenceNavigator {
                 stage: "IMU increment",
                 reason,
             }),
-        }
-    }
-
-    fn gnss(&mut self, input: &SensorInput, budget: ErrorBudget, sink: &mut dyn AcceptanceSink) {
-        let SensorData::GnssFix {
-            position,
-            velocity,
-            position_cov,
-            velocity_cov,
-        } = &input.data
-        else {
-            return;
-        };
-        let (h, v, s) = match budget {
-            ErrorBudget::Gnss {
-                horizontal_sigma_m,
-                vertical_sigma_m,
-                velocity_sigma_m_s,
-            } => (horizontal_sigma_m, vertical_sigma_m, velocity_sigma_m_s),
-            _ => (f64::NAN, f64::NAN, f64::NAN),
-        };
-        let position_cov =
-            position_cov.unwrap_or(SymmetricCov3::from_diagonal(h * h, h * h, v * v));
-        let value = ObservationValue::PositionFix {
-            position: *position,
-            covariance: position_cov,
-        };
-        let gated = self.offer_value(input, "gnss_position", value, SensorClass::Gnss, sink);
-        // A run of positions outside the gate says that the state is far
-        // from the receiver: the alignment is suspect.
-        self.gate_refusals = if gated {
-            self.gate_refusals.saturating_add(1)
-        } else {
-            0
-        };
-        if let Some(velocity) = velocity {
-            let covariance =
-                velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
-            let value = ObservationValue::VelocityFix {
-                velocity: *velocity,
-                covariance,
-            };
-            self.offer_value(input, "gnss_velocity", value, SensorClass::Gnss, sink);
         }
     }
 

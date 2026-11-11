@@ -6,7 +6,8 @@ use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
 use super::{Increment, Moving, measurement, names};
 use crate::{
     AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
-    ErrorBudget, OnboardError, Outcome, ReferenceNavigator, SensorData, SensorInput,
+    ErrorBudget, GnssCorrelatedError, OnboardError, Outcome, ReferenceNavigator, SensorData,
+    SensorInput,
 };
 
 impl ReferenceNavigator {
@@ -50,16 +51,18 @@ impl ReferenceNavigator {
                 position_cov,
                 velocity_cov,
             } => {
-                let (declared, declared_speed) = match budget {
+                let (declared, declared_speed, slow) = match budget {
                     ErrorBudget::Gnss {
                         horizontal_sigma_m: h,
                         vertical_sigma_m: v,
                         velocity_sigma_m_s,
+                        correlated,
                     } => (
                         Some(SymmetricCov3::from_diagonal(h * h, h * h, v * v)),
                         Some(velocity_sigma_m_s),
+                        correlated,
                     ),
-                    _ => (None, None),
+                    _ => (None, None, None),
                 };
                 // The largest axis of a stated velocity covariance, or the
                 // declared one-sigma of the receiver.
@@ -70,9 +73,8 @@ impl ReferenceNavigator {
                     })
                     .or(declared_speed);
                 let velocity = velocity.map(|v| (v, speed_sigma));
-                let moving = self
-                    .aligner
-                    .gnss(at, *position, velocity, position_cov.or(declared));
+                let covariance = position_cov.or(declared).map(|c| with_slow_error(c, slow));
+                let moving = self.aligner.gnss(at, *position, velocity, covariance);
                 if let Some(moving) = moving {
                     self.set_moving_state(&moving)?;
                 }
@@ -246,4 +248,16 @@ impl ReferenceNavigator {
             context: None,
         });
     }
+}
+
+/// `covariance` with the time-correlated part of a GNSS error added. A
+/// start takes one fix, and that fix holds the slow error in full.
+fn with_slow_error(covariance: SymmetricCov3, slow: Option<GnssCorrelatedError>) -> SymmetricCov3 {
+    let Some(slow) = slow else {
+        return covariance;
+    };
+    let [xx, xy, xz, yy, yz, zz] = covariance.upper_triangle();
+    let h = slow.horizontal_sigma_m * slow.horizontal_sigma_m;
+    let v = slow.vertical_sigma_m * slow.vertical_sigma_m;
+    SymmetricCov3::from_upper_triangle([xx + h, xy, xz, yy + h, yz, zz + v])
 }
