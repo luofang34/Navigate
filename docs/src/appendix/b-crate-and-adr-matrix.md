@@ -27,7 +27,7 @@ This appendix maps every crate in the `Navigate` Cargo workspace to its runtime 
 | `navigate-locate` | `wasm32` + host | Single-photo localization, Hilbert-sharded `DINOv2` place search, and flight corridor tracking | Ch 13, 20 |
 | `navigate-visual-flight` | Host | Real-time 30 Hz zero-disk-IO flight visual engine, multi-hypothesis spatial basin checks, amortized masking, delayed covariance propagation | Ch 7, 12, 13 |
 | `navigate-locate-web` | `wasm32` | Browser Web Worker visual locator with WebNN, WebGPU, and CPU fallback | Ch 20 |
-| `navigate-data` | `no_std` + `alloc` | Navigation data contract: canonical package manifests, content-addressed blobs, verification, read and fetch ports, fixed correlation grid, vertical datum | Ch 21 |
+| `navigate-data` | `no_std` + `alloc` | Navigation data contract: canonical integer-only package manifests, tile index blobs, content-addressed blobs, verification, ranged read and fetch ports, correlation keys by source and cell, vertical datum | Ch 21 |
 | `navigate-recording` | Host | Visual recording wire contracts, session processor, and revisit loop closures | Ch 20 |
 | `tools/navrun` | Host CLI | Deterministic end-to-end closed-loop scenario runner | Ch 19 |
 | `tools/visual-model` | Host CLI | Deterministic checkpoint converter for `LoFTR`, `XFeat`, and `LighterGlue` | Ch 20 |

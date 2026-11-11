@@ -1,6 +1,6 @@
 use super::*;
-use crate::manifest::tests::{elevation_layer, imagery_layer};
-use crate::{MemoryStore, WritePort, manifest_path};
+use crate::manifest::tests::{ELEVATION, IMAGERY, elevation_spec, imagery_spec};
+use crate::{MemoryFile, MemoryStore, WritePort};
 use pollster::block_on;
 
 #[cfg(test)]
@@ -19,51 +19,57 @@ fn bytes_of(a: TileAddress) -> Vec<u8> {
     alloc::format!("tile {} {} {}", a.zoom, a.x, a.y).into_bytes()
 }
 
-/// Writes a package with the tiles in `order`, the first one a gap.
+/// Writes a package with the imagery tiles in `order`, the first address a
+/// gap, and elevation at zoom 10.
 #[cfg(test)]
-fn build(store: &mut MemoryStore, order: &[TileAddress], release: &str) -> Sha256Digest {
-    let mut writer = PackageWriter::new(release);
-    writer.add_layer(elevation_layer()).unwrap();
-    writer.add_layer(imagery_layer()).unwrap();
-    for (i, &a) in order.iter().enumerate() {
+fn build(store: &mut MemoryStore, order: &[TileAddress]) -> Sha256Digest {
+    let mut writer = PackageWriter::new();
+    writer.add_layer(elevation_spec()).unwrap();
+    writer.add_layer(imagery_spec()).unwrap();
+    for &a in order {
         if a == addresses()[0] {
-            writer.add_gap("imagery", a).unwrap();
+            writer.add_gap(IMAGERY, a).unwrap();
         } else {
-            block_on(writer.add_tile(store, "imagery", a, &bytes_of(a))).unwrap();
-        }
-        if i % 2 == 0 {
-            block_on(writer.add_tile(store, "elevation", a.ancestor(2), &bytes_of(a.ancestor(2))))
-                .ok();
+            block_on(writer.add_tile(store, IMAGERY, a, &bytes_of(a))).unwrap();
         }
     }
-    block_on(writer.seal(store)).unwrap()
+    let coarse = addresses()[0].ancestor(2);
+    block_on(writer.add_tile(store, ELEVATION, coarse, &bytes_of(coarse))).unwrap();
+    block_on(writer.seal(store, &Descriptor::default())).unwrap()
+}
+
+#[cfg(test)]
+fn open(store: &MemoryStore, id: Sha256Digest) -> Result<Package<MemoryFile>, DataError> {
+    block_on(Package::open(store, id))
 }
 
 #[test]
 fn a_sealed_package_opens_and_reads_tile_for_tile() {
     let mut store = MemoryStore::default();
-    let id = build(&mut store, &addresses(), "r1");
-    let package = block_on(Package::open(&store, id)).unwrap();
+    let id = build(&mut store, &addresses());
+    let package = open(&store, id).unwrap();
     assert_eq!(package.identity(), id);
-    assert_eq!(package.release_id(), "r1");
     for &a in &addresses()[1..] {
-        let read = block_on(package.tile(&store, "imagery", a)).unwrap();
-        assert_eq!(read, TileRead::Present(bytes_of(a)));
+        assert_eq!(
+            block_on(package.tile(&store, IMAGERY, a)).unwrap(),
+            TileRead::Present(bytes_of(a))
+        );
     }
     assert_eq!(
-        block_on(package.tile(&store, "imagery", addresses()[0])).unwrap(),
+        block_on(package.tile(&store, IMAGERY, addresses()[0])).unwrap(),
         TileRead::Gap
     );
     let outside = TileAddress::new(12, 1, 1).unwrap();
     assert_eq!(
-        block_on(package.tile(&store, "imagery", outside)).unwrap(),
+        block_on(package.tile(&store, IMAGERY, outside)).unwrap(),
         TileRead::Outside
     );
-    assert!(block_on(package.tile(&store, "lidar", outside)).is_err());
-    assert_eq!(
-        block_on(package.verify_all(&store)).unwrap(),
-        addresses().len()
-    );
+    let other = LayerKey {
+        kind: crate::LayerKind::Imagery,
+        source: crate::SourceKey::Synthetic,
+    };
+    assert!(block_on(package.tile(&store, other, outside)).is_err());
+    assert!(block_on(package.descriptor(&store)).unwrap().is_some());
 }
 
 #[test]
@@ -71,69 +77,66 @@ fn identity_does_not_depend_on_the_order_of_the_tiles() {
     let mut forward = MemoryStore::default();
     let mut reverse = MemoryStore::default();
     let mut order = addresses();
-    let a = build(&mut forward, &order, "r1");
+    let a = build(&mut forward, &order);
     order.reverse();
-    let b = build(&mut reverse, &order, "r1");
-    assert_eq!(a, b);
-    let mut other = MemoryStore::default();
-    assert_ne!(a, build(&mut other, &addresses(), "r2"));
+    assert_eq!(a, build(&mut reverse, &order));
 }
 
 #[test]
 fn overlapping_packages_share_blobs() {
     let mut store = MemoryStore::default();
-    build(&mut store, &addresses(), "r1");
-    let after_one = store.files.len();
-    build(&mut store, &addresses()[..6], "r2");
-    assert_eq!(
-        store.files.len(),
-        after_one + 1,
-        "only the second manifest is new"
-    );
+    build(&mut store, &addresses());
+    let before: Vec<String> = store.paths().map(String::from).collect();
+    build(&mut store, &addresses()[..6]);
+    let new: Vec<_> = store
+        .paths()
+        .filter(|p| !before.iter().any(|b| b == p))
+        .collect();
+    // The second package adds its imagery index, its manifest, and its
+    // descriptor; every tile blob and the elevation index are shared.
+    assert_eq!(new.len(), 3, "{new:?}");
 }
 
 #[test]
 fn a_changed_blob_is_found_when_it_is_read() {
     let mut store = MemoryStore::default();
-    let id = build(&mut store, &addresses(), "r1");
-    let package = block_on(Package::open(&store, id)).unwrap();
+    let id = build(&mut store, &addresses());
     let victim = addresses()[4];
     let path = blob_path(Sha256Digest::of(&bytes_of(victim)));
-    store.files.insert(path.clone(), b"changed".to_vec());
+    store.replace(&path, b"changed");
+    let package = open(&store, id).unwrap();
     assert!(matches!(
-        block_on(package.tile(&store, "imagery", victim)),
+        block_on(package.tile(&store, IMAGERY, victim)),
         Err(DataError::Integrity { path: p, .. }) if p == path
     ));
     assert_eq!(
-        block_on(package.tile(&store, "imagery", addresses()[5])).unwrap(),
+        block_on(package.tile(&store, IMAGERY, addresses()[5])).unwrap(),
         TileRead::Present(bytes_of(addresses()[5]))
     );
-    assert!(block_on(package.verify_all(&store)).is_err());
-    store.files.remove(&path);
+    store.remove(&path);
     assert!(matches!(
-        block_on(package.tile(&store, "imagery", victim)),
+        block_on(package.tile(&store, IMAGERY, victim)),
         Err(DataError::Missing { .. })
     ));
 }
 
 #[test]
-fn a_changed_manifest_does_not_open() {
+fn a_changed_manifest_or_index_does_not_open() {
     let mut store = MemoryStore::default();
-    let id = build(&mut store, &addresses(), "r1");
-    let path = manifest_path(id);
-    let mut bytes = store.files.get(&path).cloned().unwrap();
-    let at = bytes.iter().position(|&b| b == b'r').unwrap();
-    if let Some(b) = bytes.get_mut(at) {
-        *b = b's';
+    let id = build(&mut store, &addresses());
+    let package = open(&store, id).unwrap();
+    let index = blob_path(package.manifest().layers[1].index.blob);
+    let mut bytes = store.get(&index).unwrap().to_vec();
+    if let Some(b) = bytes.last_mut() {
+        *b ^= 1;
     }
-    store.files.insert(path, bytes);
+    store.replace(&index, &bytes);
+    assert!(matches!(open(&store, id), Err(DataError::Integrity { .. })));
+    let manifest = manifest_path(id);
+    store.replace(&manifest, b"{}");
+    assert!(matches!(open(&store, id), Err(DataError::Integrity { .. })));
     assert!(matches!(
-        block_on(Package::open(&store, id)),
-        Err(DataError::Integrity { .. })
-    ));
-    let unknown = Sha256Digest::of(b"no such package");
-    assert!(matches!(
-        block_on(Package::open(&store, unknown)),
+        open(&store, Sha256Digest::of(b"none")),
         Err(DataError::Missing { .. })
     ));
 }
@@ -168,28 +171,59 @@ fn an_interrupted_write_leaves_no_manifest() {
         inner: MemoryStore::default(),
         writes_left: 3,
     };
-    let mut writer = PackageWriter::new("r1");
-    writer.add_layer(imagery_layer()).unwrap();
+    let mut writer = PackageWriter::new();
+    writer.add_layer(imagery_spec()).unwrap();
     let mut failed = false;
     for a in addresses() {
-        failed |= block_on(writer.add_tile(&mut store, "imagery", a, &bytes_of(a))).is_err();
+        failed |= block_on(writer.add_tile(&mut store, IMAGERY, a, &bytes_of(a))).is_err();
     }
     assert!(failed);
     assert!(matches!(
-        block_on(writer.seal(&mut store)),
+        block_on(writer.seal(&mut store, &Descriptor::default())),
         Err(DataError::Missing { .. })
     ));
-    assert!(store.inner.files.keys().all(|p| p.starts_with("chunks/")));
+    assert!(store.inner.paths().all(|p| p.starts_with("chunks/")));
 }
 
 #[test]
 fn a_tile_cannot_be_declared_twice() {
     let mut store = MemoryStore::default();
-    let mut writer = PackageWriter::new("r1");
-    writer.add_layer(imagery_layer()).unwrap();
+    let mut writer = PackageWriter::new();
+    writer.add_layer(imagery_spec()).unwrap();
     let a = addresses()[0];
-    block_on(writer.add_tile(&mut store, "imagery", a, b"x")).unwrap();
-    assert!(block_on(writer.add_tile(&mut store, "imagery", a, b"y")).is_err());
-    assert!(writer.add_gap("imagery", a).is_err());
-    assert!(writer.add_layer(imagery_layer()).is_err());
+    block_on(writer.add_tile(&mut store, IMAGERY, a, b"x")).unwrap();
+    assert!(block_on(writer.add_tile(&mut store, IMAGERY, a, b"y")).is_err());
+    assert!(writer.add_gap(IMAGERY, a).is_err());
+    assert!(writer.add_layer(imagery_spec()).is_err());
+    assert!(block_on(writer.add_tile(&mut store, IMAGERY, addresses()[1], b"")).is_err());
+}
+
+#[test]
+fn correlation_keys_follow_the_source_not_the_package() {
+    let mut store = MemoryStore::default();
+    let id_a = build(&mut store, &addresses());
+    let id_b = build(&mut store, &addresses()[..6]);
+    let (a, b) = (open(&store, id_a).unwrap(), open(&store, id_b).unwrap());
+    assert_ne!(a.identity(), b.identity());
+    let point = [41.7, -1.0];
+    let key_a = a
+        .manifest()
+        .layer(IMAGERY)
+        .unwrap()
+        .correlation_key(point)
+        .unwrap();
+    let key_b = b
+        .manifest()
+        .layer(IMAGERY)
+        .unwrap()
+        .correlation_key(point)
+        .unwrap();
+    assert_eq!(key_a, key_b);
+    let coarse = a
+        .manifest()
+        .layer(ELEVATION)
+        .unwrap()
+        .correlation_key(point)
+        .unwrap();
+    assert_eq!(coarse.cell.0.zoom, 12);
 }

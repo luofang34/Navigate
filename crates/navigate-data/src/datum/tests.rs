@@ -15,11 +15,11 @@ impl GeoidUndulation for Constant {
 #[test]
 fn orthometric_heights_convert_only_with_the_named_model() {
     let datum = VerticalDatum::Orthometric {
-        geoid_model: "egm96".into(),
+        geoid: GeoidModel::Egm96,
     };
     let model = Constant(49.5);
     assert_eq!(
-        datum.to_ellipsoidal(300.0, 0.7, -0.02, Some(("egm96", &model))),
+        datum.to_ellipsoidal(300.0, 0.7, -0.02, Some((GeoidModel::Egm96, &model))),
         EllipsoidalHeight::Known(349.5)
     );
     let unknown = EllipsoidalHeight::UnknownUndulation {
@@ -27,7 +27,7 @@ fn orthometric_heights_convert_only_with_the_named_model() {
         bound_m: UNKNOWN_UNDULATION_BOUND_M,
     };
     assert_eq!(
-        datum.to_ellipsoidal(300.0, 0.7, -0.02, Some(("egm2008", &model))),
+        datum.to_ellipsoidal(300.0, 0.7, -0.02, Some((GeoidModel::Egm2008, &model))),
         unknown
     );
     assert_eq!(
@@ -40,11 +40,11 @@ fn orthometric_heights_convert_only_with_the_named_model() {
 fn ellipsoidal_and_unknown_datums() {
     let zero = ZeroUndulation(Ellipsoid::WGS84);
     assert_eq!(
-        VerticalDatum::Ellipsoidal.to_ellipsoidal(10.0, 0.0, 0.0, Some(("egm96", &zero))),
+        VerticalDatum::Ellipsoidal.to_ellipsoidal(10.0, 0.0, 0.0, Some((GeoidModel::Egm96, &zero))),
         EllipsoidalHeight::Known(10.0)
     );
     assert!(matches!(
-        VerticalDatum::Unknown.to_ellipsoidal(10.0, 0.0, 0.0, Some(("egm96", &zero))),
+        VerticalDatum::Unknown.to_ellipsoidal(10.0, 0.0, 0.0, Some((GeoidModel::Egm96, &zero))),
         EllipsoidalHeight::UnknownUndulation { .. }
     ));
 }

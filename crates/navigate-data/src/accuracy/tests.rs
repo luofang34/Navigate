@@ -3,21 +3,22 @@ use super::*;
 #[test]
 fn unknown_values_stay_unknown_and_known_values_grow_with_age() {
     let mut a = Accuracy::unknown();
-    assert_eq!(a.horizontal_after(3.0), Sigma::Unknown);
-    a.horizontal = Sigma::Known(3.0);
-    assert_eq!(a.horizontal_after(3.0), Sigma::Unknown);
-    a.age_growth_per_year = Sigma::Known(4.0 / 3.0);
-    assert_eq!(a.horizontal_after(3.0), Sigma::Known(5.0));
-    assert_eq!(a.horizontal_after(-1.0), Sigma::Known(3.0));
+    assert_eq!(a.horizontal_sigma_m(DayNumber(1_000)), None);
+    a.horizontal_mm = Some(3_000);
+    a.acquired = Some(DayNumber(0));
+    assert_eq!(a.horizontal_sigma_m(DayNumber(1_000)), None);
+    a.age_growth_mm_per_year = Some(1_000);
+    let four_years = DayNumber(1_461);
+    assert!((a.horizontal_sigma_m(four_years).unwrap() - 5.0).abs() < 1e-9);
+    assert_eq!(a.horizontal_sigma_m(DayNumber(-5)), Some(3.0));
 }
 
 #[test]
-fn unknown_is_explicit_in_the_encoding() {
+fn the_encoding_has_integers_and_explicit_nulls() {
     let text = serde_json::to_string(&Accuracy::unknown()).unwrap();
     assert_eq!(
         text,
-        r#"{"horizontal":"unknown","vertical":"unknown","acquired":"unknown","age_growth_per_year":"unknown","surface":"unknown"}"#
+        r#"{"horizontal_mm":null,"vertical_mm":null,"acquired":null,"age_growth_mm_per_year":null,"surface":"unknown"}"#
     );
-    let known = serde_json::to_string(&Sigma::Known(2.5)).unwrap();
-    assert_eq!(known, r#"{"known":2.5}"#);
+    assert!(serde_json::from_str::<Accuracy>(r#"{"horizontal_mm":1.5,"vertical_mm":null,"acquired":null,"age_growth_mm_per_year":null,"surface":"unknown"}"#).is_err());
 }
