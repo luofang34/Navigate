@@ -97,6 +97,29 @@ fn frames_that_can_only_show_cells_with_a_fix_are_not_matched() {
     assert!(error.xy().norm() < 16.0, "{error}");
 }
 
+/// A navigator with the belly camera `imager`, aligned 30 m north, 20 m
+/// west, and 10 m above the centre at the height of the flights.
+#[cfg(test)]
+fn aligned_hover(imager: ImagerModel) -> ReferenceNavigator {
+    let mut navigator = ReferenceNavigator::new(suite(imager, belly()), CLOCK, None).unwrap();
+    navigator
+        .align(&Alignment {
+            position: GeodeticPosition::new(
+                CENTRE[0].to_radians() + 30.0 / 6_364_000.0,
+                CENTRE[1].to_radians() - 20.0 / 4_762_000.0,
+                HEIGHT_M + 10.0,
+            ),
+            velocity: NedVelocity::new(0.0, 0.0, 0.0),
+            attitude: AttitudeQuaternion::new(1.0, 0.0, 0.0, 0.0),
+            position_cov: SymmetricCov3::from_diagonal(1_600.0, 1_600.0, 400.0),
+            velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
+            attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
+            at: at(0),
+        })
+        .unwrap();
+    navigator
+}
+
 #[test]
 fn a_large_frame_is_matched_at_the_working_resolution() {
     let world = World::build(&WorldSpec::default());
@@ -119,23 +142,7 @@ fn a_large_frame_is_matched_at_the_working_resolution() {
         start: [CENTRE[0], CENTRE[1], HEIGHT_M],
         speed_m_s: 0.0,
     };
-    let imager = ImagerModel::pinhole(declared);
-    let mut navigator = ReferenceNavigator::new(suite(imager, belly()), CLOCK, None).unwrap();
-    navigator
-        .align(&Alignment {
-            position: GeodeticPosition::new(
-                CENTRE[0].to_radians() + 30.0 / 6_364_000.0,
-                CENTRE[1].to_radians() - 20.0 / 4_762_000.0,
-                HEIGHT_M + 10.0,
-            ),
-            velocity: NedVelocity::new(0.0, 0.0, 0.0),
-            attitude: AttitudeQuaternion::new(1.0, 0.0, 0.0, 0.0),
-            position_cov: SymmetricCov3::from_diagonal(1_600.0, 1_600.0, 400.0),
-            velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
-            attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
-            at: at(0),
-        })
-        .unwrap();
+    let mut navigator = aligned_hover(ImagerModel::pinhole(declared));
     let scaled = TerrainMapRequest {
         config,
         ..request(&world)

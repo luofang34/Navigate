@@ -48,6 +48,22 @@ pub(crate) struct TerrainCamera {
     working: Option<WorkingCamera>,
 }
 
+/// The frame of the match: the image at the size of the working camera.
+/// The triangle filter averages the source pixels under each working
+/// pixel, and it maps pixel centres as `Intrinsics::resized` does.
+fn resampled(stamp: FrameStamp, image: GrayImage, working: &Intrinsics) -> Frame {
+    let size = (working.width, working.height);
+    Frame {
+        stamp,
+        camera: model(working),
+        image: if image.dimensions() == size {
+            image
+        } else {
+            resize(&image, size.0, size.1, FilterType::Triangle)
+        },
+    }
+}
+
 impl TerrainCamera {
     pub(super) fn new(spec: &SensorSpec, clock: ClockDomainId) -> Result<Self, OnboardError> {
         let invalid = |detail: String| OnboardError::Config {
@@ -244,22 +260,11 @@ impl TerrainCamera {
             attitude_radius_rad,
         };
         self.working = Some(reference.working);
-        let k = reference.working.intrinsics;
-        let frame = Frame {
-            stamp: FrameStamp {
-                sequence,
-                capture_time_ns: acquired,
-            },
-            camera: model(&k),
-            // The triangle filter averages the source pixels under each
-            // working pixel, and it maps pixel centres as
-            // `Intrinsics::resized` does.
-            image: if image.dimensions() == (k.width, k.height) {
-                image
-            } else {
-                resize(&image, k.width, k.height, FilterType::Triangle)
-            },
+        let stamp = FrameStamp {
+            sequence,
+            capture_time_ns: acquired,
         };
+        let frame = resampled(stamp, image, &reference.working.intrinsics);
         match self.localizer.estimate_blocking(&frame, view, &prior) {
             Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, (key, path))),
             Err(error) => {

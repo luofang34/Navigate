@@ -243,6 +243,34 @@ fn where_the_time_of_one_frame_goes() {
     );
 }
 
+/// The hover, the camera mount, and the alignment error (north, east, up,
+/// metres) of the pose `i`: a belly camera for an even pose and an oblique
+/// camera with a lever arm for an odd pose.
+#[cfg(test)]
+fn pose(i: u32) -> (Flight, CameraMount, [f64; 3]) {
+    let a = f64::from(i);
+    let hover = Flight {
+        start: [
+            CENTRE[0] + 0.004 * (a * 1.7).sin(),
+            CENTRE[1] + 0.006 * (a * 2.3).cos(),
+            HEIGHT_M + 60.0 * (a * 0.9).sin(),
+        ],
+        speed_m_s: 0.0,
+    };
+    let mount = if i.is_multiple_of(2) {
+        belly()
+    } else {
+        CameraMount::rotated_forward(0.1, -70.0_f64.to_radians(), 0.4 + a)
+            .with_lever_arm(nalgebra::Vector3::new(2.0, -0.7, 0.9))
+    };
+    let off = [
+        30.0 * (a * 1.1).sin(),
+        30.0 * (a * 0.7).cos(),
+        10.0 * (a * 1.9).sin(),
+    ];
+    (hover, mount, off)
+}
+
 /// The fixes of `poses` hovering vehicles over `world`, alternately through
 /// the belly camera and an oblique camera of 320 by 240 pixels, with the
 /// tuning `config`: the count of fused fixes, the root mean square of the
@@ -268,28 +296,9 @@ fn fixes_with(world: &World, config: TerrainConfig, poses: u32) -> (u32, f64, f6
     let rays = (1, if cfg!(debug_assertions) { 2 } else { 1 });
     let (mut fused, mut horizontal_m2, mut vertical_m2, mut ms) = (0, 0.0, 0.0, 0.0);
     for i in 0..poses {
-        let a = f64::from(i);
-        let hover = Flight {
-            start: [
-                CENTRE[0] + 0.004 * (a * 1.7).sin(),
-                CENTRE[1] + 0.006 * (a * 2.3).cos(),
-                HEIGHT_M + 60.0 * (a * 0.9).sin(),
-            ],
-            speed_m_s: 0.0,
-        };
-        let mount = if i % 2 == 0 {
-            belly()
-        } else {
-            CameraMount::rotated_forward(0.1, -70.0_f64.to_radians(), 0.4 + a)
-                .with_lever_arm(nalgebra::Vector3::new(2.0, -0.7, 0.9))
-        };
+        let (hover, mount, off) = pose(i);
         let suite = suite(ImagerModel::pinhole(k), mount);
         let mut navigator = ReferenceNavigator::new(suite, CLOCK, None).unwrap();
-        let off = [
-            30.0 * (a * 1.1).sin(),
-            30.0 * (a * 0.7).cos(),
-            10.0 * (a * 1.9).sin(),
-        ];
         let (lat, lon) = (hover.start[0].to_radians(), hover.start[1].to_radians());
         navigator
             .align(&Alignment {
