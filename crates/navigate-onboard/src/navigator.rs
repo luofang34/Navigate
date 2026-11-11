@@ -9,8 +9,12 @@ use core::any::Any;
 
 use navigate_data::product::{KindName, ProductKind, ProductUse};
 use navigate_data::{LayerKind, Sha256Digest};
+use navigate_fusion::ImuBiasPrior;
 
-use crate::{AcceptanceSink, AlignmentStatus, OnboardError, SensorInput, SensorSuite};
+use crate::{
+    AcceptanceSink, AlignmentConfig, AlignmentStatus, MagneticReference, OnboardError, SensorInput,
+    SensorSuite,
+};
 
 /// How much a navigator needs one kind of data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +68,13 @@ pub struct Alignment {
     pub attitude_cov: SymmetricCov3,
     /// When the state is valid, on the navigator clock.
     pub at: MonotonicNanos,
+    /// The IMU biases at the state, with their covariances, in the body
+    /// axes: for example the gyroscope turn-on bias that a ground
+    /// calibration measured in a rest window before an in-air start. The
+    /// filter starts its biases from it; `None` starts them at zero with
+    /// their stationary variances and clears a prior that an earlier
+    /// alignment gave.
+    pub imu_bias_prior: Option<ImuBiasPrior>,
 }
 
 /// A navigator: sensor inputs in, a navigation solution out.
@@ -98,6 +109,34 @@ pub trait Navigator {
         Err(OnboardError::Config {
             field: "realign",
             detail: "this navigator does not align itself".into(),
+        })
+    }
+
+    /// States the Earth's field at the place, for the heading of a
+    /// magnetometer.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a reference that is not usable, and a navigator that does
+    /// not take one.
+    fn set_magnetic_reference(&mut self, reference: MagneticReference) -> Result<(), OnboardError> {
+        Err(OnboardError::Config {
+            field: "magnetic reference",
+            detail: format!("this navigator does not take one: {reference:?}"),
+        })
+    }
+
+    /// Sets how the navigator aligns itself. A host that holds the
+    /// navigator as a trait object reaches it here.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a configuration that is not usable, and a navigator that
+    /// does not align itself.
+    fn set_alignment_config(&mut self, config: AlignmentConfig) -> Result<(), OnboardError> {
+        Err(OnboardError::Config {
+            field: "alignment configuration",
+            detail: format!("this navigator does not align itself: {config:?}"),
         })
     }
 

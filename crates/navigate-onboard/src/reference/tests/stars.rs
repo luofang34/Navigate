@@ -166,6 +166,7 @@ fn transfer(step: u64) -> Alignment {
         velocity_cov: SymmetricCov3::from_diagonal(0.01, 0.01, 0.01),
         attitude_cov: SymmetricCov3::from_diagonal(1e-6, 1e-6, 1e-5),
         at: at(step),
+        imu_bias_prior: None,
     }
 }
 
