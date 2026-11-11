@@ -1,5 +1,6 @@
 //! The reference navigator: Navigate's 22-state inertial filter on WGS84
-//! with GNSS, barometric, star-camera, and pass-through aiding.
+//! with GNSS, barometric, star-camera, terrain-camera, and pass-through
+//! aiding.
 
 use std::collections::BTreeMap;
 
@@ -13,15 +14,24 @@ use navigate_fusion::{
 };
 use navigate_startrack::line_of_sight_observations;
 
+use navigate_data::LayerKind;
+use navigate_data::product::ProductKind;
+
 use crate::{
-    AcceptanceRecord, AcceptanceSink, Alignment, ErrorBudget, Navigator, OnboardError, Outcome,
-    SensorData, SensorInput, SensorKind, SensorSuite,
+    AcceptanceRecord, AcceptanceSink, Alignment, DataRequirement, ErrorBudget, Navigator, Need,
+    OnboardError, Outcome, ProductReport, SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
 mod stars;
+mod terrain;
 pub use stars::{StarCatalogueConfig, own_prior};
+pub use terrain::{
+    AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, TerrainConfig,
+    TerrainMapRequest,
+};
 
 use stars::{Sighting, StarChannel};
+use terrain::TerrainMeans;
 
 /// The reference composition. Each sensor of the suite feeds the one
 /// filter; a sensor whose inputs do not come gives nothing.
@@ -35,6 +45,7 @@ pub struct ReferenceNavigator {
     sequences: BTreeMap<u32, WrappingSequence>,
     /// Keyed by `SourceId::get`.
     stars: BTreeMap<u32, StarChannel>,
+    terrain: TerrainMeans,
 }
 
 /// The filter configuration of a suite: the IMU budget and the bias of the
@@ -77,8 +88,9 @@ impl ReferenceNavigator {
     ///
     /// # Errors
     ///
-    /// Refuses a suite without an IMU budget and a star camera without a
-    /// catalogue configuration.
+    /// Refuses a suite without an IMU budget, a star camera without a
+    /// catalogue configuration, and a terrain camera that is not a visible
+    /// camera with usable intrinsics.
     pub fn new(
         suite: SensorSuite,
         clock: ClockDomainId,
@@ -97,6 +109,7 @@ impl ReferenceNavigator {
             channels.insert(spec.id.get(), StarChannel::new(spec, catalogue)?);
         }
         Ok(Self {
+            terrain: TerrainMeans::new(&suite, clock)?,
             filter: Box::new(InertialNavigationFilter::new_surface(
                 config,
                 clock,
@@ -348,6 +361,9 @@ impl Navigator for ReferenceNavigator {
             (SensorData::StarCentroids { .. }, SensorKind::StarCamera) => {
                 self.star_frame(input, sink)
             }
+            (SensorData::TerrainFrame { .. }, SensorKind::TerrainCamera) => {
+                self.terrain_frame(input, sink)
+            }
             (SensorData::Observation(observation), _) => {
                 self.offer(input, "observation", observation, None, sink);
                 Ok(())
@@ -358,6 +374,34 @@ impl Navigator for ReferenceNavigator {
 
     fn solution(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
         self.filter.tick(now)
+    }
+
+    fn requirements(&self) -> Vec<DataRequirement> {
+        if !self.terrain.has_cameras() {
+            return Vec::new();
+        }
+        let layer = |kind| DataRequirement {
+            layer: Some(kind),
+            product: None,
+            altitude_bands: None,
+            need: Need::Required,
+        };
+        vec![
+            layer(LayerKind::Imagery),
+            layer(LayerKind::Elevation),
+            DataRequirement {
+                layer: None,
+                product: Some(ProductKind::Keyframes),
+                altitude_bands: None,
+                need: Need::Optional,
+            },
+        ]
+    }
+
+    fn load_report(&self) -> &[ProductReport] {
+        self.terrain
+            .report()
+            .map_or(&[], |report| report.products.as_slice())
     }
 
     fn snapshot(&self) -> Box<dyn Navigator> {

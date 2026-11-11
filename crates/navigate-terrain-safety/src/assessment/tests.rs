@@ -239,6 +239,44 @@ fn vertical_uncertainty_above_bound_is_refused() {
 }
 
 #[test]
+fn an_infinite_vertical_bound_is_an_explicit_no_limit() {
+    let db = FlatTerrain { elevation_m: 0.0 };
+    let config = ClearanceConfig {
+        max_vertical_1sigma_m: f64::INFINITY,
+        ..ClearanceConfig::default()
+    };
+    let weak = solution_with_vertical_sigma(SolutionQuality::Degraded, 500.0, 900.0, t0());
+    assert!(assess_clearance(&weak, t0(), CLOCK, Some(&db), &config).is_ok());
+    // A non-finite sigma is refused with every bound.
+    for sigma in [f64::NAN, f64::INFINITY] {
+        let bad = solution_with_vertical_sigma(SolutionQuality::Degraded, 500.0, sigma, t0());
+        assert!(matches!(
+            assess_clearance(&bad, t0(), CLOCK, Some(&db), &config),
+            Err(ClearanceUnavailable::VerticalUncertaintyExceeded { .. })
+        ));
+    }
+}
+
+#[test]
+fn a_nan_or_negative_vertical_bound_refuses_every_solution() {
+    let db = FlatTerrain { elevation_m: 0.0 };
+    let good = solution_with_vertical_sigma(SolutionQuality::Good, 500.0, 1.0, t0());
+    for bound in [f64::NAN, -1.0, f64::NEG_INFINITY] {
+        let config = ClearanceConfig {
+            max_vertical_1sigma_m: bound,
+            ..ClearanceConfig::default()
+        };
+        assert!(
+            matches!(
+                assess_clearance(&good, t0(), CLOCK, Some(&db), &config),
+                Err(ClearanceUnavailable::VerticalUncertaintyExceeded { .. })
+            ),
+            "bound {bound}"
+        );
+    }
+}
+
+#[test]
 fn no_coverage_is_refused() {
     let result = assess_clearance(
         &solution(SolutionQuality::Good, 500.0, t0()),

@@ -168,8 +168,8 @@ pub enum ClearanceUnavailable {
 /// - [`ClearanceUnavailable::SolutionIntegrity`] when the solution's quality
 ///   is below `config.minimum_quality`;
 /// - [`ClearanceUnavailable::VerticalUncertaintyExceeded`] when
-///   `solution.integrity.vertical_1sigma_m` exceeds
-///   `config.max_vertical_1sigma_m`;
+///   `solution.integrity.vertical_1sigma_m` is not finite or exceeds
+///   `config.max_vertical_1sigma_m`, or when that bound is NaN;
 /// - [`ClearanceUnavailable::NoCoverage`] when `terrain` has no elevation
 ///   at the solution position.
 pub fn assess_clearance(
@@ -214,8 +214,11 @@ pub fn assess_clearance(
         });
     }
     let vertical_1sigma_m = solution.integrity.vertical_1sigma_m;
+    // A positive infinite bound is the explicit "no vertical limit" of
+    // the caller. A NaN bound is a configuration defect and refuses, and
+    // a non-finite sigma always refuses.
     if !vertical_1sigma_m.is_finite()
-        || !config.max_vertical_1sigma_m.is_finite()
+        || config.max_vertical_1sigma_m.is_nan()
         || vertical_1sigma_m > config.max_vertical_1sigma_m
     {
         return Err(ClearanceUnavailable::VerticalUncertaintyExceeded {

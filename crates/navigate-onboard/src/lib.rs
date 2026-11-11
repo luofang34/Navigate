@@ -15,7 +15,10 @@
 //! when its inputs do not come: no navigator has a mode that disables one.
 //!
 //! [`ReferenceNavigator`] is the reference composition: the 22-state
-//! inertial filter with GNSS, barometric, and star-camera aiding.
+//! inertial filter with GNSS, barometric, star-camera, and terrain-camera
+//! aiding. The terrain camera needs a terrain map: the host opens a store
+//! and gives it with a [`TerrainMapRequest`], and the navigator reads the
+//! package and never fetches.
 //! [`RouteDirector`] executes a flight plan with Navigate's sequencer and
 //! guidance laws.
 
@@ -32,7 +35,10 @@ pub use bundle::Onboard;
 pub use director::{
     DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector, SequenceCause,
 };
-pub use error::OnboardError;
+pub use error::{MapRefusal, OnboardError};
 pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
-pub use reference::{ReferenceNavigator, StarCatalogueConfig, own_prior};
+pub use reference::{
+    AccuracySource, AssumedAccuracy, HostGeoid, LayerReport, MapReport, ReferenceNavigator,
+    StarCatalogueConfig, TerrainConfig, TerrainMapRequest, own_prior,
+};
 pub use sensor::{ErrorBudget, SensorData, SensorInput, SensorKind, SensorSpec, SensorSuite};
