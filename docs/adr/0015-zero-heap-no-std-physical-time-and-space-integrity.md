@@ -50,6 +50,10 @@ when terrestrial assumptions stay implicit:
 - `Waypoint` and `PlanValidationError` use `Ident` and implement `Copy`.
 - `FlightPlan<'a>` borrows a caller-owned slice `&'a [Waypoint]` and
   allocates no heap memory.
+- `PlanExecution<'a>` borrows its plan. An owner that keeps the
+  waypoints and cannot keep the borrow between steps stores the active
+  index and the completion flag, and calls `PlanExecution::resume` with
+  them at the next step.
 - `navigate_celestial::stars::stars_ecef_tt_into` writes star sights
   into a caller-supplied `&mut [StarSight]` buffer without allocation.
 - `navigate_contract::FrameId` is the single frame identifier across

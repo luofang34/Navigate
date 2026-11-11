@@ -236,6 +236,42 @@ impl<'a> PlanExecution<'a> {
         })
     }
 
+    /// Restores the sequencing state of an execution of the same plan and
+    /// config: the active index and the completion flag. An owner that
+    /// keeps its waypoints and must not hold a borrow between steps
+    /// stores these two values and resumes the execution at each step.
+    /// The validation is that of [`Self::new`], so a plan that does not
+    /// activate does not resume.
+    ///
+    /// # Errors
+    ///
+    /// Each refusal of [`Self::new`], and
+    /// [`PlanActivationError::InvalidResumeState`] for an active index past
+    /// the last waypoint or a complete state at another index than the
+    /// last.
+    pub fn resume(
+        plan: FlightPlan<'a>,
+        config: ExecutionConfig,
+        active_index: usize,
+        complete: bool,
+    ) -> Result<Self, PlanActivationError> {
+        let mut execution = Self::new(plan, config)?;
+        let waypoints = plan.waypoints.len();
+        let last = waypoints.checked_sub(1);
+        let fits = active_index < waypoints && (!complete || Some(active_index) == last);
+        if !fits {
+            return Err(PlanActivationError::InvalidResumeState {
+                plan: plan.id,
+                active_index,
+                complete,
+                waypoints,
+            });
+        }
+        execution.active_index = active_index;
+        execution.complete = complete;
+        Ok(execution)
+    }
+
     /// Feeds one position sample to the sequencer at the commanded
     /// groundspeed. Capture is horizontal and ignores altitude: a fly-by
     /// waypoint between two fixed legs sequences strictly within

@@ -130,6 +130,22 @@ pub enum PlanActivationError {
         /// The rejected value.
         value: f64,
     },
+    /// A resumed sequencing state does not fit the plan: the active index
+    /// is past the last waypoint, or a complete execution is not at the
+    /// last waypoint.
+    #[error(
+        "plan {plan} cannot resume at waypoint {active_index} (complete: {complete}) of {waypoints}"
+    )]
+    InvalidResumeState {
+        /// Offending plan id.
+        plan: Ident,
+        /// The requested active index.
+        active_index: usize,
+        /// The requested completion state.
+        complete: bool,
+        /// Waypoints in the plan.
+        waypoints: usize,
+    },
     /// A leg declares a path terminator this build has no sequencer for
     /// (NAV-LG-005). The plan is valid; this executor cannot fly it.
     #[error("plan {plan} leg {index} ({ident}) declares a {path} leg this build cannot fly")]
