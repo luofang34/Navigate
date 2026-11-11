@@ -7,11 +7,12 @@
 //! extra measurement must not get worse on average, and its horizontal
 //! NEES must stay in its band.
 
-use nalgebra::{Rotation3, Vector3};
+use nalgebra::{Const, DimMin, Rotation3, Vector3};
 
 use super::flight_truth::{Alignment, FREE_INDEX, Flight, Route, draw3, tactical};
 use super::*;
-use crate::observation::{LineOfSightReference, Observation, ObservationValue};
+use crate::inertial::StateLayout;
+use crate::observation::{CorrelatedError, LineOfSightReference, Observation, ObservationValue};
 
 /// Independent runs for each case. The debug build of `cargo test`
 /// runs one short run of each case as a smoke test; the release build
@@ -69,8 +70,8 @@ const ALIGNMENT: Alignment = Alignment {
 const STARS_PER_FRAME: u32 = 8;
 /// Centroid direction 1-sigma, radians.
 const STAR_SIGMA_RAD: f64 = 5e-6;
-/// The constant camera mount error of the limit case, radians about each
-/// axis, declared as white variance on each line of sight.
+/// The constant camera mount error of the mount cases, radians about
+/// each axis.
 const MOUNT_SIGMA_RAD: f64 = 2e-5;
 
 /// One case of the distribution.
@@ -80,19 +81,31 @@ struct Case {
     route: Route,
     /// 1-sigma of the constant mount error of each run, radians.
     mount_rad: f64,
+    /// Whether the camera declares the mount error as a constant
+    /// correlated error. Otherwise each line of sight declares it as
+    /// white variance.
+    declare_mount: bool,
 }
 
 /// One frame of the roof camera: `STARS_PER_FRAME` lines of sight in a
 /// cone around the body zenith, with centroid noise.
-fn offer_stars(
-    flight: &mut Flight,
+fn offer_stars<const N: usize>(
+    flight: &mut Flight<N>,
     star: &mut u32,
     mount: &Rotation3<f64>,
-    mount_rad: f64,
+    case: Case,
     at_ms: u64,
-) -> u32 {
+) -> u32
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
     let seed = flight.seed;
-    let variance = STAR_SIGMA_RAD.powi(2) + mount_rad.powi(2);
+    let mount_rad = case.mount_rad;
+    let variance = if case.declare_mount {
+        STAR_SIGMA_RAD.powi(2)
+    } else {
+        STAR_SIGMA_RAD.powi(2) + mount_rad.powi(2)
+    };
     let c = flight.truth_body_to_frame();
     let mut refused = 0_u32;
     for _ in 0..STARS_PER_FRAME {
@@ -113,6 +126,11 @@ fn offer_stars(
             SourceComposition::of(SensorClass::Celestial),
             flight.filter.frame(),
         );
+        let observation = if case.declare_mount {
+            observation.with_correlated_error(CorrelatedError::new(f64::INFINITY, [mount_rad; 3]))
+        } else {
+            observation
+        };
         // The 0.1 % gate refuses a few true draws.
         if !flight.filter.ingest(&observation, t(at_ms)).is_accepted() {
             refused = refused.wrapping_add(1);
@@ -123,8 +141,15 @@ fn offer_stars(
 
 /// The horizontal NEES, the attitude NEES, and the horizontal error in
 /// meters at the end of one run of a tactical IMU.
-fn run(seed: u32, case: Case) -> (f64, f64, f64) {
-    let mut flight = Flight::new(case.route, seed, tactical(), ALIGNMENT);
+fn run<const N: usize>(seed: u32, case: Case, layout: StateLayout) -> (f64, f64, f64)
+where
+    Const<N>: DimMin<Const<N>, Output = Const<N>>,
+{
+    let config = InertialConfig {
+        layout,
+        ..tactical()
+    };
+    let mut flight = Flight::<N>::new(case.route, seed, config, ALIGNMENT);
     let mount = Rotation3::new(draw3(seed, FREE_INDEX, case.mount_rad));
     let per_frame = (1.0 / case.route.step_s).round() as u32;
     let (mut star, mut refused) = (0_u32, 0_u32);
@@ -132,13 +157,8 @@ fn run(seed: u32, case: Case) -> (f64, f64, f64) {
     for k in 1..=case.route.steps() {
         at_ms = flight.step();
         if case.stars && k % per_frame == 0 {
-            refused = refused.wrapping_add(offer_stars(
-                &mut flight,
-                &mut star,
-                &mount,
-                case.mount_rad,
-                at_ms,
-            ));
+            refused =
+                refused.wrapping_add(offer_stars(&mut flight, &mut star, &mount, case, at_ms));
         }
     }
     assert!(refused * 100 <= star.max(1), "{refused} of {star} refused");
@@ -149,7 +169,15 @@ fn run(seed: u32, case: Case) -> (f64, f64, f64) {
 /// Mean horizontal NEES, mean attitude NEES, RMS horizontal error, and
 /// the errors of each seed.
 fn distribution(case: Case) -> (f64, f64, f64, std::vec::Vec<f64>) {
-    let runs: std::vec::Vec<(f64, f64, f64)> = (0..SEEDS).map(|seed| run(seed, case)).collect();
+    let runs: std::vec::Vec<(f64, f64, f64)> = (0..SEEDS)
+        .map(|seed| {
+            if case.declare_mount {
+                run::<25>(seed, case, StateLayout::FULL.with_correlated_blocks(1))
+            } else {
+                run::<22>(seed, case, StateLayout::FULL)
+            }
+        })
+        .collect();
     let n = f64::from(SEEDS);
     let nees = runs.iter().map(|r| r.0).sum::<f64>() / n;
     let attitude = runs.iter().map(|r| r.1).sum::<f64>() / n;
@@ -164,11 +192,13 @@ fn monte_carlo_stars_do_not_make_the_horizontal_estimate_worse() {
             stars: false,
             route,
             mount_rad: 0.0,
+            declare_mount: false,
         });
         let (star_nees, star_att, star_rms, starred) = distribution(Case {
             stars: true,
             route,
             mount_rad: 0.0,
+            declare_mount: false,
         });
         let (low, high) = HORIZONTAL_BAND;
         for nees in [free_nees, star_nees] {
@@ -209,18 +239,26 @@ fn monte_carlo_stars_do_not_make_the_horizontal_estimate_worse() {
 }
 
 #[test]
-fn monte_carlo_a_constant_mount_error_declared_as_white_makes_the_attitude_over_confident() {
+fn monte_carlo_a_constant_mount_error_needs_its_correlated_declaration() {
     // A constant camera mount error that each line of sight declares as
     // white variance: the filter averages it over the lines of sight and
     // the frames as if it were noise, so the attitude covariance falls
-    // below the error. The mean attitude NEES is above its band (17.8 in
-    // the release sample). A time-correlated error model for the mount
-    // (ADR-0023) or a mount state brings it into the band, and this test
-    // then inverts.
-    let (_, attitude, _, _) = distribution(Case {
+    // below the error, and the mean attitude NEES is above its band.
+    // Declared as a constant correlated error (ADR-0023), the mount has a
+    // block that every line of sight of the camera reads, and the
+    // attitude covariance keeps the mount uncertainty.
+    let case = Case {
         stars: true,
         route: AT_REST,
         mount_rad: MOUNT_SIGMA_RAD,
+        declare_mount: false,
+    };
+    let (_, white, _, _) = distribution(case);
+    assert!(white > ATTITUDE_BAND.1, "attitude NEES {white}");
+    let (_, declared, _, _) = distribution(Case {
+        declare_mount: true,
+        ..case
     });
-    assert!(attitude > ATTITUDE_BAND.1, "attitude NEES {attitude}");
+    let (low, high) = ATTITUDE_BAND;
+    assert!((low..=high).contains(&declared), "attitude NEES {declared}");
 }

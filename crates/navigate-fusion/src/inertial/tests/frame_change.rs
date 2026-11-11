@@ -70,6 +70,7 @@ fn the_jacobian_matches_finite_differences_of_the_change() {
         a_dmc: Vector3::new(3e-7, -1e-7, 2e-7),
         clock_bias_m: 120.0,
         clock_drift_mps: 0.4,
+        correlated: [nalgebra::Vector3::zeros(); crate::inertial::MAX_CORRELATED_BLOCKS],
     };
     let next = transformed_nominal(&x, &change);
     let mut numeric = ErrorMat::<22>::zeros();

@@ -6,6 +6,7 @@ use navigate_contract::{MonotonicNanos, SourceId};
 
 use super::coast::coast_transition;
 use super::config::InertialConfig;
+use super::correlated::{CorrelatedSources, Plan};
 use super::imu::ImuIncrement;
 use super::layout::StateLayout;
 use super::mechanization::{ImuRates, increment_transition, transition};
@@ -46,6 +47,11 @@ pub(crate) struct InertialCore<const N: usize = FULL_STATES> {
     pub(crate) last_rates: Option<ImuRates>,
     /// The map of the current magnetic bias estimate.
     pub(crate) mag_key: Option<MagneticKey>,
+    /// The sources with a correlated error and their blocks.
+    pub(crate) correlated: CorrelatedSources,
+    /// How the fix that is being applied reads its correlated error. It
+    /// is set only during one observation.
+    pub(crate) pending: Option<Plan>,
     /// How the state propagates.
     pub(crate) mode: PropagationMode,
 }
@@ -83,8 +89,11 @@ where
         let mut nominal = self.nominal;
         let mut p = self.p;
         for _ in 0..(steps as u64) {
-            let (next, phi, q_d) = transition(&nominal, rates, dt_s, &self.regime, config)
-                .ok_or(RejectionReason::ImplausibleCovariance)?;
+            let (mut next, mut phi, mut q_d) =
+                transition(&nominal, rates, dt_s, &self.regime, config)
+                    .ok_or(RejectionReason::ImplausibleCovariance)?;
+            self.correlated
+                .advance(&self.layout, dt_s, &mut next, &mut phi, &mut q_d);
             let propagated = phi * p * phi.transpose() + q_d;
             p = (propagated + propagated.transpose()) * 0.5;
             nominal = next;
@@ -115,9 +124,11 @@ where
             return self.propagate_to(at, &ImuRates::mean_of(increment), config);
         }
         let dt_s = seconds(elapsed);
-        let (next, phi, q_d) =
+        let (mut next, mut phi, mut q_d) =
             increment_transition(&self.nominal, increment, dt_s, &self.regime, config)
                 .ok_or(RejectionReason::ImplausibleCovariance)?;
+        self.correlated
+            .advance(&self.layout, dt_s, &mut next, &mut phi, &mut q_d);
         let propagated = phi * self.p * phi.transpose() + q_d;
         self.p = (propagated + propagated.transpose()) * 0.5;
         self.nominal = next;
@@ -170,8 +181,11 @@ where
         let mut nominal = self.nominal;
         let mut p = self.p;
         for _ in 0..(steps as u64) {
-            let (next, phi, q_d) = coast_transition(&nominal, dt_s, &model, settings, config)
-                .ok_or(RejectionReason::ImplausibleCovariance)?;
+            let (mut next, mut phi, mut q_d) =
+                coast_transition(&nominal, dt_s, &model, settings, config)
+                    .ok_or(RejectionReason::ImplausibleCovariance)?;
+            self.correlated
+                .advance(&self.layout, dt_s, &mut next, &mut phi, &mut q_d);
             let propagated = phi * p * phi.transpose() + q_d;
             p = (propagated + propagated.transpose()) * 0.5;
             nominal = next;
@@ -184,14 +198,22 @@ where
 
     /// Applies one linearized measurement of the error state. The error
     /// state is zero before the update. The update injects the estimate
-    /// into the nominal state and resets the covariance. On an error the
-    /// core does not change.
+    /// into the nominal state and resets the covariance. A pending
+    /// correlated error changes the model first ([`Plan::apply`]). On an error the core does not change.
     pub(crate) fn update<const M: usize>(
         &mut self,
         model: &Linearized<M, N>,
         gate_chi2: f64,
         mode: Mode,
     ) -> Result<f64, RejectionReason> {
+        let correlated;
+        let model = match &self.pending {
+            Some(pending) => {
+                correlated = pending.apply(model, &self.nominal);
+                &correlated
+            }
+            None => model,
+        };
         let state = KalmanState::<N> {
             x: ErrorVec::<N>::zeros(),
             p: self.p,

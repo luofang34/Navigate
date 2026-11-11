@@ -145,7 +145,10 @@ pub(crate) fn frame_change_jacobian<const N: usize>(
 /// Moves `core` into the new frame of `change`, with its regime.
 pub(crate) fn apply_frame_change<const N: usize>(core: &mut InertialCore<N>, change: &FrameChange) {
     core.nominal = transformed_nominal(&core.nominal, change);
-    let j = frame_change_jacobian::<N>(change, &core.layout);
+    let mut j = frame_change_jacobian::<N>(change, &core.layout);
+    let layout = core.layout;
+    core.correlated
+        .rotate(&change.rotation(), &layout, &mut core.nominal, &mut j);
     let moved = j * core.p * j.transpose();
     core.p = (moved + moved.transpose()) * 0.5;
     core.regime = Regime {
