@@ -70,6 +70,10 @@ echo "== navigate-celestial against every eclipse of the Canon (release) =="
 # cargo test checks a sample in the debug build; this checks every eclipse.
 cargo test --release -p navigate-celestial --test eclipse_canon
 
+echo "== navigate-fusion Monte Carlo consistency (release) =="
+# cargo test runs a small sample in the debug build; this runs the full one.
+cargo test --release -p navigate-fusion --lib monte_carlo
+
 echo "== cargo test =="
 cargo test --all-targets
 

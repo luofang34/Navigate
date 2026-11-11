@@ -49,6 +49,16 @@ pub enum ObservationValue {
     },
     /// Height above the reference ellipsoid, such as a corrected
     /// barometric altitude (ADR-0012). Requires an initialized filter.
+    ///
+    /// In the inertial filter, the vertical error correlates with the
+    /// horizontal error through the Coriolis and tilt terms of the
+    /// error dynamics. Thus an altitude update also moves the horizontal
+    /// estimate. When the horizontal uncertainty is large, the movement
+    /// is large: tens of meters for each update at an 800 m horizontal
+    /// 1-sigma. This is correct estimation, and on average it decreases
+    /// the horizontal error. A consumer of the solution, such as
+    /// guidance or a display, must tolerate this movement and must not
+    /// treat it as a fault.
     Altitude {
         /// Height above the reference ellipsoid in meters.
         altitude_m: f64,

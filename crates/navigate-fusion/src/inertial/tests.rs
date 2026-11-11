@@ -1,3 +1,4 @@
+mod baro_consistency;
 mod coast;
 mod deep_space;
 mod frame_change;
