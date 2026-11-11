@@ -266,7 +266,9 @@ impl Motion {
         let coriolis = earth_rate.cross(&(velocity + span.velocity_from));
         let force_ned = acceleration + coriolis - Vector3::new(0.0, 0.0, GRAVITY_MPS2);
         // The sizes of the two specific forces differ by the accelerometer
-        // errors and the velocity noise; a rotation does not change them.
+        // errors and the velocity noise. The tilt one-sigma of the span
+        // also holds the turn of the sum, which does not change a size:
+        // the gate is the wider for it, and never narrower.
         let force_sigma = span.tilt_sigma_rad * GRAVITY_MPS2;
         if (force_body.norm() - force_ned.norm()).abs() > GATE_SIGMAS * force_sigma {
             return Err(AlignmentNeed::ForceDisagreement);

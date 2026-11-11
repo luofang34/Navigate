@@ -127,6 +127,9 @@ impl Aligner {
     /// Takes one inertial increment. It gives the state of a declared start
     /// whose stamp it passes, or of a rest window that it completes.
     pub(crate) fn increment(&mut self, step: Increment) -> Option<Moving> {
+        if !(step.dt_s.is_finite() && step.dt_s > 0.0) {
+            return None;
+        }
         self.motion.increment(step);
         if let Some(moving) = self.try_declared() {
             return Some(moving);

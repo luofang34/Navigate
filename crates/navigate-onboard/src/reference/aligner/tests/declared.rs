@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 use navigate_contract::{NavigationSolution, SourceId};
 use navigate_data::VerticalDatum;
 
-use super::moving::{attitude_error, normalized};
+use super::moving::{attitude_error, cross_wind, normalized};
 use super::path::{Profile, Truth, Vehicle, ramp};
 use super::rig::{self, Noise, Rig, at};
 use super::waiting;
@@ -126,38 +126,67 @@ fn errors(truth: &Truth, solution: &NavigationSolution) -> [f64; 4] {
     ]
 }
 
-/// The mean normalized errors of 96 declared starts in cruise, with wind
-/// and climb drawn from their allowances and the statement drawn from its
-/// one-sigmas times `honesty`.
-fn mean_errors(honesty: f64) -> [f64; 4] {
+/// How a declared start states its speed, and what the navigator knows
+/// of the direction of the velocity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Case {
+    /// Airspeed of a vehicle that moves along its nose, in a wind drawn
+    /// from the wind allowance.
+    Air,
+    /// Ground speed of a vehicle that moves along its nose, with a crab
+    /// angle drawn from the crab allowance.
+    Ground,
+    /// Airspeed of a vehicle whose course is not its heading.
+    Undirected,
+}
+
+/// The mean normalized errors of 96 declared starts in cruise, with the
+/// unstated wind and climb drawn from their allowances and the statement
+/// drawn from its one-sigmas times `honesty`; and the largest stated tilt
+/// one-sigma.
+fn mean_errors(case: Case, honesty: f64) -> ([f64; 4], f64) {
     const SEEDS: u64 = 96;
     let config = AlignmentConfig::default();
     let mut sum = [0.0; 4];
+    let mut widest_tilt: f64 = 0.0;
     for seed in 0..SEEDS {
         let mut noise = Noise::new(seed.wrapping_add(7_000));
         let heading = noise.normal() * 3.0;
-        let wind = [
-            noise.normal() * config.declared_wind_sigma_m_s,
-            noise.normal() * config.declared_wind_sigma_m_s,
-        ];
+        let wind = match case {
+            Case::Ground => cross_wind(heading, noise.normal() * CRAB_SIGMA_RAD),
+            Case::Air | Case::Undirected => [
+                noise.normal() * config.declared_wind_sigma_m_s,
+                noise.normal() * config.declared_wind_sigma_m_s,
+            ],
+        };
         let climb = noise.normal() * config.declared_vertical_speed_sigma_m_s;
         let mut vehicle = Vehicle::new(cruise(heading, climb), wind, seed, 1.0);
-        let mut navigator = navigator(Some(CRAB_SIGMA_RAD));
+        let crab = (case != Case::Undirected).then_some(CRAB_SIGMA_RAD);
+        let mut navigator = navigator(crab);
         let (truth, solution) = declare(
             &mut navigator,
             &mut vehicle,
-            |truth| statement(truth, 55.0, &mut Noise::new(seed), honesty),
+            |truth| {
+                let mut start = statement(truth, 55.0, &mut Noise::new(seed), honesty);
+                if case == Case::Ground {
+                    start.speed.kind = SpeedKind::GroundSpeed;
+                    start.speed.speed_m_s += truth.velocity.xy().norm() - 55.0;
+                }
+                start
+            },
             0,
         );
         let Some(solution) = solution else {
-            panic!("seed {seed}: {:?}", navigator.alignment_status());
+            panic!("{case:?} seed {seed}: {:?}", navigator.alignment_status());
         };
+        let (tilt_var, _, _) = solution.attitude_cov.unwrap().diagonal();
+        widest_tilt = widest_tilt.max(tilt_var.sqrt());
         let each = errors(&truth, &solution);
         for (total, value) in sum.iter_mut().zip(each) {
             *total += value / SEEDS as f64;
         }
     }
-    sum
+    (sum, widest_tilt)
 }
 
 /// The first state of a declared start is as good as it states. The
@@ -168,21 +197,30 @@ fn mean_errors(honesty: f64) -> [f64; 4] {
 #[test]
 fn a_declared_start_is_as_good_as_it_states() {
     rig::show_events();
-    let [attitude, velocity, position, heading] = mean_errors(1.0);
-    tracing::info!(
-        attitude,
-        velocity,
-        position,
-        heading,
-        "96 declared starts: mean normalized errors"
-    );
-    // Three degrees of freedom: a band of 3.3 sigma about three. One:
-    // about one.
-    assert!(attitude < 3.82 && velocity < 3.82, "{attitude} {velocity}");
-    assert!((2.18..=3.82).contains(&position), "{position}");
-    assert!((0.52..=1.48).contains(&heading), "{heading}");
+    for case in [Case::Air, Case::Ground, Case::Undirected] {
+        let ([attitude, velocity, position, heading], widest_tilt) = mean_errors(case, 1.0);
+        tracing::info!(
+            ?case,
+            attitude,
+            velocity,
+            position,
+            heading,
+            widest_tilt,
+            "96 declared starts: mean normalized errors, widest tilt one-sigma"
+        );
+        // Three degrees of freedom: a band of 3.3 sigma about three. One:
+        // about one.
+        assert!(
+            attitude < 3.82 && velocity < 3.82,
+            "{case:?}: {attitude} {velocity}"
+        );
+        assert!((2.18..=3.82).contains(&position), "{case:?}: {position}");
+        assert!((0.52..=1.48).contains(&heading), "{case:?}: {heading}");
+        // The tilt one-sigma of the size test, at 55 m/s.
+        assert!(widest_tilt < 0.25, "{case:?}: {widest_tilt}");
+    }
     // A statement five times worse than it says shows.
-    let [_, _, position, heading] = mean_errors(5.0);
+    let ([_, _, position, heading], _) = mean_errors(Case::Air, 5.0);
     assert!(position > 3.82 && heading > 1.48, "{position} {heading}");
 }
 
@@ -261,6 +299,9 @@ fn a_turn_is_inside_the_stated_tilt() {
         };
         let error = attitude_error(&truth, &solution);
         let (tilt_var, _, _) = solution.attitude_cov.unwrap().diagonal();
+        // Taken out, the turn leaves less than 2° of the 20° bank: what is
+        // left is the angle of attack, the velocity off the body axis.
+        assert!(error.xy().norm() < 0.035, "{}", error.xy().norm());
         assert!(
             error.xy().norm() < 3.0 * tilt_var.sqrt(),
             "{crab:?}: {} of {}",
@@ -369,4 +410,39 @@ fn a_fork_before_a_late_statement_aligns_as_the_original_does() {
     let (records, status, solution) = run(&mut original);
     assert!(matches!(status, Some(AlignmentStatus::Aligned { .. })));
     assert_eq!(run(&mut *fork), (records, status, solution));
+}
+
+/// An increment of no or negative length is not kept: a declared start
+/// after it aligns from the good increments and does not fail.
+#[test]
+fn an_increment_of_no_length_is_not_kept() {
+    let mut vehicle = Vehicle::new(cruise(0.7, 0.0), [0.0, 0.0], 23, 1.0);
+    let mut navigator = navigator(Some(CRAB_SIGMA_RAD));
+    let mut sink = Vec::new();
+    while vehicle.step < STATED_AT {
+        let input = vehicle.increment();
+        if vehicle.step == STATED_AT - 50 {
+            for dt_s in [-0.01, f64::NAN, 0.0] {
+                let bad = SensorInput {
+                    data: SensorData::ImuIncrement {
+                        dt_s,
+                        delta_theta_rad: [0.0; 3],
+                        delta_velocity_m_s: [0.0; 3],
+                    },
+                    ..input.clone()
+                };
+                navigator.ingest(&bad, &mut sink).unwrap();
+            }
+        }
+        navigator.ingest(&input, &mut sink).unwrap();
+    }
+    let stated = statement(&vehicle.truth(), 55.0, &mut Noise::new(6), 0.0);
+    let input = SensorInput {
+        sensor: OPERATOR,
+        acquired_at: at(STATED_AT),
+        delivered_at: at(STATED_AT),
+        data: SensorData::DeclaredStart(stated),
+    };
+    navigator.ingest(&input, &mut sink).unwrap();
+    assert!(navigator.solution(at(STATED_AT)).is_some());
 }
