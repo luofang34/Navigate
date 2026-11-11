@@ -387,3 +387,27 @@ fn resampling_swaps_the_slices_and_keeps_the_particle_count() {
     assert_eq!(f.particles().len(), 64);
     assert!((f.effective_sample_size() - 64.0).abs() < 1e-9);
 }
+
+#[test]
+fn a_second_publication_of_the_same_state_keeps_its_sequence() {
+    let mut storage = Storage::new(PARTICLES);
+    let mut f = filter(
+        &mut storage,
+        MpfConfig::default(),
+        100.0,
+        NedVelocity::new(0.0, 0.0, 0.0),
+        0.1,
+    );
+    let composition = SourceComposition::of(SensorClass::MagneticAnomaly);
+    let publish = |f: &mut MarginalizedParticleFilter<'_>, at: u64| {
+        f.publish(
+            MonotonicNanos::from_nanos(at),
+            ClockDomainId::new(1),
+            composition,
+        )
+    };
+    let first = publish(&mut f, 5);
+    assert_eq!(publish(&mut f, 5), first);
+    let later = publish(&mut f, 6);
+    assert_eq!(later.stamp.sequence, first.stamp.sequence.next());
+}

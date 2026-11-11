@@ -33,6 +33,7 @@ use crate::kalman::{self, KalmanState};
 use crate::observation::{MeasurementKind, Observation, ObservationValue};
 use crate::provenance::ProvenanceLedger;
 use crate::rejection::{IngestOutcome, RejectionCounters, RejectionReason};
+use crate::solution_sequence::SolutionSequencer;
 use history::History;
 pub use history::MAX_KINEMATIC_HISTORY;
 pub use stats::InnovationStats;
@@ -60,7 +61,7 @@ pub struct NavigationFilter {
     clock: ClockDomainId,
     ellipsoid: BodyEllipsoid,
     epoch: SourceEpoch,
-    next_solution_sequence: WrappingSequence,
+    sequencer: SolutionSequencer,
     rejections: RejectionCounters,
     ledger: ProvenanceLedger,
     core: Option<Core>,
@@ -99,7 +100,7 @@ impl NavigationFilter {
             clock,
             ellipsoid,
             epoch: SourceEpoch::new(0),
-            next_solution_sequence: WrappingSequence::new(0),
+            sequencer: SolutionSequencer::new(),
             rejections: RejectionCounters::default(),
             ledger: ProvenanceLedger::default(),
             core: None,
@@ -137,7 +138,9 @@ impl NavigationFilter {
     /// measurements apply with their true positive `dt` even inside a
     /// tick loop. A `now` earlier than the state's time is clock misuse
     /// and yields `None`, never an absorbed or backdated publication.
-    /// Each publication advances the solution sequence.
+    /// The solution sequence advances only when the published solution
+    /// changes: a second tick for the same state at the same `now` gives
+    /// the same solution with the same sequence.
     pub fn tick(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
         let psd = self.config.process_noise_accel_psd;
         let core = self.core.as_ref()?;
@@ -158,7 +161,7 @@ impl NavigationFilter {
     /// lifetime, not one epoch.
     pub fn reset(&mut self) {
         self.epoch = self.epoch.next();
-        self.next_solution_sequence = WrappingSequence::new(0);
+        self.sequencer = SolutionSequencer::new();
         self.ledger.clear();
         self.core = None;
         self.history.clear();
@@ -334,10 +337,8 @@ impl NavigationFilter {
         let velocity = NedVelocity::new(v_local[0], v_local[1], v_local[2]);
         let position_cov = kalman::matrix_to_cov3(&p_cov_local);
         let velocity_cov = kalman::matrix_to_cov3(&v_cov_local);
-        let sequence = self.next_solution_sequence;
-        self.next_solution_sequence = sequence.next();
-        let stamp = SolutionStamp::new(self.epoch, sequence, now, self.clock);
-        Some(NavigationSolution::new(
+        let stamp = SolutionStamp::new(self.epoch, WrappingSequence::new(0), now, self.clock);
+        Some(self.sequencer.surface(NavigationSolution::new(
             stamp,
             position,
             velocity,
@@ -349,6 +350,6 @@ impl NavigationFilter {
             // window-scoped.
             self.ledger.epoch_composition(),
             self.ellipsoid.contract(),
-        ))
+        )))
     }
 }
