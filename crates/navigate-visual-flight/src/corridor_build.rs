@@ -113,13 +113,29 @@ pub struct CorridorBuildStats {
 pub fn build_corridor_bank_with_priors(
     spec: &CorridorBuildSpec,
 ) -> Result<CorridorBuildStats, FlightVisualError> {
-    let t0 = Instant::now();
     let surface = Surface::from_catalog(&spec.catalog_path)?;
     let catalog_bytes = fs::read(&spec.catalog_path).map_err(|source| FlightVisualError::Io {
         path: spec.catalog_path.clone(),
         source,
     })?;
-    let catalog_digest: [u8; 32] = Sha256::digest(&catalog_bytes).into();
+    build_corridor_bank_on_surface(spec, &surface, Sha256::digest(&catalog_bytes).into())
+}
+
+/// Build and write a corridor bank on a loaded [`Surface`]. The bank
+/// records `source_digest` as the identity of the map that it comes from:
+/// the catalog digest, or the identity of a navigation data package
+/// (ADR-0022). `spec.catalog_path` is not read.
+///
+/// # Errors
+///
+/// Returns [`FlightVisualError`] when feature extraction or file output fails.
+pub fn build_corridor_bank_on_surface(
+    spec: &CorridorBuildSpec,
+    surface: &Surface,
+    source_digest: [u8; 32],
+) -> Result<CorridorBuildStats, FlightVisualError> {
+    let t0 = Instant::now();
+    let catalog_digest = source_digest;
     let xfeat = LoadedXFeat::load(&spec.xfeat_weights_path, &spec.xfeat_runtime)?;
     let projector = HadamardProjector::new(DEFAULT_KASHIN_SEED);
 
@@ -129,7 +145,7 @@ pub fn build_corridor_bank_with_priors(
     let stride = spec.adaptive_stride.max(1);
 
     let mut tile_keys = select_corridor_tiles_from_priors(
-        &surface,
+        surface,
         &spec.priors,
         tile_m,
         spec.corridor_radius_m,
@@ -152,7 +168,7 @@ pub fn build_corridor_bank_with_priors(
 
     let render_size = [800_u32, 600_u32];
     let k_render = Matrix3::new(600.0, 0.0, 399.5, 0.0, 600.0, 299.5, 0.0, 0.0, 1.0);
-    let mut gpu_renderer = SurfaceGpuRenderer::try_new(&surface, &k_render, render_size);
+    let mut gpu_renderer = SurfaceGpuRenderer::try_new(surface, &k_render, render_size);
     if gpu_renderer.is_none() {
         tracing::warn!(
             catalog_sha256 = %surface.catalog_sha256,
@@ -185,7 +201,7 @@ pub fn build_corridor_bank_with_priors(
                     .iter()
                     .any(|p| (ce - p[0]).powi(2) + (cn - p[1]).powi(2) <= dense_nadir_radius_sq);
             let views = canonical_tile_poses(
-                &surface,
+                surface,
                 (ce, cn, ground_msl),
                 tile_m,
                 agl_m,
@@ -194,7 +210,7 @@ pub fn build_corridor_bank_with_priors(
             for (band, eye, rot) in views {
                 canonical_views += 1;
                 let gpu_view = gpu_renderer.as_mut().and_then(|gpu| {
-                    gpu.render_view(&surface, eye, &rot, &k_render, render_size)
+                    gpu.render_view(surface, eye, &rot, &k_render, render_size)
                         .ok()
                 });
                 let gray_img = if let Some(ref gv) = gpu_view {
@@ -298,7 +314,7 @@ pub fn build_corridor_bank_with_priors(
                     };
                 let bv = &base_views[view_idx];
                 let world_hits: Vec<Option<[f64; 3]>> = if let Some(ref gv) = bv.gpu_view {
-                    gv.unproject_pixels(&surface, &query_px)
+                    gv.unproject_pixels(surface, &query_px)
                 } else {
                     surface
                         .raycast_pixels(bv.eye, &bv.rot, &k_render, &query_px)

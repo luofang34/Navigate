@@ -16,7 +16,12 @@
 //! - the [`Descriptor`]: labels, attribution, and licence text outside the
 //!   identity;
 //! - [`CorrelationKey`]: correlated map error by source and grid cell;
-//! - Web Mercator tile arithmetic and the Terrarium height decoder.
+//! - derived [`product`] chunks, reusable across missions, and per-mission
+//!   product lists;
+//! - Web Mercator tile arithmetic and the Terrarium height decoder;
+//! - the [`resource`] model, which computes what each leg of a flight needs
+//!   before a fetch, and [`prepare`](fn@prepare), which fetches the planned
+//!   tiles through the host port and seals a package.
 //!
 //! The crate is `#![no_std]` with `alloc`. The `std` feature (the default)
 //! adds [`DirectoryStore`]; the `libm` feature supplies the float functions
@@ -34,6 +39,7 @@ compile_error!("navigate-data needs the `std` or the `libm` feature for float fu
 mod accuracy;
 mod body;
 mod correlation;
+pub mod corridor;
 mod datum;
 mod descriptor;
 mod digest;
@@ -43,6 +49,9 @@ mod grid;
 pub mod index;
 mod manifest;
 mod package;
+mod prepare;
+pub mod product;
+pub mod resource;
 mod source;
 mod store;
 pub mod tile;
@@ -58,6 +67,11 @@ pub use fetch::{FetchPort, Fetched, TileKey};
 pub use grid::{DEFAULT_CORRELATION_ZOOM, GridCell, GridScheme};
 pub use manifest::{IndexRef, Layer, LayerKey, Manifest, PACKAGE_FORMAT, PACKAGE_FORMAT_VERSION};
 pub use package::{LayerSpec, Package, PackageWriter, TileRead, read_blob};
+pub use prepare::{PlannedTiles, PrepareSummary, plan_tiles, prepare};
+pub use resource::{
+    GroundHeight, LayerLimits, LegResources, PlannedCamera, PlannedLeg, ResourcePlan,
+    ResourceRequest, ZoomBand, plan_resources,
+};
 pub use source::{Encoding, LayerKind, Revision, SourceKey};
 #[cfg(feature = "std")]
 pub use store::{DirectoryFile, DirectoryStore};
