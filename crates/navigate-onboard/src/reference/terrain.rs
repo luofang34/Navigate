@@ -326,15 +326,11 @@ impl ReferenceNavigator {
                 sensor: input.sensor,
             });
         };
-        // A frame with no structure gives no match, and a faint one no
-        // honest one; both are found before the filter, the map, or the
-        // matcher do any work for them.
+        // A frame with no structure gives no match. It is found before
+        // the filter, the map, or the matcher do any work for it.
         let content = content::Content::of(&image);
         if content.is_featureless(map.config.min_structure) {
             return Ok((Outcome::Unused(names::FEATURELESS_FRAME), None));
-        }
-        if content.is_faint(map.config.min_block_contrast) {
-            return Ok((Outcome::Unused(names::FAINT_FRAME), None));
         }
         let times = (input.acquired_at, input.delivered_at);
         // With a GNSS check the belief is that of its reference: a
@@ -345,6 +341,12 @@ impl ReferenceNavigator {
             None => &mut self.filter,
         };
         let sighting = match at_exposure(believer, times, map.config.max_capture_lag_s) {
+            // A faint frame of an oblique camera gives no honest match.
+            // The floor needs the believed view, and the frame is found
+            // before the map and the matcher do any work for it.
+            Ok(exposure) if camera.is_faint(&map.config, &content, &exposure.belief) => {
+                Sighting::Unused(names::FAINT_FRAME, None)
+            }
             Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,
             Err(reason) => Sighting::Unused(reason, None),
         };

@@ -247,6 +247,20 @@ const CASES: &[Case] = &[
         relief_m: 80.0,
         camera: Mismatch::ALL,
     },
+    // Fields at about three counts of block contrast, through a sensor
+    // with two counts of noise and no other change: what a camera at the
+    // nadir sees over real imagery of low contrast.
+    Case {
+        name: "farm-faint",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch {
+            contrast: 0.07,
+            noise: 2.0,
+            ..Mismatch::EXACT
+        },
+    },
 ];
 
 /// The 0.1 % and 99.9 % points of `χ²(3n)/n`, by Wilson–Hilferty.
@@ -321,8 +335,9 @@ fn check(case: &Case, heights: &[f64], offs: &[f64], sets: &[u32]) -> usize {
 }
 
 /// The cases of the release test: the exact map and the full camera
-/// mismatch over fields, low texture with the full mismatch, and a town.
-const RELEASE: [usize; 4] = [0, 3, 9, 6];
+/// mismatch over fields, low texture with the full mismatch, a town, and
+/// faint fields.
+const RELEASE: [usize; 5] = [0, 3, 9, 6, 12];
 
 /// From 1000 m and 1760 m, at the nadir and 30°: the fixes over fields,
 /// with the camera as the map shows it and with each mismatch at once,

@@ -2,6 +2,7 @@
 //! frames with a little content are still matched.
 
 use image::GrayImage;
+use navigate_camera::CameraMount;
 
 use super::fixes::{HEIGHT_M, belly, terrain};
 use super::flight::{CAMERA, Flight, RATE, at, load, navigator, show_events};
@@ -143,10 +144,23 @@ fn block(luma: &[u8]) -> f64 {
     Content::of(&GrayImage::from_raw(160, 120, luma.to_vec()).unwrap()).block
 }
 
-/// The outcome of the frame `luma` of `world` from `hover`.
+/// A camera that looks 45° ahead of the nadir.
 #[cfg(test)]
-fn outcome(world: &World, hover: &Flight, frame: &SensorInput, luma: Vec<u8>) -> Outcome {
-    let mut navigator = navigator(hover, belly(), [15.0, -10.0, 5.0], 20.0);
+fn oblique() -> CameraMount {
+    CameraMount::rotated_forward(0.0, -45.0_f64.to_radians(), 0.0)
+}
+
+/// The outcome of the frame `luma` of `world` from `hover`, for a camera
+/// on `mount`.
+#[cfg(test)]
+fn outcome(
+    world: &World,
+    hover: &Flight,
+    mount: CameraMount,
+    frame: &SensorInput,
+    luma: Vec<u8>,
+) -> Outcome {
+    let mut navigator = navigator(hover, mount, [15.0, -10.0, 5.0], 20.0);
     load(&mut navigator, world);
     let mut sink = Vec::new();
     for step in 1..=RATE {
@@ -164,38 +178,48 @@ fn outcome(world: &World, hover: &Flight, frame: &SensorInput, luma: Vec<u8>) ->
     terrain(&sink).remove(0).0
 }
 
-/// A frame of ground faded to just under the block contrast floor is
-/// refused as faint without a match; faded to just over it, it is
-/// matched and fixes.
-#[test]
-fn the_faint_floor_refuses_just_under_it_and_matches_just_over_it() {
-    show_events();
-    let floor = TerrainConfig::default().min_block_contrast;
-    let world = World::build(&WorldSpec::default());
+/// The frame of `luma` faded to `target` counts of block contrast, by
+/// bisection: the block contrast grows with the contrast.
+#[cfg(test)]
+fn faded_to(luma: &[u8], target: f64) -> Vec<u8> {
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..30 {
+        let middle = 0.5 * (low + high);
+        if block(&faded(luma, middle, 9)) < target {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    faded(luma, high, 9)
+}
+
+/// The frame of a camera on `mount` over the centre of `world`.
+#[cfg(test)]
+fn frame_of(world: &World, mount: &CameraMount) -> (Flight, SensorInput, Vec<u8>) {
     let hover = Flight {
         start: [CENTRE[0], CENTRE[1], HEIGHT_M],
         speed_m_s: 0.0,
     };
-    let frame = hover.frame(&world, &belly(), RATE, 0);
+    let frame = hover.frame(world, mount, RATE, 0);
     let SensorData::TerrainFrame { luma, .. } = &frame.data else {
         panic!("a terrain frame");
     };
-    // The contrast at which the faded frame has `target` counts of block
-    // contrast, by bisection: the block contrast grows with the contrast.
-    let at = |target: f64| {
-        let (mut low, mut high) = (0.0, 1.0);
-        for _ in 0..30 {
-            let middle = 0.5 * (low + high);
-            if block(&faded(luma, middle, 9)) < target {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        faded(luma, high, 9)
-    };
-    let under = at(0.95 * floor);
-    let over = at(1.05 * floor);
+    let luma = luma.clone();
+    (hover, frame, luma)
+}
+
+/// A frame of a camera 45° off the nadir, faded to just under the block
+/// contrast floor, is refused as faint without a match; faded to just
+/// over it, it is matched.
+#[test]
+fn the_faint_floor_of_an_oblique_camera_refuses_just_under_it_and_matches_just_over_it() {
+    show_events();
+    let floor = TerrainConfig::default().min_block_contrast;
+    let world = World::build(&WorldSpec::default());
+    let (hover, frame, luma) = frame_of(&world, &oblique());
+    let under = faded_to(&luma, 0.95 * floor);
+    let over = faded_to(&luma, 1.05 * floor);
     tracing::info!(
         under = block(&under),
         over = block(&over),
@@ -203,8 +227,48 @@ fn the_faint_floor_refuses_just_under_it_and_matches_just_over_it() {
     );
     assert!(block(&under) < floor && block(&over) > floor);
     assert_eq!(
-        outcome(&world, &hover, &frame, under),
+        outcome(&world, &hover, oblique(), &frame, under),
         Outcome::Unused("faint_frame")
     );
-    assert_eq!(outcome(&world, &hover, &frame, over), Outcome::Accepted);
+    assert_ne!(
+        outcome(&world, &hover, oblique(), &frame, over),
+        Outcome::Unused("faint_frame")
+    );
+}
+
+/// A camera at the nadir has no floor: a frame under the floor of an
+/// oblique camera goes to the matcher, which decides. The camera of this
+/// test has 160 by 120 pixels, and the matcher finds too little in its
+/// faint frames; the camera of `tests::geometry` fixes at these
+/// contrasts.
+#[test]
+fn a_camera_at_the_nadir_gives_a_frame_under_the_oblique_floor_to_the_matcher() {
+    show_events();
+    let floor = TerrainConfig::default().min_block_contrast;
+    let world = World::build(&WorldSpec::default());
+    let (hover, frame, luma) = frame_of(&world, &belly());
+    for part in [0.75, 0.5] {
+        let faint = faded_to(&luma, part * floor);
+        assert!(block(&faint) < (part + 0.1) * floor);
+        let outcome = outcome(&world, &hover, belly(), &frame, faint);
+        tracing::info!(part, ?outcome, "a faint frame at the nadir");
+        assert_ne!(outcome, Outcome::Unused("faint_frame"));
+        assert_ne!(outcome, Outcome::Unused("featureless_frame"));
+    }
+}
+
+#[test]
+fn the_floor_rises_from_thirty_degrees_to_forty_five() {
+    let config = TerrainConfig::default();
+    let at = |degrees: f64| config.faint_floor(degrees.to_radians());
+    assert_eq!([at(0.0), at(15.0), at(30.0)], [0.0, 0.0, 0.0]);
+    assert!((at(37.5) - 2.0).abs() < 1e-9);
+    assert!((at(45.0) - 4.0).abs() < 1e-9 && (at(70.0) - 4.0).abs() < 1e-9);
+    // The angles must be in order.
+    let reversed = TerrainConfig {
+        faint_floor_from_rad: 1.0,
+        faint_floor_full_rad: 0.5,
+        ..config
+    };
+    assert!(reversed.validate().is_err() && config.validate().is_ok());
 }
