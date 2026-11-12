@@ -155,6 +155,20 @@ fn a_receiver_that_leaves_the_reference_is_doubted_then_excluded_and_each_value_
         .map(|s| north_m(&s.solution).abs())
         .fold(0.0, f64::max);
     assert!(worst < 6.0, "{worst}");
+    // The solution says which sensors it holds: the receiver until the
+    // exclusion, and not from it.
+    let holds_gnss = |s: &Second| {
+        s.solution
+            .integrity
+            .contributing
+            .contains(SensorClass::Gnss)
+    };
+    assert!(holds_gnss(&seen[3]) && holds_gnss(doubted));
+    assert!(
+        seen.iter()
+            .filter(|s| s.second >= excluded.second)
+            .all(|s| !holds_gnss(s))
+    );
     // Each value of the excluded receiver has its record, the Doppler
     // velocity with the position.
     for measurement in ["gnss_position", "gnss_velocity"] {
@@ -335,4 +349,34 @@ fn an_observation_of_the_gnss_class_is_not_offered_while_gnss_is_excluded() {
     let last = sink.last().unwrap();
     assert_eq!(last.measurement, "observation");
     assert_eq!(last.outcome, Outcome::Unused(GNSS_EXCLUDED));
+}
+
+/// The time of one inertial step with and without the check, for a
+/// report: a vehicle at rest, 50 Hz increments, one GNSS fix each second.
+#[test]
+#[ignore = "a timing for a report"]
+fn time_one_inertial_step_with_and_without_the_check() {
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
+    let honest = Drift {
+        rate_m_s: 0.0,
+        ..RAMP
+    };
+    for with_check in [false, true] {
+        let mut navigator = aligned(&[SensorKind::Gnss]);
+        if with_check {
+            navigator.set_gnss_integrity(Some(config())).unwrap();
+        }
+        let mut sink = Vec::new();
+        let seconds = 60;
+        let started = std::time::Instant::now();
+        for step in 1..=seconds * RATE {
+            navigator.ingest(&rest_increment(step), &mut sink).unwrap();
+            if step.is_multiple_of(RATE) {
+                let fix = gnss_fix(step, honest.north_m(step / RATE));
+                navigator.ingest(&fix, &mut sink).unwrap();
+            }
+        }
+        let step_us = started.elapsed().as_secs_f64() * 1e6 / (seconds * RATE) as f64;
+        tracing::info!(with_check, step_us, "one inertial step");
+    }
 }

@@ -156,8 +156,18 @@ fn a_drifting_receiver_is_doubted_then_excluded_and_taken_again_when_it_agrees()
         // The error stays under the bound that the status stated.
         assert!(worst_m < error_m && worst_m < seen.largest_bound_m);
         assert!(seen.doubt_is_stated);
-        // After the exclusion the solution is that of the terrain fixes.
+        // After the exclusion the solution is that of the terrain fixes,
+        // and the filter takes each of them.
         assert!(seen.worst_after_m < FIX_BOUND_M, "{}", seen.worst_after_m);
+        let excluded_at = at((seen.excluded_s.unwrap() * RATE as f64).round() as u64);
+        let later: Vec<_> = seen
+            .records
+            .iter()
+            .filter(|r| r.acquired_at > excluded_at)
+            .cloned()
+            .collect();
+        let (accepted, refused, _) = terrain_counts(&later);
+        assert!(accepted >= 6 && refused == 0, "{accepted} {refused}");
         // The receiver agrees again from `TO_S`, and the navigator takes
         // it after the configured time, with a terrain fix in that time.
         let again_s = seen.taken_again_s.unwrap() - TO_S as f64;
