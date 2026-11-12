@@ -12,7 +12,7 @@ use super::super::world::lattice;
 
 /// How a camera frame differs from a render of the map imagery.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct Mismatch {
+pub(in super::super) struct Mismatch {
     /// Gain of the exposure.
     pub gain: f64,
     /// Exponent of the response: the frame is `(v/255)^gamma`.
@@ -32,7 +32,7 @@ pub(super) struct Mismatch {
 
 impl Mismatch {
     /// A frame as the map renders it.
-    pub(super) const EXACT: Self = Self {
+    pub(in super::super) const EXACT: Self = Self {
         gain: 1.0,
         gamma: 1.0,
         contrast: 1.0,
@@ -42,7 +42,7 @@ impl Mismatch {
         jpeg: None,
     };
     /// Another exposure, response, and light.
-    pub(super) const PHOTOMETRIC: Self = Self {
+    pub(in super::super) const PHOTOMETRIC: Self = Self {
         gain: 0.8,
         gamma: 1.3,
         contrast: 0.7,
@@ -50,14 +50,14 @@ impl Mismatch {
         ..Self::EXACT
     };
     /// The optics and the sensor: a blur of a pixel, noise, JPEG at 75.
-    pub(super) const OPTICS: Self = Self {
+    pub(in super::super) const OPTICS: Self = Self {
         blur_px: 1.0,
         noise: 3.0,
         jpeg: Some(75),
         ..Self::EXACT
     };
     /// Both.
-    pub(super) const ALL: Self = Self {
+    pub(in super::super) const ALL: Self = Self {
         blur_px: 1.0,
         noise: 3.0,
         jpeg: Some(75),
@@ -66,7 +66,13 @@ impl Mismatch {
 
     /// `luma`, `width` by `height`, as this camera gives it; `seed` draws
     /// the noise.
-    pub(super) fn apply(&self, luma: &[u8], width: u32, height: u32, seed: u64) -> Vec<u8> {
+    pub(in super::super) fn apply(
+        &self,
+        luma: &[u8],
+        width: u32,
+        height: u32,
+        seed: u64,
+    ) -> Vec<u8> {
         let (w, h) = (width as usize, height as usize);
         let mean = luma.iter().map(|v| f64::from(*v)).sum::<f64>() / luma.len() as f64;
         let mut v: Vec<f64> = luma
