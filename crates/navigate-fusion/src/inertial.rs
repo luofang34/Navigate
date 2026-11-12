@@ -349,6 +349,20 @@ where
         self.stats.clear();
     }
 
+    /// Replaces the estimate of this filter with the estimate of `other`:
+    /// the state, the history, the per-source tracking, the assessment
+    /// window, and the innovation statistics. The filter epoch, the
+    /// solution sequence, and the rejection counters stay, so the
+    /// solutions of this filter continue in order. A host that runs two
+    /// filters of one configuration on different observation sets
+    /// continues with it from the filter whose observations it trusts.
+    pub fn adopt_estimate(&mut self, other: &Self) {
+        self.core = other.core;
+        self.history = other.history;
+        self.ledger = other.ledger;
+        self.stats = other.stats;
+    }
+
     /// Per-reason rejection counters.
     #[must_use]
     pub const fn rejections(&self) -> &RejectionCounters {

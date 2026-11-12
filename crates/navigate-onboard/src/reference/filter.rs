@@ -152,6 +152,17 @@ impl NavigatorFilter {
         ))
     }
 
+    /// Takes the estimate of `other`, as
+    /// [`InertialNavigationFilter::adopt_estimate`] does. Two filters of
+    /// one navigator have one layout; for another layout nothing changes.
+    pub(crate) fn adopt_estimate(&mut self, other: &Self) {
+        match (self, other) {
+            (Self::Full(a), Self::Full(b)) => a.adopt_estimate(b),
+            (Self::Correlated(a), Self::Correlated(b)) => a.adopt_estimate(b),
+            _ => {}
+        }
+    }
+
     /// Drops the state, as [`InertialNavigationFilter::reset`] does.
     pub(crate) fn reset(&mut self) {
         each!(self, f => f.reset());

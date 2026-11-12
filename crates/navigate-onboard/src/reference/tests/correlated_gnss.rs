@@ -21,25 +21,25 @@ use crate::{
     SensorInput, SensorKind, SensorSuite,
 };
 
-const CLOCK: ClockDomainId = ClockDomainId::new(7);
-const IMU: SourceId = SourceId::new(1);
-const GNSS: SourceId = SourceId::new(2);
+pub(super) const CLOCK: ClockDomainId = ClockDomainId::new(7);
+pub(super) const IMU: SourceId = SourceId::new(1);
+pub(super) const GNSS: SourceId = SourceId::new(2);
 const LAT_DEG: f64 = 41.7;
 const LON_DEG: f64 = -1.0;
 const HEIGHT_M: f64 = 1_000.0;
 const SPEED_MPS: f64 = 40.0;
 /// The turn rate of a 25° bank at 40 m/s.
 const TURN_RAD_S: f64 = 0.114;
-const STEP_S: f64 = 0.1;
+pub(super) const STEP_S: f64 = 0.1;
 const EARTH_RATE: f64 = 7.292_115e-5;
 const EARTH_RADIUS_M: f64 = 6_378_137.0;
 /// The receiver of the browser chain: 10 Hz fixes, white 0.6 m
 /// horizontal and 1.0 m vertical, correlated 1.2 m and 2.0 m with a
 /// correlation time of 300 s, and 0.05 m/s Doppler velocity.
-const WHITE_M: [f64; 3] = [0.6, 0.6, 1.0];
-const CORRELATED_M: [f64; 3] = [1.2, 1.2, 2.0];
-const TAU_S: f64 = 300.0;
-const VELOCITY_SIGMA: f64 = 0.05;
+pub(super) const WHITE_M: [f64; 3] = [0.6, 0.6, 1.0];
+pub(super) const CORRELATED_M: [f64; 3] = [1.2, 1.2, 2.0];
+pub(super) const TAU_S: f64 = 300.0;
+pub(super) const VELOCITY_SIGMA: f64 = 0.05;
 
 const SEEDS: u32 = if cfg!(debug_assertions) { 1 } else { 12 };
 const DURATION_S: f64 = if cfg!(debug_assertions) {
@@ -73,13 +73,13 @@ fn mix(mut z: u64) -> u64 {
 }
 
 /// Independent standard normal draws for one seed.
-struct Draws {
-    seed: u64,
-    index: u64,
+pub(super) struct Draws {
+    pub(super) seed: u64,
+    pub(super) index: u64,
 }
 
 impl Draws {
-    fn normal(&mut self) -> f64 {
+    pub(super) fn normal(&mut self) -> f64 {
         let mut uniform = || {
             self.index = self.index.wrapping_add(1);
             let bits = mix((self.seed << 40) ^ self.index) >> 11;
@@ -89,7 +89,7 @@ impl Draws {
         (-2.0 * a.ln()).sqrt() * (core::f64::consts::TAU * b).cos()
     }
 
-    fn vec3(&mut self, sigma: [f64; 3]) -> Vector3<f64> {
+    pub(super) fn vec3(&mut self, sigma: [f64; 3]) -> Vector3<f64> {
         Vector3::new(
             self.normal() * sigma[0],
             self.normal() * sigma[1],
@@ -98,12 +98,12 @@ impl Draws {
     }
 }
 
-fn at(step: u32) -> MonotonicNanos {
+pub(super) fn at(step: u32) -> MonotonicNanos {
     MonotonicNanos::from_nanos(1_000_000_000 + u64::from(step) * 100_000_000)
 }
 
 /// The tactical IMU of the simulator trial.
-fn imu_budget() -> (f64, f64, FogmBias, FogmBias) {
+pub(super) fn imu_budget() -> (f64, f64, FogmBias, FogmBias) {
     let per_sqrt_hour = 1.0 / 60.0;
     (
         0.05 * per_sqrt_hour,
@@ -113,7 +113,7 @@ fn imu_budget() -> (f64, f64, FogmBias, FogmBias) {
     )
 }
 
-fn suite(correlated: bool) -> SensorSuite {
+pub(super) fn suite(correlated: bool) -> SensorSuite {
     let (accel, gyro, accel_bias, gyro_bias) = imu_budget();
     let spec = |id, kind, budget| SensorSpec {
         id,
@@ -158,18 +158,18 @@ fn suite(correlated: bool) -> SensorSuite {
 
 /// The truth: an inertial filter of Navigate that integrates exact
 /// increments of a level flight with coordinated heading changes.
-struct Truth {
+pub(super) struct Truth {
     filter: Box<InertialNavigationFilter>,
     sequence: WrappingSequence,
-    state: NavigationSolution,
+    pub(super) state: NavigationSolution,
 }
 
-fn start() -> GeodeticPosition {
+pub(super) fn start() -> GeodeticPosition {
     GeodeticPosition::new(LAT_DEG.to_radians(), LON_DEG.to_radians(), HEIGHT_M)
 }
 
 impl Truth {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut filter = Box::new(InertialNavigationFilter::new_surface(
             InertialConfig::default(),
             CLOCK,
@@ -198,7 +198,7 @@ impl Truth {
 
     /// The exact increments of the step that starts at `t_s`, and the
     /// truth after it.
-    fn step(&mut self, step: u32, t_s: f64) -> ([f64; 3], [f64; 3]) {
+    pub(super) fn step(&mut self, step: u32, t_s: f64) -> ([f64; 3], [f64; 3]) {
         let s = &self.state;
         let q = s.attitude.unwrap();
         let c = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(q.w, q.x, q.y, q.z));
@@ -246,7 +246,7 @@ impl Truth {
 }
 
 /// The NED offset of `b` from `a`, metres.
-fn ned_offset(a: &GeodeticPosition, b: &GeodeticPosition) -> Vector3<f64> {
+pub(super) fn ned_offset(a: &GeodeticPosition, b: &GeodeticPosition) -> Vector3<f64> {
     let r = EARTH_RADIUS_M + a.altitude_m;
     Vector3::new(
         (b.latitude_rad - a.latitude_rad) * r,
@@ -256,7 +256,7 @@ fn ned_offset(a: &GeodeticPosition, b: &GeodeticPosition) -> Vector3<f64> {
 }
 
 /// `p` moved by the NED offset `d`, metres.
-fn moved(p: &GeodeticPosition, d: &Vector3<f64>) -> GeodeticPosition {
+pub(super) fn moved(p: &GeodeticPosition, d: &Vector3<f64>) -> GeodeticPosition {
     let r = EARTH_RADIUS_M + p.altitude_m;
     GeodeticPosition::new(
         p.latitude_rad + d.x / r,

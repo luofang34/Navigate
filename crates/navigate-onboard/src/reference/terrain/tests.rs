@@ -15,4 +15,5 @@ mod load;
 mod precheck;
 mod reacquire;
 mod snapshot;
+mod spoof;
 mod world;
