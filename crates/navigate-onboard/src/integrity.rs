@@ -196,7 +196,10 @@ pub struct GnssIntegrityStatus {
     pub reference_position_fix_at: Option<MonotonicNanos>,
     /// For a reference on inertial data alone: the slowest receiver drift
     /// that it finds, m/s, the lowest exclusion bound over the time since
-    /// its start. A slower drift moves the solution and is not found.
+    /// its start. A slower drift moves the solution and is not found. A
+    /// start copies the position and the velocity of the solution, so the
+    /// reference finds a drift only when the drift begins after its
+    /// start, and best when it begins soon after it.
     /// `None` with a position fix of another sensor, and before the first
     /// compared fix.
     pub inertial_detectable_rate_m_s: Option<f64>,
