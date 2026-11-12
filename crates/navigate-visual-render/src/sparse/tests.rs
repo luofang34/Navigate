@@ -1,6 +1,8 @@
 use super::*;
 use nalgebra::{UnitQuaternion, Vector2};
-use navigate_visual::MapRevision;
+use navigate_visual::{LocalFrame, MapRevision};
+
+mod mapping;
 
 fn centered_layout(frame: LocalFrame, zoom: u32) -> AtlasLayout {
     let xy = frame.mercator_xy(Vector3::zeros());
