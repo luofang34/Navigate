@@ -93,7 +93,11 @@ echo "$monte_carlo_out" | grep -q "test result: ok. $monte_carlo_count passed" \
 
 echo "== navigate-onboard Monte Carlo consistency (release) =="
 onboard_tests="reference::tests::correlated_gnss::monte_carlo_a_declared_correlated_gnss_error_at_10_hz_keeps_the_position_nees_in_band
-reference::tests::correlated_gnss::monte_carlo_a_correlated_gnss_error_declared_as_white_at_10_hz_is_over_confident"
+reference::tests::correlated_gnss::monte_carlo_a_correlated_gnss_error_declared_as_white_at_10_hz_is_over_confident
+reference::tests::gnss_drift::monte_carlo_an_honest_receiver_is_never_excluded_and_the_check_changes_no_solution
+reference::tests::gnss_drift::a_drift_that_begins_on_a_fresh_reference_is_excluded_before_it_moves_the_solution
+reference::tests::gnss_drift::a_drift_slower_than_the_stated_rate_is_not_found_and_the_status_states_that_rate
+reference::tests::gnss_drift::a_late_fix_meets_the_reference_at_its_acquisition_time"
 onboard_count=$(echo "$onboard_tests" | wc -l | tr -d ' ')
 # shellcheck disable=SC2086
 onboard_out=$(cargo test --release -p navigate-onboard --lib -- --exact $onboard_tests 2>&1) \
@@ -115,6 +119,9 @@ cargo test --release -p navigate-onboard --features terrain-camera --lib terrain
 # mismatch, through the real matcher; the full calibration grid is an
 # ignored test of the same module.
 cargo test --release -p navigate-onboard --features terrain-camera --lib terrain::tests::geometry
+# A GNSS receiver that leaves the truth over terrain, through the real
+# matcher: the exclusion, the return, and honest receivers.
+cargo test --release -p navigate-onboard --features terrain-camera --lib terrain::tests::spoof
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \

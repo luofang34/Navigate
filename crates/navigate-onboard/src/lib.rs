@@ -23,6 +23,12 @@
 //! package and never fetches.
 //! [`RouteDirector`] executes a flight plan with Navigate's sequencer and
 //! guidance laws.
+//!
+//! A host can start a check of the GNSS positions against the other
+//! sensors with [`Navigator::set_gnss_integrity`]. The navigator then
+//! stops to take a receiver whose positions leave a reference solution
+//! that holds no GNSS value, and [`GnssIntegrityStatus`] says what it
+//! does and why.
 
 mod acceptance;
 mod alignment;
@@ -30,6 +36,7 @@ mod bundle;
 mod declared;
 mod director;
 mod error;
+mod integrity;
 mod navigator;
 mod reference;
 mod sensor;
@@ -45,6 +52,9 @@ pub use director::{
     DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, RouteDirector, SequenceCause,
 };
 pub use error::{MapRefusal, OnboardError};
+pub use integrity::{
+    GnssFault, GnssIntegrityConfig, GnssIntegrityState, GnssIntegrityStatus, GnssSeparation,
+};
 pub use navigate_fusion::ImuBiasPrior;
 pub use navigator::{Alignment, DataRequirement, Navigator, Need, ProductReport};
 #[cfg(feature = "terrain-camera")]

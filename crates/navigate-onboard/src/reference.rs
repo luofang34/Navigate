@@ -16,13 +16,14 @@ use navigate_startrack::line_of_sight_observations;
 
 use crate::{
     AcceptanceRecord, AcceptanceSink, Alignment, AlignmentConfig, AlignmentRecord, AlignmentStatus,
-    ErrorBudget, MagneticReference, Navigator, OnboardError, Outcome, SensorData, SensorInput,
-    SensorKind, SensorSuite,
+    ErrorBudget, GnssIntegrityConfig, GnssIntegrityStatus, MagneticReference, Navigator,
+    OnboardError, Outcome, SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
 mod aligner;
 mod filter;
 mod gnss;
+mod monitor;
 mod stars;
 #[cfg(feature = "terrain-camera")]
 pub(crate) mod terrain;
@@ -30,6 +31,7 @@ pub use filter::NavigatorFilter;
 pub use stars::{StarCatalogueConfig, own_prior};
 
 use aligner::Aligner;
+use monitor::GnssMonitor;
 use stars::{Sighting, StarChannel};
 #[cfg(feature = "terrain-camera")]
 use terrain::TerrainMeans;
@@ -50,6 +52,8 @@ pub struct ReferenceNavigator {
     alignment: Option<AlignmentRecord>,
     /// GNSS positions in a row that the filter refused at its gate.
     gate_refusals: u32,
+    /// The GNSS check, when the host started one.
+    monitor: Option<Box<GnssMonitor>>,
     #[cfg(feature = "terrain-camera")]
     terrain: TerrainMeans,
 }
@@ -129,6 +133,7 @@ impl ReferenceNavigator {
             aligner: Aligner::new(&suite),
             alignment: None,
             gate_refusals: 0,
+            monitor: None,
             #[cfg(feature = "terrain-camera")]
             terrain: TerrainMeans::new(&suite, clock)?,
             filter: NavigatorFilter::new(config, clock, suite.has_correlated_error()).map_err(
@@ -186,6 +191,9 @@ impl ReferenceNavigator {
             IngestOutcome::Accepted => Outcome::Accepted,
             IngestOutcome::Rejected(reason) => Outcome::Rejected(reason),
         };
+        if let Some(monitor) = self.monitor.as_deref_mut() {
+            monitor.mirror(observation, input.delivered_at);
+        }
         let gated = matches!(
             outcome,
             Outcome::Rejected(navigate_fusion::RejectionReason::InnovationGate { .. })
@@ -232,7 +240,12 @@ impl ReferenceNavigator {
             .filter
             .ingest_imu_increment(&sample, input.delivered_at)
         {
-            IngestOutcome::Accepted => Ok(()),
+            IngestOutcome::Accepted => {
+                if let Some(monitor) = self.monitor.as_deref_mut() {
+                    monitor.mirror_imu(&sample, input.delivered_at);
+                }
+                Ok(())
+            }
             IngestOutcome::Rejected(reason) => Err(OnboardError::Refused {
                 stage: "IMU increment",
                 reason,
@@ -361,6 +374,7 @@ impl Navigator for ReferenceNavigator {
         if !self.filter.is_initialized() {
             return self.aligning(input, budget, sink);
         }
+        self.follow_filter(input.delivered_at);
         match (&input.data, kind) {
             (SensorData::MagneticField { .. }, SensorKind::Magnetometer)
             | (
@@ -417,7 +431,18 @@ impl Navigator for ReferenceNavigator {
     }
 
     fn solution(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
-        self.filter.tick(now)
+        self.checked_solution(now)
+    }
+
+    fn set_gnss_integrity(
+        &mut self,
+        config: Option<GnssIntegrityConfig>,
+    ) -> Result<(), OnboardError> {
+        self.configure_gnss_integrity(config)
+    }
+
+    fn gnss_integrity(&self) -> Option<GnssIntegrityStatus> {
+        self.gnss_integrity_status()
     }
 
     #[cfg(feature = "terrain-camera")]

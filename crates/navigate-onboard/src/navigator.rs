@@ -12,8 +12,8 @@ use navigate_data::{LayerKind, Sha256Digest};
 use navigate_fusion::ImuBiasPrior;
 
 use crate::{
-    AcceptanceSink, AlignmentConfig, AlignmentStatus, MagneticReference, OnboardError, SensorInput,
-    SensorSuite,
+    AcceptanceSink, AlignmentConfig, AlignmentStatus, GnssIntegrityConfig, GnssIntegrityStatus,
+    MagneticReference, OnboardError, SensorInput, SensorSuite,
 };
 
 /// How much a navigator needs one kind of data.
@@ -138,6 +138,30 @@ pub trait Navigator {
             field: "alignment configuration",
             detail: format!("this navigator does not align itself: {config:?}"),
         })
+    }
+
+    /// Starts the check of the GNSS positions against the other sensors
+    /// with `config`, or stops it with `None`. Without a call there is no
+    /// check. A check that starts after the first state takes the
+    /// solution of that time as honest.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a configuration that is not usable, and a navigator that
+    /// has no such check.
+    fn set_gnss_integrity(
+        &mut self,
+        config: Option<GnssIntegrityConfig>,
+    ) -> Result<(), OnboardError> {
+        Err(OnboardError::Config {
+            field: "GNSS integrity configuration",
+            detail: format!("this navigator has no GNSS check: {config:?}"),
+        })
+    }
+
+    /// The state of the GNSS check, or `None` without one.
+    fn gnss_integrity(&self) -> Option<GnssIntegrityStatus> {
+        None
     }
 
     /// Takes one input and writes what it did with each measurement into

@@ -60,7 +60,7 @@ const SHARED: Outcome = Outcome::Unused("shared_map_error");
 /// which are 5.3 m on the ground from 800 m. Over the poses of
 /// [`the_declared_sigma_holds_the_error_and_is_of_its_order`] the
 /// horizontal error is 3.7 m root mean square and 8.5 m at most.
-const FIX_BOUND_M: f64 = 16.0;
+pub(crate) const FIX_BOUND_M: f64 = 16.0;
 
 #[test]
 fn one_fix_pulls_a_hovering_vehicle_to_the_truth_through_an_oblique_lever_armed_camera() {

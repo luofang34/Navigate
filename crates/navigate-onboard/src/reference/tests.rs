@@ -1,4 +1,6 @@
 mod correlated_gnss;
+mod gnss_drift;
+mod gnss_integrity;
 
 use super::*;
 use crate::sensor::SensorSpec;

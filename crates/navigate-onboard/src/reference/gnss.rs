@@ -4,7 +4,11 @@
 use navigate_contract::{SensorClass, SourceComposition, SymmetricCov3};
 use navigate_fusion::{Observation, ObservationValue};
 
-use crate::{AcceptanceSink, ErrorBudget, ReferenceNavigator, SensorData, SensorInput};
+use super::monitor::GNSS_EXCLUDED;
+use crate::{
+    AcceptanceRecord, AcceptanceSink, ErrorBudget, Outcome, ReferenceNavigator, SensorData,
+    SensorInput,
+};
 
 impl ReferenceNavigator {
     pub(super) fn gnss(
@@ -38,6 +42,22 @@ impl ReferenceNavigator {
         };
         let position_cov =
             position_cov.unwrap_or(SymmetricCov3::from_diagonal(h * h, h * h, v * v));
+        if !self.takes_gnss(input, position, &position_cov, correlated) {
+            // The Doppler velocity is of the same receiver: it goes with
+            // the position.
+            let measurements = ["gnss_position", "gnss_velocity"];
+            let count = if velocity.is_some() { 2 } else { 1 };
+            for measurement in measurements.into_iter().take(count) {
+                sink.record(AcceptanceRecord {
+                    sensor: input.sensor,
+                    acquired_at: input.acquired_at,
+                    measurement,
+                    outcome: Outcome::Unused(GNSS_EXCLUDED),
+                    context: None,
+                });
+            }
+            return;
+        }
         let value = ObservationValue::PositionFix {
             position: *position,
             covariance: position_cov,
@@ -50,6 +70,7 @@ impl ReferenceNavigator {
             None => observation,
         };
         let gated = self.offer(input, "gnss_position", &observation, None, sink);
+        self.gnss_offered(input, !gated);
         // A run of positions outside the gate says that the state is far
         // from the receiver: the alignment is suspect.
         self.gate_refusals = if gated {

@@ -199,6 +199,9 @@ impl ReferenceNavigator {
     fn forget_earlier_state(&mut self) {
         self.alignment = None;
         self.gate_refusals = 0;
+        if let Some(monitor) = self.monitor.as_deref_mut() {
+            monitor.forget();
+        }
         self.aligner.restart();
         for channel in self.stars.values_mut() {
             channel.forget_state();

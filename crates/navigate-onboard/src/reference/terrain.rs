@@ -337,7 +337,14 @@ impl ReferenceNavigator {
             return Ok((Outcome::Unused(names::FAINT_FRAME), None));
         }
         let times = (input.acquired_at, input.delivered_at);
-        let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {
+        // With a GNSS check the belief is that of its reference: a
+        // receiver error then does not move the search, and the fix stays
+        // evidence that the receiver had no part in.
+        let believer = match self.monitor.as_deref_mut().and_then(|m| m.belief()) {
+            Some(reference) => reference,
+            None => &mut self.filter,
+        };
+        let sighting = match at_exposure(believer, times, map.config.max_capture_lag_s) {
             Ok(exposure) => camera.sight(&map, &self.terrain.ledger, input, image, &exposure)?,
             Err(reason) => Sighting::Unused(reason, None),
         };
@@ -348,15 +355,23 @@ impl ReferenceNavigator {
                 cell,
                 frame,
                 path,
-            } => match self.filter.ingest(&observation, input.delivered_at) {
-                IngestOutcome::Accepted => {
-                    // Only a fix that the filter took carries the map
-                    // error of its cell into the state.
+            } => {
+                let taken = self.filter.ingest(&observation, input.delivered_at);
+                let mirrored = self
+                    .monitor
+                    .as_deref_mut()
+                    .is_some_and(|m| m.mirror(&observation, input.delivered_at));
+                // Only a fix that a filter took carries the map error of
+                // its cell into a state: that of the navigator, or that of
+                // the reference of a GNSS check.
+                if taken.is_accepted() || mirrored {
                     self.terrain.ledger.commit(cell, frame);
-                    (Outcome::Accepted, Some(path))
                 }
-                IngestOutcome::Rejected(reason) => (Outcome::Rejected(reason), Some(path)),
-            },
+                match taken {
+                    IngestOutcome::Accepted => (Outcome::Accepted, Some(path)),
+                    IngestOutcome::Rejected(reason) => (Outcome::Rejected(reason), Some(path)),
+                }
+            }
         })
     }
 }
