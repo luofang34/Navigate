@@ -19,12 +19,22 @@ pub(crate) fn build(image: &GrayImage) -> Vec<GrayImage> {
     levels
 }
 
+/// The bilinear value of `image` at `(x, y)`. The pixels are read from the
+/// raw buffer: a caller keeps the point a pixel inside the image, and a
+/// pixel outside reads as zero.
 pub(super) fn sample(image: &GrayImage, x: f64, y: f64) -> f64 {
     let ix = x.floor() as u32;
     let iy = y.floor() as u32;
     let dx = x - f64::from(ix);
     let dy = y - f64::from(iy);
-    let at = |x, y| f64::from(image.get_pixel(x, y)[0]);
+    let (width, raw) = (image.width() as usize, image.as_raw());
+    let at = |x: u32, y: u32| {
+        f64::from(
+            raw.get(y as usize * width + x as usize)
+                .copied()
+                .unwrap_or(0),
+        )
+    };
     (1.0 - dy) * ((1.0 - dx) * at(ix, iy) + dx * at(ix + 1, iy))
         + dy * ((1.0 - dx) * at(ix, iy + 1) + dx * at(ix + 1, iy + 1))
 }
