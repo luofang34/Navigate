@@ -283,12 +283,12 @@ where
             self.stats.record_admitted(kind, nis);
         }
         let window = self.config.fusion.assessment_window;
-        self.ledger.commit(
+        self.ledger.commit_held(
             &obs.stamp,
             obs.composition,
             obs.value.constrained_state(),
             now,
-            window,
+            (window, obs.hold),
         );
         Ok(())
     }

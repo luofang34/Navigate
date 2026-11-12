@@ -238,12 +238,12 @@ impl NavigationFilter {
         if let Some(nis) = self.apply(obs)? {
             self.stats.record_admitted(obs.value.kind(), nis);
         }
-        self.ledger.commit(
+        self.ledger.commit_held(
             &obs.stamp,
             obs.composition,
             obs.value.constrained_state(),
             now,
-            self.config.assessment_window,
+            (self.config.assessment_window, obs.hold),
         );
         Ok(())
     }

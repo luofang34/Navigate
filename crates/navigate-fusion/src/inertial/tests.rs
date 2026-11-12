@@ -8,6 +8,7 @@ mod correlated_gnss;
 mod deep_space;
 mod flight_truth;
 mod frame_change;
+mod hold;
 mod increment;
 mod layout;
 mod lunar_beacon;
