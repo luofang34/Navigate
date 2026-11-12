@@ -111,6 +111,10 @@ cargo test --release -p navigate-onboard --lib aligner
 # Fixes over elevation models with a tilted or a random error, through the
 # real matcher: slow without optimization, ignored in the debug build.
 cargo test --release -p navigate-onboard --features terrain-camera --lib terrain::tests::dem
+# The stated covariance of terrain fixes against their error under camera
+# mismatch, through the real matcher; the full calibration grid is an
+# ignored test of the same module.
+cargo test --release -p navigate-onboard --features terrain-camera --lib terrain::tests::geometry
 
 echo "== cargo doc =="
 RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links" \

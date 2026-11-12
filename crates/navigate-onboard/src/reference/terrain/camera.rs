@@ -31,6 +31,29 @@ use crate::{ErrorBudget, OnboardError, SensorInput, SensorSpec};
 /// matched.
 const MAX_CHECKED_CELLS: u64 = 64;
 
+/// The pixel noise floor of a terrain match, pixels: the precision of the
+/// matcher on textured ground, whose reprojection RMS is 0.25 to 0.6
+/// pixels when the camera sees the map imagery.
+const PIXEL_NOISE_FLOOR_PX: f64 = 0.2;
+/// The residual at which the geometry covariance of a terrain match
+/// doubles, pixels ([`LocalizerConfig::residual_correlation_px`]). A
+/// changed appearance (exposure, response, light, blur, noise,
+/// compression, another season), a registration error of the map, and a
+/// fine repeated texture raise the residual to 1 to 1.6 pixels, and the
+/// error of the fix grows more than the residual alone says. The value is
+/// calibrated against the real matcher over heights of 400 m to 1760 m,
+/// views of 0° to 45°, and those cases (`tests::geometry`).
+const RESIDUAL_CORRELATION_PX: f64 = 1.2;
+
+/// The acceptance and the covariance of a terrain match.
+fn localizer_config() -> LocalizerConfig {
+    LocalizerConfig {
+        pixel_noise_floor: PIXEL_NOISE_FLOOR_PX,
+        residual_correlation_px: RESIDUAL_CORRELATION_PX,
+        ..LocalizerConfig::default()
+    }
+}
+
 /// One declared terrain camera and the state of its capture stream.
 #[derive(Debug, Clone)]
 pub(crate) struct TerrainCamera {
@@ -123,7 +146,7 @@ impl TerrainCamera {
                 epoch: SourceEpoch::new(0),
                 clock,
             },
-            localizer: Localizer::new(PyramidalMatcher, LocalizerConfig::default())
+            localizer: Localizer::new(PyramidalMatcher, localizer_config())
                 .map_err(|e| invalid(e.to_string()))?,
             frames: 0,
             views: Views::default(),
@@ -370,7 +393,8 @@ impl TerrainCamera {
         match position_fix_observation_composed(&estimate, &self.identity, &external) {
             Ok(observation) => {
                 if self.inspect {
-                    self.pending.offered(&observation);
+                    let model_m = estimate.frame.model_error_m(estimate.pose.position);
+                    self.pending.offered(&observation, &external, model_m);
                 }
                 Sighting::Fix {
                     observation: Box::new(observation),

@@ -20,6 +20,16 @@ pub struct LocalizerConfig {
     pub min_occupied_cells: usize,
     /// Assumed pixel noise floor for the local geometry covariance.
     pub pixel_noise_floor: f64,
+    /// Residual at which the local geometry covariance doubles, in pixels.
+    ///
+    /// The covariance takes the reprojection variance of the support as
+    /// independent pixel noise. A residual above the precision of the
+    /// matcher comes from correspondences whose errors are shared, such as
+    /// a repeated texture, a changed appearance, or a resampled image, and
+    /// those errors do not average down over the support. The variance is
+    /// multiplied by `1 + (rms / this)²`, with `rms` the reprojection RMS.
+    /// Infinity takes the residual as independent noise.
+    pub residual_correlation_px: f64,
 }
 
 impl Default for LocalizerConfig {
@@ -30,6 +40,7 @@ impl Default for LocalizerConfig {
             inlier_threshold_px: 2.5,
             min_occupied_cells: 4,
             pixel_noise_floor: 1.0,
+            residual_correlation_px: f64::INFINITY,
         }
     }
 }
