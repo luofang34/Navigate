@@ -112,6 +112,7 @@ impl<'a> SparseSceneSampler<'a> {
             camera,
             eye: pose.position,
             rot: pose.orientation.to_rotation_matrix(),
+            distances: self.march_distances(),
         };
         let mut hits = Vec::with_capacity(pixels.len());
         for &[u, v] in pixels {
@@ -148,6 +149,7 @@ impl<'a> SparseSceneSampler<'a> {
             camera,
             eye: pose.position,
             rot: pose.orientation.to_rotation_matrix(),
+            distances: self.march_distances(),
         };
         let width = camera.width as usize;
         let mut luma_buf = vec![0_u8; total_pixels];
@@ -250,6 +252,16 @@ impl<'a> SparseSceneSampler<'a> {
         ))
     }
 
+    /// The distance of each step of the march, from the near depth to the
+    /// far distance in equal ratios.
+    fn march_distances(&self) -> Vec<f64> {
+        let ratio = self.far_m / NEAR_DEPTH_M;
+        let inv_steps = 1.0 / f64::from(self.steps);
+        (0..=self.steps)
+            .map(|step| NEAR_DEPTH_M * ratio.powf(f64::from(step) * inv_steps))
+            .collect()
+    }
+
     fn raycast_one(&self, ctx: &RayCtx<'_>, u: f64, v: f64) -> Option<SparseRayHit> {
         if self.far_m <= NEAR_DEPTH_M {
             return None;
@@ -261,14 +273,11 @@ impl<'a> SparseSceneSampler<'a> {
         );
         let ray = ctx.rot * ray_eye;
         let eye = ctx.eye;
-        let ratio = self.far_m / NEAR_DEPTH_M;
-        let inv_steps = 1.0 / f64::from(self.steps);
 
         let mut above = false;
         let mut previous = NEAR_DEPTH_M;
         let mut bracket = None;
-        for step in 0..=self.steps {
-            let distance = NEAR_DEPTH_M * ratio.powf(f64::from(step) * inv_steps);
+        for &distance in &ctx.distances {
             let point = eye + ray * distance;
             let (mercator_xy, alt_m) = point_mercator_and_alt(self.scene.frame, point);
             if let Some(terrain_h) = sample_terrain(&self.scene.terrain, mercator_xy) {
@@ -314,6 +323,8 @@ struct RayCtx<'a> {
     camera: &'a CameraModel,
     eye: Vector3<f64>,
     rot: Rotation3<f64>,
+    /// The distance of each march step: the same for every ray.
+    distances: Vec<f64>,
 }
 
 fn grid_axis(len: u32, stride: u32) -> Vec<u32> {

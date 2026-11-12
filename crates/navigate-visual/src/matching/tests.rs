@@ -1,5 +1,7 @@
 use super::*;
 
+mod oracle;
+
 fn texture() -> GrayImage {
     GrayImage::from_fn(320, 240, |x, y| {
         let h = (x / 7).wrapping_mul(374761393) ^ (y / 9).wrapping_mul(668265263);

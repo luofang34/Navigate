@@ -5,6 +5,8 @@ use image::GrayImage;
 use nalgebra::{Matrix2, Vector2};
 
 const RADIUS: i32 = 4;
+/// The values of a patch of side `2 * RADIUS + 1`.
+const PATCH: usize = 81;
 
 pub(super) fn track(
     source: &[GrayImage],
@@ -72,14 +74,15 @@ fn inside(image: &GrayImage, p: Vector2<f64>) -> bool {
         && p.y < f64::from(image.height()) - border
 }
 
-fn patch(image: &GrayImage, p: Vector2<f64>) -> Vec<f64> {
-    let mut values = Vec::with_capacity(81);
-    for y in -RADIUS..=RADIUS {
-        for x in -RADIUS..=RADIUS {
-            values.push(sample(image, p.x + f64::from(x), p.y + f64::from(y)));
-        }
+/// The zero-mean values of the patch about `p`, row by row. A fixed array:
+/// the coarse seed takes one patch for each of its candidates.
+fn patch(image: &GrayImage, p: Vector2<f64>) -> [f64; PATCH] {
+    let mut values = [0.0; PATCH];
+    let offsets = (-RADIUS..=RADIUS).flat_map(|y| (-RADIUS..=RADIUS).map(move |x| (x, y)));
+    for (value, (x, y)) in values.iter_mut().zip(offsets) {
+        *value = sample(image, p.x + f64::from(x), p.y + f64::from(y));
     }
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let mean = values.iter().sum::<f64>() / PATCH as f64;
     values.iter_mut().for_each(|v| *v -= mean);
     values
 }
