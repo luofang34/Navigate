@@ -52,6 +52,8 @@ impl PoseVerifier {
             || config.inlier_threshold_px <= 0.0
             || !config.pixel_noise_floor.is_finite()
             || config.pixel_noise_floor <= 0.0
+            || config.residual_correlation_px.is_nan()
+            || config.residual_correlation_px <= 0.0
         {
             return Err(VisualError::Invalid {
                 field: "localizer thresholds",
@@ -297,8 +299,11 @@ impl PoseVerifier {
         {
             return Err(VisualError::DegenerateGeometry);
         }
+        let mean_square = squared_error / points.len() as f64;
+        let shared = 1.0 + mean_square / self.config.residual_correlation_px.powi(2);
         let variance = (squared_error / (2 * points.len() - 6) as f64)
-            .max(self.config.pixel_noise_floor.powi(2));
+            .max(self.config.pixel_noise_floor.powi(2))
+            * shared;
         let scale = SMatrix::<f64, 6, 6>::from_diagonal(&nalgebra::SVector::from_row_slice(&[
             1.0, 1.0, 1.0, 0.001, 0.001, 0.001,
         ]));
@@ -311,7 +316,7 @@ impl PoseVerifier {
                 spatial_support: points.len(),
                 occupied_cells,
                 condition_number,
-                reprojection_rms_px: (squared_error / points.len() as f64).sqrt(),
+                reprojection_rms_px: mean_square.sqrt(),
             },
             covariance,
         ))

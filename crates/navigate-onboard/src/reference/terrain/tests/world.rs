@@ -71,6 +71,9 @@ pub(crate) struct WorldSpec {
     pub dem_error: DemError,
     /// What the ground looks like.
     pub texture: Texture,
+    /// Registration error of the imagery, north and east, metres: the
+    /// imagery shows the ground this far from where it is.
+    pub imagery_shift_m: [f64; 2],
 }
 
 impl Default for WorldSpec {
@@ -87,6 +90,7 @@ impl Default for WorldSpec {
             relief_m: 80.0,
             dem_error: DemError::None,
             texture: Texture::Farmland,
+            imagery_shift_m: [0.0, 0.0],
         }
     }
 }
@@ -140,9 +144,6 @@ fn noise(x: f64, y: f64, cell: f64, seed: u64) -> f64 {
         + sy * ((1.0 - sx) * at(0, 1) + sx * at(1, 1))
 }
 
-/// The luminance of the ground at one global imagery pixel: fields and
-/// blocks of 50 m to 250 m, which a camera with 5 m pixels resolves.
-
 /// The height of the ground above the ellipsoid at one global elevation
 /// pixel: hills of `relief_m` from valley to top, a kilometre apart.
 pub(crate) fn ground_height_m(gx: f64, gy: f64, relief_m: f64) -> f64 {
@@ -155,9 +156,18 @@ fn png(image: &RgbImage) -> Vec<u8> {
     out.into_inner()
 }
 
-fn imagery_tile(a: TileAddress, pixels: u32, texture: Texture) -> Vec<u8> {
+fn imagery_tile(a: TileAddress, spec: &WorldSpec) -> Vec<u8> {
+    let pixels = spec.imagery_tile_pixels;
+    let pixel_m = 156_543.033_928 * CENTRE[0].to_radians().cos()
+        / f64::from(1_u32 << spec.imagery_zoom)
+        * 256.0
+        / f64::from(pixels);
+    let [north_m, east_m] = spec.imagery_shift_m;
+    let (sx, sy) = (east_m / pixel_m, -north_m / pixel_m);
     png(&RgbImage::from_fn(pixels, pixels, |x, y| {
-        let v = texture.luma(f64::from(a.x * pixels + x), f64::from(a.y * pixels + y));
+        let gx = f64::from(a.x * pixels + x) - sx;
+        let gy = f64::from(a.y * pixels + y) - sy;
+        let v = spec.texture.luma(gx, gy);
         Rgb([v, v, v])
     }))
 }
@@ -215,7 +225,7 @@ impl World {
         let mut tiles = BTreeSet::new();
         corridor_tiles(&[CENTRE], spec.radius_m, spec.imagery_zoom, &mut tiles).unwrap();
         for a in tiles {
-            let tile = imagery_tile(a, spec.imagery_tile_pixels, spec.texture);
+            let tile = imagery_tile(a, spec);
             pollster::block_on(writer.add_tile(&mut store, IMAGERY, a, &tile)).unwrap();
         }
         if spec.elevation {

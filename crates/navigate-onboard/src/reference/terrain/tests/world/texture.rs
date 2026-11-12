@@ -15,6 +15,9 @@ pub(crate) enum Texture {
     TownIrregular,
     /// Smooth ground with a contrast of about twenty-five counts.
     LowModerate,
+    /// The fields of [`Self::Farmland`] in another season: about half of
+    /// them change from dark to light or back, and the contrast differs.
+    FarmlandSeason,
 }
 
 impl Texture {
@@ -37,6 +40,14 @@ impl Texture {
                 } else {
                     (lattice(bx as i64, by as i64, 21) * 180.0 + 60.0) as u8
                 }
+            }
+            Self::FarmlandSeason => {
+                let base = f64::from(Self::Farmland.luma(gx, gy));
+                // The fields of one crop: cells of a coarse noise.
+                let field = (noise(gx, gy, 37.0, 2) * 6.0).floor() as i64;
+                let changed = lattice(field, 0, 41) < 0.5;
+                let v = if changed { 255.0 - base } else { base };
+                (128.0 + (v - 128.0) * 0.8).clamp(0.0, 255.0) as u8
             }
             Self::TownIrregular => {
                 // Block edges where a smooth noise crosses levels: an

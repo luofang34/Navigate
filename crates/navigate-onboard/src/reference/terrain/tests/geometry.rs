@@ -1,5 +1,11 @@
-//! EXPLORATION: the stated covariance of a terrain fix against its error,
-//! through the real matcher, over heights, view angles and textures.
+//! The stated covariance of a terrain fix against its error, through the
+//! real matcher: the demo camera (400 by 300, 67° across, matched at 320
+//! by 240) over heights, view angles, textures, and the ways in which a
+//! camera frame differs from the map imagery. The map elevation is exact
+//! and its imagery states a millimetre, or the registration error it has,
+//! so the stated covariance is that of the match.
+
+mod mismatch;
 
 use std::sync::Arc;
 
@@ -14,6 +20,7 @@ use crate::{
     Alignment, Navigator, ReferenceNavigator, SensorData, SensorInput, TerrainConfig,
     TerrainMapRequest,
 };
+use mismatch::Mismatch;
 
 /// The camera of the demo: 400 by 300 with a field of 67° across.
 fn camera() -> CameraModel {
@@ -39,12 +46,13 @@ fn imager() -> ImagerModel {
     })
 }
 
-fn world(texture: Texture, relief_m: f64) -> World {
+fn world(texture: Texture, relief_m: f64, shift_m: [f64; 2], registration_mm: u32) -> World {
     World::build(&WorldSpec {
-        accuracy_mm: Some((1, 1)),
+        accuracy_mm: Some((registration_mm, 1)),
         texture,
         relief_m,
         radius_m: 6_000.0,
+        imagery_shift_m: shift_m,
         ..WorldSpec::default()
     })
 }
@@ -67,15 +75,10 @@ fn hover(k: u32, set: u32, agl_m: f64) -> Flight {
     }
 }
 
-/// One fix: the error, north east down, the stated covariance, the
-/// external part, the frame model one-sigma, and the inliers, the spatial
-/// support and the reprojection RMS of the match.
+/// One fix: the error, north, east and down, and the stated covariance.
 struct Measured {
     error: Vector3<f64>,
     total: Matrix3<f64>,
-    external: Matrix3<f64>,
-    model_m: f64,
-    quality: (usize, usize, f64),
 }
 
 fn matrix(c: &SymmetricCov3) -> Matrix3<f64> {
@@ -83,7 +86,12 @@ fn matrix(c: &SymmetricCov3) -> Matrix3<f64> {
     Matrix3::new(a, b, c2, b, d, e, c2, e, f)
 }
 
-fn measure(map: &World, flight: &Flight, mount: CameraMount) -> Option<Measured> {
+fn measure(
+    (map, truth): (&World, &World),
+    flight: &Flight,
+    mount: CameraMount,
+    mismatch: Mismatch,
+) -> Option<Measured> {
     let mut navigator = ReferenceNavigator::new(suite(imager(), mount), CLOCK, None).unwrap();
     let [lat, lon, h] = flight.start;
     navigator
@@ -115,7 +123,9 @@ fn measure(map: &World, flight: &Flight, mount: CameraMount) -> Option<Measured>
         navigator.ingest(&flight.increment(step), &mut sink).ok()?;
     }
     let level = UnitQuaternion::identity();
-    let luma = frame_at(map, &camera(), flight.body(RATE), &level, &mount, RATE);
+    let rendered = frame_at(truth, &camera(), flight.body(RATE), &level, &mount, RATE);
+    let seed = (flight.start[0] * 1e6) as u64 ^ (flight.start[1].abs() * 1e6) as u64;
+    let luma = mismatch.apply(&rendered, 400, 300, seed);
     let frame = SensorInput {
         sensor: CAMERA,
         acquired_at: at(RATE),
@@ -129,7 +139,6 @@ fn measure(map: &World, flight: &Flight, mount: CameraMount) -> Option<Measured>
     navigator.ingest(&frame, &mut sink).ok()?;
     let record = navigator.last_terrain_match(CAMERA)?;
     let fix = record.fix()?;
-    let solved = record.solved()?;
     let [lat, lon, h] = flight.body(RATE);
     let p = fix.position;
     let error = Vector3::new(
@@ -140,92 +149,211 @@ fn measure(map: &World, flight: &Flight, mount: CameraMount) -> Option<Measured>
     Some(Measured {
         error,
         total: matrix(&fix.covariance_ned),
-        external: matrix(&fix.external_ned),
-        model_m: fix.frame_model_m,
-        quality: (
-            solved.inliers,
-            solved.spatial_support,
-            solved.reprojection_rms_px,
-        ),
     })
 }
 
-#[test]
-#[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
-fn explore_geometry_covariance() {
-    super::flight::show_events();
-    let only = std::env::var("TEXTURE").unwrap_or_default();
-    let worlds = [
-        ("farmland", Texture::Farmland, 80.0),
-        ("town", Texture::Town, 30.0),
-        ("hills", Texture::Farmland, 300.0),
-        ("low", Texture::Low, 80.0),
-        ("town2", Texture::TownIrregular, 30.0),
-        ("lowmod", Texture::LowModerate, 80.0),
-    ];
-    for (name, texture, relief) in worlds {
-        if !only.is_empty() && only != name {
-            continue;
-        }
-        let map = world(texture, relief);
-        for agl_m in [400.0, 800.0, 1_200.0, 1_600.0, 2_000.0] {
-            for off_deg in [0.0, 30.0, 45.0] {
-                let mut fixes = Vec::new();
-                for set in 0..2 {
-                    for k in 0..9 {
-                        fixes.extend(measure(&map, &hover(k, set, agl_m), mount(off_deg)));
-                    }
-                }
-                let n = fixes.len() as f64;
-                if fixes.is_empty() {
-                    tracing::warn!("GEOM {name} agl={agl_m} off={off_deg} n=0");
-                    continue;
-                }
-                let nees = fixes
-                    .iter()
-                    .filter_map(|f| {
+/// One case of the grid: the map and the ground the camera sees, and the
+/// camera.
+struct Case {
+    name: &'static str,
+    map: (Texture, [f64; 2], u32),
+    ground: Texture,
+    relief_m: f64,
+    camera: Mismatch,
+}
+
+const CASES: &[Case] = &[
+    Case {
+        name: "farm-exact",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch::EXACT,
+    },
+    Case {
+        name: "farm-photo",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch::PHOTOMETRIC,
+    },
+    Case {
+        name: "farm-optics",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch::OPTICS,
+    },
+    Case {
+        name: "farm-all",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch::ALL,
+    },
+    Case {
+        name: "farm-season",
+        map: (Texture::Farmland, [0.0, 0.0], 1),
+        ground: Texture::FarmlandSeason,
+        relief_m: 80.0,
+        camera: Mismatch::ALL,
+    },
+    Case {
+        name: "farm-reg",
+        map: (Texture::Farmland, [1.5, -1.0], 2_000),
+        ground: Texture::Farmland,
+        relief_m: 80.0,
+        camera: Mismatch::ALL,
+    },
+    Case {
+        name: "town-exact",
+        map: (Texture::TownIrregular, [0.0, 0.0], 1),
+        ground: Texture::TownIrregular,
+        relief_m: 30.0,
+        camera: Mismatch::EXACT,
+    },
+    Case {
+        name: "town-all",
+        map: (Texture::TownIrregular, [0.0, 0.0], 1),
+        ground: Texture::TownIrregular,
+        relief_m: 30.0,
+        camera: Mismatch::ALL,
+    },
+    Case {
+        name: "low-exact",
+        map: (Texture::LowModerate, [0.0, 0.0], 1),
+        ground: Texture::LowModerate,
+        relief_m: 80.0,
+        camera: Mismatch::EXACT,
+    },
+    Case {
+        name: "low-all",
+        map: (Texture::LowModerate, [0.0, 0.0], 1),
+        ground: Texture::LowModerate,
+        relief_m: 80.0,
+        camera: Mismatch::ALL,
+    },
+    Case {
+        name: "town-grid-exact",
+        map: (Texture::Town, [0.0, 0.0], 1),
+        ground: Texture::Town,
+        relief_m: 30.0,
+        camera: Mismatch::EXACT,
+    },
+    Case {
+        name: "faint-all",
+        map: (Texture::Low, [0.0, 0.0], 1),
+        ground: Texture::Low,
+        relief_m: 80.0,
+        camera: Mismatch::ALL,
+    },
+];
+
+/// The 0.1 % and 99.9 % points of `χ²(3n)/n`, by Wilson–Hilferty.
+fn band(n: usize) -> (f64, f64) {
+    let k = (3 * n) as f64;
+    let a = 2.0 / (9.0 * k);
+    let at = |z: f64| k * (1.0 - a + z * a.sqrt()).powi(3) / n as f64;
+    (at(-3.09), at(3.09))
+}
+
+/// The mean normalized error of the fixes of `case` at each height of
+/// `heights`, view of `offs`, and position set of `sets`, with the count
+/// of fixes: groups of fewer than four fixes are left out.
+fn groups(
+    case: &Case,
+    heights: &[f64],
+    offs: &[f64],
+    sets: &[u32],
+) -> Vec<((f64, f64, u32), usize, f64)> {
+    let (texture, shift, registration) = case.map;
+    let map = world(texture, case.relief_m, shift, registration);
+    let exact = (case.ground, [0.0, 0.0], 1) == case.map;
+    let ground = (!exact).then(|| world(case.ground, case.relief_m, [0.0, 0.0], 1));
+    let ground = ground.as_ref().unwrap_or(&map);
+    let mut out = Vec::new();
+    for &agl_m in heights {
+        for &off_deg in offs {
+            for &set in sets {
+                let nees: Vec<f64> = (0..9)
+                    .filter_map(|k| {
+                        let flight = hover(k, set, agl_m);
+                        let f = measure((&map, ground), &flight, mount(off_deg), case.camera)?;
                         Some((f.error.transpose() * f.total.try_inverse()? * f.error)[(0, 0)])
                     })
-                    .sum::<f64>()
-                    / n;
-                let unfloored = fixes
-                    .iter()
-                    .filter_map(|f| {
-                        let (_, support, rms) = f.quality;
-                        let n = support as f64;
-                        let raw = rms * rms * n / (2.0 * n - 6.0);
-                        let g = (f.total - f.external - Matrix3::identity() * f.model_m.powi(2))
-                            * (raw / raw.max(1.0));
-                        let c = g + f.external + Matrix3::identity() * f.model_m.powi(2);
-                        Some((f.error.transpose() * c.try_inverse()? * f.error)[(0, 0)])
-                    })
-                    .sum::<f64>()
-                    / n;
-                let rms_h = (fixes
-                    .iter()
-                    .map(|f| f.error.xy().norm_squared() / 2.0)
-                    .sum::<f64>()
-                    / n)
-                    .sqrt();
-                let rms_v = (fixes.iter().map(|f| f.error.z * f.error.z).sum::<f64>() / n).sqrt();
-                let geometry =
-                    |f: &Measured| f.total - f.external - Matrix3::identity() * f.model_m.powi(2);
-                let sig_h = (fixes
-                    .iter()
-                    .map(|f| (geometry(f)[(0, 0)] + geometry(f)[(1, 1)]) / 2.0)
-                    .sum::<f64>()
-                    / n)
-                    .sqrt();
-                let sig_v = (fixes.iter().map(|f| geometry(f)[(2, 2)]).sum::<f64>() / n).sqrt();
-                let model = fixes.iter().map(|f| f.model_m).sum::<f64>() / n;
-                let ext = (fixes.iter().map(|f| f.external.trace() / 3.0).sum::<f64>() / n).sqrt();
-                let inl = fixes.iter().map(|f| f.quality.0 as f64).sum::<f64>() / n;
-                let sup = fixes.iter().map(|f| f.quality.1 as f64).sum::<f64>() / n;
-                let rpx = fixes.iter().map(|f| f.quality.2).sum::<f64>() / n;
-                tracing::warn!(
-                    "GEOM {name} agl={agl_m} off={off_deg} n={n} nees={nees:.2} unfloored={unfloored:.2} err_h={rms_h:.2} err_v={rms_v:.2} geom_h={sig_h:.2} geom_v={sig_v:.2} model={model:.2} ext={ext:.2} inliers={inl:.0} support={sup:.0} rms_px={rpx:.2}"
-                );
+                    .collect();
+                if nees.len() >= 4 {
+                    let mean = nees.iter().sum::<f64>() / nees.len() as f64;
+                    out.push(((agl_m, off_deg, set), nees.len(), mean));
+                }
             }
         }
     }
+    out
+}
+
+/// Checks each group of `case`: the fixes are never over-confident, and
+/// their sigma is not more than twice too large past the low edge of the
+/// band.
+fn check(case: &Case, heights: &[f64], offs: &[f64], sets: &[u32]) -> usize {
+    let groups = groups(case, heights, offs, sets);
+    for ((agl_m, off_deg, set), n, mean) in &groups {
+        let (low, high) = band(*n);
+        tracing::info!(
+            case = case.name,
+            agl_m,
+            off_deg,
+            set,
+            n,
+            mean,
+            low,
+            high,
+            "terrain fix NEES"
+        );
+        let at = format!(
+            "{} {agl_m} m {off_deg}° set {set}: {mean:.2} of {n}",
+            case.name
+        );
+        assert!(*mean <= high, "over-confident: {at} > {high:.2}");
+        assert!(*mean >= low / 4.0, "too cautious: {at} < {:.2}", low / 4.0);
+    }
+    groups.len()
+}
+
+/// The cases of the release test: the exact map and the full camera
+/// mismatch over fields, low texture with the full mismatch, and a town.
+const RELEASE: [usize; 4] = [0, 3, 9, 6];
+
+/// From 1000 m and 1760 m, at the nadir and 30°: the fixes over fields,
+/// with the camera as the map shows it and with each mismatch at once,
+/// over low texture with that mismatch, and over a town, state their
+/// error, neither over-confident nor more than about twice too cautious.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
+fn a_terrain_fix_states_its_error_under_camera_mismatch() {
+    super::flight::show_events();
+    let mut checked = 0;
+    for index in RELEASE {
+        checked += check(&CASES[index], &[1_000.0, 1_760.0], &[0.0, 30.0], &[0]);
+    }
+    assert!(checked >= 10, "{checked}");
+}
+
+/// Every case of [`CASES`] from 400 m, 1000 m and 1760 m at 0°, 30° and
+/// 45°, on both sets of positions: the grid that calibrates the floor and
+/// the residual correlation of the terrain match.
+#[test]
+#[ignore = "the full calibration grid: about ten minutes in an optimized build"]
+fn the_full_grid_states_the_error_of_a_terrain_fix() {
+    super::flight::show_events();
+    let mut checked = 0;
+    for case in CASES {
+        checked += check(
+            case,
+            &[400.0, 1_000.0, 1_760.0],
+            &[0.0, 30.0, 45.0],
+            &[0, 1],
+        );
+    }
+    assert!(checked >= 80, "{checked}");
 }
