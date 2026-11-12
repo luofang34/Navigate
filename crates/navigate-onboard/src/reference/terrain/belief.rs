@@ -144,6 +144,19 @@ impl Belief {
     }
 }
 
+impl Belief {
+    /// The angle of the believed optical axis from the local down,
+    /// radians. `None` when the believed position has no local frame.
+    pub(crate) fn off_nadir_rad(&self, mount: &CameraMount) -> Option<f64> {
+        let [lat, lon, _] = self.position;
+        let frame = LocalFrame::wgs84_enu(lat, lon).ok()?;
+        let pose = self.camera_in(frame, mount).ok()?;
+        // The eye axes are right, up, and back: the camera looks along -Z.
+        let axis = pose.orientation * -Vector3::z();
+        Some((-axis.z).clamp(-1.0, 1.0).acos())
+    }
+}
+
 /// Largest angle of the optical axis from the local down at which the
 /// ground point of the axis is taken, radians.
 const MAX_GROUND_ANGLE_RAD: f64 = 1.3;

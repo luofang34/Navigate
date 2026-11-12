@@ -25,7 +25,7 @@ use super::map::TerrainMap;
 use super::names::{self, rejection};
 use super::view::{NoView, Views, model};
 use super::{Sighting, admission};
-use crate::{ErrorBudget, OnboardError, SensorInput, SensorSpec};
+use crate::{ErrorBudget, OnboardError, SensorInput, SensorSpec, TerrainConfig};
 
 mod attempt;
 
@@ -407,6 +407,21 @@ impl TerrainCamera {
             sensor: self.sensor,
             detail,
         }
+    }
+
+    /// Whether a frame of the contrast `content` is under the block
+    /// contrast floor of the believed view. A belief without a view has
+    /// the floor of an oblique camera.
+    pub(super) fn is_faint(
+        &self,
+        config: &TerrainConfig,
+        content: &super::content::Content,
+        belief: &Belief,
+    ) -> bool {
+        let off_nadir_rad = belief
+            .off_nadir_rad(&self.mount)
+            .unwrap_or(config.faint_floor_full_rad);
+        content.is_faint(config.faint_floor(off_nadir_rad))
     }
 
     /// The fix of a solved camera pose, when the filter may take it.

@@ -111,7 +111,8 @@ fn one(
 /// its covariance holds; another season is refused or fixed honestly; a
 /// changed exposure still fixes, the matcher comparing the images with
 /// their local contrast normalised; and ground of about two counts of
-/// block contrast is refused as faint before any match.
+/// block contrast, which a camera at the nadir matches, fixes honestly
+/// or not at all.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 fn a_frame_unlike_the_map_fixes_honestly_or_not_at_all() {
@@ -133,7 +134,7 @@ fn a_frame_unlike_the_map_fixes_honestly_or_not_at_all() {
             [0, 6],
         ),
     ];
-    let (mut inconsistent, mut scarce, mut matched_faint) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut inconsistent, mut scarce) = (Vec::new(), Vec::new());
     for (height, agl_m) in [400.0, 1_760.0].into_iter().enumerate() {
         for (name, case, fewest) in cases {
             let (mut fixes, mut neeses, mut worst_m) = (0, Vec::new(), 0.0_f64);
@@ -144,9 +145,6 @@ fn a_frame_unlike_the_map_fixes_honestly_or_not_at_all() {
                     GROUND_M + agl_m,
                 ];
                 let (outcome, measured) = one(case, start, u64::from(k) + 3);
-                if name == "faint" && outcome != Outcome::Unused("faint_frame") {
-                    matched_faint.push((agl_m, k, outcome.clone()));
-                }
                 if outcome != Outcome::Accepted {
                     continue;
                 }
@@ -168,5 +166,4 @@ fn a_frame_unlike_the_map_fixes_honestly_or_not_at_all() {
     }
     assert!(inconsistent.is_empty(), "{inconsistent:?}");
     assert!(scarce.is_empty(), "{scarce:?}");
-    assert!(matched_faint.is_empty(), "{matched_faint:?}");
 }

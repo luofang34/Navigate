@@ -107,17 +107,30 @@ pub struct TerrainConfig {
     /// noise with the pixel contrast of the frame. A frame of noise alone
     /// has one.
     pub min_structure: f64,
-    /// Smallest block contrast of a frame that is matched: the mean
-    /// absolute difference of the means of adjacent blocks of 8 by 8
-    /// pixels, in counts of the 8-bit frame as the host delivers it,
-    /// before the matcher normalises its contrast. A sensor of another
-    /// bit depth or gain rescales it to its counts. Under it, the matcher
-    /// finds ground that its normalisation raised above the noise, and
-    /// the fix is off by more than its covariance states: with the
-    /// camera mismatch of `tests::geometry`, frames of 1 to 3.5 counts
-    /// over 45° views were over-confident and frames of 3.6 and more
-    /// were not.
+    /// Smallest block contrast of a frame of an oblique camera that is
+    /// matched: the mean absolute difference of the means of adjacent
+    /// blocks of 8 by 8 pixels, in counts of the 8-bit frame as the host
+    /// delivers it, before the matcher normalises its contrast. A sensor
+    /// of another bit depth or gain rescales it to its counts. It holds
+    /// for a camera whose optical axis is `faint_floor_full_rad` or more
+    /// from the local down. Under it, the matcher finds ground that its
+    /// normalisation raised above the noise, and the fix is off by more
+    /// than its covariance states: with the camera mismatch of
+    /// `tests::geometry`, frames of 1 to 3.5 counts over 45° views were
+    /// over-confident and frames of 3.6 and more were not.
     pub min_block_contrast: f64,
+    /// Angle of the optical axis from the local down up to which a frame
+    /// has no block contrast floor, radians. Default: 30°. At the nadir,
+    /// at 15° and at 30°, the fixes of frames of 1.3 to 4 counts state
+    /// their error, with the sensor of `tests::geometry` and with a
+    /// sensor of two counts of noise; under about one count the matcher
+    /// finds no fix. From this angle the floor rises in proportion to the
+    /// angle, to `min_block_contrast` at `faint_floor_full_rad`.
+    pub faint_floor_from_rad: f64,
+    /// Angle of the optical axis from the local down from which the
+    /// floor is `min_block_contrast`, radians. Default: 45°, the view of
+    /// the frames that set that floor.
+    pub faint_floor_full_rad: f64,
     /// Largest count of pixels of the reference view and of the match: the
     /// bound of the cost of one frame.
     pub max_match_pixels: u32,
@@ -169,6 +182,8 @@ impl Default for TerrainConfig {
             depth_edge: 0.02,
             min_structure: 2.0,
             min_block_contrast: 4.0,
+            faint_floor_from_rad: 30.0_f64.to_radians(),
+            faint_floor_full_rad: 45.0_f64.to_radians(),
             max_match_pixels: 320 * 240,
             min_match_pixels: 160 * 120,
             dem_correlation_length_m: 300.0,
@@ -178,6 +193,14 @@ impl Default for TerrainConfig {
 }
 
 impl TerrainConfig {
+    /// The block contrast floor of a frame whose optical axis is
+    /// `off_nadir_rad` from the local down, counts.
+    pub(crate) fn faint_floor(&self, off_nadir_rad: f64) -> f64 {
+        let span = self.faint_floor_full_rad - self.faint_floor_from_rad;
+        let part = ((off_nadir_rad - self.faint_floor_from_rad) / span).clamp(0.0, 1.0);
+        self.min_block_contrast * part
+    }
+
     /// The working camera for one frame: the camera of the reference view
     /// and of the match. `range_m` is the distance to the ground along
     /// the optical axis, and `map_texel_m` is the ground size of one pixel
@@ -268,7 +291,10 @@ impl TerrainConfig {
             && self.acquisition.peaks > 0
             && self.acquisition.min_score.is_finite()
             && self.acquisition.min_margin.is_finite()
-            && (0.0..=1.0).contains(&self.min_view_coverage);
+            && (0.0..=1.0).contains(&self.min_view_coverage)
+            && self.faint_floor_from_rad >= 0.0
+            && self.faint_floor_from_rad < self.faint_floor_full_rad
+            && self.faint_floor_full_rad.is_finite();
         let counts = self.steps > 0
             && self.stride > 0
             && self.min_match_pixels >= 64 * 48
