@@ -4,9 +4,13 @@ use std::fmt;
 
 use image::GrayImage;
 use nalgebra::{Rotation3, Vector3};
-use navigate_visual::{CameraModel, CameraPose, LocalFrame, ReferenceView};
+use navigate_visual::{CameraModel, CameraPose, ReferenceView};
 
 use crate::{AtlasLayout, ImageAtlas, RenderError, RenderScene, TerrainAtlas};
+
+mod mapping;
+
+use mapping::MapCoordinates;
 
 /// Minimum optical-axis ray-marching depth in metres.
 const NEAR_DEPTH_M: f64 = 10.0;
@@ -41,6 +45,9 @@ pub struct SparseSceneSampler<'a> {
     far_m: f64,
     steps: u32,
     refinements: u32,
+    /// Whether a march may take the map coordinates of its points from a
+    /// model about the eye; tests turn it off to render the exact view.
+    modelled: bool,
 }
 
 impl fmt::Debug for SparseSceneSampler<'_> {
@@ -90,6 +97,7 @@ impl<'a> SparseSceneSampler<'a> {
             far_m,
             steps,
             refinements,
+            modelled: true,
         })
     }
 
@@ -108,12 +116,7 @@ impl<'a> SparseSceneSampler<'a> {
         if pixels.iter().any(|[u, v]| !u.is_finite() || !v.is_finite()) {
             return Err(RenderError::Invalid("pixel coordinates must be finite"));
         }
-        let ctx = RayCtx {
-            camera,
-            eye: pose.position,
-            rot: pose.orientation.to_rotation_matrix(),
-            distances: self.march_distances(),
-        };
+        let ctx = self.ray_ctx(camera, pose);
         let mut hits = Vec::with_capacity(pixels.len());
         for &[u, v] in pixels {
             hits.push(self.raycast_one(&ctx, u, v));
@@ -145,12 +148,7 @@ impl<'a> SparseSceneSampler<'a> {
             .filter(|&n| n <= MAX_ADAPTIVE_PIXELS)
             .ok_or(RenderError::Invalid("adaptive view exceeds pixel limit"))?;
 
-        let ctx = RayCtx {
-            camera,
-            eye: pose.position,
-            rot: pose.orientation.to_rotation_matrix(),
-            distances: self.march_distances(),
-        };
+        let ctx = self.ray_ctx(camera, pose);
         let width = camera.width as usize;
         let mut luma_buf = vec![0_u8; total_pixels];
         let mut depth_buf = vec![0.0_f32; total_pixels];
@@ -252,6 +250,22 @@ impl<'a> SparseSceneSampler<'a> {
         ))
     }
 
+    /// What every ray of one view shares.
+    fn ray_ctx<'c>(&self, camera: &'c CameraModel, pose: &CameraPose) -> RayCtx<'c> {
+        let frame = self.scene.frame;
+        RayCtx {
+            camera,
+            eye: pose.position,
+            rot: pose.orientation.to_rotation_matrix(),
+            distances: self.march_distances(),
+            map: if self.modelled {
+                MapCoordinates::about(frame, pose.position, self.far_m)
+            } else {
+                MapCoordinates::Exact(frame)
+            },
+        }
+    }
+
     /// The distance of each step of the march, from the near depth to the
     /// far distance in equal ratios.
     fn march_distances(&self) -> Vec<f64> {
@@ -279,7 +293,7 @@ impl<'a> SparseSceneSampler<'a> {
         let mut bracket = None;
         for &distance in &ctx.distances {
             let point = eye + ray * distance;
-            let (mercator_xy, alt_m) = point_mercator_and_alt(self.scene.frame, point);
+            let (mercator_xy, alt_m) = ctx.map.at(point);
             if let Some(terrain_h) = sample_terrain(&self.scene.terrain, mercator_xy) {
                 let clearance = alt_m - terrain_h;
                 if clearance <= 0.0 && above {
@@ -297,7 +311,7 @@ impl<'a> SparseSceneSampler<'a> {
         for _ in 0..self.refinements {
             let middle = 0.5 * (low + high);
             let point = eye + ray * middle;
-            let (mercator_xy, alt_m) = point_mercator_and_alt(self.scene.frame, point);
+            let (mercator_xy, alt_m) = ctx.map.at(point);
             if let Some(terrain_h) = sample_terrain(&self.scene.terrain, mercator_xy)
                 && alt_m - terrain_h <= 0.0
             {
@@ -309,7 +323,7 @@ impl<'a> SparseSceneSampler<'a> {
 
         let distance = 0.5 * (low + high);
         let hit = eye + ray * distance;
-        let (mercator_xy, _) = point_mercator_and_alt(self.scene.frame, hit);
+        let (mercator_xy, _) = ctx.map.at(hit);
         let luma = sample_imagery(&self.scene.imagery, mercator_xy)?;
         Some(SparseRayHit {
             world_local: [hit.x, hit.y, hit.z],
@@ -325,6 +339,8 @@ struct RayCtx<'a> {
     rot: Rotation3<f64>,
     /// The distance of each march step: the same for every ray.
     distances: Vec<f64>,
+    /// The map coordinates of a point of a ray.
+    map: MapCoordinates,
 }
 
 fn grid_axis(len: u32, stride: u32) -> Vec<u32> {
@@ -389,17 +405,6 @@ fn interpolate_block(
             luma_buf[idx] = (l_top * (1.0 - ty) + l_bot * ty).round().clamp(0.0, 255.0) as u8;
             depth_buf[idx] = (1.0 / (id_top * (1.0 - ty) + id_bot * ty)) as f32;
         }
-    }
-}
-
-fn point_mercator_and_alt(frame: LocalFrame, point: Vector3<f64>) -> ([f64; 2], f64) {
-    if matches!(frame, LocalFrame::AnchorMercator { .. }) {
-        (frame.mercator_xy(point), point.z)
-    } else {
-        let [lat_deg, lon_deg, alt_m] = frame.geodetic(point);
-        let mx = (lon_deg + 180.0) / 360.0;
-        let my = (1.0 - lat_deg.to_radians().tan().asinh() / std::f64::consts::PI) * 0.5;
-        ([mx, my], alt_m)
     }
 }
 
