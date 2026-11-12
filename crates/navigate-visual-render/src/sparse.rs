@@ -8,7 +8,7 @@ use navigate_visual::{CameraModel, CameraPose, ReferenceView};
 
 use crate::{AtlasLayout, ImageAtlas, RenderError, RenderScene, TerrainAtlas};
 
-mod mapping;
+pub(crate) mod mapping;
 
 use mapping::MapCoordinates;
 
@@ -447,16 +447,22 @@ fn sample_bilinear_covered(
         .then_some((v00 * (1.0 - fx) + v10 * fx) * (1.0 - fy) + (v01 * (1.0 - fx) + v11 * fx) * fy)
 }
 
-fn sample_terrain(atlas: &TerrainAtlas, mercator_xy: [f64; 2]) -> Option<f64> {
+pub(crate) fn sample_terrain(atlas: &TerrainAtlas, mercator_xy: [f64; 2]) -> Option<f64> {
     sample_bilinear_covered(atlas.layout, &atlas.coverage, mercator_xy, |idx| {
         f64::from(atlas.heights_m.get(idx).copied().unwrap_or(0.0))
     })
 }
 
-fn sample_imagery(atlas: &ImageAtlas, mercator_xy: [f64; 2]) -> Option<u8> {
-    let val = sample_bilinear_covered(atlas.layout, &atlas.coverage, mercator_xy, |idx| {
+/// The bilinear luma of the imagery at unit Web Mercator `mercator_xy`,
+/// none where the atlas does not cover it.
+pub(crate) fn imagery_luma(atlas: &ImageAtlas, mercator_xy: [f64; 2]) -> Option<f64> {
+    sample_bilinear_covered(atlas.layout, &atlas.coverage, mercator_xy, |idx| {
         f64::from(atlas.pixels.get(idx).copied().unwrap_or(0))
-    })?;
+    })
+}
+
+fn sample_imagery(atlas: &ImageAtlas, mercator_xy: [f64; 2]) -> Option<u8> {
+    let val = imagery_luma(atlas, mercator_xy)?;
     Some(val.round().clamp(0.0, 255.0) as u8)
 }
 

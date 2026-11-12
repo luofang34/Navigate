@@ -1,6 +1,7 @@
 //! Tuning of the terrain means.
 
 use navigate_camera::Intrinsics;
+use navigate_visual::acquisition::AcquisitionConfig;
 
 use crate::MapRefusal;
 
@@ -43,8 +44,24 @@ pub struct TerrainConfig {
     pub search_sigma_multiple: f64,
     /// Smallest position search radius, metres.
     pub min_search_radius_m: f64,
-    /// Largest position search radius, metres.
+    /// Largest position search radius of a reference view, metres. A
+    /// wider belief is first acquired.
     pub max_search_radius_m: f64,
+    /// Largest position search radius of an acquisition, metres: the cost
+    /// of an acquisition grows with its square. A value not above the
+    /// largest search radius of a view turns acquisition off: a wider
+    /// belief is then searched only that far about itself.
+    pub max_acquisition_radius_m: f64,
+    /// Side of a ground cell of an acquisition, metres.
+    pub acquisition_cell_m: f64,
+    /// What an acquisition requires of the place it finds.
+    pub acquisition: AcquisitionConfig,
+    /// Largest difference between the corrections of two acquisitions
+    /// that confirm one another, metres.
+    pub acquisition_confirm_m: f64,
+    /// Longest time between two acquisitions that confirm one another,
+    /// seconds.
+    pub acquisition_confirm_s: f64,
     /// Attitude search bound, radians.
     pub attitude_radius_rad: f64,
     /// Longest time from the middle of the exposure to the delivery of a
@@ -102,6 +119,11 @@ impl Default for TerrainConfig {
             search_sigma_multiple: 3.0,
             min_search_radius_m: 30.0,
             max_search_radius_m: 300.0,
+            max_acquisition_radius_m: 3_000.0,
+            acquisition_cell_m: 32.0,
+            acquisition: AcquisitionConfig::default(),
+            acquisition_confirm_m: 30.0,
+            acquisition_confirm_s: 10.0,
             attitude_radius_rad: 0.05,
             max_capture_lag_s: 0.5,
             lag_acceleration_m_s2: 20.0,
@@ -183,6 +205,11 @@ impl TerrainConfig {
             self.search_sigma_multiple,
             self.min_search_radius_m,
             self.max_search_radius_m,
+            self.max_acquisition_radius_m,
+            self.acquisition_cell_m,
+            self.acquisition_confirm_m,
+            self.acquisition_confirm_s,
+            self.acquisition.exclusion_m,
             self.attitude_radius_rad,
             self.far_m,
             self.min_structure,
@@ -199,6 +226,9 @@ impl TerrainConfig {
         .iter()
         .all(|v| v.is_finite() && *v >= 0.0);
         let ordered = self.min_search_radius_m <= self.max_search_radius_m
+            && self.acquisition.peaks > 0
+            && self.acquisition.min_score.is_finite()
+            && self.acquisition.min_margin.is_finite()
             && (0.0..=1.0).contains(&self.min_view_coverage);
         let counts = self.steps > 0
             && self.stride > 0

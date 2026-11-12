@@ -290,6 +290,9 @@ fn fixes_with(world: &World, config: TerrainConfig, poses: u32) -> (u32, f64, f6
     let request = TerrainMapRequest {
         config: TerrainConfig {
             max_search_radius_m: 80.0,
+            // The search stays about the belief: these poses hold the
+            // covariance of a fix, not the acquisition of a wide belief.
+            max_acquisition_radius_m: 80.0,
             ..config
         },
         ..TerrainMapRequest::new(world.package, TODAY)

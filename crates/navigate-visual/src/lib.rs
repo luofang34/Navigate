@@ -30,6 +30,7 @@
 //! assert!(matches!(localizer.estimate_blocking(&frame, &reference, &prior), Err(VisualError::InsufficientMatches { .. })));
 //! # Ok::<(), VisualError>(())
 //! ```
+pub mod acquisition;
 mod camera;
 mod candidates;
 pub mod controller;
