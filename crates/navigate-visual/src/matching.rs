@@ -4,6 +4,7 @@ use crate::VisualError;
 use image::GrayImage;
 use nalgebra::Vector2;
 
+mod contrast;
 pub(crate) mod pyramid;
 mod refinement;
 mod tracking;
@@ -223,6 +224,10 @@ fn track_both_ways(
 /// more than the plain matcher. A tight prior costs the square of its
 /// radius; a wide one searches as the plain matcher does.
 ///
+/// Both images are matched with their local contrast normalised: a camera
+/// frame differs from a map render in exposure, response and light, and
+/// faint ground has corners only relative to its own contrast.
+///
 /// The search does not grow past the plain matcher's: a wider patch search
 /// at the same pyramid level finds false minima on textured ground, and
 /// loses more points than it finds.
@@ -246,15 +251,16 @@ impl BoundedPyramidalMatcher {
 
 impl ImageMatcher for BoundedPyramidalMatcher {
     fn identity(&self) -> &str {
-        "cpu-pyramidal-lk-v1-bounded"
+        "cpu-pyramidal-lk-v1-bounded-lcn"
     }
     fn match_images_blocking(
         &mut self,
         reference: &GrayImage,
         query: &GrayImage,
     ) -> Result<Vec<PixelMatch>, VisualError> {
-        let points = pyramid::corners(reference);
-        let found = track_both_ways(reference, query, &points, self.offset_bound_px)?;
+        let (reference, query) = (contrast::normalised(reference), contrast::normalised(query));
+        let points = pyramid::corners(&reference);
+        let found = track_both_ways(&reference, &query, &points, self.offset_bound_px)?;
         Ok(points
             .into_iter()
             .zip(found)

@@ -326,10 +326,15 @@ impl ReferenceNavigator {
                 sensor: input.sensor,
             });
         };
-        // A frame with no structure gives no match, and it is found before
-        // the filter, the map, or the matcher do any work for it.
-        if content::Content::of(&image).is_featureless(map.config.min_structure) {
+        // A frame with no structure gives no match, and a faint one no
+        // honest one; both are found before the filter, the map, or the
+        // matcher do any work for them.
+        let content = content::Content::of(&image);
+        if content.is_featureless(map.config.min_structure) {
             return Ok((Outcome::Unused(names::FEATURELESS_FRAME), None));
+        }
+        if content.is_faint(map.config.min_block_contrast) {
+            return Ok((Outcome::Unused(names::FAINT_FRAME), None));
         }
         let times = (input.acquired_at, input.delivered_at);
         let sighting = match at_exposure(&mut self.filter, times, map.config.max_capture_lag_s) {

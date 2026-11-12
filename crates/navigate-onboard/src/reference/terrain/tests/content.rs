@@ -136,3 +136,75 @@ fn a_frame_of_noise_is_recorded_and_costs_no_match() {
     assert_eq!(navigator.terrain_working_camera(CAMERA), None);
     assert_eq!(navigator.solution(at(RATE)).unwrap(), before);
 }
+
+/// The block contrast of a 160 by 120 frame.
+#[cfg(test)]
+fn block(luma: &[u8]) -> f64 {
+    Content::of(&GrayImage::from_raw(160, 120, luma.to_vec()).unwrap()).block
+}
+
+/// The outcome of the frame `luma` of `world` from `hover`.
+#[cfg(test)]
+fn outcome(world: &World, hover: &Flight, frame: &SensorInput, luma: Vec<u8>) -> Outcome {
+    let mut navigator = navigator(hover, belly(), [15.0, -10.0, 5.0], 20.0);
+    load(&mut navigator, world);
+    let mut sink = Vec::new();
+    for step in 1..=RATE {
+        navigator.ingest(&hover.increment(step), &mut sink).unwrap();
+    }
+    let input = SensorInput {
+        data: SensorData::TerrainFrame {
+            width: 160,
+            height: 120,
+            luma,
+        },
+        ..frame.clone()
+    };
+    navigator.ingest(&input, &mut sink).unwrap();
+    terrain(&sink).remove(0).0
+}
+
+/// A frame of ground faded to just under the block contrast floor is
+/// refused as faint without a match; faded to just over it, it is
+/// matched and fixes.
+#[test]
+fn the_faint_floor_refuses_just_under_it_and_matches_just_over_it() {
+    show_events();
+    let floor = TerrainConfig::default().min_block_contrast;
+    let world = World::build(&WorldSpec::default());
+    let hover = Flight {
+        start: [CENTRE[0], CENTRE[1], HEIGHT_M],
+        speed_m_s: 0.0,
+    };
+    let frame = hover.frame(&world, &belly(), RATE, 0);
+    let SensorData::TerrainFrame { luma, .. } = &frame.data else {
+        panic!("a terrain frame");
+    };
+    // The contrast at which the faded frame has `target` counts of block
+    // contrast, by bisection: the block contrast grows with the contrast.
+    let at = |target: f64| {
+        let (mut low, mut high) = (0.0, 1.0);
+        for _ in 0..30 {
+            let middle = 0.5 * (low + high);
+            if block(&faded(luma, middle, 9)) < target {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        faded(luma, high, 9)
+    };
+    let under = at(0.95 * floor);
+    let over = at(1.05 * floor);
+    tracing::info!(
+        under = block(&under),
+        over = block(&over),
+        "the faded frames"
+    );
+    assert!(block(&under) < floor && block(&over) > floor);
+    assert_eq!(
+        outcome(&world, &hover, &frame, under),
+        Outcome::Unused("faint_frame")
+    );
+    assert_eq!(outcome(&world, &hover, &frame, over), Outcome::Accepted);
+}

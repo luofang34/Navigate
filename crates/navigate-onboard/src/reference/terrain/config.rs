@@ -107,6 +107,17 @@ pub struct TerrainConfig {
     /// noise with the pixel contrast of the frame. A frame of noise alone
     /// has one.
     pub min_structure: f64,
+    /// Smallest block contrast of a frame that is matched: the mean
+    /// absolute difference of the means of adjacent blocks of 8 by 8
+    /// pixels, in counts of the 8-bit frame as the host delivers it,
+    /// before the matcher normalises its contrast. A sensor of another
+    /// bit depth or gain rescales it to its counts. Under it, the matcher
+    /// finds ground that its normalisation raised above the noise, and
+    /// the fix is off by more than its covariance states: with the
+    /// camera mismatch of `tests::geometry`, frames of 1 to 3.5 counts
+    /// over 45° views were over-confident and frames of 3.6 and more
+    /// were not.
+    pub min_block_contrast: f64,
     /// Largest count of pixels of the reference view and of the match: the
     /// bound of the cost of one frame.
     pub max_match_pixels: u32,
@@ -148,6 +159,7 @@ impl Default for TerrainConfig {
             luma_edge: u8::MAX,
             depth_edge: 0.02,
             min_structure: 2.0,
+            min_block_contrast: 4.0,
             max_match_pixels: 320 * 240,
             min_match_pixels: 160 * 120,
             dem_correlation_length_m: 300.0,
@@ -225,6 +237,7 @@ impl TerrainConfig {
             self.attitude_radius_rad,
             self.far_m,
             self.min_structure,
+            self.min_block_contrast,
             f64::from(self.depth_edge),
             self.dem_correlation_length_m,
         ]

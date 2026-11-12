@@ -3,6 +3,7 @@
 //! at true poses, and the reference navigator run on inertial increments
 //! and those frames.
 
+mod appearance;
 mod content;
 mod cost;
 mod dem;
