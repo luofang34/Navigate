@@ -40,6 +40,8 @@ pub(crate) const FIX_REFUSED: &str = "fix_refused";
 pub(crate) const ACQUISITION_AMBIGUOUS: &str = "acquisition_ambiguous";
 /// No place within the acquisition radius matches the frame.
 pub(crate) const ACQUISITION_WEAK: &str = "acquisition_weak";
+/// The acquisition of a wide belief goes on over the next frames.
+pub(crate) const ACQUISITION_PENDING: &str = "acquisition_pending";
 /// The fix of an acquisition waits for the next acquisition to agree.
 pub(crate) const ACQUISITION_UNCONFIRMED: &str = "acquisition_unconfirmed";
 
