@@ -12,5 +12,6 @@ mod geometry;
 mod inspection;
 mod load;
 mod precheck;
+mod reacquire;
 mod snapshot;
 mod world;

@@ -1,5 +1,6 @@
 use super::*;
 
+mod bounded;
 mod oracle;
 
 fn texture() -> GrayImage {

@@ -12,7 +12,7 @@ use navigate_data::{CorrelationKey, GridCell, TileAddress};
 use navigate_visual::fusion_bridge::{VisualSourceIdentity, position_fix_observation_composed};
 use navigate_visual::session::{ContinuityEpoch, FrameKey, MapCell, MapCellLedger, StreamId};
 use navigate_visual::{
-    Estimate, Frame, FrameStamp, Localizer, LocalizerConfig, PosePrior, PyramidalMatcher,
+    BoundedPyramidalMatcher, Estimate, Frame, FrameStamp, Localizer, LocalizerConfig, PosePrior,
     ReferenceView,
 };
 
@@ -45,6 +45,44 @@ const PIXEL_NOISE_FLOOR_PX: f64 = 0.2;
 /// views of 0° to 45°, and those cases (`tests::geometry`).
 const RESIDUAL_CORRELATION_PX: f64 = 1.2;
 
+/// Margin of the offset bound of a match, pixels.
+const OFFSET_MARGIN_PX: f64 = 4.0;
+
+/// A bound on the offset of a ground point between the reference view,
+/// rendered at the belief, and the frame, pixels of the working camera.
+///
+/// A position error inside the position radius of the prior, which holds
+/// the floor and the ceiling that the host sets for the search, moves a
+/// point by the error over the range, times the focal length for the
+/// shift and times the distance from the centre for the change of scale.
+/// An attitude error turns a point by the angle times the focal length;
+/// it is taken at the search multiple of the belief's attitude one-sigma
+/// with the lag, because the attitude radius of the prior is a gate on
+/// the solved attitude, far wider than a belief of a few milliradians
+/// needs. A belief without an attitude one-sigma takes that radius. A
+/// wide belief, as after a long gap of fixes, searches as far as the
+/// plain matcher.
+fn offset_bound_px(
+    belief: &Belief,
+    (config, lag_s): (&super::config::TerrainConfig, f64),
+    prior: &PosePrior,
+    working: &WorkingCamera,
+) -> f64 {
+    let attitude_rad = belief
+        .sigma_attitude_rad
+        .map_or(prior.attitude_radius_rad, |sigma| {
+            let rad = config.search_sigma_multiple * sigma + config.lag_rate_rad_s * lag_s;
+            rad.min(prior.attitude_radius_rad)
+        });
+    let k = &working.intrinsics;
+    let focal = k.fx.max(k.fy);
+    let range_m = working.ground_pixel_m * k.fx;
+    let half_diagonal = f64::from(k.width).hypot(f64::from(k.height)) / 2.0;
+    prior.position_radius_m / range_m * (focal + half_diagonal)
+        + attitude_rad * focal
+        + OFFSET_MARGIN_PX
+}
+
 /// The acceptance and the covariance of a terrain match.
 fn localizer_config() -> LocalizerConfig {
     LocalizerConfig {
@@ -63,7 +101,7 @@ pub(crate) struct TerrainCamera {
     pub(super) mount: CameraMount,
     calibration_sigma_rad: f64,
     identity: VisualSourceIdentity,
-    pub(super) localizer: Localizer<PyramidalMatcher>,
+    pub(super) localizer: Localizer<BoundedPyramidalMatcher>,
     /// Count of frames taken; the sequence of the next frame.
     frames: u64,
     pub(super) views: Views,
@@ -146,8 +184,11 @@ impl TerrainCamera {
                 epoch: SourceEpoch::new(0),
                 clock,
             },
-            localizer: Localizer::new(PyramidalMatcher, localizer_config())
-                .map_err(|e| invalid(e.to_string()))?,
+            localizer: Localizer::new(
+                BoundedPyramidalMatcher::new(f64::INFINITY),
+                localizer_config(),
+            )
+            .map_err(|e| invalid(e.to_string()))?,
             frames: 0,
             views: Views::default(),
             ground_height_m: None,
@@ -334,6 +375,9 @@ impl TerrainCamera {
             attitude_radius_rad,
         };
         self.working = Some(reference.working);
+        let search = (&map.config, exposure.unmodelled_lag_s);
+        let bound_px = offset_bound_px(&belief, search, &prior, &reference.working);
+        self.localizer.matcher_mut().set_offset_bound_px(bound_px);
         let stamp = FrameStamp {
             sequence,
             capture_time_ns: acquired,

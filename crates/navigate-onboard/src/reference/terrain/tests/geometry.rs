@@ -23,7 +23,7 @@ use crate::{
 use mismatch::Mismatch;
 
 /// The camera of the demo: 400 by 300 with a field of 67° across.
-fn camera() -> CameraModel {
+pub(super) fn camera() -> CameraModel {
     CameraModel {
         width: 400,
         height: 300,
@@ -34,7 +34,7 @@ fn camera() -> CameraModel {
     }
 }
 
-fn imager() -> ImagerModel {
+pub(super) fn imager() -> ImagerModel {
     let k = camera();
     ImagerModel::pinhole(Intrinsics {
         width: k.width,

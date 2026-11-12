@@ -191,16 +191,74 @@ impl PointTracker for PyramidalMatcher {
         query: &GrayImage,
         points: &[Vector2<f64>],
     ) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
-        validate_points(reference, query, points)?;
-        let source = pyramid::build(reference);
-        let target = pyramid::build(query);
+        track_both_ways(reference, query, points, f64::INFINITY)
+    }
+}
+
+/// Tracks each of `points` from `reference` into `query` and back, with the
+/// coarse seed bounded by `bound_px` at full resolution, and keeps a point
+/// that returns within a pixel.
+fn track_both_ways(
+    reference: &GrayImage,
+    query: &GrayImage,
+    points: &[Vector2<f64>],
+    bound_px: f64,
+) -> Result<Vec<Option<Vector2<f64>>>, VisualError> {
+    validate_points(reference, query, points)?;
+    let source = pyramid::build(reference);
+    let target = pyramid::build(query);
+    Ok(points
+        .iter()
+        .map(|&point| {
+            let found = tracking::track(&source, &target, point, point, bound_px)?;
+            let back = tracking::track(&target, &source, found, point, bound_px)?;
+            ((back - point).norm() <= 1.0).then_some(found)
+        })
+        .collect())
+}
+
+/// [`PyramidalMatcher`] for a reference view rendered at a pose prior: the
+/// coarse seed of each point searches only the offsets that the prior
+/// allows, a bound in pixels of the query at full resolution, and never
+/// more than the plain matcher. A tight prior costs the square of its
+/// radius; a wide one searches as the plain matcher does.
+///
+/// The search does not grow past the plain matcher's: a wider patch search
+/// at the same pyramid level finds false minima on textured ground, and
+/// loses more points than it finds.
+#[derive(Clone, Copy, Debug)]
+pub struct BoundedPyramidalMatcher {
+    offset_bound_px: f64,
+}
+
+impl BoundedPyramidalMatcher {
+    /// A matcher with the offset bound `offset_bound_px`.
+    #[must_use]
+    pub const fn new(offset_bound_px: f64) -> Self {
+        Self { offset_bound_px }
+    }
+
+    /// Sets the offset bound for the next match.
+    pub fn set_offset_bound_px(&mut self, offset_bound_px: f64) {
+        self.offset_bound_px = offset_bound_px;
+    }
+}
+
+impl ImageMatcher for BoundedPyramidalMatcher {
+    fn identity(&self) -> &str {
+        "cpu-pyramidal-lk-v1-bounded"
+    }
+    fn match_images_blocking(
+        &mut self,
+        reference: &GrayImage,
+        query: &GrayImage,
+    ) -> Result<Vec<PixelMatch>, VisualError> {
+        let points = pyramid::corners(reference);
+        let found = track_both_ways(reference, query, &points, self.offset_bound_px)?;
         Ok(points
-            .iter()
-            .map(|&point| {
-                let found = tracking::track(&source, &target, point, point)?;
-                let back = tracking::track(&target, &source, found, point)?;
-                ((back - point).norm() <= 1.0).then_some(found)
-            })
+            .into_iter()
+            .zip(found)
+            .filter_map(|(reference, query)| query.map(|query| PixelMatch { reference, query }))
             .collect())
     }
 }

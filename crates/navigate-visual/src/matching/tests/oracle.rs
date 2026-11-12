@@ -180,7 +180,7 @@ fn the_tracker_gives_the_bits_of_its_plain_form() {
         let mut found = 0;
         for point in pyramid::corners(&original) {
             for initial in [point, point + Vector2::new(1.7, -2.3)] {
-                let fast = tracking::track(&source, &target, point, initial);
+                let fast = tracking::track(&source, &target, point, initial, f64::INFINITY);
                 let plain = track(&source, &target, point, initial);
                 assert_eq!(
                     fast.map(|q| (q.x.to_bits(), q.y.to_bits())),
