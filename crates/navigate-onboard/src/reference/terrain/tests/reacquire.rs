@@ -202,29 +202,39 @@ fn a_belief_kilometres_off_finds_the_ground_again() {
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 fn an_acquisition_gives_no_fix_at_a_wrong_place() {
     show_events();
-    let mut total = Tally::default();
     for texture in [Texture::Farmland, Texture::Town, Texture::TownIrregular] {
         let world = world(texture);
+        let mut ground = Tally::default();
         for magnitude in [500.0, 4_000.0] {
             for off in around(magnitude, 2) {
                 let seen = first_frames(Trial::exact(&world), off, 1_000.0, FRAMES);
-                total.add(&seen, &format!("{texture:?}"));
+                ground.add(&seen, &format!("{texture:?}"));
             }
         }
+        tracing::info!(?texture, ?ground, "acquisitions");
+        ground.assert_consistent(&format!("{texture:?}"));
     }
-    tracing::info!(?total, "acquisitions");
-    assert_eq!((total.wrong_place, total.inconsistent), (0, 0), "{total:?}");
 }
 
 /// Squared Mahalanobis length of a two-dimensional error that a
 /// consistent covariance exceeds once in a thousand.
 const NEES_999: f64 = 13.82;
 
+/// The band, at 99 %, of the mean of `n` independent squared Mahalanobis
+/// lengths of two-dimensional errors under a consistent covariance: their
+/// sum is chi-square with `2 n` degrees of freedom (Wilson and Hilferty).
+fn mean_nees_band(n: usize) -> (f64, f64) {
+    let k = 2.0 * n as f64;
+    let quantile = |z: f64| k * (1.0 - 2.0 / (9.0 * k) + z * (2.0 / (9.0 * k)).sqrt()).powi(3);
+    (quantile(-2.576) / n as f64, quantile(2.576) / n as f64)
+}
+
 /// Outcomes of the frames of a statistics run. An accepted fix is at a
 /// wrong place when it is farther from the truth than the exclusion
 /// distance of the acquisition, and inconsistent when its error is past
 /// [`NEES_999`] under the covariance it stated; errors past 30 m are
-/// counted as well.
+/// counted as well. The first accepted fix of a run is its acquisition
+/// fix.
 #[derive(Default, Debug)]
 struct Tally {
     frames: u32,
@@ -233,6 +243,8 @@ struct Tally {
     wrong_place: u32,
     inconsistent: u32,
     past_30_m: u32,
+    /// Horizontal NEES of each acquisition fix.
+    acquired_nees: Vec<f64>,
     refusals: std::collections::BTreeMap<String, u32>,
 }
 
@@ -252,6 +264,9 @@ impl Tally {
                 continue;
             }
             self.fixes += 1;
+            if wide {
+                self.acquired_nees.push(frame.nees);
+            }
             wide = false;
             let wrong = frame.error_m > 300.0;
             let inconsistent = frame.nees > NEES_999;
@@ -261,6 +276,44 @@ impl Tally {
             if wrong || inconsistent || frame.error_m > 30.0 {
                 tracing::warn!(label, ?frame, "an acquired fix far off");
             }
+        }
+    }
+
+    /// The mean NEES of the acquisition fixes and its band, when there
+    /// are any.
+    fn mean_nees(&self) -> Option<(f64, (f64, f64))> {
+        let n = self.acquired_nees.len();
+        (n > 0).then(|| {
+            let mean = self.acquired_nees.iter().sum::<f64>() / n as f64;
+            (mean, mean_nees_band(n))
+        })
+    }
+
+    /// Asserts no wrong place, no inconsistent fix, and a mean NEES of the
+    /// acquisition fixes under the top of its band: a stated covariance
+    /// that is somewhat optimistic for every fix shows in the mean before
+    /// it shows in one fix. The bottom is not asserted: the test worlds
+    /// state a map accuracy that their imagery does not have, so their
+    /// fixes are conservative, and the runs of one ground share a place.
+    fn assert_consistent(&self, label: &str) {
+        assert_eq!(
+            (self.wrong_place, self.inconsistent),
+            (0, 0),
+            "{label}: {self:?}"
+        );
+        if let Some((mean, (low, high))) = self.mean_nees() {
+            tracing::info!(
+                label,
+                n = self.acquired_nees.len(),
+                mean,
+                low,
+                high,
+                "acquisition NEES"
+            );
+            assert!(
+                mean <= high,
+                "{label}: mean NEES {mean} past {high}: {self:?}"
+            );
         }
     }
 }
@@ -312,18 +365,22 @@ fn the_full_acquisition_grid_gives_no_wrong_fix() {
             };
             trials.push(("season".into(), trial));
         }
+        let mut ground = Tally::default();
         for (name, trial) in &trials {
             let mut tally = Tally::default();
             for magnitude in [500.0, 2_000.0, 4_000.0] {
                 for off in around(magnitude, 3) {
                     let seen = first_frames(*trial, off, 1_000.0, FRAMES);
                     tally.add(&seen, name);
+                    ground.add(&seen, name);
                     total.add(&seen, name);
                 }
             }
             tracing::info!(?texture, name, ?tally, "acquisition grid");
         }
+        tracing::info!(?texture, ?ground, "acquisition grid ground");
+        ground.assert_consistent(&format!("{texture:?}"));
     }
     tracing::info!(?total, "acquisition grid total");
-    assert_eq!((total.wrong_place, total.inconsistent), (0, 0), "{total:?}");
+    total.assert_consistent("all grounds");
 }
