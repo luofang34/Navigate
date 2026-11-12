@@ -5,7 +5,7 @@
 //! and its imagery states a millimetre, or the registration error it has,
 //! so the stated covariance is that of the match.
 
-mod mismatch;
+pub(super) mod mismatch;
 
 use std::sync::Arc;
 

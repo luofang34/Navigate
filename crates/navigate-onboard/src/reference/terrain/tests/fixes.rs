@@ -344,6 +344,9 @@ fn the_declared_sigma_holds_the_error_and_is_of_its_order() {
     let wide = TerrainMapRequest {
         config: TerrainConfig {
             max_search_radius_m: 80.0,
+            // The search stays about the belief: these poses hold the
+            // covariance of a fix, not the acquisition of a wide belief.
+            max_acquisition_radius_m: 80.0,
             ..request(&world).config
         },
         ..request(&world)

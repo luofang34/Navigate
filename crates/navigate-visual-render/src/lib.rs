@@ -4,6 +4,7 @@
 mod atlas;
 mod error;
 pub mod keyframes;
+mod map_raster;
 pub mod package_scene;
 mod renderer;
 mod sparse;
@@ -13,6 +14,7 @@ mod test_package;
 pub use atlas::{AtlasLayout, ImageAtlas, TerrainAtlas};
 pub use error::RenderError;
 pub use keyframes::{KeyframeRendering, KeyframeSpec, build_keyframes};
+pub use map_raster::{ground_height_m, map_raster};
 pub use package_scene::{SceneRequest, SceneWindow, scene_around};
 pub use renderer::{GpuRenderer, GpuScene, GpuViewport, RenderLimits, RenderScene};
 pub use sparse::{AdaptiveRenderStats, SparseRayHit, SparseSceneSampler};

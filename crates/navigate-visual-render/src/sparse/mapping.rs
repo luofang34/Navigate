@@ -25,11 +25,11 @@ const DIFFERENCE_STEP_M: f64 = 100.0;
 const WGS84_A_M: f64 = 6_378_137.0;
 
 /// Unit Web Mercator coordinates and the altitude of a frame position.
-pub(super) type MapPoint = ([f64; 2], f64);
+pub(crate) type MapPoint = ([f64; 2], f64);
 
 /// How a march finds the map coordinates of its points.
 #[derive(Clone, Debug)]
-pub(super) enum MapCoordinates {
+pub(crate) enum MapCoordinates {
     /// The conversion of the frame at every point.
     Exact(LocalFrame),
     /// A quadratic model about the eye that agrees with the conversion of
@@ -42,7 +42,7 @@ impl MapCoordinates {
     /// when it holds over the whole reach, else the exact conversion, as at
     /// a pole, across the antimeridian, or on a frame whose conversion is
     /// already cheap.
-    pub(super) fn about(frame: LocalFrame, eye: Vector3<f64>, reach_m: f64) -> Self {
+    pub(crate) fn about(frame: LocalFrame, eye: Vector3<f64>, reach_m: f64) -> Self {
         if matches!(frame, LocalFrame::AnchorMercator { .. }) {
             return Self::Exact(frame);
         }
@@ -53,7 +53,7 @@ impl MapCoordinates {
     }
 
     /// The map coordinates of `point`.
-    pub(super) fn at(&self, point: Vector3<f64>) -> MapPoint {
+    pub(crate) fn at(&self, point: Vector3<f64>) -> MapPoint {
         match self {
             Self::Exact(frame) => exact(*frame, point),
             Self::Model(model) => model.at(point),
@@ -75,7 +75,7 @@ pub(super) fn exact(frame: LocalFrame, point: Vector3<f64>) -> MapPoint {
 
 /// Second-order Taylor model of `(mx, my, alt)` about an eye.
 #[derive(Clone, Debug)]
-pub(super) struct Quadratic {
+pub(crate) struct Quadratic {
     eye: Vector3<f64>,
     value: Vector3<f64>,
     /// Row `k` is the gradient of output `k`: Mercator x, Mercator y,

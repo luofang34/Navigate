@@ -35,6 +35,13 @@ pub(crate) const SHARED_MAP_ERROR: &str = "shared_map_error";
 pub(crate) const UNTRACKED_MAP_CELL: &str = "untracked_map_cell";
 /// The solved pose gave no usable position fix.
 pub(crate) const FIX_REFUSED: &str = "fix_refused";
+/// Another place matches the frame about as well as the best: the
+/// acquisition of a wide belief does not choose.
+pub(crate) const ACQUISITION_AMBIGUOUS: &str = "acquisition_ambiguous";
+/// No place within the acquisition radius matches the frame.
+pub(crate) const ACQUISITION_WEAK: &str = "acquisition_weak";
+/// The fix of an acquisition waits for the next acquisition to agree.
+pub(crate) const ACQUISITION_UNCONFIRMED: &str = "acquisition_unconfirmed";
 
 /// The name of a localizer rejection.
 pub(crate) const fn rejection(error: &VisualError) -> &'static str {

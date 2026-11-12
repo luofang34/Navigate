@@ -34,6 +34,7 @@ use crate::{
     ProductReport, ReferenceNavigator, SensorData, SensorInput, SensorKind, SensorSuite,
 };
 
+mod acquire;
 mod belief;
 mod budget;
 mod camera;

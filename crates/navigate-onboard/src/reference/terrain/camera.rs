@@ -16,6 +16,7 @@ use navigate_visual::{
     ReferenceView,
 };
 
+use super::acquire::{Candidate, Search};
 use super::belief::{Belief, BeliefSource, Exposure, body_position};
 use super::budget::{ViewGeometry, external_covariance_ned};
 use super::config::WorkingCamera;
@@ -95,7 +96,7 @@ fn localizer_config() -> LocalizerConfig {
 /// One declared terrain camera and the state of its capture stream.
 #[derive(Debug, Clone)]
 pub(crate) struct TerrainCamera {
-    sensor: SourceId,
+    pub(super) sensor: SourceId,
     /// The camera as the host declared it: the size of each frame.
     pub(super) declared: Intrinsics,
     pub(super) mount: CameraMount,
@@ -107,7 +108,9 @@ pub(crate) struct TerrainCamera {
     pub(super) views: Views,
     /// Height above the ellipsoid of the ground that the last match saw,
     /// metres. It gives the range of the next view before a match.
-    ground_height_m: Option<f64>,
+    pub(super) ground_height_m: Option<f64>,
+    /// The fix of the last acquisition, until the next one confirms it.
+    pub(super) candidate: Option<Candidate>,
     /// The camera of the last reference view and match.
     working: Option<WorkingCamera>,
     /// Where the belief of the last frame came from.
@@ -192,6 +195,7 @@ impl TerrainCamera {
             frames: 0,
             views: Views::default(),
             ground_height_m: None,
+            candidate: None,
             working: None,
             belief_source: None,
             inspect: false,
@@ -205,6 +209,7 @@ impl TerrainCamera {
     pub(super) fn reset(&mut self) {
         self.views = Views::default();
         self.ground_height_m = None;
+        self.candidate = None;
         self.working = None;
         self.belief_source = None;
         self.forget_match();
@@ -333,11 +338,17 @@ impl TerrainCamera {
         let sequence = self.frames;
         self.frames = self.frames.wrapping_add(1);
         let acquired = input.acquired_at.as_nanos();
-        let belief = exposure.belief;
         self.belief_source = Some(exposure.source);
-        let (position_radius_m, attitude_radius_rad) = map
-            .config
-            .search(belief.sigma_h_m, exposure.unmodelled_lag_s);
+        let Search {
+            belief,
+            position_radius_m,
+            attitude_radius_rad,
+            acquired_from,
+        } = match self.search(map, &image, exposure) {
+            Ok(search) => search,
+            Err(NoView::Unused(reason)) => return Ok(Sighting::Unused(reason, None)),
+            Err(NoView::Read(detail)) => return Err(self.map_read(detail)),
+        };
         let key = FrameKey {
             stream: StreamId(self.sensor.get()),
             continuity: ContinuityEpoch(0),
@@ -358,12 +369,7 @@ impl TerrainCamera {
         let reference = match self.views.reference(map, &sight) {
             Ok(reference) => reference,
             Err(NoView::Unused(reason)) => return Ok(Sighting::Unused(reason, None)),
-            Err(NoView::Read(detail)) => {
-                return Err(OnboardError::MapRead {
-                    sensor: self.sensor,
-                    detail,
-                });
-            }
+            Err(NoView::Read(detail)) => return Err(self.map_read(detail)),
         };
         let (view, path) = (&*reference.view, reference.path);
         let Ok(pose) = belief.camera_in(view.frame, &self.mount) else {
@@ -375,33 +381,54 @@ impl TerrainCamera {
             attitude_radius_rad,
         };
         self.working = Some(reference.working);
-        let search = (&map.config, exposure.unmodelled_lag_s);
-        let bound_px = offset_bound_px(&belief, search, &prior, &reference.working);
+        let lag = (&map.config, exposure.unmodelled_lag_s);
+        let bound_px = offset_bound_px(&belief, lag, &prior, &reference.working);
         self.localizer.matcher_mut().set_offset_bound_px(bound_px);
         let stamp = FrameStamp {
             sequence,
             capture_time_ns: acquired,
         };
         let frame = resampled(stamp, image, &reference.working.intrinsics);
-        // Both calls run the same match; the second also returns its pairs.
-        let estimate = if self.inspect {
-            let (estimate, evidence) = self
-                .localizer
-                .estimate_with_evidence_blocking(&frame, view, &prior);
-            let working = reference.working;
-            let view = Arc::clone(&reference.view);
-            self.pending.compared(view, frame.image, working, &evidence);
-            self.pending.gate(&prior, &estimate);
-            estimate
-        } else {
-            self.localizer.estimate_blocking(&frame, view, &prior)
-        };
-        match estimate {
+        match self.matched(frame, &reference, &prior) {
+            Ok(estimate) if !self.confirms(map, acquired_from.as_ref(), &estimate, acquired) => {
+                Ok(Sighting::Unused(names::ACQUISITION_UNCONFIRMED, Some(path)))
+            }
             Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, (key, path))),
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain frame did not match");
                 Ok(Sighting::Unused(rejection(&error), Some(path)))
             }
+        }
+    }
+
+    /// The pose that `frame` gives against the view of `reference`.
+    fn matched(
+        &mut self,
+        frame: Frame,
+        reference: &super::view::Reference,
+        prior: &PosePrior,
+    ) -> Result<Estimate, navigate_visual::VisualError> {
+        let view = &*reference.view;
+        if !self.inspect {
+            return self.localizer.estimate_blocking(&frame, view, prior);
+        }
+        // Both calls run the same match; this one also returns its pairs.
+        let (estimate, evidence) = self
+            .localizer
+            .estimate_with_evidence_blocking(&frame, view, prior);
+        let working = reference.working;
+        let shown = Arc::clone(&reference.view);
+        self.pending
+            .compared(shown, frame.image, working, &evidence);
+        self.pending.gate(prior, &estimate);
+        estimate
+    }
+
+    /// The error of a store that failed or gave changed data.
+    fn map_read(&self, detail: String) -> OnboardError {
+        OnboardError::MapRead {
+            sensor: self.sensor,
+            detail,
         }
     }
 
