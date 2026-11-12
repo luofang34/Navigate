@@ -95,6 +95,12 @@ impl Content {
         }
     }
 
+    /// Whether the block contrast of the frame is less than
+    /// `min_block_contrast` counts.
+    pub(crate) fn is_faint(&self, min_block_contrast: f64) -> bool {
+        self.block < min_block_contrast
+    }
+
     /// Whether the frame has no structure for a match: it is flat, or its
     /// block contrast is less than `min_structure` times that of noise.
     pub(crate) fn is_featureless(&self, min_structure: f64) -> bool {

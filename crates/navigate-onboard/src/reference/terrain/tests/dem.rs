@@ -188,10 +188,29 @@ fn stated_tilt_m(off_deg: f64, agl_m: f64) -> f64 {
     tilt_sigma_m(&map, &view)
 }
 
+/// The mean of `shifts`, the standard error of that mean on each axis,
+/// and the root mean square of the shifts.
+fn spread(shifts: &[Vector2<f64>]) -> (Vector2<f64>, Vector2<f64>, f64) {
+    let n = shifts.len().max(2) as f64;
+    let mean = shifts.iter().sum::<Vector2<f64>>() / n;
+    let variance = shifts
+        .iter()
+        .map(|s| (s - mean).component_mul(&(s - mean)))
+        .sum::<Vector2<f64>>()
+        / (n - 1.0);
+    let rms = (shifts.iter().map(|s| s.norm_squared()).sum::<f64>() / n).sqrt();
+    (mean, variance.map(|v| (v / n).sqrt()), rms)
+}
+
 /// A tilted plane of elevation error moves the fix against the slope by
 /// about the height above the ground times the slope: 4 m from 400 m and
-/// 16 m from 1.6 km for 1 %. The single frames give 0.6 to 1.0 of that,
-/// and the shift grows with the height.
+/// 16 m from 1.6 km for 1 %. One frame scatters about that by a one-sigma
+/// of 3 to 5 m from 400 m and 6 to 16 m from 1.6 km, so the test takes the
+/// mean over the nine places of the grid. Along the slope the mean is the
+/// expected shift within three standard errors of the mean and a quarter
+/// of the expected shift; across it, zero within three standard errors
+/// and a metre; and it grows with the height by more than three standard
+/// errors of the difference.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 fn a_tilted_elevation_error_moves_the_fix_by_the_height_times_the_slope() {
@@ -201,29 +220,47 @@ fn a_tilted_elevation_error_moves_the_fix_by_the_height_times_the_slope() {
         east: 0.0,
     };
     let plane = world(slope, CORRELATION_ZOOM);
-    let mut shifts = Vec::new();
+    let nadir = mount(0.0, false);
+    let mut along = Vec::new();
     for agl_m in [400.0, 1_600.0] {
-        let flight = hover(4, agl_m);
-        let nadir = mount(0.0, false);
-        let base = fix((&truth, &truth), &flight, nadir).unwrap().0;
-        let tilted = fix((&plane, &truth), &flight, nadir).unwrap().0;
-        let shift = tilted - base;
+        let shifts: Vec<Vector2<f64>> = (0..9)
+            .filter_map(|k| {
+                let flight = hover(k, agl_m);
+                let base = fix((&truth, &truth), &flight, nadir)?.0;
+                Some(fix((&plane, &truth), &flight, nadir)?.0 - base)
+            })
+            .collect();
+        let (mean, error, rms) = spread(&shifts);
         let expected = 0.01 * agl_m;
-        tracing::info!(agl_m, north = shift.x, east = shift.y, "a 1 % plane");
-        let along = (-1.25 * expected..=-0.5 * expected).contains(&shift.x);
-        assert!(along, "{agl_m}: {shift}");
-        assert!(shift.y.abs() < 0.3 * expected + 1.0, "{agl_m}: {shift}");
-        shifts.push(-shift.x);
+        tracing::info!(agl_m, ?mean, ?error, rms, "a 1 % plane");
+        assert!(shifts.len() >= 6, "{agl_m}: {}", shifts.len());
+        let off = (mean.x + expected).abs();
+        assert!(
+            off <= 3.0 * error.x + 0.25 * expected,
+            "{agl_m}: {mean} {error}"
+        );
+        assert!(
+            mean.y.abs() <= 3.0 * error.y + 1.0,
+            "{agl_m}: {mean} {error}"
+        );
+        along.push((-mean.x, error.x));
     }
-    assert!(shifts[1] > 2.5 * shifts[0], "{shifts:?}");
+    let [(low, low_error), (high, high_error)] = along[..] else {
+        panic!("two heights");
+    };
+    assert!(high - low > 3.0 * low_error.hypot(high_error), "{along:?}");
 }
 
 /// What a free 6-DoF solve does not take horizontally: a uniform
 /// elevation error moves the fix vertically, and an error of the mount
 /// angle turns the solved attitude. Over the grid at 800 m above the
 /// ground, a 10 m offset of the elevation and a 5 mrad error of the pitch
-/// of a camera 30° off the nadir each move the fix by less than 1.5 m on
-/// average, where the relief and the range would give 6 m and 5 m.
+/// of a camera 30° off the nadir move the fix by nothing on average. One
+/// frame moves by a few metres either way, from the scatter of a single
+/// solve (a root mean square of 3 to 4 m over the grid), so the mean is
+/// zero within three standard errors of it and half a metre, and the root
+/// mean square stays under the 6 m and 5 m that the relief and the range
+/// would give.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 fn a_uniform_elevation_error_and_a_mount_error_hardly_move_the_fix_horizontally() {
@@ -231,30 +268,33 @@ fn a_uniform_elevation_error_and_a_mount_error_hardly_move_the_fix_horizontally(
     let raised = world(DemError::Offset(10.0), CORRELATION_ZOOM);
     let oblique = mount(30.0, false);
     let pitched = CameraMount::rotated_forward(0.0, -60.0_f64.to_radians() + 0.005, 0.0);
-    let (mut offset, mut turned, mut n) = (Vector2::zeros(), Vector2::zeros(), 0.0);
+    let (mut offset, mut turned) = (Vec::new(), Vec::new());
     for k in 0..9 {
         let flight = hover(k, 800.0);
         let base = fix((&truth, &truth), &flight, oblique);
         let high = fix((&raised, &truth), &flight, oblique);
         let off = fix_rendered((&truth, &truth), &flight, (oblique, pitched));
         if let (Some(b), Some(h), Some(o)) = (base, high, off) {
-            offset += h.0 - b.0;
-            turned += o.0 - b.0;
-            n += 1.0;
+            offset.push(h.0 - b.0);
+            turned.push(o.0 - b.0);
         }
     }
-    let (offset, turned) = (offset / n, turned / n);
-    tracing::info!(
-        n,
-        ?offset,
-        ?turned,
-        "a uniform elevation error and a mount error"
-    );
-    assert!(n >= 6.0, "{n}");
-    assert!(
-        offset.norm() < 1.5 && turned.norm() < 1.5,
-        "{offset} {turned}"
-    );
+    assert!(offset.len() >= 6, "{}", offset.len());
+    for (name, shifts, limit_m) in [("offset", &offset, 6.0), ("mount", &turned, 5.0)] {
+        let (mean, error, rms) = spread(shifts);
+        tracing::info!(
+            name,
+            ?mean,
+            ?error,
+            rms,
+            "a uniform elevation error and a mount error"
+        );
+        assert!(
+            mean.x.abs() <= 3.0 * error.x + 0.5 && mean.y.abs() <= 3.0 * error.y + 0.5,
+            "{name}: {mean} {error}"
+        );
+        assert!(rms < limit_m, "{name}: {rms}");
+    }
 }
 
 /// Over random elevation fields of 5 m and 300 m, the normalized error of

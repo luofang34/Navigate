@@ -15,6 +15,9 @@ pub(crate) const RENDER: &str = "render";
 /// The frame has no structure that a match can use: it is flat, or it has
 /// only the contrast of noise.
 pub(crate) const FEATURELESS_FRAME: &str = "featureless_frame";
+/// The frame has structure, but less contrast than the matcher states its
+/// error for honestly.
+pub(crate) const FAINT_FRAME: &str = "faint_frame";
 /// The acquisition time of the frame is after its delivery time.
 pub(crate) const ACQUIRED_AFTER_DELIVERY: &str = "acquired_after_delivery";
 /// The frame came later after its exposure than the configured bound.
