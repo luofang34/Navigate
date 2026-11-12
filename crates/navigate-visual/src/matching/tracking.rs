@@ -5,14 +5,23 @@ use image::GrayImage;
 use nalgebra::{Matrix2, Vector2};
 
 const RADIUS: i32 = 4;
+/// Half side of the coarse seed search, pixels of the level where a point
+/// is seeded.
+const SEED_RADIUS: i32 = 8;
 /// The values of a patch of side `2 * RADIUS + 1`.
 const PATCH: usize = 81;
 
+/// Tracks `point` of `source` into `target` from `initial`. The coarse seed
+/// searches the offsets that `bound_px`, a bound on the offset of the point
+/// at full resolution, allows with a pixel of margin, and at most
+/// [`SEED_RADIUS`] pixels of the seeding level; an infinite bound searches
+/// all of them.
 pub(super) fn track(
     source: &[GrayImage],
     target: &[GrayImage],
     point: Vector2<f64>,
     initial: Vector2<f64>,
+    bound_px: f64,
 ) -> Option<Vector2<f64>> {
     let mut found = initial;
     let mut seeded = false;
@@ -24,7 +33,8 @@ pub(super) fn track(
             if !inside(&source[level], p) {
                 continue;
             }
-            guess = coarse_seed(&source[level], &target[level], p, guess)?;
+            let radius = seed_radius(bound_px, scale);
+            guess = coarse_seed(&source[level], &target[level], p, guess, radius)?;
             seeded = true;
         }
         let aligned = align(&source[level], &target[level], p, guess)?;
@@ -33,11 +43,23 @@ pub(super) fn track(
     seeded.then_some(found)
 }
 
+/// The half side of the coarse seed search at a level of `scale` for the
+/// full-resolution bound `bound_px`.
+fn seed_radius(bound_px: f64, scale: f64) -> i32 {
+    let needed = (bound_px / scale).ceil() + 1.0;
+    if needed < f64::from(SEED_RADIUS) {
+        needed.max(1.0) as i32
+    } else {
+        SEED_RADIUS
+    }
+}
+
 fn coarse_seed(
     source: &GrayImage,
     target: &GrayImage,
     p: Vector2<f64>,
     initial: Vector2<f64>,
+    radius: i32,
 ) -> Option<Vector2<f64>> {
     if !inside(source, p) {
         return None;
@@ -45,8 +67,8 @@ fn coarse_seed(
     let template = patch(source, p);
     let mut best = None;
     let mut best_error = f64::INFINITY;
-    for y in -8..=8 {
-        for x in -8..=8 {
+    for y in -radius..=radius {
+        for x in -radius..=radius {
             let q = initial + Vector2::new(f64::from(x), f64::from(y));
             if !inside(target, q) {
                 continue;

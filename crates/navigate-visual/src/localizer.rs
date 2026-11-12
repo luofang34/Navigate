@@ -156,6 +156,11 @@ impl<M: ImageMatcher> Localizer<M> {
     pub fn matcher(&self) -> &M {
         &self.matcher
     }
+    /// The matcher, to tune it for the next frame, as a bound of its search
+    /// from the prior of that frame.
+    pub fn matcher_mut(&mut self) -> &mut M {
+        &mut self.matcher
+    }
     /// Build a localizer with explicit acceptance thresholds.
     ///
     /// # Errors

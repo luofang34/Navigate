@@ -83,8 +83,8 @@ pub use local_scene::{
 };
 pub use localizer::{Estimate, EstimateQuality, Localizer, LocalizerConfig, MatchEvidence};
 pub use matching::{
-    AsyncImageMatcher, FeatureBackend, FeatureMetadata, ImageMatcher, PixelMatch, PointTracker,
-    PyramidalMatcher,
+    AsyncImageMatcher, BoundedPyramidalMatcher, FeatureBackend, FeatureMetadata, ImageMatcher,
+    PixelMatch, PointTracker, PyramidalMatcher,
 };
 pub use orthographic::{
     OrthographicEstimate, OrthographicReference, RasterGeometry, RawPixelQuality,
