@@ -2,6 +2,8 @@ use navigate_contract::{Ellipsoid, Ident, PlanRole};
 
 use super::*;
 
+mod abeam;
+mod holds;
 mod leg_paths;
 mod passed_fix;
 mod resume;

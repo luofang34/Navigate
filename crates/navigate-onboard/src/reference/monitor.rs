@@ -230,12 +230,22 @@ impl GnssMonitor {
         self.state = state;
         self.since = Some(at);
         self.agreeing_since = None;
+        if state != GnssIntegrityState::Consistent {
+            self.accepting_since = None;
+        }
+        if matches!(
+            state,
+            GnssIntegrityState::Consistent | GnssIntegrityState::Excluded
+        ) {
+            self.doubts = 0;
+            self.exceedances = 0;
+        }
     }
 
     /// Judges one GNSS position; the result says whether the navigator
     /// takes the fix. On an exclusion `main` continues from the estimate
     /// of the reference, which holds nothing of the receiver.
-    fn judge(&mut self, fix: &Fix, main: &mut NavigatorFilter) -> bool {
+    fn judge(&mut self, fix: &Fix, main: &mut NavigatorFilter, gate_refusals: u32) -> bool {
         let excluded = self.state == GnssIntegrityState::Excluded;
         let Some(test) = self.compare(fix) else {
             return !excluded;
@@ -252,21 +262,30 @@ impl GnssMonitor {
             // A reference that says too little cannot say that the
             // receiver is honest again, and neither can one on inertial
             // data alone: its bound grows until it holds any offset.
-            let long_enough = self.agreed_long_enough(calm && within, fix.acquired_at);
+            let agrees = within
+                && self.exceedances == 0
+                && if self.agreeing_since.is_some() {
+                    calm
+                } else {
+                    self.doubts == 0
+                };
+            let long_enough = self.agreed_long_enough(agrees, fix.acquired_at);
             let witnessed = self
                 .agreeing_since
                 .zip(self.position_fix_at)
                 .is_some_and(|(since, fixed_at)| fixed_at >= since);
-            if long_enough && witnessed {
+            if long_enough && witnessed && self.doubts == 0 {
                 self.enter(GnssIntegrityState::Consistent, fix.acquired_at);
                 tracing::info!(source = ?fix.source, "GNSS is taken again");
                 return true;
             }
             return false;
         }
-        if self.exceedances >= self.config.confirming_fixes {
+        let gated_while_disagreeing = self.state == GnssIntegrityState::Disagreeing
+            && gate_refusals >= self.config.confirming_fixes
+            && self.doubts > self.config.confirming_fixes;
+        if self.exceedances >= self.config.confirming_fixes || gated_while_disagreeing {
             main.adopt_estimate(&self.reference);
-            self.exceedances = 0;
             self.enter(GnssIntegrityState::Excluded, fix.acquired_at);
             tracing::warn!(
                 source = ?fix.source,

@@ -4,7 +4,7 @@
 
 use core::fmt;
 
-use super::Ident;
+use super::{HoldLegLength, Ident, TurnDirection};
 
 /// Which declared quantity a validation refusal names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,8 +126,8 @@ pub enum PlanValidationError {
         /// Waypoint identifier.
         ident: Ident,
     },
-    /// A course-to-fix leg declares a course that is not a finite angle
-    /// in `[0, 2π)`, so no vehicle can fly it (NAV-LG-004).
+    /// A course leg or a hold declares a course that is not a finite
+    /// angle in `[0, 2π)`, so no vehicle can fly it (NAV-LG-004).
     #[error(
         "plan {plan} waypoint {index} ({ident}) declares a course {course_rad} outside [0, 2π)"
     )]
@@ -140,5 +140,59 @@ pub enum PlanValidationError {
         ident: Ident,
         /// The course that cannot be flown.
         course_rad: f64,
+    },
+    /// A course-to-altitude leg at a waypoint with no altitude constraint
+    /// has no altitude to end on (NAV-LG-004).
+    #[error("plan {plan} waypoint {index} ({ident}) declares a CA leg with no altitude")]
+    CourseToAltitudeWithoutAltitude {
+        /// Offending plan id.
+        plan: Ident,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: Ident,
+    },
+    /// A hold declares an inbound leg that is not finite and positive, so
+    /// it has no racetrack to fly (NAV-LG-004, NAV-LG-015).
+    #[error(
+        "plan {plan} waypoint {index} ({ident}) declares a hold leg {leg:?} that is not positive"
+    )]
+    HoldLegNotPositive {
+        /// Offending plan id.
+        plan: Ident,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: Ident,
+        /// The leg length that cannot be flown.
+        leg: HoldLegLength,
+    },
+    /// A hold to an altitude at a waypoint with no altitude constraint has
+    /// no altitude to end on (NAV-LG-004, NAV-LG-015).
+    #[error("plan {plan} waypoint {index} ({ident}) declares an HA hold with no altitude")]
+    HoldToAltitudeWithoutAltitude {
+        /// Offending plan id.
+        plan: Ident,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: Ident,
+    },
+    /// A hold waypoint declares a turn direction that disagrees with the
+    /// turn direction of its racetrack.
+    #[error(
+        "plan {plan} waypoint {index} ({ident}) declares turn {waypoint_turn:?} against hold turn {hold_turn:?}"
+    )]
+    ConflictingTurnDirection {
+        /// Offending plan id.
+        plan: Ident,
+        /// Waypoint index in fly order.
+        index: usize,
+        /// Waypoint identifier.
+        ident: Ident,
+        /// Turn direction declared on the waypoint.
+        waypoint_turn: TurnDirection,
+        /// Turn direction declared on the hold geometry.
+        hold_turn: TurnDirection,
     },
 }

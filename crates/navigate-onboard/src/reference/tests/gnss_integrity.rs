@@ -7,6 +7,8 @@ use crate::reference::monitor::GNSS_EXCLUDED;
 use crate::{GnssFault, GnssIntegrityConfig, GnssIntegrityState, GnssIntegrityStatus};
 use navigate_contract::SolutionQuality;
 
+mod readmission;
+
 /// The receiver error of a test: the position moves north at `rate_m_s`
 /// from `from_s` to `to_s`, then keeps its offset or drops it.
 #[derive(Debug, Clone, Copy)]

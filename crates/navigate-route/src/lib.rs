@@ -28,7 +28,10 @@ mod float_math;
 pub mod plan_set;
 pub mod turn;
 
-pub use execution::{ExecutionConfig, Leg, PlanExecution, SequenceEvent, SequenceReason};
+pub use execution::{
+    Corner, ExecutionConfig, ExecutionState, HoldEntry, HoldStage, HoldStatus, Leg, PlanExecution,
+    SequenceEvent, SequenceReason, hold_entry,
+};
 pub use plan_set::{PlanActivationError, PlanSet};
 pub use turn::{
     EARTH_STANDARD_GRAVITY_MPS2, MARS_SURFACE_GRAVITY_MPS2, TITAN_SURFACE_GRAVITY_MPS2,

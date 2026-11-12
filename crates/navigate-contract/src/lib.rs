@@ -44,8 +44,9 @@ pub use kinematics::{
     SymmetricCov3,
 };
 pub use plan::{
-    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, Ident, IdentError, LegPath,
-    MAX_IDENT_BYTES, PlanRole, PlanValidationError, TurnType, Waypoint,
+    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, HoldGeometry, HoldLegLength,
+    Ident, IdentError, LegPath, MAX_IDENT_BYTES, PlanRole, PlanValidationError, TurnDirection,
+    TurnType, Waypoint,
 };
 pub use solution::{CartesianSolution, NavigationSolution};
 pub use stamp::{

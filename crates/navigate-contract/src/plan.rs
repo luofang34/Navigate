@@ -18,7 +18,7 @@ pub mod leg;
 
 pub use error::{ConstraintField, PlanValidationError};
 pub use ident::{Ident, IdentError, MAX_IDENT_BYTES};
-pub use leg::{CourseReference, LegPath};
+pub use leg::{CourseReference, HoldGeometry, HoldLegLength, LegPath, TurnDirection};
 
 #[cfg(test)]
 mod tests;
@@ -94,6 +94,10 @@ pub struct Waypoint {
     /// [`LegPath::DirectToFix`], every later one to
     /// [`LegPath::TrackToFix`] (NAV-LG-002).
     pub path: Option<LegPath>,
+    /// Mandatory turn direction onto the leg toward this waypoint. `None`
+    /// allows the shortest turn. On a hold leg, this field is either
+    /// `None` or equal to [`HoldGeometry::turn`].
+    pub turn_direction: Option<TurnDirection>,
 }
 
 impl Waypoint {
@@ -109,6 +113,7 @@ impl Waypoint {
             max_speed_mps: None,
             gradient: None,
             path: None,
+            turn_direction: None,
         }
     }
 
@@ -147,6 +152,14 @@ impl Waypoint {
     #[must_use]
     pub const fn with_path(mut self, path: LegPath) -> Self {
         self.path = Some(path);
+        self
+    }
+
+    /// This waypoint with a mandatory turn direction onto the leg toward
+    /// it.
+    #[must_use]
+    pub const fn with_turn_direction(mut self, turn_direction: TurnDirection) -> Self {
+        self.turn_direction = Some(turn_direction);
         self
     }
 }

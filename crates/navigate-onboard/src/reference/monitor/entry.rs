@@ -80,7 +80,7 @@ impl ReferenceNavigator {
             delivered_at: input.delivered_at,
         };
         let was_excluded = monitor.state == GnssIntegrityState::Excluded;
-        let taken = monitor.judge(&fix, &mut self.filter);
+        let taken = monitor.judge(&fix, &mut self.filter, self.gate_refusals);
         if monitor.state == GnssIntegrityState::Excluded && !was_excluded {
             // The refusals were those of the state that the receiver
             // moved; the adopted state has none.

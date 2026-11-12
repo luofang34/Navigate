@@ -3,7 +3,10 @@
 
 use std::string::ToString;
 
-use navigate_contract::CourseReference;
+use navigate_contract::{
+    AltitudeConstraint, CourseReference, HoldGeometry, HoldLegLength, LateralReference,
+    TurnDirection,
+};
 
 use super::*;
 
@@ -12,11 +15,8 @@ const EASTBOUND_RAD: f64 = core::f64::consts::FRAC_PI_2;
 
 /// Every reserved terminator, so the refusal test walks the whole
 /// reserved set rather than a sample of it.
-const RESERVED: [LegPath; 8] = [
+const RESERVED: [LegPath; 5] = [
     LegPath::RadiusToFix,
-    LegPath::HoldToAltitude,
-    LegPath::HoldToFix,
-    LegPath::HoldManual,
     LegPath::VerticalTakeoff,
     LegPath::Hover,
     LegPath::Transition,
@@ -28,6 +28,15 @@ pub(super) fn eastbound_course(reference: CourseReference) -> LegPath {
         course_rad: EASTBOUND_RAD,
         reference,
     }
+}
+
+fn eastbound_hold(reference: CourseReference) -> HoldGeometry {
+    HoldGeometry::new(
+        EASTBOUND_RAD,
+        reference,
+        TurnDirection::Right,
+        HoldLegLength::Distance { meters: 4_000.0 },
+    )
 }
 
 /// The resolved terminator of the leg the execution is flying.
@@ -108,25 +117,75 @@ fn nav_lg_012_a_reserved_leg_is_refused_by_kind_not_by_a_geometry_guard() {
 
 #[test]
 fn nav_lg_005_a_magnetic_course_is_refused_and_the_true_one_activates() {
-    let mag_wps = [
-        wp("W0", 0.0, 0.0),
-        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::Magnetic)),
-    ];
-    let mag_plan = FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &mag_wps);
-    let refused = PlanExecution::new(mag_plan, ExecutionConfig::default())
-        .expect_err("no magnetic variation model exists");
-    assert!(matches!(
-        refused,
-        PlanActivationError::MagneticCourseUnsupported { index: 1, ident, .. } if ident == "W1"
-    ));
-    let true_wps = [
-        wp("W0", 0.0, 0.0),
-        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
-    ];
-    let true_plan = FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &true_wps);
-    // The same geometry against true north is flyable, so the refusal
-    // is about the reference and not about the course.
-    assert!(PlanExecution::new(true_plan, ExecutionConfig::default()).is_ok());
+    for (mag_path, true_path) in [
+        (
+            eastbound_course(CourseReference::Magnetic),
+            eastbound_course(CourseReference::True),
+        ),
+        (
+            LegPath::CourseToAltitude {
+                course_rad: EASTBOUND_RAD,
+                reference: CourseReference::Magnetic,
+            },
+            LegPath::CourseToAltitude {
+                course_rad: EASTBOUND_RAD,
+                reference: CourseReference::True,
+            },
+        ),
+        (
+            LegPath::HoldToAltitude {
+                hold: eastbound_hold(CourseReference::Magnetic),
+            },
+            LegPath::HoldToAltitude {
+                hold: eastbound_hold(CourseReference::True),
+            },
+        ),
+        (
+            LegPath::HoldToFix {
+                hold: eastbound_hold(CourseReference::Magnetic),
+            },
+            LegPath::HoldToFix {
+                hold: eastbound_hold(CourseReference::True),
+            },
+        ),
+        (
+            LegPath::HoldManual {
+                hold: eastbound_hold(CourseReference::Magnetic),
+            },
+            LegPath::HoldManual {
+                hold: eastbound_hold(CourseReference::True),
+            },
+        ),
+    ] {
+        let mag_wps = [
+            wp("W0", 0.0, 0.0),
+            wp("W1", 0.0, 0.5)
+                .with_altitude(AltitudeConstraint::AtOrAbove(400.0))
+                .with_path(mag_path),
+        ];
+        let mag_plan = FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &mag_wps);
+        let refused = PlanExecution::new(mag_plan, ExecutionConfig::default())
+            .expect_err("no magnetic variation model exists");
+        assert!(
+            matches!(
+                refused,
+                PlanActivationError::MagneticCourseUnsupported { index: 1, ident, .. } if ident == "W1"
+            ),
+            "{mag_path:?}: {refused:?}"
+        );
+        let true_wps = [
+            wp("W0", 0.0, 0.0),
+            wp("W1", 0.0, 0.5)
+                .with_altitude(AltitudeConstraint::AtOrAbove(400.0))
+                .with_path(true_path),
+        ];
+        let true_plan =
+            FlightPlan::new(id("course"), PlanRole::Mission, Ellipsoid::WGS84, &true_wps);
+        assert!(
+            PlanExecution::new(true_plan, ExecutionConfig::default()).is_ok(),
+            "{true_path:?}"
+        );
+    }
 }
 
 #[test]
@@ -174,7 +233,7 @@ fn nav_lg_009_a_course_to_fix_leg_captures_inside_the_capture_radius_only() {
 #[test]
 fn nav_lg_010_an_outbound_leg_that_is_not_a_track_stops_anticipation() {
     let plan_with = |w2_path: Option<LegPath>| {
-        let mut w2 = wp("W2", 0.5, 0.5);
+        let mut w2 = wp("W2", 0.5, 0.5).with_altitude(AltitudeConstraint::AtOrAbove(400.0));
         if let Some(path) = w2_path {
             w2 = w2.with_path(path);
         }
@@ -191,11 +250,18 @@ fn nav_lg_010_an_outbound_leg_that_is_not_a_track_stops_anticipation() {
             ..
         }
     ));
-    // The outbound leg leaves the corner on a course of its own, so the
-    // bearing to W2 would mis-size the turn: no anticipation.
+    // The outbound leg leaves the corner on a course or pattern of its
+    // own, so the bearing to W2 would mis-size the turn: no anticipation.
     for outbound in [
         LegPath::DirectToFix,
         eastbound_course(CourseReference::True),
+        LegPath::CourseToAltitude {
+            course_rad: EASTBOUND_RAD,
+            reference: CourseReference::True,
+        },
+        LegPath::HoldToFix {
+            hold: eastbound_hold(CourseReference::True),
+        },
     ] {
         let wps = plan_with(Some(outbound));
         let mut exec = execution(&wps, ExecutionConfig::default());
@@ -262,18 +328,28 @@ fn nav_lg_014_each_flown_terminator_yields_its_own_lateral_reference() {
         "a track leg runs from the fix before it"
     );
 
-    let course_wps = [
-        wp("W0", 0.0, 0.0),
-        wp("W1", 0.0, 0.5).with_path(eastbound_course(CourseReference::True)),
-    ];
-    let mut courses = execution(&course_wps, ExecutionConfig::default());
-    capture_w0(&mut courses);
-    assert_eq!(
-        courses
-            .active_leg()
-            .expect("an active leg")
-            .lateral_reference(),
-        LateralReference::course(EASTBOUND_RAD),
-        "a course leg reports its published course"
-    );
+    for course_path in [
+        eastbound_course(CourseReference::True),
+        LegPath::CourseToAltitude {
+            course_rad: EASTBOUND_RAD,
+            reference: CourseReference::True,
+        },
+    ] {
+        let course_wps = [
+            wp("W0", 0.0, 0.0),
+            wp("W1", 0.0, 0.5)
+                .with_altitude(AltitudeConstraint::AtOrAbove(400.0))
+                .with_path(course_path),
+        ];
+        let mut courses = execution(&course_wps, ExecutionConfig::default());
+        capture_w0(&mut courses);
+        assert_eq!(
+            courses
+                .active_leg()
+                .expect("an active leg")
+                .lateral_reference(),
+            LateralReference::course(EASTBOUND_RAD),
+            "a course leg reports its published course"
+        );
+    }
 }

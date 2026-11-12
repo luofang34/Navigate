@@ -106,6 +106,23 @@ pub(crate) fn admit_leg(
             ellipsoid,
         });
     }
+    if let LateralReference::DisplacedCourse { anchor, course_rad } = reference {
+        if !anchor.is_plausible() {
+            return Err(GuidanceRefusal::ImplausibleTarget {
+                ident: leg_to.ident,
+            });
+        }
+        return Ok(AdmittedLeg {
+            cross_track_m: cross_track_from_course_m(
+                &solution.position,
+                &anchor,
+                course_rad,
+                ellipsoid,
+            ),
+            course_rad,
+            ellipsoid,
+        });
+    }
     let track_start = match reference {
         LateralReference::Track { ref from } => from,
         _ => &solution.position,

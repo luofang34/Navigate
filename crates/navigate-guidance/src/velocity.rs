@@ -2,7 +2,7 @@
 //! velocity setpoint.
 
 use navigate_contract::{
-    ClockDomainId, GuidanceCommand, GuidanceSetpoint, LateralReference, MonotonicNanos,
+    ClockDomainId, GuidanceCommand, GuidanceSetpoint, LateralReference, LegPath, MonotonicNanos,
     NavigationSolution, NedVelocity, Waypoint,
 };
 use navigate_geodesy::distance_m;
@@ -97,7 +97,15 @@ pub fn guide_velocity(
         now_clock,
         &config.admission,
     )?;
-    let remaining_m = distance_m(&solution.position, &leg_to.position, leg.ellipsoid);
+    let remaining_m = match leg_to.path {
+        Some(
+            LegPath::CourseToAltitude { .. }
+            | LegPath::HoldToAltitude { .. }
+            | LegPath::HoldToFix { .. }
+            | LegPath::HoldManual { .. },
+        ) => f64::INFINITY,
+        _ => distance_m(&solution.position, &leg_to.position, leg.ellipsoid),
+    };
     // A waypoint speed constraint bounds the leg toward it (NAV-VC-003);
     // plan validation refuses non-positive constraints and activation
     // refuses sub-floor ones, so a plain min is honest here.

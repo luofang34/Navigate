@@ -69,8 +69,13 @@ impl ReferenceNavigator {
             Some(c) => observation.with_correlated_error(c.filter_error()),
             None => observation,
         };
-        let gated = self.offer(input, "gnss_position", &observation, None, sink);
-        self.gnss_offered(input, !gated);
+        let outcome = self.offer(input, "gnss_position", &observation, None, sink);
+        let accepted = outcome == Outcome::Accepted;
+        let gated = matches!(
+            outcome,
+            Outcome::Rejected(navigate_fusion::RejectionReason::InnovationGate { .. })
+        );
+        self.gnss_offered(input, accepted);
         // A run of positions outside the gate says that the state is far
         // from the receiver: the alignment is suspect.
         self.gate_refusals = if gated {
@@ -79,13 +84,25 @@ impl ReferenceNavigator {
             0
         };
         if let Some(velocity) = velocity {
-            let covariance =
-                velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
-            let value = ObservationValue::VelocityFix {
-                velocity: *velocity,
-                covariance,
-            };
-            self.offer_value(input, "gnss_velocity", value, SensorClass::Gnss, sink);
+            if accepted {
+                let covariance =
+                    velocity_cov.unwrap_or(SymmetricCov3::from_diagonal(s * s, s * s, s * s));
+                let value = ObservationValue::VelocityFix {
+                    velocity: *velocity,
+                    covariance,
+                };
+                self.offer_value(input, "gnss_velocity", value, SensorClass::Gnss, sink);
+            } else {
+                // A receiver whose position was refused does not feed its
+                // Doppler velocity into the filter.
+                sink.record(AcceptanceRecord {
+                    sensor: input.sensor,
+                    acquired_at: input.acquired_at,
+                    measurement: "gnss_velocity",
+                    outcome: Outcome::Unused("gnss_position_rejected"),
+                    context: None,
+                });
+            }
         }
     }
 }

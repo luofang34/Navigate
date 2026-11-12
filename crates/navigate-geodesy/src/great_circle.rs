@@ -26,7 +26,7 @@
 //! direction instead of two endpoints, which is what a published course
 //! gives, and so has no degenerate case to refuse.
 
-use core::f64::consts::TAU;
+use core::f64::consts::{PI, TAU};
 
 use navigate_contract::GeodeticPosition;
 
@@ -114,6 +114,49 @@ pub fn cross_track_from_course_m(
     let relative_bearing = initial_bearing_rad(anchor, point) - course_rad;
     let sine = (sin(distance_angle) * sin(relative_bearing)).clamp(-1.0, 1.0);
     asin(sine) * ellipsoid.mean_radius_m()
+}
+
+/// Signed along-track distance in meters from `anchor` along the great
+/// circle whose true bearing at `anchor` is `course_rad`, on the
+/// mean-radius sphere of `ellipsoid`. Positive ahead of `anchor` and
+/// negative behind `anchor`.
+#[must_use]
+pub fn along_track_from_course_m(
+    point: &GeodeticPosition,
+    anchor: &GeodeticPosition,
+    course_rad: f64,
+    ellipsoid: BodyEllipsoid,
+) -> f64 {
+    let distance_angle = central_angle_rad(anchor, point);
+    let relative_bearing = initial_bearing_rad(anchor, point) - course_rad;
+    let along_angle = atan2(
+        sin(distance_angle) * cos(relative_bearing),
+        cos(distance_angle),
+    );
+    along_angle * ellipsoid.mean_radius_m()
+}
+
+/// Position at `distance_m` from `start` along initial true bearing
+/// `bearing_rad` on the mean-radius sphere of `ellipsoid`, keeping
+/// `start.altitude_m`.
+#[must_use]
+pub fn destination_point(
+    start: &GeodeticPosition,
+    bearing_rad: f64,
+    distance_m: f64,
+    ellipsoid: BodyEllipsoid,
+) -> GeodeticPosition {
+    let delta = distance_m / ellipsoid.mean_radius_m();
+    let sin_lat1 = sin(start.latitude_rad);
+    let cos_lat1 = cos(start.latitude_rad);
+    let sin_delta = sin(delta);
+    let cos_delta = cos(delta);
+    let lat2 =
+        asin((sin_lat1 * cos_delta + cos_lat1 * sin_delta * cos(bearing_rad)).clamp(-1.0, 1.0));
+    let y = sin(bearing_rad) * sin_delta * cos_lat1;
+    let x = cos_delta - sin_lat1 * sin(lat2);
+    let lon2 = rem_euclid(start.longitude_rad + atan2(y, x) + PI, TAU) - PI;
+    GeodeticPosition::new(lat2, lon2, start.altitude_m)
 }
 
 /// Signed along-track distance in meters, on the mean-radius sphere of

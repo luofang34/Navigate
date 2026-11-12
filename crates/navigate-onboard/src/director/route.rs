@@ -5,16 +5,16 @@ use navigate_contract::{
     Waypoint,
 };
 use navigate_guidance::{guide, guide_velocity};
-use navigate_route::{ExecutionConfig, PlanExecution, SequenceEvent, SequenceReason};
+use navigate_route::{
+    ExecutionConfig, ExecutionState, HoldStatus, PlanExecution, SequenceEvent, SequenceReason,
+};
 
 use super::{DirectorEvent, DirectorOutput, FlightDirector, GuidanceLaw, SequenceCause};
 use crate::OnboardError;
 
-/// Executes one flight plan on WGS84: leg sequencing with capture and
-/// turn anticipation, and the guidance law on the active leg. It owns its
-/// waypoints and keeps the sequencing state as the active index and the
-/// completion flag; each step resumes the execution from them
-/// (`PlanExecution::resume`).
+/// Executes one flight plan on WGS84: leg sequencing with capture, turn
+/// anticipation, and hold racetracks, plus the guidance law on the active
+/// leg.
 #[derive(Debug, Clone)]
 pub struct RouteDirector {
     route_id: Ident,
@@ -23,12 +23,11 @@ pub struct RouteDirector {
     law: GuidanceLaw,
     cruise_speed_mps: f64,
     clock: ClockDomainId,
-    active_index: usize,
-    complete: bool,
+    state: ExecutionState,
 }
 
 impl RouteDirector {
-    /// A director for `waypoints` named `route_id`.
+    /// Builds a director for `waypoints` named `route_id`.
     ///
     /// # Errors
     ///
@@ -51,18 +50,21 @@ impl RouteDirector {
         }
         let route_id =
             Ident::try_new(route_id).map_err(|e| invalid(format!("{route_id}: {e:?}")))?;
-        let director = Self {
+        let state = {
+            let plan = FlightPlan::new(route_id, PlanRole::Mission, Ellipsoid::WGS84, &waypoints);
+            PlanExecution::new(plan, config)
+                .map_err(|e| invalid(format!("{e}")))?
+                .state()
+        };
+        Ok(Self {
             route_id,
             waypoints,
             config,
             law,
             cruise_speed_mps,
             clock,
-            active_index: 0,
-            complete: false,
-        };
-        director.execution().map_err(|e| invalid(format!("{e}")))?;
-        Ok(director)
+            state,
+        })
     }
 
     fn execution(&self) -> Result<PlanExecution<'_>, navigate_route::PlanActivationError> {
@@ -72,7 +74,23 @@ impl RouteDirector {
             Ellipsoid::WGS84,
             &self.waypoints,
         );
-        PlanExecution::resume(plan, self.config, self.active_index, self.complete)
+        PlanExecution::resume_state(plan, self.config, self.state)
+    }
+
+    /// Arms manual exit when the active leg is a manual hold (`HM`).
+    pub fn exit_hold(&mut self) -> bool {
+        let Ok(mut execution) = self.execution() else {
+            return false;
+        };
+        let armed = execution.exit_hold();
+        self.state = execution.state();
+        armed
+    }
+
+    /// Returns observable progress when the active leg is a hold.
+    #[must_use]
+    pub const fn hold_status(&self) -> Option<HoldStatus> {
+        self.state.hold_status()
     }
 
     /// Speed on the leg toward waypoint `index`: the cruise speed under the
@@ -104,7 +122,7 @@ impl FlightDirector for RouteDirector {
         solution: Option<&NavigationSolution>,
         now: MonotonicNanos,
     ) -> DirectorOutput {
-        let index = self.active_index;
+        let index = self.state.active_index();
         let mut output = DirectorOutput {
             setpoint: None,
             commanded_speed_mps: self.leg_speed(index),
@@ -152,14 +170,13 @@ impl FlightDirector for RouteDirector {
                 Err(refusal) => output.refusal = Some(refusal),
             }
         }
-        let (active, complete) = (execution.active_index(), execution.is_complete());
-        self.active_index = active;
-        self.complete = complete;
+        self.state = execution.state();
         output
     }
 
     fn active_index(&self) -> Option<usize> {
-        (!self.complete && self.active_index < self.waypoints.len()).then_some(self.active_index)
+        (!self.state.is_complete() && self.state.active_index() < self.waypoints.len())
+            .then_some(self.state.active_index())
     }
 
     fn snapshot(&self) -> Box<dyn FlightDirector> {

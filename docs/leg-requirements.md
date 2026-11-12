@@ -18,10 +18,10 @@ instrument procedure coding:
 
 - A **path terminator** is a two-letter code. The first letter names the
   path, and the second letter names the termination. `TF` is a track
-  that ends at a fix. `CF` is a course that ends at a fix. `HM` is a
-  hold that ends on a manual command. (ARINC 424 leg types, as coded in
-  the FAA CIFP and described in FAA Order 8260.19 procedure design
-  guidance.)
+  that ends at a fix. `CF` is a course that ends at a fix. `CA` is a
+  course that ends at an altitude. `HM` is a hold that ends on a manual
+  command. (ARINC 424 leg types, as coded in the FAA CIFP and described
+  in FAA Order 8260.19 procedure design guidance.)
 - **IF** declares the start fix of a procedure. It has no path.
 - **TF** is the standard RNAV leg: a great-circle track between two
   fixes. Procedure design assumes it wherever a fix pair is published.
@@ -29,11 +29,16 @@ instrument procedure coding:
   inbound track, so no procedure protection assumes one.
 - **CF** flies a published course to a fix. The course is published, and
   the origin is the present position. A CF leg follows a leg that has no
-  fixed end, such as a heading leg or a DF.
+  fixed end, such as a heading leg, a `CA`, or a `DF`.
+- **CA** flies a published course until the vehicle achieves the
+  declared altitude constraint.
 - **RF** is a constant-radius arc between two fixes about a published
   center. RNP AR procedures use it (FAA AC 90-101).
 - **HA**, **HF**, and **HM** are the three holding terminators: to an
   altitude, to a fix after one circuit, and to a manual command.
+- A leg or hold MAY declare a mandatory **turn direction** (`Left` or
+  `Right`) when airspace or obstacle protection forbids turning along
+  the shorter arc.
 
 Vertical procedure legs have no ARINC 424 code. A vertical-takeoff
 vehicle flies a vertical takeoff, a hover, a transition between
@@ -49,13 +54,14 @@ can hover.
 ## The vocabulary
 
 - **NAV-LG-001** Every leg carries a path terminator from one vocabulary.
-  The vocabulary names `InitialFix`, `TrackToFix`, `DirectToFix`, and
-  `CourseToFix`, which this build flies. It reserves `RadiusToFix`,
-  `HoldToAltitude`, `HoldToFix`, `HoldManual`, `VerticalTakeoff`,
-  `Hover`, `Transition`, and `VerticalLanding`. A reserved terminator is
-  constructible, because a plan source must be able to state the leg it
-  holds. A reserved terminator carries no parameters, because the
-  parameters follow from the sequencer that flies it.
+  The vocabulary names `InitialFix`, `TrackToFix`, `DirectToFix`,
+  `CourseToFix`, `CourseToAltitude`, `HoldToAltitude`, `HoldToFix`, and
+  `HoldManual`, which this build flies. It reserves `RadiusToFix`,
+  `VerticalTakeoff`, `Hover`, `Transition`, and `VerticalLanding`. A
+  reserved terminator is constructible, because a plan source must be
+  able to state the leg it holds. A hold carries its racetrack
+  (NAV-LG-015). Every reserved terminator carries no parameters, because
+  the parameters follow from the sequencer that flies it.
 - **NAV-LG-002** A waypoint MAY state the path terminator of the leg that
   ends at it. A waypoint that states none gets one by position in the fly
   order: the first waypoint resolves to `DirectToFix`, and every later
@@ -73,17 +79,24 @@ can hover.
 - **NAV-LG-004** Plan validation refuses a structural defect in the
   vocabulary. A `TrackToFix` at the first waypoint has no fix before it
   and MUST be refused. An `InitialFix` after the first waypoint is not a
-  start and MUST be refused. A `CourseToFix` whose course is not a finite
-  angle in `[0, 2π)` cannot be flown and MUST be refused. Each refusal
-  names the plan, the waypoint index, and the waypoint identifier.
+  start and MUST be refused. A `CourseToFix` or `CourseToAltitude` whose
+  course is not a finite angle in `[0, 2π)` cannot be flown and MUST be
+  refused. A `CourseToAltitude` or `HoldToAltitude` at a waypoint with
+  no altitude constraint has no altitude to end on and MUST be refused.
+  A hold whose inbound course is not a finite angle in `[0, 2π)`, or
+  whose leg length is not finite and positive, cannot be flown and MUST
+  be refused. A waypoint whose `turn_direction` conflicts with the turn
+  direction of its `HoldGeometry` MUST be refused. Each refusal names
+  the plan, the waypoint index, and the waypoint identifier.
 - **NAV-LG-005** Activation refuses a leg this build cannot fly, and the
   refusal names the leg type. A plan that carries a reserved terminator
   is a valid plan, and it is not one this build can execute: what is
   implemented is a property of the executor, not of the exchange type.
-  Activation also refuses a `CourseToFix` whose course reference is
-  magnetic, because Navigate has no magnetic variation model and MUST NOT
-  guess a variation. Refusal is unconditional. A reserved leg never
-  reaches the sequencer, so no guard can misapply to it.
+  Activation also refuses a `CourseToFix`, `CourseToAltitude`, or hold
+  whose course reference is magnetic, because Navigate has no magnetic
+  variation model and MUST NOT guess a variation. Refusal is
+  unconditional. A reserved leg never reaches the sequencer, so no guard
+  can misapply to it.
 - **NAV-LG-006** A Navigate leg is an execution vocabulary, not the
   canonical plan record. It carries what the sequencer and the guidance
   derivations read. The immutable resolved plan revision, its identity,
@@ -110,12 +123,14 @@ can hover.
   fix and its published course define. The course is a true course in
   `[0, 2π)`, measured at the fix, in the direction of flight. The leg
   sequences on a horizontal fix capture inside the capture radius, or
-  when the vehicle passes the fix (NAV-TT-006). It does not anticipate a
-  turn.
-  Guidance reports the published course as the reference course, and it
-  measures the cross-track deviation against the course line. A vehicle
-  right of the course line reads a positive deviation, which matches
-  every other lateral deviation in this workspace.
+  when the vehicle passes the fix (NAV-TT-006). A `CourseToAltitude` leg
+  tracks its published course without horizontal arrival slowdown and
+  sequences when the vehicle achieves the waypoint's altitude constraint
+  (`SequenceReason::AltitudeReached`). Neither course leg anticipates a
+  turn. Guidance reports the published course as the reference course,
+  and it measures the cross-track deviation against the course line. A
+  vehicle right of the course line reads a positive deviation, which
+  matches every other lateral deviation in this workspace.
 - **NAV-LG-010** Turn anticipation applies between two `TrackToFix` legs
   only. NAV-TT-003 states the rule for a fly-by fix "between two fixed
   legs", and only a `TrackToFix` leg is fixed at both ends. The leg into
@@ -128,6 +143,31 @@ can hover.
   `TrackToFix` legs after the first waypoint, so its anticipation does
   not change.
 
+## Holds
+
+- **NAV-LG-015** A hold (`HoldToAltitude`, `HoldToFix`, `HoldManual`)
+  carries its racetrack (`HoldGeometry`), and the waypoint that carries
+  the hold is the hold fix. The racetrack is an inbound course, its
+  north reference, the direction of the turns (`Left` or `Right`), and
+  the length of the leg (`Time` or `Distance`). The inbound course is
+  measured at the fix, in the direction of flight, in `[0, 2π)`. That
+  length is geometry, and it never ends the hold (NAV-LG-011). When the
+  vehicle crosses the hold fix, the executor selects a standard ICAO Doc
+  8168 / FAA AIM 5-3-8 entry (`Direct`, `Parallel`, or `Teardrop`) from
+  the arrival course and turn direction, tracks the displaced outbound
+  leg on the holding side (`LateralReference::DisplacedCourse` offset by
+  `2 · r` abeam the fix) and the inbound course back to the fix, and
+  counts completed circuits:
+  - `HoldToAltitude` (`HA`) ends as soon as the waypoint's altitude
+    constraint is achieved (`SequenceReason::AltitudeReached`),
+    including on initial fix crossing when already at or past the target
+    altitude.
+  - `HoldToFix` (`HF`) ends on returning to the hold fix after one
+    circuit (`SequenceReason::HoldCircuitComplete`).
+  - `HoldManual` (`HM`) repeats circuits until external exit is armed
+    via `exit_hold()`, then completes the inbound leg to the hold fix
+    and ends (`SequenceReason::HoldExited`).
+
 ## Termination conditions
 
 - **NAV-LG-011** A leg ends on a condition the vehicle achieves. A fix
@@ -138,53 +178,29 @@ can hover.
   time or in distance. That length is hold geometry and states how large
   the racetrack is; it does not state when the hold ends.
 
-Each leg type ends on one of five condition classes. The table states the
-class, and the input the sequencer needs to evaluate it. `advance`
-receives a position and a groundspeed today, so the horizontal and the
-vertical classes are evaluable now. The other classes need an input the
-sequencer does not receive.
-
 | Leg type | Termination | Class | Sequencer input |
 |---|---|---|---|
-| `InitialFix` | The fix captures | Horizontal | Position (present) |
-| `TrackToFix` | The fix captures | Horizontal | Position (present) |
-| `DirectToFix` | The fix captures | Horizontal | Position (present) |
-| `CourseToFix` | The fix captures | Horizontal | Position (present) |
-| `RadiusToFix` | The arc end fix captures | Horizontal | Position (present) |
-| `HoldToAltitude` | The declared altitude is reached | Vertical | Position altitude (present, but capture ignores it) |
-| `HoldToFix` | The hold fix captures after one circuit | Horizontal | Position, and a circuit count the executor holds |
-| `HoldManual` | An external command releases the hold | Commanded | A command input the sequencer does not receive |
-| `VerticalTakeoff` | The declared altitude is reached | Vertical | Position altitude (present, but capture ignores it) |
-| `Hover` | An external command or a declared condition releases the hover | Commanded | A command input the sequencer does not receive |
-| `Transition` | The vehicle reports the target flight mode | State | A vehicle-state input the sequencer does not receive |
-| `VerticalLanding` | The vehicle reports ground contact | State | A ground-contact input the sequencer does not receive |
-
-A vertical landing terminates on reported ground contact and not on a
-zero altitude. An altitude estimate is not a statement that the vehicle
-is on the ground, and to treat it as one would sequence the plan while
-the vehicle is still in the air.
-
-Each reserved leg needs the parameters below when its sequencer lands.
-This list is a commitment to decide, not a decision:
-
-| Leg type | Parameters it will need |
-|---|---|
-| `RadiusToFix` | Arc center, turn direction, and the inbound course at the arc start |
-| `HoldToAltitude` | Hold fix, inbound course, turn direction, leg length, and the target altitude |
-| `HoldToFix` | Hold fix, inbound course, turn direction, and leg length |
-| `HoldManual` | Hold fix, inbound course, turn direction, and leg length |
-| `VerticalTakeoff` | Target altitude and a climb-rate limit |
-| `Hover` | Hold position, a position tolerance, and the release condition |
-| `Transition` | Target flight mode and an entry-condition envelope |
-| `VerticalLanding` | Landing position and a descent-rate limit |
+| `InitialFix` | The fix captures | Horizontal | Position |
+| `TrackToFix` | The fix captures | Horizontal | Position |
+| `DirectToFix` | The fix captures | Horizontal | Position |
+| `CourseToFix` | The fix captures | Horizontal | Position |
+| `CourseToAltitude` | The declared altitude is reached | Vertical | Position altitude |
+| `RadiusToFix` | The arc end fix captures | Horizontal | Position (reserved) |
+| `HoldToAltitude` | The declared altitude is reached | Vertical | Position altitude |
+| `HoldToFix` | The hold fix captures after one circuit | Horizontal | Position and circuit count |
+| `HoldManual` | An external command releases the hold at the fix | Commanded | `exit_hold()` and position |
+| `VerticalTakeoff` | The declared altitude is reached | Vertical | Position altitude (reserved) |
+| `Hover` | An external command or a declared condition releases the hover | Commanded | Command input (reserved) |
+| `Transition` | The vehicle reports the target flight mode | State | Vehicle-state input (reserved) |
+| `VerticalLanding` | The vehicle reports ground contact | State | Ground-contact input (reserved) |
 
 ## Guard reconciliation
 
-Three guards in the current code assume that a leg is a horizontal track
-between two separate fixes. **NAV-LG-012** states what each guard does
-per leg type. A guard "applies" when its current behavior is correct for
-the leg. A guard is "replaced" when a typed condition takes its place. No
-guard is relaxed.
+Three guards assume that a leg is a horizontal track between two
+separate fixes. **NAV-LG-012** states what each guard does per leg type.
+A guard "applies" when its current behavior is correct for the leg. A
+guard is "replaced" when a typed condition takes its place. No guard is
+relaxed.
 
 - **G1, horizontal capture.** `PlanExecution::advance` measures the
   great-circle distance to the waypoint and ignores altitude.
@@ -200,20 +216,19 @@ guard is relaxed.
 | `InitialFix` | Applies | Applies | Applies |
 | `TrackToFix` | Applies | Applies | Applies |
 | `DirectToFix` | Applies | Applies | Applies |
-| `CourseToFix` | Applies | Applies | Replaced: a fix and a course define the course line, so no two-endpoint degenerate case exists |
-| `RadiusToFix` | Applies | Applies | Replaced: the arc reference is the center and the radius, not a two-point track |
-| `HoldToAltitude` | Replaced: an altitude-achieved condition | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference, not a track |
-| `HoldToFix` | Applies at the hold fix, after the circuit count | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference |
-| `HoldManual` | Replaced: a commanded-release condition | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference |
-| `VerticalTakeoff` | Replaced: an altitude-achieved condition | Replaced: a minimum **vertical** separation between the two ends | Replaced: a position-hold reference at the departure point, with no course |
-| `Hover` | Replaced: a commanded-release or achieved condition | Not applicable: the leg has one position | Replaced: a position-hold reference at the hover fix, with no course |
-| `Transition` | Replaced: a state-achieved condition | Applies: a transition covers ground | Applies: a transition flies the lateral reference of its leg |
-| `VerticalLanding` | Replaced: a ground-contact condition | Replaced: a minimum **vertical** separation between the two ends | Replaced: a position-hold reference at the landing point, with no course |
+| `CourseToFix` | Applies | Applies | Replaced: a fix and a course define the course line |
+| `CourseToAltitude` | Replaced: an altitude-achieved condition | Not applicable: the leg has no horizontal termination fix | Replaced: an anchor and a course define the course line |
+| `RadiusToFix` | Applies | Applies | Replaced: the arc reference is the center and the radius |
+| `HoldToAltitude` | Replaced: an altitude-achieved condition | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference |
+| `HoldToFix` | Applies at the hold fix, after one circuit | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference |
+| `HoldManual` | Replaced: `exit_hold()` armed + return to hold fix | Not applicable: the hold has one fix | Replaced: the hold pattern derives the reference |
+| `VerticalTakeoff` | Replaced: an altitude-achieved condition | Replaced: a minimum vertical separation | Replaced: a position-hold reference |
+| `Hover` | Replaced: a commanded-release condition | Not applicable: the leg has one position | Replaced: a position-hold reference |
+| `Transition` | Replaced: a state-achieved condition | Applies | Applies |
+| `VerticalLanding` | Replaced: a ground-contact condition | Replaced: a minimum vertical separation | Replaced: a position-hold reference |
 
-Every leg marked "Replaced" is refused at activation until its
-replacement lands (NAV-LG-005). Fail closed: a leg type whose
-termination condition is not implemented is refused, and it is never
-flown under a guard written for a different geometry.
+Every leg whose replacement has not landed is refused at activation
+(NAV-LG-005).
 
 ## Honesty requirements
 
@@ -224,21 +239,19 @@ flown under a guard written for a different geometry.
 - **NAV-LG-014** The reference course a guidance derivation reports is
   the course of the leg the vehicle actually flies. A `TrackToFix`
   reports the track bearing, a `DirectToFix` reports the live bearing to
-  the fix, and a `CourseToFix` reports the published course. Guidance
-  never reports a course from a leg geometry the leg does not have.
+  the fix, a `CourseToFix` or `CourseToAltitude` reports the published
+  course, and an active hold reports the course of its current stage
+  (inbound, teardrop, parallel, or displaced outbound). Guidance never
+  reports a course from a leg geometry the leg does not have.
 
 ## Out of scope (recorded, deferred)
 
-- Turn anticipation into or out of a `CourseToFix` leg. The published
-  course gives the inbound course at the fix, but the leg has no fixed
-  inbound length to bound the DTA against (NAV-TT-003 caps the DTA at
-  half the shorter adjoining leg). A bound that uses the live distance is
-  self-referential, in the same way a `DirectToFix` inbound is.
-- Magnetic variation. A `CourseToFix` may declare a magnetic reference,
-  and activation refuses it until a variation model lands.
+- Turn anticipation into or out of a `CourseToFix` leg.
+- Magnetic variation inside Navigate (`CourseReference::Magnetic` is
+  converted to true north by Pilotage's geomagnetic model before
+  activation, and refused if passed unresolved).
 - Procedure and transition context on a leg, a stable leg identity, and a
   source record locator. These belong to Pilotage's canonical resolved
   plan (NAV-LG-006).
-- DME arcs, heading legs (`VA`, `VI`, `VM`, `CA`, `CI`, `FA`, `FM`), and
-  the rest of the ARINC 424 leg set. The vocabulary grows additively as
-  each sequencer lands.
+- DME arcs (`AF`), heading legs (`VA`, `VI`, `VM`), and `RF` arcs. The
+  vocabulary grows additively as each sequencer lands.

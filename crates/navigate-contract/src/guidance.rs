@@ -36,6 +36,15 @@ pub enum LateralReference {
         /// The published course in radians, true, in `[0, 2π)`.
         course_rad: f64,
     },
+    /// A course line through an explicit anchor position rather than the
+    /// leg's fix. Hold outbound legs use this reference because the
+    /// outbound course is offset laterally from the hold fix.
+    DisplacedCourse {
+        /// Anchor position on the course line.
+        anchor: GeodeticPosition,
+        /// True course at `anchor` in the direction of flight, `[0, 2π)`.
+        course_rad: f64,
+    },
 }
 
 impl LateralReference {
@@ -49,6 +58,12 @@ impl LateralReference {
     #[must_use]
     pub const fn course(course_rad: f64) -> Self {
         Self::Course { course_rad }
+    }
+
+    /// A course line through `anchor`, radians true, in `[0, 2π)`.
+    #[must_use]
+    pub const fn displaced_course(anchor: GeodeticPosition, course_rad: f64) -> Self {
+        Self::DisplacedCourse { anchor, course_rad }
     }
 }
 

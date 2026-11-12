@@ -80,21 +80,23 @@ fn nav_tt_006_a_capture_on_a_sample_beyond_the_fix_is_one_capture_event() {
 }
 
 #[test]
-fn nav_tt_006_a_fly_by_fix_missed_outside_its_anticipation_is_passed() {
-    // The 90° corner at W1 anticipates 1129.8 m at 60 m/s. A track 2 km
-    // to the right of the inbound course never enters that disc.
-    let wps = dogleg(wp("W1", 0.0, 0.5));
+fn nav_tt_006_a_fly_by_fix_past_the_limit_missed_abeam_is_passed() {
+    // A 135° corner at W1 exceeds the 121° fly-by boundary, so W1 does
+    // not anticipate on the abeam line. A track 2 km to the right of the
+    // inbound course misses the capture disc and sequences on the
+    // perpendicular through W1 as Passed.
+    let wps = [wp("W0", 0.0, 0.0), wp("W1", 0.0, 0.5), wp("W2", 0.5, 0.0)];
     let mut exec = execution(&wps, ExecutionConfig::default());
     capture_w0(&mut exec);
     let events = fly_abeam(&mut exec, -2000.0);
     assert_eq!(events.len(), 1, "one event only: {events:?}");
     assert!(matches!(
         events.first(),
-        Some(&(_, SequenceEvent::LegAdvanced {
+        Some(&(beyond_m, SequenceEvent::LegAdvanced {
             to_index: 2,
             turn: TurnType::FlyBy,
             reason: SequenceReason::Passed { cross_track_m },
-        })) if (cross_track_m - 2000.0).abs() < 1.0
+        })) if beyond_m > 0.0 && (cross_track_m - 2000.0).abs() < 1.0
     ));
 }
 

@@ -59,7 +59,8 @@ pub use ecef::{BodyFixedPosition, body_fixed_to_geodetic, geodetic_to_body_fixed
 pub use ellipsoid::{BodyEllipsoid, west_to_east_lon_rad};
 pub use error::GeodesyError;
 pub use great_circle::{
-    along_track_m, cross_track_from_course_m, cross_track_m, distance_m, initial_bearing_rad,
+    along_track_from_course_m, along_track_m, cross_track_from_course_m, cross_track_m,
+    destination_point, distance_m, initial_bearing_rad,
 };
 pub use local_plane::{LocalTangentPlane, NedOffset};
 pub use shape::{SurfaceHit, SurfaceShape};

@@ -46,18 +46,29 @@ vehicle class.
   the DO-236C low-altitude cap of half the track change limited to 23°).
   The model is pure and unit-tested; no vehicle class is assumed.
 - **NAV-TT-003** A fly-by waypoint between two fixed legs sequences
-  strictly within `max(capture_radius, DTA)` of the fix, where
-  `DTA = r · tan(Δtrack / 2)` and `Δtrack` is the course change between
-  the inbound course at the fix and the outbound leg. DTA is bounded by
+  within the capture radius of the fix, or when the along-track
+  distance to go on the inbound course is less than the DTA and not yet
+  below zero, wherever the vehicle is across the track: the line abeam
+  the DTA before the fix is the start of the turn whatever the
+  cross-track error. `DTA = r · tan(Δtrack / 2)`, where `Δtrack` is the
+  course change between the inbound course at the fix and the outbound
+  leg (measured in the mandatory `turn_direction` when the outbound leg
+  declares one, or along the shorter arc otherwise). DTA is bounded by
   half the shorter adjoining leg, so every leg keeps a flyable middle
   and both of its ends may anticipate — a leg never sequences at the
-  instant it begins. Anticipation applies only to track changes up to
-  120°: beyond it `tan(Δ/2)` approaches a reversal's blowup and a
-  course reversal has no fly-by solution (holds and radius-to-fix legs
-  own that geometry and are out of scope), so such fixes sequence at
-  the capture radius — a deliberate step, not a taper, because clamping
-  the DTA at the limit would fabricate a turn the vehicle cannot fly.
-  A straight-ahead fix (`Δtrack ≈ 0`), a direct-to leg (whose inbound
+  instant it begins. A vehicle beyond the perpendicular through the fix
+  is no turn to anticipate; NAV-TT-006 ends its leg. Anticipation
+  applies to track changes up to the fly-by limit of 120° and an
+  allowance of 1° for courses charted to the whole degree and the
+  convergence between a charted and a great-circle course: a turn
+  designed at 120° anticipates. Past 121° (including a mandatory turn
+  direction opposite the shorter arc), `tan(Δ/2)` approaches a
+  reversal's blowup and a course reversal has no fly-by solution, so
+  such fixes sequence at the capture radius — a deliberate step, not a
+  taper, because clamping the DTA at the limit would fabricate a turn
+  the vehicle cannot fly. The decision depends on the plan alone; the
+  execution reports it per fix from activation (`Corner`). A
+  straight-ahead fix (`Δtrack ≈ 0`), a direct-to leg (whose inbound
   geometry is the live position, not a fixed track), and the terminal
   fix likewise degrade to the capture radius. The no-sequencing-at-leg-
   start guarantee is completed by activation: a plan whose fixed leg is

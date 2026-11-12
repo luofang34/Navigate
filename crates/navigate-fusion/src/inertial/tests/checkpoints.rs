@@ -172,6 +172,33 @@ fn many_regime_updates_shorten_the_history_and_keep_it_valid() {
 }
 
 #[test]
+fn many_delayed_observations_shorten_the_history_and_keep_admitting() {
+    let mut filter = surface_filter(
+        InertialConfig::default(),
+        PlanetaryBody::EARTH_WGS84,
+        earth_origin(),
+    );
+    let rates = rest_rates(&filter);
+    let mut seq = 0_u32;
+    // 100 steps with two delayed observations per step = 198 delayed
+    // observations, past the 160-slot observation pool while total events
+    // (298) stay below the 704-entry ring capacity.
+    for k in 1..=100_u32 {
+        let now_ms = u64::from(k) * 100;
+        assert_accepted(filter.ingest_imu(&imu(k, now_ms, rates, 0.1), t(now_ms)));
+        if k > 2 {
+            let acquired_ms = u64::from(k - 2) * 100;
+            for _ in 0..2 {
+                seq = seq.wrapping_add(1);
+                let obs = altitude(seq, t(acquired_ms), earth_origin().altitude_m);
+                assert_accepted(filter.ingest(&obs, t(now_ms)));
+            }
+        }
+    }
+    assert_eq!(filter.rejections().outside_history, 0);
+}
+
+#[test]
 fn the_history_is_smaller_than_one_core_per_event() {
     // The size of the filter is reported, not optimized for: the old
     // history of 32 full cores was 0.18 MB.

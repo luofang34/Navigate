@@ -186,7 +186,7 @@ impl ReferenceNavigator {
         observation: &Observation,
         context: Option<&'static str>,
         sink: &mut dyn AcceptanceSink,
-    ) -> bool {
+    ) -> Outcome {
         let outcome = match self.filter.ingest(observation, input.delivered_at) {
             IngestOutcome::Accepted => Outcome::Accepted,
             IngestOutcome::Rejected(reason) => Outcome::Rejected(reason),
@@ -194,18 +194,14 @@ impl ReferenceNavigator {
         if let Some(monitor) = self.monitor.as_deref_mut() {
             monitor.mirror(observation, input.delivered_at);
         }
-        let gated = matches!(
-            outcome,
-            Outcome::Rejected(navigate_fusion::RejectionReason::InnovationGate { .. })
-        );
         sink.record(AcceptanceRecord {
             sensor: input.sensor,
             acquired_at: input.acquired_at,
             measurement,
-            outcome,
+            outcome: outcome.clone(),
             context,
         });
-        gated
+        outcome
     }
 
     fn offer_value(
@@ -215,7 +211,7 @@ impl ReferenceNavigator {
         value: ObservationValue,
         class: SensorClass,
         sink: &mut dyn AcceptanceSink,
-    ) -> bool {
+    ) -> Outcome {
         let stamp = self.stamp(input.sensor, input.acquired_at);
         let observation = Observation::new(stamp, value, SourceComposition::of(class));
         self.offer(input, measurement, &observation, None, sink)

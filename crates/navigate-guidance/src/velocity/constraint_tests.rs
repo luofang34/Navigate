@@ -149,3 +149,65 @@ fn nav_tt_004_a_fly_over_rejoin_reports_honest_deviation_and_corrects_toward_the
         velocity.east_mps
     );
 }
+
+#[test]
+fn displaced_course_and_altitude_or_hold_legs_bypass_arrival_slowdown() {
+    use navigate_contract::{CourseReference, HoldGeometry, HoldLegLength, LegPath, TurnDirection};
+
+    let (_, end) = equator_leg();
+    let config = VelocityGuidanceConfig::default();
+    let ca_wp = end
+        .with_altitude(AltitudeConstraint::AtOrAbove(400.0))
+        .with_path(LegPath::CourseToAltitude {
+            course_rad: core::f64::consts::FRAC_PI_2,
+            reference: CourseReference::True,
+        });
+    // Right at `end`'s horizontal coordinates, a normal fix leg slows to
+    // the approach floor, whereas `CA` keeps full cruise speed.
+    let at_fix = solution(SolutionQuality::Good, deg(0.0, 1.0, 100.0), now());
+    let ca_cmd = guide_velocity(
+        &at_fix,
+        LateralReference::course(core::f64::consts::FRAC_PI_2),
+        &ca_wp,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("CA guides");
+    let GuidanceSetpoint::Velocity { velocity: ca_vel } = ca_cmd.setpoint else {
+        panic!("velocity setpoint");
+    };
+    assert!(
+        (ca_vel.east_mps - config.cruise_mps).abs() < 1e-6,
+        "CA must maintain cruise speed at anchor: {ca_vel:?}"
+    );
+
+    // Displaced outbound hold course: anchor is 500 m south of the hold fix
+    // on a westbound course (3π/2). Ownship at the hold fix is right of
+    // westbound (north of the displaced anchor), so guidance commands
+    // southward correction onto the holding side at full cruise speed.
+    let hold = HoldGeometry::new(
+        core::f64::consts::FRAC_PI_2,
+        CourseReference::True,
+        TurnDirection::Right,
+        HoldLegLength::Distance { meters: 3_000.0 },
+    );
+    let hf_wp = end.with_path(LegPath::HoldToFix { hold });
+    let anchor = deg(-0.005, 1.0, 0.0);
+    let hf_cmd = guide_velocity(
+        &at_fix,
+        LateralReference::displaced_course(anchor, 3.0 * core::f64::consts::FRAC_PI_2),
+        &hf_wp,
+        now(),
+        CLOCK,
+        &config,
+    )
+    .expect("displaced hold course guides");
+    let GuidanceSetpoint::Velocity { velocity: hf_vel } = hf_cmd.setpoint else {
+        panic!("velocity setpoint");
+    };
+    assert!(
+        hf_vel.north_mps < -0.1 && hf_vel.east_mps < -0.5,
+        "displaced westbound outbound steers south-west onto the holding side: {hf_vel:?}"
+    );
+}

@@ -5,19 +5,25 @@ use std::string::ToString;
 use std::vec::Vec;
 
 use super::{
-    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, Ident, LegPath, PlanRole,
-    PlanValidationError, TurnType, Waypoint,
+    AltitudeConstraint, ConstraintField, CourseReference, FlightPlan, HoldGeometry, HoldLegLength,
+    Ident, LegPath, PlanRole, PlanValidationError, TurnDirection, TurnType, Waypoint,
 };
 use crate::frame::{Ellipsoid, FrameId};
 use crate::kinematics::GeodeticPosition;
 
+mod holds;
+
+const HOLD: HoldGeometry = HoldGeometry::new(
+    1.5,
+    CourseReference::True,
+    TurnDirection::Right,
+    HoldLegLength::Time { seconds: 60.0 },
+);
+
 /// Every reserved terminator, so a test walks the whole reserved set
 /// rather than a sample of it.
-const RESERVED: [LegPath; 8] = [
+const RESERVED: [LegPath; 5] = [
     LegPath::RadiusToFix,
-    LegPath::HoldToAltitude,
-    LegPath::HoldToFix,
-    LegPath::HoldManual,
     LegPath::VerticalTakeoff,
     LegPath::Hover,
     LegPath::Transition,
@@ -270,6 +276,13 @@ fn nav_lg_001_every_terminator_names_itself_distinctly() {
             course_rad: 0.0,
             reference: CourseReference::True,
         },
+        LegPath::CourseToAltitude {
+            course_rad: 0.0,
+            reference: CourseReference::True,
+        },
+        LegPath::HoldToAltitude { hold: HOLD },
+        LegPath::HoldToFix { hold: HOLD },
+        LegPath::HoldManual { hold: HOLD },
     ];
     let codes: Vec<&str> = flown
         .iter()

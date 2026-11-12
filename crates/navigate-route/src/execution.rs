@@ -1,192 +1,45 @@
 //! Active-leg sequencing over a validated flight plan.
 //!
 //! A [`PlanExecution`] walks a [`FlightPlan`] leg by leg on the reference
-//! ellipsoid of the plan. Every leg carries a path terminator (NAV-LG-001);
-//! a waypoint that declares none gets one by position in the fly order
-//! (NAV-LG-002), which names the implicit model rather than changing it.
-//! The active leg runs from the captured upstream waypoint — or from the
-//! present position on a direct-to leg — to the next waypoint in fly order.
-//! A fly-by waypoint between two track-to-fix legs sequences early by the
-//! distance of turn anticipation when the turn geometry earns it
-//! (NAV-TT-003, NAV-LG-010); a fly-over waypoint and the terminal waypoint
-//! capture only inside the capture radius (NAV-TT-004). A fix that the
-//! vehicle passes outside its capture distance sequences when the vehicle
-//! crosses the perpendicular through the fix (NAV-TT-006). After the final
-//! waypoint sequences, the execution is complete and further advances are
-//! inert.
+//! ellipsoid of the plan. Every leg carries a path terminator (NAV-LG-001).
+//! A waypoint that declares none gets one by position in the fly order
+//! (NAV-LG-002).
+//!
+//! A fly-by waypoint between two track-to-fix legs sequences early on the
+//! line abeam the distance of turn anticipation before it when the turn
+//! stays within the 121° boundary (NAV-TT-003, NAV-LG-010). Fly-over
+//! waypoints and terminal fixes capture inside the capture radius
+//! (NAV-TT-004). Fixed inbound legs that pass their fix outside the
+//! capture radius sequence on crossing the perpendicular through the fix
+//! (NAV-TT-006). Hold legs (`HA`, `HF`, `HM`) enter and fly their
+//! racetracks until their termination condition is met (NAV-LG-011,
+//! NAV-LG-015).
 
 use navigate_contract::{
-    FlightPlan, GeodeticPosition, LateralReference, LegPath, PlanValidationError, TurnType,
-    Waypoint,
+    FlightPlan, GeodeticPosition, LegPath, PlanValidationError, TurnType, Waypoint,
 };
-use navigate_geodesy::{BodyEllipsoid, distance_m, initial_bearing_rad};
+use navigate_geodesy::{BodyEllipsoid, distance_m};
 
 use crate::plan_set::PlanActivationError;
-use crate::turn::{
-    EARTH_STANDARD_GRAVITY_MPS2, fold_to_half_turn, turn_anticipation_m, turn_radius_m,
-};
+use crate::turn::{turn_anticipation_m, turn_radius_m};
 
 mod activation;
+mod corner;
+mod hold;
 mod passing;
+mod types;
 
 #[cfg(test)]
 mod tests;
 
-use activation::{resolve_path, screen_leg_paths};
+use activation::{resolve_path, screen_leg_paths, skips_minimum_length_guard};
+pub use corner::Corner;
+use corner::{corner, distance_to_go_m};
+use hold::LegState;
+pub use hold::{HoldEntry, HoldStage, HoldStatus, hold_entry};
 use passing::passed_cross_track_m;
-
-/// Below this track separation a course is numerically meaningless and
-/// turn geometry is skipped (mirrors the geodesy degenerate-track floor).
-const MIN_TRACK_SEPARATION_M: f64 = 1e-3;
-
-/// Largest track change fly-by anticipation applies to: 120°. Beyond it
-/// `tan(Δ/2)` grows toward a reversal's blowup, and a course reversal
-/// has no fly-by solution — holds and radius-to-fix legs own that
-/// geometry and are out of scope (NAV-TT-003).
-const MAX_ANTICIPATED_TRACK_CHANGE_RAD: f64 = 2.0 * core::f64::consts::FRAC_PI_3;
-
-/// Tunable sequencing parameters.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub struct ExecutionConfig {
-    /// Great-circle distance to the active `to` waypoint, in meters, at
-    /// which the waypoint captures regardless of turn geometry.
-    pub capture_radius_m: f64,
-    /// Bank-angle limit for the fly-by turn-performance model, radians
-    /// (NAV-TT-002). The default is the 18° RNP fly-by standard recorded
-    /// in `docs/procedure-requirements.md`.
-    pub bank_limit_rad: f64,
-    /// Floor under waypoint speed constraints, meters per second
-    /// (NAV-VC-003): a plan demanding a slower approach is refused at
-    /// activation, never silently clamped in flight.
-    pub min_approach_speed_mps: f64,
-    /// Surface gravitational acceleration of the body in meters per second
-    /// squared, used to compute the fly-by turn radius `v² / (g · tan φ)`.
-    /// Set the value of the body of the plan, for example
-    /// [`crate::MARS_SURFACE_GRAVITY_MPS2`] or
-    /// [`crate::TITAN_SURFACE_GRAVITY_MPS2`]. Activation refuses a value
-    /// that is not finite and positive.
-    pub surface_gravity_mps2: f64,
-}
-
-impl ExecutionConfig {
-    /// Builds a config with the given capture radius in meters and the
-    /// default bank limit, approach-speed floor, and Earth surface gravity.
-    #[must_use]
-    pub const fn new(capture_radius_m: f64) -> Self {
-        Self {
-            capture_radius_m,
-            bank_limit_rad: 18.0_f64.to_radians(),
-            min_approach_speed_mps: 0.3,
-            surface_gravity_mps2: EARTH_STANDARD_GRAVITY_MPS2,
-        }
-    }
-
-    /// Sets the surface gravitational acceleration in meters per second
-    /// squared, for flight on another body, such as
-    /// [`crate::MARS_SURFACE_GRAVITY_MPS2`] on Mars or
-    /// [`crate::TITAN_SURFACE_GRAVITY_MPS2`] on Titan.
-    #[must_use]
-    pub const fn with_surface_gravity_mps2(mut self, surface_gravity_mps2: f64) -> Self {
-        self.surface_gravity_mps2 = surface_gravity_mps2;
-        self
-    }
-}
-
-/// 100 m capture radius, the 18° fly-by bank standard, a 0.3 m/s
-/// approach-speed floor, and [`EARTH_STANDARD_GRAVITY_MPS2`].
-impl Default for ExecutionConfig {
-    fn default() -> Self {
-        Self::new(100.0)
-    }
-}
-
-/// A borrowed view of the leg being flown.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Leg<'a> {
-    /// Origin waypoint; `None` on the initial direct-to leg, which is
-    /// flown from the present position to the first waypoint.
-    pub from: Option<&'a Waypoint>,
-    /// Destination waypoint being flown toward.
-    pub to: &'a Waypoint,
-    /// Index of `to` in the plan's fly order.
-    pub index: usize,
-    /// The leg's resolved path terminator (NAV-LG-002). Activation has
-    /// already refused every terminator this build cannot fly, so this
-    /// is always one the sequencer and the guidance derivations
-    /// understand.
-    pub path: LegPath,
-}
-
-impl Leg<'_> {
-    /// The lateral geometry this leg gives a guidance derivation
-    /// (NAV-LG-014).
-    ///
-    /// A track-to-fix leg yields the track from its upstream fix, a
-    /// course-to-fix leg yields its published course, and every other
-    /// flown leg runs from the present position.
-    #[must_use]
-    pub fn lateral_reference(&self) -> LateralReference {
-        match self.path {
-            LegPath::CourseToFix { course_rad, .. } => LateralReference::course(course_rad),
-            // A track leg without an upstream fix is refused at
-            // activation, so the fallback is unreachable; it is also
-            // the fail-safe answer, because a track anchored at ownship
-            // is a direct-to.
-            LegPath::TrackToFix => self.from.map_or(LateralReference::PresentPosition, |from| {
-                LateralReference::track(from.position)
-            }),
-            _ => LateralReference::PresentPosition,
-        }
-    }
-}
-
-/// Why a waypoint sequenced (NAV-TT-005).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub enum SequenceReason {
-    /// The distance of turn anticipation drove an advance beyond the
-    /// capture radius — only fly-by geometry earns this.
-    Anticipated,
-    /// The fix captured inside the capture radius: every fly-over
-    /// crossing, and any fly-by fix whose anticipation distance stays
-    /// inside the capture radius.
-    Overflown,
-    /// The vehicle crossed the perpendicular through the fix outside the
-    /// capture distance (NAV-TT-006). The fix can no longer capture, so
-    /// the leg ends here and does not wait for a capture.
-    Passed {
-        /// Signed cross-track distance from the inbound course line at
-        /// the sample that sequenced, in meters, positive right of the
-        /// course: the distance by which the vehicle missed the fix.
-        cross_track_m: f64,
-    },
-}
-
-/// What one call to [`PlanExecution::advance`] decided.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub enum SequenceEvent {
-    /// No waypoint sequenced; the active leg is unchanged.
-    None,
-    /// The active `to` waypoint sequenced and the next leg is active.
-    LegAdvanced {
-        /// Index of the newly active `to` waypoint.
-        to_index: usize,
-        /// How the captured waypoint was flown.
-        turn: TurnType,
-        /// Why it sequenced.
-        reason: SequenceReason,
-    },
-    /// The final waypoint sequenced; the plan is complete.
-    PlanComplete {
-        /// How the terminal waypoint was flown.
-        turn: TurnType,
-        /// Why it sequenced: a capture or a passed fix, never an
-        /// anticipation, because the terminal fix has no onward course.
-        reason: SequenceReason,
-    },
-}
+use types::validate_config;
+pub use types::{ExecutionConfig, ExecutionState, Leg, SequenceEvent, SequenceReason};
 
 /// Sequencing state for one activated flight plan.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,18 +49,16 @@ pub struct PlanExecution<'a> {
     config: ExecutionConfig,
     active_index: usize,
     complete: bool,
+    leg_state: LegState,
 }
 
 impl<'a> PlanExecution<'a> {
-    /// Validates the plan and the config, then starts execution on the
-    /// initial direct-to leg toward the first waypoint.
+    /// Validates the plan and config, then starts execution at index `0`.
     ///
     /// # Errors
     ///
-    /// The plan's first structural defect, an unflyable config value, a
-    /// waypoint speed constraint below the approach-speed floor
-    /// (NAV-VC-003), or a path terminator this build cannot fly
-    /// (NAV-LG-005) — an invalid plan never becomes an execution.
+    /// Returns the first validation, config, speed-floor, unsupported-leg,
+    /// or minimum-leg-length refusal.
     pub fn new(plan: FlightPlan<'a>, config: ExecutionConfig) -> Result<Self, PlanActivationError> {
         plan.validate()?;
         let ellipsoid = BodyEllipsoid::try_from_contract(plan.ellipsoid)
@@ -226,11 +77,16 @@ impl<'a> PlanExecution<'a> {
                 });
             }
         }
-        for pair in plan.waypoints.windows(2) {
+        for (index, pair) in plan.waypoints.windows(2).enumerate() {
+            let from_path = resolve_path(index, pair[0].path);
+            let to_path = resolve_path(index.wrapping_add(1), pair[1].path);
+            if skips_minimum_length_guard(to_path)
+                || (matches!(from_path, LegPath::CourseToAltitude { .. })
+                    && to_path != LegPath::TrackToFix)
+            {
+                continue;
+            }
             let leg_length_m = distance_m(&pair[0].position, &pair[1].position, ellipsoid);
-            // A leg shorter than the capture radius would sequence while
-            // the vehicle is still at the previous fix — a plan-design
-            // defect refused here rather than flown as a skip.
             if leg_length_m <= config.capture_radius_m {
                 return Err(PlanActivationError::CaptureRadiusExceedsLeg {
                     plan: plan.id,
@@ -240,107 +96,192 @@ impl<'a> PlanExecution<'a> {
                 });
             }
         }
+        let first_path = resolve_path(0, plan.waypoints.first().and_then(|wp| wp.path));
         Ok(Self {
             plan,
             ellipsoid,
             config,
             active_index: 0,
             complete: false,
+            leg_state: LegState::for_path(first_path),
         })
     }
 
-    /// Restores the sequencing state of an execution of the same plan and
-    /// config: the active index and the completion flag. An owner that
-    /// keeps its waypoints and must not hold a borrow between steps
-    /// stores these two values and resumes the execution at each step.
-    /// The validation is that of [`Self::new`], so a plan that does not
-    /// activate does not resume.
+    /// Restores sequencing from `active_index` and `complete` with fresh
+    /// per-leg state.
     ///
     /// # Errors
     ///
-    /// Each refusal of [`Self::new`], and
-    /// [`PlanActivationError::InvalidResumeState`] for an active index past
-    /// the last waypoint or a complete state at another index than the
-    /// last.
+    /// Returns any refusal of [`Self::new`] or
+    /// [`PlanActivationError::InvalidResumeState`].
     pub fn resume(
         plan: FlightPlan<'a>,
         config: ExecutionConfig,
         active_index: usize,
         complete: bool,
     ) -> Result<Self, PlanActivationError> {
+        let leg_state = plan
+            .waypoints
+            .get(active_index)
+            .map(|wp| LegState::for_path(resolve_path(active_index, wp.path)))
+            .unwrap_or_default();
+        Self::resume_state(
+            plan,
+            config,
+            ExecutionState {
+                active_index,
+                complete,
+                leg_state,
+            },
+        )
+    }
+
+    /// Restores full sequencing state, including hold circuit progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns any refusal of [`Self::new`] or
+    /// [`PlanActivationError::InvalidResumeState`].
+    pub fn resume_state(
+        plan: FlightPlan<'a>,
+        config: ExecutionConfig,
+        state: ExecutionState,
+    ) -> Result<Self, PlanActivationError> {
         let mut execution = Self::new(plan, config)?;
         let waypoints = plan.waypoints.len();
         let last = waypoints.checked_sub(1);
-        let fits = active_index < waypoints && (!complete || Some(active_index) == last);
+        let fits =
+            state.active_index < waypoints && (!state.complete || Some(state.active_index) == last);
         if !fits {
             return Err(PlanActivationError::InvalidResumeState {
                 plan: plan.id,
-                active_index,
-                complete,
+                active_index: state.active_index,
+                complete: state.complete,
                 waypoints,
             });
         }
-        execution.active_index = active_index;
-        execution.complete = complete;
+        let path = resolve_path(
+            state.active_index,
+            plan.waypoints
+                .get(state.active_index)
+                .and_then(|wp| wp.path),
+        );
+        execution.active_index = state.active_index;
+        execution.complete = state.complete;
+        execution.leg_state = if path.hold().is_some() == state.leg_state.status().is_some() {
+            state.leg_state
+        } else {
+            LegState::for_path(path)
+        };
         Ok(execution)
     }
 
-    /// Feeds one position sample to the sequencer at the commanded
-    /// groundspeed. Capture is horizontal and ignores altitude: a fly-by
-    /// waypoint between two fixed legs sequences strictly within
-    /// `max(capture_radius, min(DTA, half the shorter adjoining leg))`
-    /// of the fix (NAV-TT-003); fly-over waypoints, the terminal
-    /// waypoint, direct-to legs, and track changes beyond the
-    /// anticipation limit capture within the capture radius only
-    /// (NAV-TT-004). A track-to-fix or course-to-fix leg that does not
-    /// capture also sequences when the position is beyond the
-    /// perpendicular through its fix to the inbound course, and the
-    /// event reports the cross-track miss (NAV-TT-006). Capture has
-    /// priority, so a sample that satisfies both rules gives one capture
-    /// event. One call sequences one fix at most: a position beyond
-    /// several fixes sequences one of them per call. The rule is a
-    /// half-space test with no distance limit, so a position far beyond
-    /// the fix also sequences it; the screen of a bad position is the
-    /// integrity screen upstream of this sequencer. A non-finite or
-    /// negative groundspeed anticipates nothing; a non-finite position
-    /// sequences nothing. Once complete, every further call returns
-    /// [`SequenceEvent::None`] without mutating anything.
+    /// Exports the portable [`ExecutionState`] snapshot.
+    #[must_use]
+    pub const fn state(&self) -> ExecutionState {
+        ExecutionState {
+            active_index: self.active_index,
+            complete: self.complete,
+            leg_state: self.leg_state,
+        }
+    }
+
+    /// Returns observable progress when the active leg is a hold.
+    #[must_use]
+    pub const fn hold_status(&self) -> Option<HoldStatus> {
+        self.state().hold_status()
+    }
+
+    /// Arms manual exit on an active `HM` (`HoldManual`) leg. Returns
+    /// `true` when the active leg is `HoldManual`.
+    pub fn exit_hold(&mut self) -> bool {
+        if self.complete {
+            return false;
+        }
+        let Some(to) = self.plan.waypoints.get(self.active_index) else {
+            return false;
+        };
+        self.leg_state
+            .arm_exit(resolve_path(self.active_index, to.path))
+    }
+
+    /// Feeds one position sample to the sequencer at `groundspeed_mps`.
     pub fn advance(&mut self, position: &GeodeticPosition, groundspeed_mps: f64) -> SequenceEvent {
         let Some(leg) = self.active_leg() else {
             return SequenceEvent::None;
         };
         let index = leg.index;
         let turn = leg.to.turn;
+        let reason = if let Some(hold) = leg.path.hold() {
+            let Some(reason) = self.leg_state.advance_hold(
+                &self.plan,
+                index,
+                leg.to,
+                leg.path,
+                hold,
+                position,
+                groundspeed_mps,
+                &self.config,
+                self.ellipsoid,
+            ) else {
+                return SequenceEvent::None;
+            };
+            reason
+        } else if matches!(leg.path, LegPath::CourseToAltitude { .. }) {
+            let Some(reason) = self.leg_state.advance_altitude(position, leg.to.altitude) else {
+                return SequenceEvent::None;
+            };
+            reason
+        } else {
+            let Some(reason) = self.advance_horizontal(&leg, position, groundspeed_mps) else {
+                return SequenceEvent::None;
+            };
+            reason
+        };
+        self.transition_after(index, turn, reason)
+    }
+
+    fn advance_horizontal(
+        &self,
+        leg: &Leg<'_>,
+        position: &GeodeticPosition,
+        groundspeed_mps: f64,
+    ) -> Option<SequenceReason> {
         let distance = distance_m(position, &leg.to.position, self.ellipsoid);
         if !distance.is_finite() {
-            return SequenceEvent::None;
+            return None;
         }
-        let anticipation = self.anticipation_distance(&leg, groundspeed_mps);
-        let threshold = self.config.capture_radius_m.max(anticipation);
-        // Strict: a capped anticipation can equal a leg-start distance,
-        // and a leg must never sequence at the instant it begins.
-        let reason = if distance < threshold {
-            // The reason names the RULE that authorizes early
-            // sequencing, not the sample that happened to arrive
-            // (NAV-TT-005): a fly-by fix whose anticipation exceeds the
-            // capture radius is an anticipated transition even when a
-            // sparse sample lands inside the radius.
-            if anticipation > self.config.capture_radius_m {
+        let anticipation = self.anticipation_distance(leg, groundspeed_mps);
+        let anticipated = anticipation > self.config.capture_radius_m;
+        if distance < self.config.capture_radius_m {
+            Some(if anticipated {
                 SequenceReason::Anticipated
             } else {
                 SequenceReason::Overflown
-            }
-        } else if let Some(cross_track_m) = passed_cross_track_m(&leg, position, self.ellipsoid) {
-            SequenceReason::Passed { cross_track_m }
+            })
+        } else if anticipated && self.inside_turn_start(leg, position, anticipation) {
+            Some(SequenceReason::Anticipated)
         } else {
-            return SequenceEvent::None;
-        };
+            passed_cross_track_m(leg, position, self.ellipsoid)
+                .map(|cross_track_m| SequenceReason::Passed { cross_track_m })
+        }
+    }
+
+    fn transition_after(
+        &mut self,
+        index: usize,
+        turn: TurnType,
+        reason: SequenceReason,
+    ) -> SequenceEvent {
         let next = index.wrapping_add(1);
         if next >= self.plan.waypoints.len() {
             self.complete = true;
             SequenceEvent::PlanComplete { turn, reason }
         } else {
+            let next_path =
+                resolve_path(next, self.plan.waypoints.get(next).and_then(|wp| wp.path));
             self.active_index = next;
+            self.leg_state = LegState::for_path(next_path);
             SequenceEvent::LegAdvanced {
                 to_index: next,
                 turn,
@@ -349,55 +290,51 @@ impl<'a> PlanExecution<'a> {
         }
     }
 
-    /// The fly-by anticipation distance for the active leg: the DTA
-    /// bounded by half the shorter adjoining leg, so each leg keeps a
-    /// flyable middle and both of its ends may anticipate (NAV-TT-003).
-    /// Zero — capture-radius sequencing — for fly-over fixes, the
-    /// terminal fix, any corner whose inbound or outbound leg is not a
-    /// track between two fixes (NAV-LG-010), track changes beyond
-    /// [`MAX_ANTICIPATED_TRACK_CHANGE_RAD`] (a reversal has no fly-by
-    /// solution), and geometry too degenerate to define a course.
-    fn anticipation_distance(&self, leg: &Leg<'_>, groundspeed_mps: f64) -> f64 {
-        if leg.to.turn != TurnType::FlyBy || leg.path != LegPath::TrackToFix {
-            return 0.0;
-        }
+    fn inside_turn_start(
+        &self,
+        leg: &Leg<'_>,
+        position: &GeodeticPosition,
+        anticipation: f64,
+    ) -> bool {
         let Some(from) = leg.from else {
+            return false;
+        };
+        distance_to_go_m(position, &from.position, &leg.to.position, self.ellipsoid)
+            .is_some_and(|to_go| (0.0..anticipation).contains(&to_go))
+    }
+
+    fn anticipation_distance(&self, leg: &Leg<'_>, groundspeed_mps: f64) -> f64 {
+        let Corner::Anticipated { track_change_rad } = self.corner(leg.index) else {
             return 0.0;
         };
-        let next_index = leg.index.wrapping_add(1);
-        let Some(next) = self.plan.waypoints.get(next_index) else {
+        let (Some(from), Some(next)) =
+            (leg.from, self.plan.waypoints.get(leg.index.wrapping_add(1)))
+        else {
             return 0.0;
         };
-        // Only a track-to-fix outbound leg is flown along the bearing to
-        // the next fix. A course-to-fix or direct-to-fix outbound leaves
-        // the corner on some other path, so that bearing would mis-size
-        // the turn (NAV-LG-010).
-        if resolve_path(next_index, next.path) != LegPath::TrackToFix {
-            return 0.0;
-        }
         let inbound_length = distance_m(&from.position, &leg.to.position, self.ellipsoid);
         let outbound_length = distance_m(&leg.to.position, &next.position, self.ellipsoid);
-        if inbound_length < MIN_TRACK_SEPARATION_M || outbound_length < MIN_TRACK_SEPARATION_M {
-            return 0.0;
-        }
-        // The inbound course AT the fix is the reciprocal of the course
-        // back to the leg origin; the initial bearing from the origin
-        // would mis-size the corner by the great-circle convergence.
-        let inbound = initial_bearing_rad(&leg.to.position, &from.position) + core::f64::consts::PI;
-        let outbound = initial_bearing_rad(&leg.to.position, &next.position);
-        let track_change = fold_to_half_turn(outbound - inbound);
-        if track_change > MAX_ANTICIPATED_TRACK_CHANGE_RAD {
-            return 0.0;
-        }
         let radius = turn_radius_m(
             groundspeed_mps,
             self.config.bank_limit_rad,
             self.config.surface_gravity_mps2,
         );
-        turn_anticipation_m(radius, track_change).min(0.5 * inbound_length.min(outbound_length))
+        turn_anticipation_m(radius, track_change_rad).min(0.5 * inbound_length.min(outbound_length))
     }
 
-    /// The leg being flown, or `None` once the plan is complete.
+    /// Returns the [`Corner`] classification at `index` (NAV-TT-003).
+    #[must_use]
+    pub fn corner(&self, index: usize) -> Corner {
+        corner(&self.plan, index, self.ellipsoid)
+    }
+
+    /// Iterates the [`Corner`] classifications for all waypoints in fly
+    /// order.
+    pub fn corners(&self) -> impl Iterator<Item = Corner> + '_ {
+        (0..self.plan.waypoints.len()).map(|index| self.corner(index))
+    }
+
+    /// Returns the active leg, or `None` once the plan is complete.
     #[must_use]
     pub fn active_leg(&self) -> Option<Leg<'a>> {
         if self.complete {
@@ -408,34 +345,39 @@ impl<'a> PlanExecution<'a> {
             .active_index
             .checked_sub(1)
             .and_then(|previous| self.plan.waypoints.get(previous));
+        let path = resolve_path(self.active_index, to.path);
+        let hold_reference = path.hold().map(|hold| {
+            self.leg_state
+                .lateral_reference(to, hold, &self.config, self.ellipsoid)
+        });
         Some(Leg {
             from,
             to,
             index: self.active_index,
-            path: resolve_path(self.active_index, to.path),
+            path,
+            hold_reference,
         })
     }
 
-    /// The plan being executed.
+    /// Returns the flight plan being executed.
     #[must_use]
     pub const fn plan(&self) -> &FlightPlan<'a> {
         &self.plan
     }
 
-    /// The derived ellipsoid of the plan.
+    /// Returns the derived ellipsoid of the plan.
     #[must_use]
     pub const fn ellipsoid(&self) -> BodyEllipsoid {
         self.ellipsoid
     }
 
-    /// Index of the active `to` waypoint. After completion this stays at
-    /// the final waypoint's index.
+    /// Returns the index of the active `to` waypoint.
     #[must_use]
     pub const fn active_index(&self) -> usize {
         self.active_index
     }
 
-    /// Waypoints not yet captured, in fly order; empty once complete.
+    /// Returns the remaining unsequenced waypoints, or `&[]` when complete.
     #[must_use]
     pub fn remaining_waypoints(&self) -> &'a [Waypoint] {
         if self.complete {
@@ -444,35 +386,9 @@ impl<'a> PlanExecution<'a> {
         self.plan.waypoints.get(self.active_index..).unwrap_or(&[])
     }
 
-    /// Whether the final waypoint has captured.
+    /// Returns `true` when the final waypoint has sequenced.
     #[must_use]
     pub const fn is_complete(&self) -> bool {
         self.complete
     }
-}
-
-/// Screens the config's own numbers: a non-finite or non-positive value
-/// in any of them would silently disable the comparison it feeds.
-fn validate_config(config: &ExecutionConfig) -> Result<(), PlanActivationError> {
-    let defect =
-        |field: &'static str, value: f64| PlanActivationError::InvalidConfig { field, value };
-    if !config.capture_radius_m.is_finite() || config.capture_radius_m <= 0.0 {
-        return Err(defect("capture_radius_m", config.capture_radius_m));
-    }
-    if !config.bank_limit_rad.is_finite()
-        || config.bank_limit_rad <= 0.0
-        || config.bank_limit_rad >= core::f64::consts::FRAC_PI_2
-    {
-        return Err(defect("bank_limit_rad", config.bank_limit_rad));
-    }
-    if !config.min_approach_speed_mps.is_finite() || config.min_approach_speed_mps <= 0.0 {
-        return Err(defect(
-            "min_approach_speed_mps",
-            config.min_approach_speed_mps,
-        ));
-    }
-    if !config.surface_gravity_mps2.is_finite() || config.surface_gravity_mps2 <= 0.0 {
-        return Err(defect("surface_gravity_mps2", config.surface_gravity_mps2));
-    }
-    Ok(())
 }

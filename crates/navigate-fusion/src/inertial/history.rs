@@ -313,10 +313,24 @@ where
         };
         self.entries.insert(index, delayed, usize::MAX);
         self.rewrite(base, index, config)?;
-        while self.entries.len() > capacity {
+        while self.entries.len() > capacity
+            || (self.has_two_checkpoints() && self.pools.is_full_for(event))
+        {
             self.evict_front();
         }
+        if self.entries.is_empty() {
+            self.anchor = Some(scratch.state_at);
+        }
         Ok((scratch, chi2))
+    }
+
+    /// Whether the history holds at least two checkpoints, so dropping
+    /// the front stride leaves a checkpoint at the new front.
+    fn has_two_checkpoints(&self) -> bool {
+        self.entries
+            .iter()
+            .skip(1)
+            .any(|entry| entry.checkpoint.is_some())
     }
 
     /// Replays the entries from `index` with `core` as the core before
