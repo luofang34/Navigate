@@ -3,7 +3,7 @@
 //! navigator does with it.
 
 use nalgebra::Vector3;
-use navigate_contract::SolutionQuality;
+use navigate_contract::{SensorClass, SolutionQuality};
 
 use super::fixes::FIX_BOUND_M;
 use super::flight::{RATE, at, request, show_events};
@@ -38,6 +38,9 @@ struct Seen {
     end_state: Option<GnssIntegrityState>,
     doubted_fixes: u32,
     worst_chi2: f64,
+    /// Solutions after the first terrain fix that do not name the terrain
+    /// camera as a contributing sensor.
+    visual_gaps: u32,
     records: Vec<AcceptanceRecord>,
 }
 
@@ -80,6 +83,12 @@ fn watch_over(
         let error: Vector3<f64> = flight.error_m(&solution, step);
         let (error_m, t_s) = (error.xy().norm(), step as f64 / RATE as f64);
         seen.end_error_m = error_m;
+        let fixed = terrain_counts(&seen.records).0 > 0;
+        let named = solution
+            .integrity
+            .contributing
+            .contains(SensorClass::VisualLandmark);
+        seen.visual_gaps += u32::from(fixed && !named);
         let Some(status) = navigator.gnss_integrity() else {
             continue;
         };
@@ -168,6 +177,10 @@ fn a_drifting_receiver_is_doubted_then_excluded_and_taken_again_when_it_agrees()
             .collect();
         let (accepted, refused, _) = terrain_counts(&later);
         assert!(accepted >= 6 && refused == 0, "{accepted} {refused}");
+        // Between two fixes, 11 s apart, the solution still names the
+        // terrain camera: with the receiver, and alone after the
+        // exclusion.
+        assert_eq!(seen.visual_gaps, 0);
         // The receiver agrees again from `TO_S`, and the navigator takes
         // it after the configured time, with a terrain fix in that time.
         let again_s = seen.taken_again_s.unwrap() - TO_S as f64;
@@ -281,4 +294,5 @@ fn the_check_keeps_the_terrain_fixes_of_an_honest_flight() {
     assert_eq!(fixes_with.1, 0);
     assert!(fixes_with.0.abs_diff(fixes_without.0) <= 1);
     assert!(with.end_error_m < 3.0 && without.end_error_m < 3.0);
+    assert_eq!((with.visual_gaps, without.visual_gaps), (0, 0));
 }

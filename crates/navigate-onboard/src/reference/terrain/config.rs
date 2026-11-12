@@ -132,6 +132,15 @@ pub struct TerrainConfig {
     /// default suits a 1-arc-second radar model such as SRTM over farmland
     /// and hills.
     pub dem_correlation_length_m: f64,
+    /// How long a fix that the filter took counts toward the integrity
+    /// assessment of the solution, seconds. The filter gets one fix for
+    /// each map cell, so the fixes come as far apart as the vehicle needs
+    /// for a cell: a cell of 450 m (zoom 16 at middle latitudes) takes
+    /// 30 s at 15 m/s, and less for a faster vehicle. The default holds
+    /// that time; between two fixes the solution then still names the
+    /// terrain camera as a contributing sensor. A vehicle that needs
+    /// longer for a cell, or a map with larger cells, needs more.
+    pub fix_hold_s: f64,
 }
 
 impl Default for TerrainConfig {
@@ -163,6 +172,7 @@ impl Default for TerrainConfig {
             max_match_pixels: 320 * 240,
             min_match_pixels: 160 * 120,
             dem_correlation_length_m: 300.0,
+            fix_hold_s: 30.0,
         }
     }
 }
@@ -240,6 +250,7 @@ impl TerrainConfig {
             self.min_block_contrast,
             f64::from(self.depth_edge),
             self.dem_correlation_length_m,
+            self.fix_hold_s,
         ]
         .iter()
         .all(|v| v.is_finite() && *v > 0.0);

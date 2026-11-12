@@ -7,7 +7,7 @@ use image::GrayImage;
 use image::imageops::{FilterType, resize};
 use nalgebra::Vector3;
 use navigate_camera::{CameraMount, Distortion, Intrinsics, SpectralBand};
-use navigate_contract::{ClockDomainId, SourceEpoch, SourceId};
+use navigate_contract::{ClockDomainId, DurationNanos, SourceEpoch, SourceId};
 use navigate_data::{CorrelationKey, GridCell, TileAddress};
 use navigate_visual::fusion_bridge::{VisualSourceIdentity, position_fix_observation_composed};
 use navigate_visual::session::{ContinuityEpoch, FrameKey, MapCell, MapCellLedger, StreamId};
@@ -440,6 +440,10 @@ impl TerrainCamera {
         estimate.pose.position = body_position(&estimate.pose, &self.mount);
         match position_fix_observation_composed(&estimate, &self.identity, &external) {
             Ok(observation) => {
+                // The fixes come one for each map cell, less often than
+                // the assessment window of the filter is long.
+                let hold_ns = (map.config.fix_hold_s * 1e9).round() as u64;
+                let observation = observation.with_hold(DurationNanos::from_nanos(hold_ns));
                 if self.inspect {
                     let model_m = estimate.frame.model_error_m(estimate.pose.position);
                     self.pending.offered(&observation, &external, model_m);

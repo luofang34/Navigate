@@ -8,6 +8,12 @@
 //! time checks of that source would not run. The assessment window holds
 //! [`MAX_WINDOW_ADMISSIONS`] admissions. A full window drops its oldest
 //! admission, so the window can only show less redundancy, never more.
+//!
+//! A source whose fixes come less often than the window is long declares
+//! a hold time with each observation. The ledger keeps the last
+//! admission of such a source apart from the window, one for each
+//! tracked source, so the admissions of a fast source do not push it
+//! out. It counts toward the assessment until its hold time ends.
 
 use navigate_contract::{
     DurationNanos, MonotonicNanos, ObservationStamp, SourceComposition, SourceEpoch, SourceId,
@@ -38,6 +44,13 @@ pub(crate) struct AdmittedContribution {
     admitted_at: MonotonicNanos,
 }
 
+/// The last admission of a source that declared a hold time.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    contribution: AdmittedContribution,
+    hold: DurationNanos,
+}
+
 /// Bitmask of the state components that an observation directly constrains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ConstrainedState(u8);
@@ -64,6 +77,8 @@ impl ConstrainedState {
 pub(crate) struct ProvenanceLedger {
     sources: [Option<(SourceId, SourceTrack)>; MAX_SOURCES],
     admitted: [Option<AdmittedContribution>; MAX_WINDOW_ADMISSIONS],
+    // At most one for each tracked source.
+    held: [Option<Held>; MAX_SOURCES],
     // Union of every admitted composition this filter epoch: published
     // provenance describes everything the state ever absorbed, not just
     // the assessment window.
@@ -80,6 +95,7 @@ impl Default for ProvenanceLedger {
         Self {
             sources: [None; MAX_SOURCES],
             admitted: [None; MAX_WINDOW_ADMISSIONS],
+            held: [None; MAX_SOURCES],
             epoch_composition: SourceComposition::empty(),
             last_admitted_at: None,
             gate_rejection_streaks: [0; 4],
@@ -92,6 +108,7 @@ impl ProvenanceLedger {
     pub(crate) fn clear(&mut self) {
         self.sources = [None; MAX_SOURCES];
         self.admitted = [None; MAX_WINDOW_ADMISSIONS];
+        self.held = [None; MAX_SOURCES];
         self.epoch_composition = SourceComposition::empty();
         self.last_admitted_at = None;
         self.gate_rejection_streaks = [0; 4];
@@ -123,10 +140,13 @@ impl ProvenanceLedger {
         self.epoch_composition
     }
 
-    /// The admissions inside the assessment window, in no particular
-    /// sequence.
+    /// The admissions that count toward the assessment, in no particular
+    /// sequence: those inside the assessment window, and the last one of
+    /// each source inside its declared hold time. An admission can be in
+    /// both.
     pub(crate) fn window(&self) -> impl Iterator<Item = &AdmittedContribution> + Clone {
-        self.admitted.iter().flatten()
+        let held = self.held.iter().flatten().map(|held| &held.contribution);
+        self.admitted.iter().flatten().chain(held)
     }
 
     /// The track of `source`.
@@ -188,7 +208,45 @@ impl ProvenanceLedger {
 
     /// Records an admitted aiding observation: the source track, the
     /// window entry, the provenance, the silence reference, and recovery
-    /// of the state components that this observation constrains.
+    /// of the state components that this observation constrains. `hold`
+    /// is the hold time that the observation declares, if it declares
+    /// one; the admission then counts until that time ends, and without
+    /// one an earlier hold of the source ends.
+    pub(crate) fn commit_held(
+        &mut self,
+        stamp: &ObservationStamp,
+        composition: SourceComposition,
+        constrained: ConstrainedState,
+        now: MonotonicNanos,
+        (window, hold): (DurationNanos, Option<DurationNanos>),
+    ) {
+        self.commit(stamp, composition, constrained, now, window);
+        let held = hold.map(|hold| Held {
+            contribution: AdmittedContribution {
+                source: stamp.source,
+                composition,
+                admitted_at: now,
+            },
+            hold,
+        });
+        let of_source =
+            |slot: &Option<Held>| slot.is_some_and(|held| held.contribution.source == stamp.source);
+        // The source table refused a source beyond its capacity, so a
+        // tracked source always finds a slot.
+        let slot = self
+            .held
+            .iter()
+            .position(of_source)
+            .or_else(|| self.held.iter().position(Option::is_none));
+        if let Some(target) = slot.and_then(|index| self.held.get_mut(index))
+            && (held.is_some() || of_source(target))
+        {
+            *target = held;
+        }
+    }
+
+    /// [`Self::commit_held`] for an observation without a hold time, and
+    /// without a change of an earlier hold of the source.
     pub(crate) fn commit(
         &mut self,
         stamp: &ObservationStamp,
@@ -258,6 +316,15 @@ impl ProvenanceLedger {
                     .is_some_and(|age| age > window)
             });
             if expired {
+                *slot = None;
+            }
+        }
+        for slot in &mut self.held {
+            let ended = slot.is_some_and(|held| {
+                now.elapsed_since(held.contribution.admitted_at)
+                    .is_some_and(|age| age > held.hold)
+            });
+            if ended {
                 *slot = None;
             }
         }

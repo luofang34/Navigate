@@ -14,8 +14,8 @@ mod correlated;
 pub use correlated::CorrelatedError;
 
 use navigate_contract::{
-    AttitudeQuaternion, CartesianPosition, CartesianVelocity, FrameId, GeodeticPosition,
-    NedVelocity, ObservationStamp, SourceComposition, SymmetricCov3,
+    AttitudeQuaternion, CartesianPosition, CartesianVelocity, DurationNanos, FrameId,
+    GeodeticPosition, NedVelocity, ObservationStamp, SourceComposition, SymmetricCov3,
 };
 
 /// The measured value of one observation, with its covariance.
@@ -412,6 +412,11 @@ pub struct Observation {
     /// The time-correlated part of the error, when the source declares
     /// one (ADR-0023). `None` declares a white error.
     pub correlated: Option<CorrelatedError>,
+    /// How long the observation counts toward the integrity assessment
+    /// after its admission (ADR-0004), for a source whose fixes come less
+    /// often than [`crate::FusionConfig::assessment_window`] is long.
+    /// `None` declares the assessment window.
+    pub hold: Option<DurationNanos>,
 }
 
 impl Observation {
@@ -429,6 +434,7 @@ impl Observation {
             frame: None,
             map_revision: None,
             correlated: None,
+            hold: None,
         }
     }
 
@@ -454,6 +460,13 @@ impl Observation {
     #[must_use]
     pub const fn with_map_revision(mut self, map_revision: u64) -> Self {
         self.map_revision = Some(map_revision);
+        self
+    }
+
+    /// This observation with the hold time `hold` declared.
+    #[must_use]
+    pub const fn with_hold(mut self, hold: DurationNanos) -> Self {
+        self.hold = Some(hold);
         self
     }
 
