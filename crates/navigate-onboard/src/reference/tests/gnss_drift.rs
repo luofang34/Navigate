@@ -213,8 +213,13 @@ struct Found {
 }
 
 fn drift(rate_m_s: f64, duration_s: f64) -> Found {
+    drift_from(FRESH_S, rate_m_s, duration_s)
+}
+
+/// A drift of `rate_m_s` that starts at `from_s` and goes on.
+fn drift_from(from_s: f64, rate_m_s: f64, duration_s: f64) -> Found {
     let ramp = Ramp {
-        from_s: FRESH_S,
+        from_s,
         to_s: f64::INFINITY,
         rate_m_s,
         drops: false,
@@ -224,10 +229,10 @@ fn drift(rate_m_s: f64, duration_s: f64) -> Found {
         ..Found::default()
     };
     let check = Some(GnssIntegrityConfig::default());
-    let end_s = FRESH_S + duration_s;
+    let end_s = from_s + duration_s;
     fly(0, end_s, Some(ramp), check, &mut Vec::new(), |step| {
         let status = step.status.unwrap();
-        let since_s = step.t_s - FRESH_S;
+        let since_s = step.t_s - from_s;
         found.witnessed |= status.reference_position_fix_at.is_some();
         if since_s < 0.0 {
             assert_eq!(status.state, GnssIntegrityState::Consistent);
@@ -326,4 +331,36 @@ fn a_late_fix_meets_the_reference_at_its_acquisition_time() {
     // farther from each fix.
     let (on_time_m, late_m) = (worst_fresh_separation_m(0), worst_fresh_separation_m(2));
     assert!((late_m - on_time_m).abs() < 1.0, "{on_time_m} {late_m}");
+}
+
+/// How the start time of a drift in the life of the reference decides
+/// whether it is found: ten start times over one life of about 96 s, for
+/// each rate, with the count of drifts excluded in 120 s and the largest
+/// error of the solution at the end. Printed for a report, not asserted.
+#[test]
+#[ignore = "a sweep for a report: about a minute in an optimized build"]
+fn sweep_the_start_time_of_a_drift_on_inertial_data_alone() {
+    tracing_subscriber::fmt().with_test_writer().try_init().ok();
+    for rate_m_s in [0.5, 1.0, 2.0] {
+        let (mut excluded, mut worst_m, mut latest_s) = (0, 0.0_f64, 0.0_f64);
+        for start in 0..10 {
+            let from_s = 400.0 + 10.0 * f64::from(start);
+            let found = drift_from(from_s, rate_m_s, 120.0);
+            if let Some(excluded_s) = found.excluded_s {
+                excluded += 1;
+                latest_s = latest_s.max(excluded_s);
+                worst_m = worst_m.max(found.worst_m);
+            } else {
+                let end_error_m = found.end_error_m;
+                tracing::info!(rate_m_s, from_s, end_error_m, "a drift was not found");
+            }
+        }
+        tracing::info!(
+            rate_m_s,
+            excluded,
+            latest_s,
+            worst_m,
+            "drifts of ten start times"
+        );
+    }
 }

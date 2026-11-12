@@ -33,22 +33,26 @@ pub struct GnssIntegrityConfig {
     /// exclusion threshold. Default: `1e-6`, the threshold 27.6, a
     /// separation of 5.3 sigma.
     pub exclusion_probability: f64,
-    /// Fixes in a row above the exclusion threshold that exclude GNSS.
-    /// One wild fix of an honest receiver is one fix, and the innovation
-    /// gate of the filter refuses it; a deceived receiver is above the
-    /// threshold on each fix. Default: 3.
-    pub exclusion_fixes: u32,
-    /// Time for which each fix must be below the caution threshold
-    /// before the state gets better, seconds: from `Disagreeing` to
-    /// `Consistent`, and from `Excluded` to `Consistent`. Default: 30 s.
-    /// In that time a receiver that still leaves the truth at 0.5 m/s
-    /// moves 15 m, which is of the order of the caution bound of a
-    /// reference with terrain fixes, so it does not pass. The navigator
-    /// takes an excluded receiver again only when the reference also took
-    /// a position fix of another sensor in that time. A reference on
-    /// inertial data alone has a bound that grows until it holds any
-    /// offset, so it cannot say that a receiver is honest again: the host
-    /// then aligns the navigator again.
+    /// Fixes in a row above a threshold that change the state for the
+    /// worse: above the caution threshold to `Disagreeing`, above the
+    /// exclusion threshold to `Excluded`. The white error of a receiver
+    /// is independent from fix to fix, so one fix of an honest receiver
+    /// is above the caution threshold about once in a thousand, and the
+    /// innovation gate of the filter refuses a wild one; a deceived
+    /// receiver is above the threshold on each fix. Default: 3.
+    pub confirming_fixes: u32,
+    /// Time of agreement before the state gets better, seconds: from
+    /// `Disagreeing` to `Consistent`, and from `Excluded` to
+    /// `Consistent`. The agreement ends with `confirming_fixes` fixes in a
+    /// row above the caution threshold. Default: 30 s. In that time a
+    /// receiver that still leaves the truth at 0.5 m/s moves 15 m, which
+    /// is of the order of the caution bound of a reference with terrain
+    /// fixes, so it does not pass. The navigator takes an excluded
+    /// receiver again only when the reference also took a position fix of
+    /// another sensor in that time. A reference on inertial data alone
+    /// has a bound that grows until it holds any offset, so it cannot say
+    /// that a receiver is honest again: the host then aligns the
+    /// navigator again.
     pub readmission_s: f64,
     /// Largest exclusion bound at which the check has a use, metres.
     /// Above it the reference says too little: a navigator that still
@@ -74,7 +78,7 @@ impl Default for GnssIntegrityConfig {
         Self {
             caution_probability: 1e-3,
             exclusion_probability: 1e-6,
-            exclusion_fixes: 3,
+            confirming_fixes: 3,
             readmission_s: 30.0,
             alert_limit_m: 556.0,
             restart_rate_ratio: 2.0,
@@ -93,7 +97,7 @@ impl GnssIntegrityConfig {
         probability(self.caution_probability)
             && probability(self.exclusion_probability)
             && self.exclusion_probability <= self.caution_probability
-            && self.exclusion_fixes > 0
+            && self.confirming_fixes > 0
             && self.readmission_s.is_finite()
             && self.readmission_s > 0.0
             && self.alert_limit_m.is_finite()
@@ -121,8 +125,8 @@ pub enum GnssIntegrityState {
     /// The fixes are below the caution threshold. The navigator takes
     /// them, and the check changes nothing in the solution.
     Consistent,
-    /// A fix is above the caution threshold. The navigator still takes
-    /// GNSS. The solution states the separation in its covariance, and
+    /// The fixes are above the caution threshold. The navigator still
+    /// takes GNSS. The solution states the separation in its covariance, and
     /// its quality is not `Good`.
     Disagreeing,
     /// The navigator does not take GNSS. The solution continues from the
@@ -196,7 +200,7 @@ pub struct GnssIntegrityStatus {
     /// `None` with a position fix of another sensor, and before the first
     /// compared fix.
     pub inertial_detectable_rate_m_s: Option<f64>,
-    /// While GNSS is excluded: the acquisition time of the first fix of
-    /// the present run of fixes below the caution threshold.
+    /// While the state is not `Consistent`: the acquisition time of the
+    /// first fix of the present time of agreement.
     pub agreeing_since: Option<MonotonicNanos>,
 }

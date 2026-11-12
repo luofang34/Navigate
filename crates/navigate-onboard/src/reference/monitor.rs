@@ -20,9 +20,10 @@ use navigate_geodesy::BodyEllipsoid;
 
 use super::NavigatorFilter;
 use crate::{
-    GnssCorrelatedError, GnssFault, GnssIntegrityConfig, GnssIntegrityState, GnssIntegrityStatus,
-    GnssSeparation, OnboardError, ReferenceNavigator, SensorInput,
+    GnssFault, GnssIntegrityConfig, GnssIntegrityState, GnssIntegrityStatus, GnssSeparation,
 };
+
+mod entry;
 
 /// The acceptance record of a GNSS value that the navigator does not
 /// take while GNSS is excluded. A host counts records by this name, so it
@@ -47,7 +48,9 @@ pub(crate) struct GnssMonitor {
     reference: NavigatorFilter,
     state: GnssIntegrityState,
     since: Option<MonotonicNanos>,
-    /// Fixes in a row above the exclusion threshold.
+    /// Fixes in a row above the caution threshold, and above the
+    /// exclusion threshold.
+    doubts: u32,
     exceedances: u32,
     agreeing_since: Option<MonotonicNanos>,
     /// The first fix of the present run of GNSS positions that the filter
@@ -101,6 +104,7 @@ impl GnssMonitor {
             reference: main.clone(),
             state: GnssIntegrityState::Consistent,
             since: None,
+            doubts: 0,
             exceedances: 0,
             agreeing_since: None,
             accepting_since: None,
@@ -116,7 +120,7 @@ impl GnssMonitor {
     pub(crate) fn forget(&mut self) {
         self.reference.reset();
         self.state = GnssIntegrityState::Consistent;
-        self.exceedances = 0;
+        (self.doubts, self.exceedances) = (0, 0);
         (self.since, self.agreeing_since, self.anchored_at) = (None, None, None);
         (self.position_fix_at, self.last, self.accepting_since) = (None, None, None);
         self.detectable_m_s = None;
@@ -238,7 +242,12 @@ impl GnssMonitor {
         };
         self.last = Some(test);
         let within = test.exclusion_bound_m <= self.config.alert_limit_m;
-        let calm = test.chi2 <= self.config.caution_chi2();
+        // One fix above a threshold is the noise of an honest receiver;
+        // a receiver that leaves the truth is above it on each fix.
+        let run = |count: u32, above: bool| if above { count.saturating_add(1) } else { 0 };
+        self.doubts = run(self.doubts, test.chi2 > self.config.caution_chi2());
+        self.exceedances = run(self.exceedances, test.chi2 > self.config.exclusion_chi2());
+        let calm = self.doubts < self.config.confirming_fixes;
         if excluded {
             // A reference that says too little cannot say that the
             // receiver is honest again, and neither can one on inertial
@@ -255,12 +264,7 @@ impl GnssMonitor {
             }
             return false;
         }
-        if test.chi2 > self.config.exclusion_chi2() {
-            self.exceedances = self.exceedances.saturating_add(1);
-        } else {
-            self.exceedances = 0;
-        }
-        if self.exceedances >= self.config.exclusion_fixes {
+        if self.exceedances >= self.config.confirming_fixes {
             main.adopt_estimate(&self.reference);
             self.exceedances = 0;
             self.enter(GnssIntegrityState::Excluded, fix.acquired_at);
@@ -277,15 +281,13 @@ impl GnssMonitor {
                 self.enter(GnssIntegrityState::Disagreeing, fix.acquired_at);
             }
         } else if self.agreed_long_enough(calm, fix.acquired_at) {
-            // One fix under the threshold among fixes above it is the
-            // noise of the receiver, not the end of the disagreement.
             self.enter(GnssIntegrityState::Consistent, fix.acquired_at);
         }
         true
     }
 
-    /// Whether the run of fixes below the caution threshold, which
-    /// `agrees` continues or ends, is as long as the configured time.
+    /// Whether the time without a confirmed doubt, which `agrees`
+    /// continues or ends, is as long as the configured time.
     fn agreed_long_enough(&mut self, agrees: bool, at: MonotonicNanos) -> bool {
         if !agrees {
             self.agreeing_since = None;
@@ -384,89 +386,6 @@ impl GnssMonitor {
             reference_position_fix_at: self.position_fix_at,
             inertial_detectable_rate_m_s: self.detectable_m_s,
             agreeing_since: self.agreeing_since,
-        }
-    }
-}
-
-impl ReferenceNavigator {
-    /// Starts, changes, or stops the GNSS check.
-    pub(super) fn configure_gnss_integrity(
-        &mut self,
-        config: Option<GnssIntegrityConfig>,
-    ) -> Result<(), OnboardError> {
-        let Some(config) = config else {
-            self.monitor = None;
-            return Ok(());
-        };
-        if !config.is_usable() {
-            return Err(OnboardError::Config {
-                field: "GNSS integrity configuration",
-                detail: format!("{config:?}"),
-            });
-        }
-        match self.monitor.as_deref_mut() {
-            Some(monitor) => monitor.config = config,
-            None => self.monitor = Some(Box::new(GnssMonitor::new(config, &self.filter))),
-        }
-        Ok(())
-    }
-
-    /// The state of the GNSS check, or `None` without one.
-    pub(super) fn gnss_integrity_status(&self) -> Option<GnssIntegrityStatus> {
-        self.monitor.as_deref().map(GnssMonitor::status)
-    }
-
-    /// Gives the reference of the check its first state.
-    pub(super) fn follow_filter(&mut self, now: MonotonicNanos) {
-        if let Some(monitor) = self.monitor.as_deref_mut() {
-            monitor.follow(&self.filter, now);
-        }
-    }
-
-    /// The solution of the filter at `now`, with what the check states.
-    pub(super) fn checked_solution(&mut self, now: MonotonicNanos) -> Option<NavigationSolution> {
-        let mut solution = self.filter.tick(now)?;
-        if let Some(monitor) = self.monitor.as_deref_mut() {
-            monitor.annotate(&mut solution, now, &self.filter.config().fusion);
-        }
-        Some(solution)
-    }
-
-    /// Whether the navigator takes the GNSS fix of `input`, whose white
-    /// position covariance is `white`. Without a check it takes each fix.
-    pub(super) fn takes_gnss(
-        &mut self,
-        input: &SensorInput,
-        position: &GeodeticPosition,
-        white: &SymmetricCov3,
-        correlated: Option<GnssCorrelatedError>,
-    ) -> bool {
-        let Some(monitor) = self.monitor.as_deref_mut() else {
-            return true;
-        };
-        let slow = correlated.map_or(0.0, |c| c.horizontal_sigma_m * c.horizontal_sigma_m);
-        let fix = Fix {
-            source: input.sensor,
-            position: *position,
-            covariance: horizontal(white) + Matrix2::from_diagonal_element(slow),
-            acquired_at: input.acquired_at,
-            delivered_at: input.delivered_at,
-        };
-        let was_excluded = monitor.state == GnssIntegrityState::Excluded;
-        let taken = monitor.judge(&fix, &mut self.filter);
-        if monitor.state == GnssIntegrityState::Excluded && !was_excluded {
-            // The refusals were those of the state that the receiver
-            // moved; the adopted state has none.
-            self.gate_refusals = 0;
-        }
-        taken
-    }
-
-    /// Tells the check what the filter did with the GNSS position of
-    /// `input`.
-    pub(super) fn gnss_offered(&mut self, input: &SensorInput, accepted: bool) {
-        if let Some(monitor) = self.monitor.as_deref_mut() {
-            monitor.offered(accepted, input.acquired_at, &self.filter);
         }
     }
 }

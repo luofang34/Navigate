@@ -261,7 +261,7 @@ fn the_check_is_absent_until_the_host_starts_it_and_refuses_an_unusable_configur
             ..GnssIntegrityConfig::default()
         },
         GnssIntegrityConfig {
-            exclusion_fixes: 0,
+            confirming_fixes: 0,
             ..GnssIntegrityConfig::default()
         },
         GnssIntegrityConfig {
@@ -317,4 +317,22 @@ fn the_check_changes_no_solution_while_the_receiver_agrees() {
         }
     }
     assert_eq!(a, b);
+}
+
+#[test]
+fn an_observation_of_the_gnss_class_is_not_offered_while_gnss_is_excluded() {
+    let mut navigator = checked(true);
+    let mut sink = Vec::new();
+    watch(&mut navigator, 20, &RAMP, true, &mut sink);
+    let status = navigator.gnss_integrity().unwrap();
+    assert_eq!(status.state, GnssIntegrityState::Excluded);
+    // The second sensor now gives a position of a receiver.
+    let mut input = witness(21);
+    if let SensorData::Observation(observation) = &mut input.data {
+        observation.composition = SourceComposition::of(SensorClass::Gnss);
+    }
+    navigator.ingest(&input, &mut sink).unwrap();
+    let last = sink.last().unwrap();
+    assert_eq!(last.measurement, "observation");
+    assert_eq!(last.outcome, Outcome::Unused(GNSS_EXCLUDED));
 }

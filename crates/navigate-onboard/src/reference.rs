@@ -423,7 +423,7 @@ impl Navigator for ReferenceNavigator {
                 self.terrain_frame(input, sink)
             }
             (SensorData::Observation(observation), _) => {
-                self.offer(input, "observation", observation, None, sink);
+                self.offer_unless_excluded(input, observation, sink);
                 Ok(())
             }
             _ => Err(wrong()),
