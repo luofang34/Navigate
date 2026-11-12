@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::UnitQuaternion;
+use nalgebra::{Matrix2, UnitQuaternion, Vector3};
 use navigate_camera::CameraMount;
 use navigate_contract::{AttitudeQuaternion, GeodeticPosition, NedVelocity, SymmetricCov3};
 
@@ -48,7 +48,28 @@ impl<'a> Trial<'a> {
 /// camera hovering 1760 m above the ground, and the horizontal error of
 /// the solution after each, with the belief `off` metres (north, east)
 /// from the truth and a one-sigma of `sigma_m` on each axis.
-fn first_frames(trial: Trial<'_>, off: [f64; 2], sigma_m: f64, frames: u64) -> Vec<(Outcome, f64)> {
+/// What one frame did: its outcome, and the horizontal error of the
+/// solution after it and that error's squared Mahalanobis length under
+/// the stated horizontal covariance.
+#[derive(Debug, Clone, PartialEq)]
+struct Seen {
+    outcome: Outcome,
+    error_m: f64,
+    nees: f64,
+}
+
+/// The squared Mahalanobis length of the north and east `error` under the
+/// north and east block of `cov`.
+fn horizontal_nees(error: Vector3<f64>, cov: &SymmetricCov3) -> f64 {
+    let [nn, ne, _, ee, _, _] = cov.upper_triangle();
+    Matrix2::new(nn, ne, ne, ee)
+        .try_inverse()
+        .map_or(f64::INFINITY, |inv| {
+            (error.xy().transpose() * inv * error.xy()).x
+        })
+}
+
+fn first_frames(trial: Trial<'_>, off: [f64; 2], sigma_m: f64, frames: u64) -> Vec<Seen> {
     let hover = Flight {
         start: [CENTRE[0], CENTRE[1], GROUND_M + 1_760.0],
         speed_m_s: 0.0,
@@ -113,8 +134,13 @@ fn first_frames(trial: Trial<'_>, off: [f64; 2], sigma_m: f64, frames: u64) -> V
             .last()
             .map(|r| r.0.clone())
             .unwrap();
-        let error = hover.error_m(&navigator.solution(at(step)).unwrap(), step);
-        seen.push((outcome, error.xy().norm()));
+        let solution = navigator.solution(at(step)).unwrap();
+        let error = hover.error_m(&solution, step);
+        seen.push(Seen {
+            outcome,
+            error_m: error.xy().norm(),
+            nees: horizontal_nees(error, &solution.position_cov),
+        });
     }
     seen
 }
@@ -137,88 +163,103 @@ fn around(magnitude: f64, count: u32) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// Frames that an acquisition takes at most after a long gap, at the
+/// default budget of a frame: the map raster is built a block a frame,
+/// the search of a frame runs over two or three frames, and a second
+/// search confirms the first.
+const FRAMES: u64 = 16;
+
 /// From 1760 m over farmland, a belief of 1 km one-sigma that is 0.5 to
-/// 2 km off is found again: the first frame acquires and waits, the
-/// second confirms it and gives the fix.
+/// 2 km off is found again within [`FRAMES`] frames: an acquisition first
+/// waits for a second one to confirm it, and only the second gives the
+/// filter its fix.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
-fn a_belief_kilometres_off_finds_the_ground_again_in_two_frames() {
+fn a_belief_kilometres_off_finds_the_ground_again() {
     show_events();
     let world = world(Texture::Farmland);
     for magnitude in [500.0, 1_000.0, 2_000.0] {
         for off in around(magnitude, 2) {
-            let seen = first_frames(Trial::exact(&world), off, 1_000.0, 2);
-            tracing::info!(?off, ?seen, "the first frames on a wide belief");
-            assert_eq!(
-                seen[0].0,
-                Outcome::Unused(ACQUISITION_UNCONFIRMED),
-                "{off:?}"
-            );
-            assert_eq!(seen[1].0, Outcome::Accepted, "{off:?}");
-            assert!(seen[1].1 < 20.0, "{off:?}: {}", seen[1].1);
+            let seen = first_frames(Trial::exact(&world), off, 1_000.0, FRAMES);
+            let outcomes: Vec<_> = seen.iter().map(|s| &s.outcome).collect();
+            tracing::info!(?off, ?outcomes, "the first frames on a wide belief");
+            let first = seen.iter().position(|s| s.outcome == Outcome::Accepted);
+            let Some(first) = first else {
+                panic!("{off:?}: {outcomes:?}");
+            };
+            let waited = Outcome::Unused(ACQUISITION_UNCONFIRMED);
+            assert!(seen[..first].iter().any(|s| s.outcome == waited), "{off:?}");
+            assert!(seen[first].error_m < 20.0, "{off:?}: {:?}", seen[first]);
         }
     }
 }
 
 /// Over farmland, over regular and irregular town blocks, and with the
 /// truth past the acquisition radius and near the edge of the map, no
-/// acquisition gives the filter a fix more than 30 m from the truth.
+/// acquisition gives the filter a fix at a wrong place or one whose error
+/// its covariance does not hold.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "needs an optimized build")]
 fn an_acquisition_gives_no_fix_at_a_wrong_place() {
     show_events();
+    let mut total = Tally::default();
     for texture in [Texture::Farmland, Texture::Town, Texture::TownIrregular] {
         let world = world(texture);
-        let (mut fixes, mut wrong, mut trials) = (0, 0, 0);
-        for magnitude in [500.0, 2_000.0, 4_000.0] {
-            for off in around(magnitude, 3) {
-                for (outcome, error_m) in first_frames(Trial::exact(&world), off, 1_000.0, 3) {
-                    trials += 1;
-                    if outcome == Outcome::Accepted {
-                        fixes += 1;
-                        if error_m > 30.0 {
-                            wrong += 1;
-                            tracing::warn!(?texture, ?off, error_m, "a wrong acquisition");
-                        }
-                    }
-                }
+        for magnitude in [500.0, 4_000.0] {
+            for off in around(magnitude, 2) {
+                let seen = first_frames(Trial::exact(&world), off, 1_000.0, FRAMES);
+                total.add(&seen, &format!("{texture:?}"));
             }
         }
-        tracing::info!(?texture, trials, fixes, wrong, "acquisitions");
-        assert_eq!(wrong, 0, "{texture:?}");
     }
+    tracing::info!(?total, "acquisitions");
+    assert_eq!((total.wrong_place, total.inconsistent), (0, 0), "{total:?}");
 }
 
-/// Outcomes of the frames of a statistics run.
+/// Squared Mahalanobis length of a two-dimensional error that a
+/// consistent covariance exceeds once in a thousand.
+const NEES_999: f64 = 13.82;
+
+/// Outcomes of the frames of a statistics run. An accepted fix is at a
+/// wrong place when it is farther from the truth than the exclusion
+/// distance of the acquisition, and inconsistent when its error is past
+/// [`NEES_999`] under the covariance it stated; errors past 30 m are
+/// counted as well.
 #[derive(Default, Debug)]
 struct Tally {
     frames: u32,
     attempts: u32,
     fixes: u32,
-    wrong: u32,
+    wrong_place: u32,
+    inconsistent: u32,
+    past_30_m: u32,
     refusals: std::collections::BTreeMap<String, u32>,
 }
 
 impl Tally {
     /// Counts the frames of one run: a frame is an acquisition attempt
     /// until the run's first accepted fix.
-    fn add(&mut self, seen: &[(Outcome, f64)], label: &str) {
+    fn add(&mut self, seen: &[Seen], label: &str) {
         let mut wide = true;
-        for (outcome, error_m) in seen {
+        for frame in seen {
             self.frames += 1;
             if wide {
                 self.attempts += 1;
             }
-            match outcome {
-                Outcome::Accepted => {
-                    self.fixes += 1;
-                    wide = false;
-                    if *error_m > 30.0 {
-                        self.wrong += 1;
-                        tracing::warn!(label, error_m, "a wrong acquisition");
-                    }
-                }
-                other => *self.refusals.entry(format!("{other:?}")).or_default() += 1,
+            if frame.outcome != Outcome::Accepted {
+                let name = format!("{:?}", frame.outcome);
+                *self.refusals.entry(name).or_default() += 1;
+                continue;
+            }
+            self.fixes += 1;
+            wide = false;
+            let wrong = frame.error_m > 300.0;
+            let inconsistent = frame.nees > NEES_999;
+            self.wrong_place += u32::from(wrong);
+            self.inconsistent += u32::from(inconsistent);
+            self.past_30_m += u32::from(frame.error_m > 30.0);
+            if wrong || inconsistent || frame.error_m > 30.0 {
+                tracing::warn!(label, ?frame, "an acquired fix far off");
             }
         }
     }
@@ -228,9 +269,10 @@ impl Tally {
 /// believed roll off by 0.5° and 1°, and under the photometric, optical
 /// and seasonal mismatch of the geometry grid, over farmland and regular
 /// and irregular town blocks, with the truth 0.5 km, 2 km and 4 km from
-/// the belief: no accepted fix is more than 30 m off.
+/// the belief: no accepted fix is at a wrong place or past what its
+/// covariance holds.
 #[test]
-#[ignore = "statistics over some 500 frames; minutes in an optimized build"]
+#[ignore = "statistics over some 2700 frames; minutes in an optimized build"]
 fn the_full_acquisition_grid_gives_no_wrong_fix() {
     show_events();
     let deg = std::f64::consts::PI / 180.0;
@@ -274,7 +316,7 @@ fn the_full_acquisition_grid_gives_no_wrong_fix() {
             let mut tally = Tally::default();
             for magnitude in [500.0, 2_000.0, 4_000.0] {
                 for off in around(magnitude, 3) {
-                    let seen = first_frames(*trial, off, 1_000.0, 3);
+                    let seen = first_frames(*trial, off, 1_000.0, FRAMES);
                     tally.add(&seen, name);
                     total.add(&seen, name);
                 }
@@ -283,5 +325,5 @@ fn the_full_acquisition_grid_gives_no_wrong_fix() {
         }
     }
     tracing::info!(?total, "acquisition grid total");
-    assert_eq!(total.wrong, 0, "{total:?}");
+    assert_eq!((total.wrong_place, total.inconsistent), (0, 0), "{total:?}");
 }

@@ -56,13 +56,23 @@ pub struct TerrainConfig {
     pub acquisition_cell_m: f64,
     /// What an acquisition requires of the place it finds.
     pub acquisition: AcquisitionConfig,
-    /// Largest difference between the corrections of two acquisitions
-    /// that confirm one another, metres.
-    pub acquisition_confirm_m: f64,
+    /// Largest heading error of the belief that an acquisition searches,
+    /// radians: it lays the frame at headings this far about the believed
+    /// one, fewer for a belief whose attitude one-sigma is small.
+    pub max_acquisition_rotation_rad: f64,
+    /// Step of the headings at which an acquisition lays the frame,
+    /// radians.
+    pub acquisition_rotation_step_rad: f64,
+    /// Cell pairs that an acquisition compares for one frame. A search
+    /// that needs more goes on over the next frames, so that one frame
+    /// takes a bounded time; the default is some 60 ms on WebAssembly.
+    pub acquisition_pairs_per_frame: u64,
     /// Longest time between two acquisitions that confirm one another,
     /// seconds.
     pub acquisition_confirm_s: f64,
-    /// Attitude search bound, radians.
+    /// Smallest attitude search bound, radians: the bound is the search
+    /// multiple of the attitude one-sigma of the belief when that is
+    /// larger.
     pub attitude_radius_rad: f64,
     /// Longest time from the middle of the exposure to the delivery of a
     /// frame, seconds. An older frame is not matched.
@@ -122,7 +132,9 @@ impl Default for TerrainConfig {
             max_acquisition_radius_m: 3_000.0,
             acquisition_cell_m: 32.0,
             acquisition: AcquisitionConfig::default(),
-            acquisition_confirm_m: 30.0,
+            max_acquisition_rotation_rad: 6.0_f64.to_radians(),
+            acquisition_rotation_step_rad: 2.0_f64.to_radians(),
+            acquisition_pairs_per_frame: 20_000_000,
             acquisition_confirm_s: 10.0,
             attitude_radius_rad: 0.05,
             max_capture_lag_s: 0.5,
@@ -207,8 +219,8 @@ impl TerrainConfig {
             self.max_search_radius_m,
             self.max_acquisition_radius_m,
             self.acquisition_cell_m,
-            self.acquisition_confirm_m,
             self.acquisition_confirm_s,
+            self.acquisition_rotation_step_rad,
             self.acquisition.exclusion_m,
             self.attitude_radius_rad,
             self.far_m,
@@ -226,6 +238,9 @@ impl TerrainConfig {
         .iter()
         .all(|v| v.is_finite() && *v >= 0.0);
         let ordered = self.min_search_radius_m <= self.max_search_radius_m
+            && self.max_acquisition_rotation_rad.is_finite()
+            && self.max_acquisition_rotation_rad >= 0.0
+            && self.acquisition_pairs_per_frame > 0
             && self.acquisition.peaks > 0
             && self.acquisition.min_score.is_finite()
             && self.acquisition.min_margin.is_finite()
@@ -244,14 +259,20 @@ impl TerrainConfig {
     }
 
     /// The position and attitude search bounds for a navigator horizontal
-    /// one-sigma `sigma_h_m` and a frame delivered `lag_s` after its
-    /// exposure.
-    pub(crate) fn search(&self, sigma_h_m: f64, lag_s: f64) -> (f64, f64) {
+    /// one-sigma `sigma_h_m` and attitude one-sigma `sigma_attitude_rad`,
+    /// and a frame delivered `lag_s` after its exposure.
+    pub(crate) fn search(
+        &self,
+        sigma_h_m: f64,
+        sigma_attitude_rad: Option<f64>,
+        lag_s: f64,
+    ) -> (f64, f64) {
         let position = (self.search_sigma_multiple * sigma_h_m)
             .clamp(self.min_search_radius_m, self.max_search_radius_m)
             + 0.5 * self.lag_acceleration_m_s2 * lag_s * lag_s;
-        let attitude =
-            (self.attitude_radius_rad + self.lag_rate_rad_s * lag_s).min(core::f64::consts::PI);
+        let believed = self.search_sigma_multiple * sigma_attitude_rad.unwrap_or(0.0);
+        let attitude = (self.attitude_radius_rad.max(believed) + self.lag_rate_rad_s * lag_s)
+            .min(core::f64::consts::PI);
         (position, attitude)
     }
 }

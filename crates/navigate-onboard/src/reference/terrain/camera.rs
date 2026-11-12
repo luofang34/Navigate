@@ -16,16 +16,20 @@ use navigate_visual::{
     ReferenceView,
 };
 
-use super::acquire::{Candidate, Search};
+use super::acquire::Acquiring;
 use super::belief::{Belief, BeliefSource, Exposure, body_position};
 use super::budget::{ViewGeometry, external_covariance_ned};
 use super::config::WorkingCamera;
 use super::inspection::{Pending, TerrainMatch};
 use super::map::TerrainMap;
 use super::names::{self, rejection};
-use super::view::{NoView, Sight, Views, model};
+use super::view::{NoView, Views, model};
 use super::{Sighting, admission};
 use crate::{ErrorBudget, OnboardError, SensorInput, SensorSpec};
+
+mod attempt;
+
+pub(super) use attempt::Attempt;
 
 /// Largest count of map cells that the check before the match looks at.
 /// A search disk that touches more cells is not checked, and the frame is
@@ -109,8 +113,8 @@ pub(crate) struct TerrainCamera {
     /// Height above the ellipsoid of the ground that the last match saw,
     /// metres. It gives the range of the next view before a match.
     pub(super) ground_height_m: Option<f64>,
-    /// The fix of the last acquisition, until the next one confirms it.
-    pub(super) candidate: Option<Candidate>,
+    /// What acquisition keeps between frames.
+    pub(super) acquiring: Acquiring,
     /// The camera of the last reference view and match.
     working: Option<WorkingCamera>,
     /// Where the belief of the last frame came from.
@@ -195,7 +199,7 @@ impl TerrainCamera {
             frames: 0,
             views: Views::default(),
             ground_height_m: None,
-            candidate: None,
+            acquiring: Acquiring::default(),
             working: None,
             belief_source: None,
             inspect: false,
@@ -209,7 +213,7 @@ impl TerrainCamera {
     pub(super) fn reset(&mut self) {
         self.views = Views::default();
         self.ground_height_m = None;
-        self.candidate = None;
+        self.forget_acquisition();
         self.working = None;
         self.belief_source = None;
         self.forget_match();
@@ -339,12 +343,7 @@ impl TerrainCamera {
         self.frames = self.frames.wrapping_add(1);
         let acquired = input.acquired_at.as_nanos();
         self.belief_source = Some(exposure.source);
-        let Search {
-            belief,
-            position_radius_m,
-            attitude_radius_rad,
-            acquired_from,
-        } = match self.search(map, &image, exposure) {
+        let search = match self.search(map, &image, exposure, acquired) {
             Ok(search) => search,
             Err(NoView::Unused(reason)) => return Ok(Sighting::Unused(reason, None)),
             Err(NoView::Read(detail)) => return Err(self.map_read(detail)),
@@ -354,46 +353,29 @@ impl TerrainCamera {
             continuity: ContinuityEpoch(0),
             index: sequence,
         };
-        if let Some(reason) =
-            self.all_cells_have_a_fix(map, ledger, &belief, position_radius_m, key)
+        if search.acquired_from.is_none()
+            && let Some(belief) = search.candidates.first()
+            && let Some(reason) =
+                self.all_cells_have_a_fix(map, ledger, belief, search.position_radius_m, key)
         {
             return Ok(Sighting::Unused(reason, None));
         }
-        let sight = Sight {
-            declared: &self.declared,
-            mount: &self.mount,
-            belief: &belief,
-            radius_m: position_radius_m,
-            ground_height_m: self.ground_height_m,
-        };
-        let reference = match self.views.reference(map, &sight) {
-            Ok(reference) => reference,
-            Err(NoView::Unused(reason)) => return Ok(Sighting::Unused(reason, None)),
-            Err(NoView::Read(detail)) => return Err(self.map_read(detail)),
-        };
-        let (view, path) = (&*reference.view, reference.path);
-        let Ok(pose) = belief.camera_in(view.frame, &self.mount) else {
-            return Ok(Sighting::Unused(names::BELIEF_OUT_OF_RANGE, Some(path)));
-        };
-        let prior = PosePrior {
-            pose,
-            position_radius_m,
-            attitude_radius_rad,
-        };
-        self.working = Some(reference.working);
-        let lag = (&map.config, exposure.unmodelled_lag_s);
-        let bound_px = offset_bound_px(&belief, lag, &prior, &reference.working);
-        self.localizer.matcher_mut().set_offset_bound_px(bound_px);
         let stamp = FrameStamp {
             sequence,
             capture_time_ns: acquired,
         };
-        let frame = resampled(stamp, image, &reference.working.intrinsics);
-        match self.matched(frame, &reference, &prior) {
-            Ok(estimate) if !self.confirms(map, acquired_from.as_ref(), &estimate, acquired) => {
+        let inputs = (&image, stamp, exposure.unmodelled_lag_s);
+        let attempt = match self.choose(map, &search, inputs) {
+            Ok(attempt) => attempt,
+            Err((NoView::Unused(reason), path)) => return Ok(Sighting::Unused(reason, path)),
+            Err((NoView::Read(detail), _)) => return Err(self.map_read(detail)),
+        };
+        let (view, path) = (Arc::clone(&attempt.reference.view), attempt.reference.path);
+        match attempt.estimate {
+            Ok(estimate) if !self.confirms(map, &search, (&estimate, &view), acquired) => {
                 Ok(Sighting::Unused(names::ACQUISITION_UNCONFIRMED, Some(path)))
             }
-            Ok(estimate) => Ok(self.fix(map, ledger, estimate, view, (key, path))),
+            Ok(estimate) => Ok(self.fix(map, ledger, estimate, &view, (key, path))),
             Err(error) => {
                 tracing::debug!(sensor = ?self.sensor, %error, "the terrain frame did not match");
                 Ok(Sighting::Unused(rejection(&error), Some(path)))
@@ -401,27 +383,22 @@ impl TerrainCamera {
         }
     }
 
-    /// The pose that `frame` gives against the view of `reference`.
-    fn matched(
-        &mut self,
-        frame: Frame,
-        reference: &super::view::Reference,
-        prior: &PosePrior,
-    ) -> Result<Estimate, navigate_visual::VisualError> {
-        let view = &*reference.view;
-        if !self.inspect {
-            return self.localizer.estimate_blocking(&frame, view, prior);
-        }
-        // Both calls run the same match; this one also returns its pairs.
-        let (estimate, evidence) = self
-            .localizer
-            .estimate_with_evidence_blocking(&frame, view, prior);
-        let working = reference.working;
-        let shown = Arc::clone(&reference.view);
-        self.pending
-            .compared(shown, frame.image, working, &evidence);
-        self.pending.gate(prior, &estimate);
-        estimate
+    /// The horizontal variance of the fix of `estimate`, the sum of its
+    /// east and north variances: the image geometry and the budget of the
+    /// map, the calibration, and the relief.
+    pub(super) fn horizontal_variance_m2(
+        &self,
+        map: &TerrainMap,
+        estimate: &Estimate,
+        view: &ReferenceView,
+    ) -> f64 {
+        let geometry = ViewGeometry::of(estimate, view, &self.declared);
+        let external = external_covariance_ned(&map.sigmas, self.calibration_sigma_rad, &geometry);
+        let image = estimate
+            .geometry_covariance
+            .fixed_view::<2, 2>(0, 0)
+            .trace();
+        image + external.fixed_view::<2, 2>(0, 0).trace()
     }
 
     /// The error of a store that failed or gave changed data.
